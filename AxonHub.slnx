@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AxonHub.Abstractions/AxonHub.Abstractions.csproj" />
+    <Project Path="src/AxonHub.Api/AxonHub.Api.csproj" />
+    <Project Path="src/AxonHub.Grains.Abstractions/AxonHub.Grains.Abstractions.csproj" />
+    <Project Path="src/AxonHub.Grains/AxonHub.Grains.csproj" />
+    <Project Path="src/AxonHub.Llm/AxonHub.Llm.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AxonHub.Api.Tests/AxonHub.Api.Tests.csproj" />
+    <Project Path="tests/AxonHub.Grains.Tests/AxonHub.Grains.Tests.csproj" />
+    <Project Path="tests/AxonHub.Llm.Tests/AxonHub.Llm.Tests.csproj" />
+  </Folder>
+</Solution>

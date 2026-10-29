@@ -1,0 +1,57 @@
+# 参照物锁定
+
+- 项目：**axonhub.net**
+- 方向：`Go 1.26` → `C# 14 / .NET 10 + Orleans 10.x`
+- 建立日期：2026-10-30
+
+## 参照实现
+
+| 项 | 值 |
+|---|---|
+| 上游仓库 | https://github.com/looplj/axonhub （本地副本 `e:\GitHub\axonhub`） |
+| 锁定版本 | `b8bb3421e1fe946cfc4f0d86e8412098738f2793` = tag **v1.0.0-beta11**（2026-10-08） |
+| 冻结副本 | git worktree：`E:\GitHub\axonhub-ref`（detached，干净） |
+| 锁定方式 | `python -I .../reference_lock.py lock --repo E:\GitHub\axonhub-ref --dest porting/reference-lock.json` |
+| 指纹 | tree `20b085a4985c456bf89e2bd86e23184c3f2cf839`，2705 个受版本控制文件 |
+| 上游规模 | 1657 个 `.go` 文件 / 约 63.7 万行 / 740 个 `_test.go` |
+
+> 为什么用 worktree：`reference_lock.py` 锁的是仓库 HEAD，而基线是 `unstable` 分支的祖先提交。
+> 冻结副本既作为锁定对象，也作为差分语料录制时的可运行参照实现。
+
+## 同步策略
+
+- [x] 长期跟随上游，每个切片收口时核对一次漂移
+- [ ] 一次性移植，完成后不再同步上游
+
+每个切片验收前执行：
+
+```powershell
+python -I C:\Users\geffz\.claude\skills\cross-lang-porting\scripts\reference_lock.py check `
+  --repo E:\GitHub\axonhub-ref --dest E:\GitHub\axonhub.net\porting\reference-lock.json
+```
+
+## 纪律
+
+> **每次动工前先跑 `reference_lock.py check`。漂移了先决策，再动手。**
+
+漂移后必须完成三件事：
+1. 明确本次跟进到哪个 commit
+2. 列出受影响的语义范围
+3. 逐项回审受影响的实现，统一混用之处
+
+升级基线时：先把 `E:\GitHub\axonhub-ref` 切到新 commit 并重新 `lock`，
+再为新旧版本各录一份差分语料，语料差异逐条进入差异台账。
+
+## 目标框架
+
+| 项 | 值 |
+|---|---|
+| 运行时 | .NET 10（本机 SDK 10.0.401） |
+| Actor 框架 | Orleans 10.x，**NuGet 发布包**（不引用 `E:\GitHub\orleans` 源码） |
+| 本地框架参考 | `E:\GitHub\orleans`（main，v10.4.0-101），仅作 API/设计阅读，不参与构建 |
+
+## 漂移记录
+
+| 日期 | 从 | 到 | 影响范围 | 处置 |
+|---|---|---|---|---|
+| 2026-10-30 | — | `b8bb3421`（v1.0.0-beta11） | 初始基线 | 锁定 |

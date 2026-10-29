@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>AxonHub.Llm</RootNamespace>
+    <AssemblyName>AxonHub.Llm</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AxonHub.Abstractions\AxonHub.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

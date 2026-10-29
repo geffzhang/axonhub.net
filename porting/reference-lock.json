@@ -1,0 +1,12 @@
+{
+  "vcs": "git",
+  "commit": "b8bb3421e1fe946cfc4f0d86e8412098738f2793",
+  "tree_hash": "20b085a4985c456bf89e2bd86e23184c3f2cf839",
+  "commit_count": 1748,
+  "head_subject": "2026-10-08 12:11:26 +0800 fix(channels): 修复 System One 渠道与 API key 的测试格式 (#2607)",
+  "dirty_files": 0,
+  "file_count": 2705,
+  "repo": "E:\\GitHub\\axonhub-ref",
+  "locked_at": "2026-10-30T05:16:27",
+  "note": "axonhub v1.0.0-beta11 / b8bb3421 (frozen worktree at E:\\GitHub\\axonhub-ref)"
+}

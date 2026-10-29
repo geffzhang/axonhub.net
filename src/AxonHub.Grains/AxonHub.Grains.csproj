@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>AxonHub.Grains</RootNamespace>
+    <AssemblyName>AxonHub.Grains</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AxonHub.Grains.Abstractions\AxonHub.Grains.Abstractions.csproj" />
+    <ProjectReference Include="..\AxonHub.Llm\AxonHub.Llm.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Server" />
+  </ItemGroup>
+</Project>

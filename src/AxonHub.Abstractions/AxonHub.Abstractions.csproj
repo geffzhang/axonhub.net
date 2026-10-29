@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>AxonHub.Abstractions</RootNamespace>
+    <AssemblyName>AxonHub.Abstractions</AssemblyName>
+  </PropertyGroup>
+</Project>

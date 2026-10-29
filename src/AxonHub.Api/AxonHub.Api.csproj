@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>AxonHub.Api</RootNamespace>
+    <AssemblyName>AxonHub.Api</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AxonHub.Grains\AxonHub.Grains.csproj" />
+    <ProjectReference Include="..\AxonHub.Llm\AxonHub.Llm.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Server" />
+  </ItemGroup>
+</Project>
