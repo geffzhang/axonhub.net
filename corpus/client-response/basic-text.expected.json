@@ -1,0 +1,6 @@
+{
+  "case": "basic-text",
+  "exit_code": 0,
+  "stdout": "{\n  \"status_code\": 200,\n  \"headers\": {\n    \"Cache-Control\": [\n      \"no-cache\"\n    ],\n    \"Content-Type\": [\n      \"application/json\"\n    ]\n  },\n  \"body\": \"{\\\"id\\\":\\\"chatcmpl-abc123\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"message\\\":{\\\"role\\\":\\\"assistant\\\",\\\"content\\\":\\\"Hello there!\\\"},\\\"finish_reason\\\":\\\"stop\\\",\\\"logprobs\\\":null}],\\\"object\\\":\\\"chat.completion\\\",\\\"created\\\":1725000000,\\\"model\\\":\\\"gpt-4o\\\",\\\"usage\\\":null}\"\n}\n",
+  "stderr": ""
+}

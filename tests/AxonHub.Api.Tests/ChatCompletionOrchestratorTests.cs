@@ -1,0 +1,375 @@
+using System.Text.Json;
+using AxonHub.Api.Http;
+using AxonHub.Api.Orchestration;
+using AxonHub.Llm;
+using AxonHub.Llm.Http;
+using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.OpenAI;
+
+namespace AxonHub.Api.Tests;
+
+/// <summary>
+/// Behavioural tests for the chat slice: candidate selection goes through the
+/// real pool/channel grains, while the transport is scripted. Each test uses its
+/// own model and channel IDs so the in-process cluster's grain state is isolated.
+/// </summary>
+[Collection(OrleansCollection.Name)]
+public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
+{
+    private ChatCompletionOrchestrator NewOrchestrator(
+        ScriptedExecutor executor,
+        IChannelMetricsRecorder metrics,
+        RetryPolicy policy)
+        => new(
+            fixture.Cluster.GrainFactory,
+            new OpenAiInboundTransformer(),
+            executor,
+            metrics,
+            policy,
+            TimeProvider.System);
+
+    private static RetryPolicy FastPolicy(int maxChannelRetries = 3, int maxSameChannelRetries = 2)
+        => new()
+        {
+            Enabled = true,
+            MaxChannelRetries = maxChannelRetries,
+            MaxSingleChannelRetries = maxSameChannelRetries,
+            RetryDelayMs = 0,
+        };
+
+    [Fact]
+    public async Task NoCandidatesReturnsInvalidModelError()
+    {
+        fixture.Channels.Set();
+
+        var executor = new ScriptedExecutor();
+        var orchestrator = NewOrchestrator(executor, new RecordingMetricsRecorder(), FastPolicy());
+
+        var ex = await Assert.ThrowsAsync<TransformerException>(
+            () => orchestrator.ProcessAsync(TestChannels.ChatRequest("missing-model")));
+
+        Assert.Equal(TransformerErrorKind.InvalidModel, ex.Kind);
+        Assert.Equal("model not found: missing-model", ex.Message);
+
+        var clientError = orchestrator.Inbound.TransformError(ex);
+        Assert.Equal(422, clientError.StatusCode);
+
+        using var document = JsonDocument.Parse(clientError.Body!);
+        Assert.Equal(
+            "invalid_model_error",
+            document.RootElement.GetProperty("error").GetProperty("type").GetString());
+        Assert.Equal(
+            "model not found: missing-model",
+            document.RootElement.GetProperty("error").GetProperty("message").GetString());
+        Assert.Empty(executor.Requests);
+    }
+
+    [Fact]
+    public async Task NonStreamSelectsChannelRewritesModelAndUsesChannelApiKey()
+    {
+        fixture.Channels.Set(new AxonHub.Abstractions.ChannelDescriptor
+        {
+            Id = 4101,
+            Name = "mapping-channel",
+            OrderingWeight = 0,
+            Type = "openai",
+            BaseUrl = "http://upstream.test",
+            Credentials = "{\"apiKey\":\"sk-mapped\"}",
+            SupportedModels = "[\"upstream-a\"]",
+            Settings = "{\"modelMappings\":[{\"from\":\"client-a\",\"to\":\"upstream-a\"}]}",
+        });
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("upstream-a", "hi there"),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy());
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("client-a"));
+
+        Assert.NotNull(result.Response);
+        Assert.Equal(200, result.Response!.StatusCode);
+
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal("http://upstream.test/v1/chat/completions", request.Url);
+        Assert.Equal(
+            "Bearer sk-mapped",
+            HttpClientUtils.HeaderGet(request.Headers, "Authorization"));
+
+        using var body = JsonDocument.Parse(request.Body!);
+        Assert.Equal("upstream-a", body.RootElement.GetProperty("model").GetString());
+
+        using var response = JsonDocument.Parse(result.Response.Body!);
+        Assert.Equal("hi there", response.RootElement
+            .GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString());
+
+        Assert.Equal(new long[] { 4101 }, metrics.Successes);
+        Assert.Empty(metrics.Failures);
+    }
+
+    [Fact]
+    public async Task NonStreamGrainRecorderUpdatesChannelMetrics()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4701, "grain-metrics-model"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("grain-metrics-model"),
+        };
+        var recorder = new GrainChannelMetricsRecorder(fixture.Cluster.GrainFactory);
+        var orchestrator = NewOrchestrator(executor, recorder, FastPolicy());
+
+        await orchestrator.ProcessAsync(TestChannels.ChatRequest("grain-metrics-model"));
+
+        var snapshot = await fixture.Cluster.GrainFactory
+            .GetGrain<AxonHub.Grains.Abstractions.IChannelGrain>(4701)
+            .GetMetricsAsync(DateTimeOffset.UtcNow);
+
+        // One initial selection (recorded by the pool grain) and one success
+        // (recorded by the metrics middleware through the real recorder).
+        Assert.Equal(1, snapshot.RequestCount);
+        Assert.Equal(1, snapshot.SuccessCount);
+        Assert.Equal(0, snapshot.ConsecutiveFailures);
+    }
+
+    [Fact]
+    public async Task NonStreamServerErrorSwitchesToNextChannel()
+    {
+        fixture.Channels.Set(
+            TestChannels.OpenAi(4201, "failover-model"),
+            TestChannels.OpenAi(4202, "failover-model"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (call, _, _) => call == 0
+                ? throw TestChannels.HttpClient(500)
+                : TestChannels.Completion("failover-model"),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy(maxSameChannelRetries: 0));
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("failover-model"));
+
+        Assert.Equal(200, result.Response!.StatusCode);
+        Assert.Equal(2, executor.Calls);
+        Assert.Equal(new long[] { 4201 }, metrics.Failures);
+        Assert.Equal(new long[] { 4202 }, metrics.Successes);
+
+        // Only the retry selection goes through the recorder; the initial
+        // selection is counted by the pool grain (TrackSelection).
+        Assert.Equal(new long[] { 4202 }, metrics.Selections);
+    }
+
+    [Fact]
+    public async Task NonStream429SkipsSameChannelRetry()
+    {
+        fixture.Channels.Set(
+            TestChannels.OpenAi(4301, "rate-limit-model"),
+            TestChannels.OpenAi(4302, "rate-limit-model"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (call, _, _) => call == 0
+                ? throw TestChannels.HttpClient(429)
+                : TestChannels.Completion("rate-limit-model"),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy(maxSameChannelRetries: 2));
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("rate-limit-model"));
+
+        Assert.Equal(200, result.Response!.StatusCode);
+        Assert.Equal(2, executor.Calls);
+        Assert.Equal(new long[] { 4301 }, metrics.Failures);
+        Assert.Equal(new long[] { 4302 }, metrics.Successes);
+        Assert.Equal(new long[] { 4302 }, metrics.Selections);
+    }
+
+    [Fact]
+    public async Task NonStreamRetryableErrorRetriesSameChannelUpToBudget()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4401, "same-channel-model"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (call, _, _) => call < 2
+                ? throw TestChannels.HttpClient(500)
+                : TestChannels.Completion("same-channel-model"),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy(maxSameChannelRetries: 2));
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("same-channel-model"));
+
+        Assert.Equal(200, result.Response!.StatusCode);
+        Assert.Equal(3, executor.Calls);
+        Assert.All(executor.Requests, request => Assert.Equal("http://upstream.test/v1/chat/completions", request.Url));
+        Assert.Equal(new long[] { 4401, 4401 }, metrics.Failures);
+        Assert.Equal(new long[] { 4401 }, metrics.Successes);
+
+        // One recorded selection per same-channel retry.
+        Assert.Equal(new long[] { 4401, 4401 }, metrics.Selections);
+    }
+
+    [Fact]
+    public async Task NonStreamRetryableErrorWithoutRetryBudgetThrowsFirstError()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4501, "no-retry-model"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => throw TestChannels.HttpClient(500),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, new RetryPolicy { Enabled = false });
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(
+            () => orchestrator.ProcessAsync(TestChannels.ChatRequest("no-retry-model")));
+
+        Assert.Single(executor.Requests);
+        Assert.Equal(500, AxonHub.Llm.Pipeline.GoErrors.As<ResponseError>(ex)!.StatusCode);
+        Assert.Equal(new long[] { 4501 }, metrics.Failures);
+        Assert.Empty(metrics.Successes);
+    }
+
+    [Fact]
+    public async Task NonStreamTimeoutSkipsSameChannelRetryAndSwitchesChannel()
+    {
+        fixture.Channels.Set(
+            TestChannels.OpenAi(4901, "non-stream-timeout-model"),
+            TestChannels.OpenAi(4902, "non-stream-timeout-model"));
+
+        var executor = new ScriptedExecutor
+        {
+            // A stalled upstream honors nothing but the attempt deadline. The
+            // pipeline must classify the cancellation as a response timeout and
+            // skip the same-channel budget, because retrying cannot inform us.
+            OnDo = (call, _, token) => call == 0
+                ? WaitForCancellation(token)
+                : TestChannels.Completion("non-stream-timeout-model"),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var policy = FastPolicy();
+        policy.MaxSingleChannelRetries = 2;
+        policy.NonStreamResponseTimeoutSeconds = 1;
+        var orchestrator = NewOrchestrator(executor, metrics, policy);
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("non-stream-timeout-model"));
+
+        Assert.Equal(200, result.Response!.StatusCode);
+        Assert.Equal(2, executor.Calls);
+        Assert.Equal(new long[] { 4902 }, metrics.Selections);
+        Assert.Equal(new long[] { 4902 }, metrics.Successes);
+
+        // The reference records a timed-out attempt as canceled, not failed:
+        // performance.go checks errors.Is(err, context.Canceled) first.
+        Assert.Empty(metrics.Failures);
+    }
+
+    [Fact]
+    public async Task StreamFirstEventTimeoutSkipsSameChannelRetryAndRecordsFailure()
+    {
+        fixture.Channels.Set(
+            TestChannels.OpenAi(4911, "first-event-timeout-model"),
+            TestChannels.OpenAi(4912, "first-event-timeout-model"));
+
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"first-event-timeout-model\",\"choices\":[{\"index\":0,"
+                + "\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}"),
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"first-event-timeout-model\",\"choices\":[{\"index\":0,\"delta\":{},"
+                + "\"finish_reason\":\"stop\"}]}"),
+            TestChannels.Data("[DONE]"),
+        };
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (call, _, token) => call == 0
+                ? new BlockingFirstEventStream(token)
+                : new ListStream<StreamEvent>(chunks),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var policy = FastPolicy();
+        policy.StreamFirstEventTimeoutSeconds = 1;
+        var orchestrator = NewOrchestrator(executor, metrics, policy);
+
+        var result = await orchestrator.ProcessAsync(
+            TestChannels.ChatRequest("first-event-timeout-model", stream: true));
+
+        Assert.NotNull(result.Stream);
+
+        var events = new List<StreamEvent>();
+        while (result.Stream!.Next())
+        {
+            if (result.Stream.Current is { } streamEvent)
+            {
+                events.Add(streamEvent);
+            }
+        }
+
+        result.Stream.Dispose();
+
+        Assert.Equal("[DONE]", System.Text.Encoding.UTF8.GetString(events[^1].Data));
+        Assert.Equal(2, executor.Calls);
+        Assert.Equal(new long[] { 4912 }, metrics.Selections);
+
+        // A first-event timeout reaches the raw-error hook as itself, not as a
+        // bare cancellation, so the stalled channel takes a failure mark.
+        Assert.Equal(new long[] { 4911 }, metrics.Failures);
+        Assert.Equal(new long[] { 4912 }, metrics.Successes);
+    }
+
+    private static HttpResponseData WaitForCancellation(CancellationToken token)
+    {
+        // The safety timeout only keeps a broken test from hanging the suite.
+        _ = token.WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+        throw new OperationCanceledException(token);
+    }
+
+    [Fact]
+    public async Task StreamPassesEventsThroughAndRecordsSuccessOnTerminal()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4601, "stream-model"));
+
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"stream-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"he\"},\"finish_reason\":null}]}"),
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"stream-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"llo\"},\"finish_reason\":null}]}"),
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"stream-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],"
+                + "\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}"),
+            TestChannels.Data("[DONE]"),
+        };
+
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(chunks),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy());
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("stream-model", stream: true));
+
+        Assert.NotNull(result.Stream);
+
+        var events = new List<StreamEvent>();
+        while (result.Stream!.Next())
+        {
+            if (result.Stream.Current is { } streamEvent)
+            {
+                events.Add(streamEvent);
+            }
+        }
+
+        result.Stream.Dispose();
+
+        Assert.True(events.Count >= 2);
+        Assert.Equal("[DONE]", System.Text.Encoding.UTF8.GetString(events[^1].Data));
+        Assert.Equal(new long[] { 4601 }, metrics.Successes);
+        Assert.Empty(metrics.Failures);
+    }
+}

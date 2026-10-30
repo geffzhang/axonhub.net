@@ -1,0 +1,6 @@
+{
+  "case": "multimodal",
+  "exit_code": 0,
+  "stdout": "{\n  \"method\": \"POST\",\n  \"url\": \"http://upstream.test/v1/chat/completions\",\n  \"headers\": {\n    \"Accept\": [\n      \"application/json\"\n    ],\n    \"Authorization\": [\n      \"Bearer sk-corpus-fixed\"\n    ],\n    \"Content-Type\": [\n      \"application/json\"\n    ],\n    \"User-Agent\": [\n      \"axonhub/1.0\"\n    ]\n  },\n  \"body\": \"{\\\"messages\\\":[{\\\"role\\\":\\\"system\\\",\\\"content\\\":\\\"be brief\\\"},{\\\"role\\\":\\\"user\\\",\\\"content\\\":[{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"what is this?\\\"},{\\\"type\\\":\\\"image_url\\\",\\\"image_url\\\":{\\\"url\\\":\\\"https://example.com/a.png\\\",\\\"detail\\\":\\\"high\\\"}}]}],\\\"model\\\":\\\"gpt-4o\\\"}\"\n}\n",
+  "stderr": ""
+}

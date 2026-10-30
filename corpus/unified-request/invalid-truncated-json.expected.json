@@ -1,0 +1,6 @@
+{
+  "case": "invalid-truncated-json",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"invalid request: failed to decode openai request: unexpected end of JSON input\"\n}\n",
+  "stderr": ""
+}

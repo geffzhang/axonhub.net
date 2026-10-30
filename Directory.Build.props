@@ -11,5 +11,14 @@
     <!-- 移植台账要求"构建 0 警告 0 错误"，此开关是验收硬门槛。 -->
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- 移植项目刻意沿用参照实现的类型名（Stop / Function / ResponseError / Object）
+         以便逐项对照 Go 侧定义；这几条命名分析器规则与忠实映射冲突，按项目豁免。
+         CA1822 / CA1812：Go 侧这些方法是接口实现的接收者方法（Inbound/Outbound），
+         C# 侧保持实例方法 + 接口形态，不能改静态。
+         CA1711：streams.Stream / MapStream 等名字直接沿用参照实现，便于逐项对照；
+         它们不是 System.IO.Stream，该命名规则在此不适用。
+         CA1068：参照实现（Go）一律把 ctx 作为首个参数，移植代码保持同一签名顺序，
+         便于逐项对照；改成 CT 末位会破坏这层映射。 -->
+    <NoWarn>$(NoWarn);CA1068;CA1710;CA1711;CA1716;CA1720;CA1822;CA1812</NoWarn>
   </PropertyGroup>
 </Project>

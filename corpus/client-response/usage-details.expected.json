@@ -1,0 +1,6 @@
+{
+  "case": "usage-details",
+  "exit_code": 0,
+  "stdout": "{\n  \"status_code\": 200,\n  \"headers\": {\n    \"Cache-Control\": [\n      \"no-cache\"\n    ],\n    \"Content-Type\": [\n      \"application/json\"\n    ]\n  },\n  \"body\": \"{\\\"id\\\":\\\"chatcmpl-usage\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"message\\\":{\\\"role\\\":\\\"assistant\\\",\\\"content\\\":\\\"ok\\\",\\\"reasoning_content\\\":\\\"thinking...\\\",\\\"reasoning\\\":\\\"thinking...\\\"},\\\"finish_reason\\\":\\\"stop\\\",\\\"logprobs\\\":null}],\\\"object\\\":\\\"chat.completion\\\",\\\"created\\\":1725000002,\\\"model\\\":\\\"gpt-4o\\\",\\\"usage\\\":{\\\"prompt_tokens\\\":12,\\\"completion_tokens\\\":7,\\\"total_tokens\\\":19,\\\"prompt_tokens_details\\\":{\\\"audio_tokens\\\":0,\\\"cached_tokens\\\":4},\\\"completion_tokens_details\\\":{\\\"audio_tokens\\\":0,\\\"reasoning_tokens\\\":3,\\\"accepted_prediction_tokens\\\":0,\\\"rejected_prediction_tokens\\\":0}},\\\"system_fingerprint\\\":\\\"fp_123\\\"}\"\n}\n",
+  "stderr": ""
+}

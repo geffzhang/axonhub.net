@@ -1,0 +1,6 @@
+{
+  "case": "usage-chunk",
+  "exit_code": 0,
+  "stdout": "{\n  \"events\": [\n    {\n      \"type\": \"\",\n      \"data\": \"{\\\"id\\\":\\\"c4\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"delta\\\":{\\\"content\\\":\\\"z\\\"},\\\"finish_reason\\\":null,\\\"logprobs\\\":null}],\\\"object\\\":\\\"chat.completion.chunk\\\",\\\"created\\\":1,\\\"model\\\":\\\"gpt-4o\\\",\\\"usage\\\":null}\"\n    },\n    {\n      \"type\": \"\",\n      \"data\": \"{\\\"id\\\":\\\"c4\\\",\\\"choices\\\":[],\\\"object\\\":\\\"chat.completion.chunk\\\",\\\"created\\\":1,\\\"model\\\":\\\"gpt-4o\\\",\\\"usage\\\":{\\\"prompt_tokens\\\":3,\\\"completion_tokens\\\":1,\\\"total_tokens\\\":4,\\\"prompt_tokens_details\\\":{\\\"audio_tokens\\\":0,\\\"cached_tokens\\\":0},\\\"completion_tokens_details\\\":{\\\"audio_tokens\\\":0,\\\"reasoning_tokens\\\":0,\\\"accepted_prediction_tokens\\\":0,\\\"rejected_prediction_tokens\\\":0}}}\"\n    },\n    {\n      \"type\": \"\",\n      \"data\": \"[DONE]\"\n    }\n  ]\n}\n",
+  "stderr": ""
+}

@@ -6,6 +6,7 @@
   <ItemGroup>
     <ProjectReference Include="..\AxonHub.Grains\AxonHub.Grains.csproj" />
     <ProjectReference Include="..\AxonHub.Llm\AxonHub.Llm.csproj" />
+    <ProjectReference Include="..\AxonHub.Persistence\AxonHub.Persistence.csproj" />
     <PackageReference Include="Microsoft.Orleans.Server" />
   </ItemGroup>
 </Project>

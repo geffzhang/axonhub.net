@@ -1,0 +1,186 @@
+using System.Text.Json;
+using AxonHub.Abstractions;
+
+namespace AxonHub.Grains;
+
+/// <summary>One request-model → upstream-model mapping exposed by a channel.</summary>
+internal sealed record ChannelModelEntry(string RequestModel, string ActualModel, string Source);
+
+/// <summary>
+/// Faithful port of <c>biz.Channel.GetModelEntries</c>
+/// (internal/server/biz/channel_llm.go): direct supported models plus prefix,
+/// auto-trim and model-mapping aliases, then the hide/lowercase post-processing.
+/// </summary>
+internal static class ChannelModelEntries
+{
+    private const string SourceDirect = "direct";
+    private const string SourcePrefix = "prefix";
+    private const string SourceAutoTrim = "auto_trim";
+    private const string SourceMapping = "mapping";
+
+    private static readonly Dictionary<string, int> SourcePriority = new(StringComparer.Ordinal)
+    {
+        [SourceDirect] = 4,
+        [SourceAutoTrim] = 3,
+        [SourceMapping] = 2,
+        [SourcePrefix] = 1,
+    };
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
+    public static Dictionary<string, ChannelModelEntry> Build(ChannelDescriptor channel)
+    {
+        var supportedModels = ParseSupportedModels(channel);
+        var entries = new Dictionary<string, ChannelModelEntry>(StringComparer.Ordinal);
+
+        // 1. Direct models from SupportedModels.
+        foreach (var model in supportedModels)
+        {
+            entries.TryAdd(model, new ChannelModelEntry(model, model, SourceDirect));
+        }
+
+        var settings = ParseSettings(channel);
+        if (settings is null)
+        {
+            return entries;
+        }
+
+        // 2. Prefixed models (ExtraModelPrefix).
+        if (!string.IsNullOrEmpty(settings.ExtraModelPrefix))
+        {
+            foreach (var model in supportedModels)
+            {
+                var prefixed = settings.ExtraModelPrefix + "/" + model;
+                entries.TryAdd(prefixed, new ChannelModelEntry(prefixed, model, SourcePrefix));
+            }
+        }
+
+        // 3. Auto-trimmed models (AutoTrimedModelPrefixes).
+        foreach (var prefix in settings.AutoTrimedModelPrefixes ?? [])
+        {
+            if (string.IsNullOrEmpty(prefix))
+            {
+                continue;
+            }
+
+            var prefixWithSlash = prefix + "/";
+            foreach (var model in supportedModels)
+            {
+                if (!model.StartsWith(prefixWithSlash, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var trimmed = model[prefixWithSlash.Length..];
+                entries.TryAdd(trimmed, new ChannelModelEntry(trimmed, model, SourceAutoTrim));
+            }
+        }
+
+        // 4. Model mappings. Only aliases whose target is actually supported.
+        foreach (var mapping in settings.ModelMappings ?? [])
+        {
+            var from = mapping.From ?? string.Empty;
+            var to = mapping.To ?? string.Empty;
+            if (!supportedModels.Contains(to, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            if (!entries.TryAdd(from, new ChannelModelEntry(from, to, SourceMapping)))
+            {
+                continue;
+            }
+
+            if (settings.HideMappedModels)
+            {
+                foreach (var key in entries
+                    .Where(pair => pair.Value.ActualModel == to && pair.Value.Source != SourceMapping)
+                    .Select(pair => pair.Key)
+                    .ToArray())
+                {
+                    entries.Remove(key);
+                }
+            }
+        }
+
+        // 5. Hide the original models when requested.
+        if (settings.HideOriginalModels)
+        {
+            foreach (var key in entries
+                .Where(pair => pair.Value.Source == SourceDirect)
+                .Select(pair => pair.Key)
+                .ToArray())
+            {
+                entries.Remove(key);
+            }
+        }
+
+        // 6. Lowercase matching keys. On a collision the higher-priority source
+        // wins, exactly like the reference. The reference iterates a Go map, so
+        // equal-priority collisions are already unspecified there.
+        if (settings.LowercaseModelId)
+        {
+            var lowercased = new Dictionary<string, ChannelModelEntry>(entries.Count, StringComparer.Ordinal);
+            foreach (var (key, entry) in entries)
+            {
+                var lowerKey = key.ToLowerInvariant();
+                var lowerEntry = entry with { RequestModel = entry.RequestModel.ToLowerInvariant() };
+                if (!lowercased.TryGetValue(lowerKey, out var existing)
+                    || SourcePriority[lowerEntry.Source] > SourcePriority[existing.Source])
+                {
+                    lowercased[lowerKey] = lowerEntry;
+                }
+            }
+
+            entries = lowercased;
+        }
+
+        return entries;
+    }
+
+    private static string[] ParseSupportedModels(ChannelDescriptor channel)
+    {
+        if (string.IsNullOrWhiteSpace(channel.SupportedModels) || channel.SupportedModels == "null")
+        {
+            return [];
+        }
+
+        return JsonSerializer.Deserialize<string[]>(channel.SupportedModels, JsonOptions) ?? [];
+    }
+
+    private static ChannelSettings? ParseSettings(ChannelDescriptor channel)
+    {
+        if (string.IsNullOrWhiteSpace(channel.Settings) || channel.Settings == "null")
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<ChannelSettings>(channel.Settings, JsonOptions);
+    }
+
+    /// <summary>Mirror of <c>objects.ChannelSettings</c> (internal/objects/channel.go).</summary>
+    private sealed class ChannelSettings
+    {
+        public string? ExtraModelPrefix { get; set; }
+
+        public string[]? AutoTrimedModelPrefixes { get; set; }
+
+        public ModelMapping[]? ModelMappings { get; set; }
+
+        public bool HideOriginalModels { get; set; }
+
+        public bool HideMappedModels { get; set; }
+
+        public bool LowercaseModelId { get; set; }
+    }
+
+    private sealed class ModelMapping
+    {
+        public string? From { get; set; }
+
+        public string? To { get; set; }
+    }
+}

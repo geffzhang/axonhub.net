@@ -1,0 +1,9 @@
+{
+  "method": "POST",
+  "url": "/v1/chat/completions",
+  "headers": {
+    "Content-Type": ["application/json"],
+    "Authorization": ["Bearer sk-client-abc"]
+  },
+  "body": "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"weather in Paris?\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get weather\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]},\"strict\":true}}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true}"
+}

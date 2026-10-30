@@ -49,6 +49,9 @@ python -I C:\Users\geffz\.claude\skills\cross-lang-porting\scripts\reference_loc
 | 运行时 | .NET 10（本机 SDK 10.0.401） |
 | Actor 框架 | Orleans 10.x，**NuGet 发布包**（不引用 `E:\GitHub\orleans` 源码） |
 | 本地框架参考 | `E:\GitHub\orleans`（main，v10.4.0-101），仅作 API/设计阅读，不参与构建 |
+| 持久化（CQRS） | 写侧/事务：EF Core 10.0.14 + Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3；读侧/热路径：Dapper 2.1.89；两者共用 Npgsql 10.0.3（PostgreSQL，本机验证版本 17）。全部为 **NuGet 发布包**，不引用源码 |
+| 本地持久化参考 | `E:\GitHub\Dapper`（HEAD `eb47546`，tag `2.1.89`），仅作 API/语义阅读，不参与构建 |
+| 测试基础设施 | Testcontainers.PostgreSql 4.16.0，测试时启动 `postgres:17-alpine` 容器，每个测试使用独立 schema |
 
 ## 漂移记录
 

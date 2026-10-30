@@ -1,0 +1,10 @@
+{
+  "status_code": 200,
+  "headers": {
+    "Content-Type": [
+      "text/event-stream"
+    ]
+  },
+  "body": "",
+  "sse": "event: error\n\ndata: [DONE]\n\n"
+}

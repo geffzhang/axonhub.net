@@ -1,0 +1,6 @@
+{
+  "case": "empty-body",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"response body is empty\"\n}\n",
+  "stderr": ""
+}

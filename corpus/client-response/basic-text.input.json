@@ -1,0 +1,9 @@
+{
+  "status_code": 200,
+  "headers": {
+    "Content-Type": [
+      "application/json"
+    ]
+  },
+  "body": "{\"id\":\"chatcmpl-abc123\",\"object\":\"chat.completion\",\"created\":1725000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Hello there!\"},\"finish_reason\":\"stop\",\"logprobs\":null}]}"
+}

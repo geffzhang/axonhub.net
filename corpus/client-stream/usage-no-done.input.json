@@ -1,0 +1,10 @@
+{
+  "status_code": 200,
+  "headers": {
+    "Content-Type": [
+      "text/event-stream"
+    ]
+  },
+  "body": "",
+  "sse": "data: {\"id\":\"c5\",\"object\":\"chat.completion.chunk\",\"created\":9,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"tail\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"c5\",\"object\":\"chat.completion.chunk\",\"created\":9,\"model\":\"gpt-4o\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n"
+}

@@ -1,0 +1,10 @@
+{
+  "status_code": 200,
+  "headers": {
+    "Content-Type": [
+      "text/event-stream"
+    ]
+  },
+  "body": "",
+  "sse": "data: {\"id\":\"c10\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"k\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"c10\",\"choices\":[],\"cost\":0.001}\n\ndata: [DONE]\n\n"
+}

@@ -1,0 +1,6 @@
+{
+  "case": "malformed",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"failed to unmarshal chat completion response: unexpected end of JSON input\"\n}\n",
+  "stderr": ""
+}

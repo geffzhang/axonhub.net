@@ -1,0 +1,10 @@
+{
+  "status_code": 200,
+  "headers": {
+    "Content-Type": [
+      "text/event-stream"
+    ]
+  },
+  "body": "",
+  "sse": "data: {\"error\":{\"message\":\"rate limited\",\"type\":\"rate_limit\",\"code\":\"429\"}}\n\n"
+}
