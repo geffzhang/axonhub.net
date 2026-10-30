@@ -25,7 +25,8 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
             new OpenAiInboundTransformer(),
             executor,
             metrics,
-            new RetryPolicy { Enabled = true, MaxChannelRetries = 3, MaxSingleChannelRetries = 0, RetryDelayMs = 0 },
+            new StaticRetryPolicyProvider(
+                new RetryPolicy { Enabled = true, MaxChannelRetries = 3, MaxSingleChannelRetries = 0, RetryDelayMs = 0 }),
             TimeProvider.System,
             recorder);
 

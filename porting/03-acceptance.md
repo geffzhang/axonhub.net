@@ -2,7 +2,7 @@
 
 验收是体检报告，不是"我感觉挺好"。
 
-测量时间：2026-10-30（M2 Llm 切片 + M4 持久化层与请求链路落库 + M3 通道选择与 HTTP 切片，含超时、非法 UTF-8 与字段级类型错误路径；C014 鉴权子切片新增 API key 中间件、ClientIP/allowlist 与 `projects` / `users` / `api_keys` 三表；C028 新增 `systems` 表、系统安全设置与 `/v1` IP 黑名单）。
+测量时间：2026-10-30（M2 Llm 切片 + M4 持久化层与请求链路落库 + M3 通道选择与 HTTP 切片，含超时、非法 UTF-8 与字段级类型错误路径；C014 鉴权子切片新增 API key 中间件、ClientIP/allowlist 与 `projects` / `users` / `api_keys` 三表；C028 新增 `systems` 表、系统安全设置与 `/v1` IP 黑名单；C030 新增 `retry_policy` 读取、归一化与每请求 topK）。
 
 ## 构建
 
@@ -19,9 +19,9 @@
 |---|---|---|---|---|---|
 | `AxonHub.Llm.Tests` | 145 | 145 | 0 | 0 | pipeline 重试 15 + 空响应 9 + 聚合器 1 + HTTP 执行器/SSE 增量解码 9 + Go JSON UTF-8 修复与语法文案 10 + 字段级类型错误文案 101 |
 | `AxonHub.Persistence.Tests` | 50 | 50 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 八表仓储 39（projects / users / api_keys 各 4 例，systems 4 例） |
-| `AxonHub.Grains.Tests` | 14 | 14 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 4 + 别名解析 3 + 同分顺序/不计数 2 |
-| `AxonHub.Api.Tests` | 174 | 174 | 0 | 0 | HTTP 切片 72：orchestrator/重试/超时 15（含通道级重试配置 3、流式性能记录语义 2）+ 请求链路落库 5（含鉴权身份传播 1）+ SSE 写帧 7 + 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 8 + 期望流选择 2 + 通道重试谓词与 settings 解析 16 + 通道性能记录 7；API key 鉴权与 ClientIP 73：header 提取 14 + 鉴权器流程 13 + ClientIP/allowlist 与中间件文案 46；系统设置与 IP 黑名单 29：SecuritySettings 回退/归一化 15 + 黑名单放行/命中/受信代理 14 |
-| **合计** | **383** | **383** | **0** | **0** | |
+| `AxonHub.Grains.Tests` | 16 | 16 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 6（含 topK 截断与归一化 2）+ 别名解析 3 + 同分顺序/不计数 2 |
+| `AxonHub.Api.Tests` | 224 | 224 | 0 | 0 | HTTP 切片 73：orchestrator/重试/超时 16（含通道级重试配置 3、流式性能记录语义 2、策略 topK 1）+ 请求链路落库 5（含鉴权身份传播 1）+ SSE 写帧 7 + 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 8 + 期望流选择 2 + 通道重试谓词与 settings 解析 16 + 通道性能记录 7；API key 鉴权与 ClientIP 73：header 提取 14 + 鉴权器流程 13 + ClientIP/allowlist 与中间件文案 46；系统设置与 IP 黑名单 29：SecuritySettings 回退/归一化 15 + 黑名单放行/命中/受信代理 14；重试策略系统设置 49：回退/零值/类型错误 16 + 解析与重复键 7 + 归一化 26 |
+| **合计** | **435** | **435** | **0** | **0** | |
 
 命令：`dotnet test AxonHub.slnx`（2026-10-30，Windows 11 / .NET SDK 10.0.401）。
 
@@ -46,7 +46,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   `AxonHub.Api`（HTTP 宿主、`POST /v1/chat/completions`、请求读取、SSE 写出、orchestrator 适配、
   API key 鉴权中间件与 header 提取、gin 兼容的 ClientIP 与 allowlist 匹配、`projects` / `users` / `api_keys` / `systems` 仓储、
   系统安全设置读取与 `/v1` IP 黑名单中间件）
-- 签名差异 / 运行时差异 / 平台限制：见 `02-differences.md`（C001–C029）
+- 签名差异 / 运行时差异 / 平台限制：见 `02-differences.md`（C001–C032）
 
 ## 协议锁定
 
@@ -63,7 +63,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 ## 端到端
 
 - [x] 进程内 HTTP 切片与通道计数语义：`POST /v1/chat/completions` 的请求读取、候选选择、重试、SSE 写出
-  与通道性能记录由 174 例覆盖，其中 2 例锁定首包超时与非流式超时，5 例锁定请求/执行/用量落库的字段与时机
+  与通道性能记录由 224 例覆盖，其中 2 例锁定首包超时与非流式超时，5 例锁定请求/执行/用量落库的字段与时机
   （含鉴权身份写入 request.api_key_id/project_id、execution.project_id 与 usage 的 api_key_id/project_id，
   以及流式 Close 的聚合回填与响应头边界写入），12 例锁定请求读取与 gzip/deflate/zstd 解码（含参照 Go
   程序产出的 zstd/raw DEFLATE 样本；不启动真实 Kestrel 与 PostgreSQL），1 例锁定消息内容中的非法 UTF-8
@@ -71,7 +71,9 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   73 例锁定 API key 鉴权：header 优先级/前缀/首值/Trim、无 header 与无效 key 的 no-auth 回退、懒建 key 的全字段、
   401/403/500 响应体逐字节、allow_no_auth、allowlist 的精确/CIDR/IPv4 映射地址匹配，以及 gin 受信代理规则
   （默认 `trusted_proxies=[]` 时忽略转发头）；29 例锁定系统安全设置回退/归一化与 IP 黑名单的放行、命中、
-  受信代理取址和 403 信封（另有 6 例 `netip` 前缀边界并入上述鉴权的 ClientIP 用例）
+  受信代理取址和 403 信封（另有 6 例 `netip` 前缀边界并入上述鉴权的 ClientIP 用例）；49 例锁定
+  `retry_policy` 的缺行/读取失败/非法文档回退、`null` 与空对象的零值语义、字段归一化与类型错误；
+  3 例锁定每请求策略读取后的 topK（6 候选打满 6 次尝试）与池的截断/归一化
 - [x] 真实宿主启动（Kestrel + PostgreSQL + Orleans silo） — 启动冒烟通过（2026-10-30）：
   `dotnet AxonHub.Api.dll` 连接 `postgres:17-alpine`，启动时幂等 DDL 建出当时切片的 4 张表
   （C023 新增 `projects` / `users` / `api_keys`、C028 新增 `systems` 后总数为 8；本次冒烟未重跑，鉴权与黑名单路径由进程内测试覆盖）；`GET /health` 返回
@@ -96,12 +98,12 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | 风险 | 影响 | 处置 |
 |---|---|---|
 | 应用容器镜像与部署形态未验证 | 已解决：多阶段 Dockerfile 构建的镜像与 PostgreSQL 容器同网络启动，健康检查、422/502 链路与落库均通过（见「端到端」） | 已关闭（镜像冒烟） |
-| C012：默认 `adaptive` 负载均衡策略链未移植，仅 round-robin 排序 | 默认配置下通道顺序可能与参照不同 | 补齐策略链后按参照用例扩展 |
-| C013：多 API key 通道只用首个 key，无 trace/thread 粘性 | 多 key 通道流量集中，限流/配额分布与参照不同 | 接入 trace/thread 后补 TraceStickyKeyProvider |
+| C012：默认 `adaptive` 负载均衡策略链未移植，仅 round-robin 排序 | 默认配置下通道顺序可能与参照不同；`retry_policy.load_balancer_strategy` 已解析并归一化，但排序仍不按该值切换 | 补齐策略链后按参照用例扩展 |
+| C013：多 API key 通道只用首个 key，无 trace/thread 粘性 | 多 key 通道流量集中，限流/配额分布与参照不同；`trace_sticky_mode` 已解析并归一化，但无 trace/thread 可粘 | 接入 trace/thread 后补 TraceStickyKeyProvider |
 | C014：限流/配额、成本计费、用户鉴权（JWT/OIDC/角色）与通道级请求改写未接入 | API key 鉴权与身份传播已接入（C023），系统安全设置与 IP 黑名单已接入（C028）：`/v1` 先过黑名单再过鉴权，request/execution/usage 的 project/api_key 已回填；但 usage 成本仍为空、无限流/配额、无用户登录与管理面权限、通道级请求改写不生效 | 后续里程碑按参照逐项接入并补测 |
 | C015：zstd 请求体与压缩错误文案 | 已解决：gzip/x-gzip/deflate/zstd 全部解码；gzip 头错误与 zlib/raw DEFLATE 分支逐字/逐分支对齐。残余差异仅损坏/截断压缩体的错误细节（缺 flate 偏移、gzip 尾部校验、zstd 内层文案） | 已关闭（ZstdSharp.Port；残余差异见 C015） |
 | C016：通道级 `retryableStatusCodes` / `retryableErrorPatterns` 未生效 | 已解决：候选携带从 settings 解析的重试规则，`CanRetry` 按参照逐条判断（传输错误、429/5xx、额外状态码、子串/正则文本） | 已关闭（16 个谓词/解析用例 + 3 个端到端用例锁定） |
-| C017：通道性能记录仅成功/失败计数，取消与无终态流语义不同 | 已解决：按 attempt 共享 `ChannelPerformanceRecord`，非流成功与 raw error 由指标中间件标记，流终态分类与聚合完成由持久化副本补记；取消不计故障，无终态且未聚合完整的流不计数。残余仅性能明细字段、自动禁用与异步工作 | 已关闭（7 个记录语义用例 + 2 个端到端用例锁定） |
+| C017：通道性能记录仅成功/失败计数，取消与无终态流语义不同 | 已解决：按 attempt 共享 `ChannelPerformanceRecord`，非流成功与 raw error 由指标中间件标记，流终态分类与聚合完成由持久化副本补记；取消不计故障，无终态且未聚合完整的流不计数。`retry_policy.auto_disable_channel` 的规则已解析并归一化（legacy statuses 迁移），但自动禁用动作未执行；残余还有性能明细字段与异步工作 | 已关闭（7 个记录语义用例 + 2 个端到端用例锁定） |
 | C018：同步 recorder 每次调用一个短生命周期工作单元 | 一次请求链路最多 5 次短事务，request 与 execution 不同事务提交 | 对当前数据路径等价；引入批量/事务需求时重估 |
 | C019：流式响应的 external id / body 与流式 request 响应头未回填 | 已解决：Close 时聚合分块回填两侧归档字段，终态分类与失败路径按参照实现 | 已关闭（测试锁定） |
 | C020：`response_chunks` 与 `store_chunks` / `store_response_body` 存储策略未接入 | 默认配置下与参照一致（chunks 为空、body 写入）；开启存储策略的部署无分块归档 | 随存储策略功能落地 |
@@ -113,4 +115,5 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | 持久化测试依赖 Docker（Testcontainers 启动 `postgres:17-alpine`） | 无 Docker 的环境无法运行持久化测试 | CI 必须提供 Docker；随 M3 补 CI 配置 |
 | C024–C027：鉴权子切片的已接受差异 | noauth key 指向已删除项目时参照触发唯一键冲突返回 500，本实现返回 401 且不改动该行（C024）；owner 选择在参照中无 `ORDER BY`，多 owner 时顺序不定（C025）；无 API key/项目缓存，每次请求读库（C026）；配置载体为 ASP.NET Core 配置而非 YAML 结构体（C027） | 已接受，测试锁定 401 行为（C024/C025），C026/C027 为性能与载体差异 |
 | C028–C029：系统安全设置与 IP 黑名单 | C028 已解决：`systems` 表、`SecuritySettingsOrDefault` 的回退/归一化与 `/v1` 黑名单中间件按参照实现，403 信封逐字节一致；C029 已接受：系统设置无进程内缓存，每个 `/v1` 请求（有 ClientIP 时）读一次库，外部改库立即可见 | 已关闭；缓存随配置/缓存里程碑（C029） |
+| C030–C032：重试策略系统设置 | C030 已解决：`retry_policy` 的读取/归一化与每请求 topK 已接入（49 例 + 3 例），禁用时 1 个候选，策略计数大于默认值时能打满候选；C031 是真实缺口：`upstream_error_policy` 的 hidden/custom 未应用到错误响应；C032 已接受：重复键后跟 `null` 时 .NET 与 Go 解码语义不同 | C030 已关闭；C031 随响应错误改写里程碑；C032 仅手改库可触发 |
 | 其余 Ent 表未移植（data_storages / traces / prompts / roles 等） | 依赖这些表的功能不可用 | 随功能落地 |

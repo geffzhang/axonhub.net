@@ -28,7 +28,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IInboundTransformer _inbound;
     private readonly IExecutor _executor;
     private readonly IChannelMetricsRecorder _metrics;
-    private readonly RetryPolicy _retryPolicy;
+    private readonly IRetryPolicyProvider _retryPolicyProvider;
     private readonly TimeProvider _timeProvider;
     private readonly IRequestChainRecorder? _requestChainRecorder;
 
@@ -37,7 +37,7 @@ public sealed class ChatCompletionOrchestrator
         IInboundTransformer inbound,
         IExecutor executor,
         IChannelMetricsRecorder metrics,
-        RetryPolicy retryPolicy,
+        IRetryPolicyProvider retryPolicyProvider,
         TimeProvider timeProvider,
         IRequestChainRecorder? requestChainRecorder = null)
     {
@@ -45,14 +45,14 @@ public sealed class ChatCompletionOrchestrator
         ArgumentNullException.ThrowIfNull(inbound);
         ArgumentNullException.ThrowIfNull(executor);
         ArgumentNullException.ThrowIfNull(metrics);
-        ArgumentNullException.ThrowIfNull(retryPolicy);
+        ArgumentNullException.ThrowIfNull(retryPolicyProvider);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _grainFactory = grainFactory;
         _inbound = inbound;
         _executor = executor;
         _metrics = metrics;
-        _retryPolicy = retryPolicy;
+        _retryPolicyProvider = retryPolicyProvider;
         _timeProvider = timeProvider;
         _requestChainRecorder = requestChainRecorder;
     }
@@ -121,9 +121,17 @@ public sealed class ChatCompletionOrchestrator
         var llmRequest = _inbound.TransformRequest(request);
         var model = llmRequest.Model;
 
+        // orchestrator.Process reads the policy once per request; the load
+        // balancer derives top-K from the same values (1 + MaxChannelRetries,
+        // or a single candidate when retries are disabled).
+        var retryPolicy = await _retryPolicyProvider
+            .GetRetryPolicyAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var topK = retryPolicy.Enabled ? 1 + retryPolicy.MaxChannelRetries : 1;
+
         var candidates = await _grainFactory
             .GetGrain<IChannelPoolGrain>(model)
-            .SelectAsync(_timeProvider.GetUtcNow(), trackSelection: true, cancellationToken);
+            .SelectAsync(_timeProvider.GetUtcNow(), trackSelection: true, topK, cancellationToken);
 
         if (candidates.Length == 0)
         {
@@ -134,12 +142,12 @@ public sealed class ChatCompletionOrchestrator
 
         var options = new PipelineOptions
         {
-            MaxChannelRetries = _retryPolicy.Enabled ? _retryPolicy.MaxChannelRetries : 0,
-            MaxSameChannelRetries = _retryPolicy.Enabled ? _retryPolicy.MaxSingleChannelRetries : 0,
-            RetryDelay = _retryPolicy.Enabled ? _retryPolicy.RetryDelay : TimeSpan.Zero,
-            EmptyResponseDetection = _retryPolicy.Enabled && _retryPolicy.EmptyResponseDetection,
-            StreamFirstEventTimeout = _retryPolicy.Enabled ? _retryPolicy.StreamFirstEventTimeout : TimeSpan.Zero,
-            NonStreamTimeout = _retryPolicy.Enabled ? _retryPolicy.NonStreamTimeout : TimeSpan.Zero,
+            MaxChannelRetries = retryPolicy.Enabled ? retryPolicy.MaxChannelRetries : 0,
+            MaxSameChannelRetries = retryPolicy.Enabled ? retryPolicy.MaxSingleChannelRetries : 0,
+            RetryDelay = retryPolicy.Enabled ? retryPolicy.RetryDelay : TimeSpan.Zero,
+            EmptyResponseDetection = retryPolicy.Enabled && retryPolicy.EmptyResponseDetection,
+            StreamFirstEventTimeout = retryPolicy.Enabled ? retryPolicy.StreamFirstEventTimeout : TimeSpan.Zero,
+            NonStreamTimeout = retryPolicy.Enabled ? retryPolicy.NonStreamTimeout : TimeSpan.Zero,
         };
         // One performance state per client request, shared by the metrics
         // middleware and the persistent-stream counterpart so both mark the

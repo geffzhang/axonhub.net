@@ -22,7 +22,7 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
             NewChannel(102, "other", """["other-model"]"""),
             NewChannel(103, "also-supports", """["basic-model"]""", weight: 50));
 
-        var result = await Pool("basic-model").SelectAsync(Now, trackSelection: false);
+        var result = await Pool("basic-model").SelectAsync(Now, trackSelection: false, topK: 4);
 
         Assert.Equal(BasicModelOrder, result.Select(candidate => candidate.ChannelId).ToArray());
         Assert.Equal(150.0, result[0].Score);
@@ -40,7 +40,7 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
         var picks = new List<long>();
         for (var iteration = 0; iteration < 20; iteration++)
         {
-            var result = await pool.SelectAsync(Now, trackSelection: true);
+            var result = await pool.SelectAsync(Now, trackSelection: true, topK: 4);
             picks.Add(result[0].ChannelId);
         }
 
@@ -53,7 +53,7 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
     {
         fixture.Channels.Set(NewChannel(1201, "only", """["no-track-model"]"""));
 
-        var result = await Pool("no-track-model").SelectAsync(Now, trackSelection: false);
+        var result = await Pool("no-track-model").SelectAsync(Now, trackSelection: false, topK: 4);
 
         Assert.Single(result);
         Assert.Equal(0, (await Channel(1201).GetMetricsAsync(Now)).RequestCount);
@@ -73,7 +73,7 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
 
         await Channel(302).RecordSelectionAsync(Now.AddMinutes(-1));
 
-        var result = await Pool("health-model").SelectAsync(Now, trackSelection: false);
+        var result = await Pool("health-model").SelectAsync(Now, trackSelection: false, topK: 4);
 
         // The unhealthy channel has the higher raw score (zero requests), so only
         // the health partition can put it last.
@@ -103,13 +103,44 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
         await Channel(405).RecordSelectionAsync(Now.AddSeconds(-30));
         await Channel(405).RecordSelectionAsync(Now.AddSeconds(-30));
 
-        var result = await Pool("topk-model").SelectAsync(Now, trackSelection: false);
+        var result = await Pool("topk-model").SelectAsync(Now, trackSelection: false, topK: 4);
 
         // topK = 1 + default MaxChannelRetries (3); the unhealthy channel ranks
         // first by score but is pushed behind all healthy candidates.
         Assert.Equal(4, result.Length);
         Assert.DoesNotContain(401L, result.Select(candidate => candidate.ChannelId));
         Assert.Equal(402L, result[0].ChannelId);
+    }
+
+    [Fact]
+    public async Task TopKLimitsCandidatesToThePolicyBudget()
+    {
+        fixture.Channels.Set(
+            NewChannel(1301, "a", """["topk-limit-model"]"""),
+            NewChannel(1302, "b", """["topk-limit-model"]"""),
+            NewChannel(1303, "c", """["topk-limit-model"]"""));
+
+        var pool = Pool("topk-limit-model");
+
+        Assert.Single(await pool.SelectAsync(Now, trackSelection: false, topK: 1));
+        Assert.Equal(2, (await pool.SelectAsync(Now, trackSelection: false, topK: 2)).Length);
+        Assert.Equal(3, (await pool.SelectAsync(Now, trackSelection: false, topK: 3)).Length);
+    }
+
+    [Fact]
+    public async Task NonPositiveOrOversizedTopKKeepsEveryCandidate()
+    {
+        fixture.Channels.Set(
+            NewChannel(1311, "a", """["topk-clamp-model"]"""),
+            NewChannel(1312, "b", """["topk-clamp-model"]"""),
+            NewChannel(1313, "c", """["topk-clamp-model"]"""));
+
+        var pool = Pool("topk-clamp-model");
+
+        // calculateTopK: topK <= 0 or topK >= len(candidates) sorts all.
+        Assert.Equal(3, (await pool.SelectAsync(Now, trackSelection: false, topK: 0)).Length);
+        Assert.Equal(3, (await pool.SelectAsync(Now, trackSelection: false, topK: -2)).Length);
+        Assert.Equal(3, (await pool.SelectAsync(Now, trackSelection: false, topK: 10)).Length);
     }
 
     [Fact]
@@ -126,7 +157,7 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
 
         await Channel(502).RecordSelectionAsync(Now.AddMinutes(-1));
 
-        var result = await Pool("cooldown-model").SelectAsync(Now, trackSelection: false);
+        var result = await Pool("cooldown-model").SelectAsync(Now, trackSelection: false, topK: 4);
 
         Assert.Equal(501L, result[0].ChannelId);
     }
@@ -145,7 +176,7 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
 
         await Channel(512).RecordSelectionAsync(Now.AddMinutes(-1));
 
-        var result = await Pool("cooldown-boundary-model").SelectAsync(Now, trackSelection: false);
+        var result = await Pool("cooldown-boundary-model").SelectAsync(Now, trackSelection: false, topK: 4);
 
         // Exactly five minutes elapsed: time.Since(lastFailure) < cooldown is false.
         Assert.Equal(511L, result[0].ChannelId);
@@ -209,15 +240,15 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
                 """["mapped-upstream"]""",
                 settings: """{"modelMappings":[{"from":"mapped-alias","to":"mapped-upstream"}]}"""));
 
-        var prefixed = Assert.Single(await Pool("azure/prefix-upstream").SelectAsync(Now, false));
+        var prefixed = Assert.Single(await Pool("azure/prefix-upstream").SelectAsync(Now, false, topK: 4));
         Assert.Equal(801L, prefixed.ChannelId);
         Assert.Equal("prefix-upstream", prefixed.ActualModel);
 
-        var trimmed = Assert.Single(await Pool("trim-upstream").SelectAsync(Now, false));
+        var trimmed = Assert.Single(await Pool("trim-upstream").SelectAsync(Now, false, topK: 4));
         Assert.Equal(802L, trimmed.ChannelId);
         Assert.Equal("vendor/trim-upstream", trimmed.ActualModel);
 
-        var mapped = Assert.Single(await Pool("mapped-alias").SelectAsync(Now, false));
+        var mapped = Assert.Single(await Pool("mapped-alias").SelectAsync(Now, false, topK: 4));
         Assert.Equal(803L, mapped.ChannelId);
         Assert.Equal("mapped-upstream", mapped.ActualModel);
     }
@@ -231,9 +262,9 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
             """["hidden-target"]""",
             settings: """{"modelMappings":[{"from":"hidden-alias","to":"hidden-target"}],"hideOriginalModels":true,"hideMappedModels":true}"""));
 
-        Assert.Empty(await Pool("hidden-target").SelectAsync(Now, false));
+        Assert.Empty(await Pool("hidden-target").SelectAsync(Now, false, topK: 4));
 
-        var alias = Assert.Single(await Pool("hidden-alias").SelectAsync(Now, false));
+        var alias = Assert.Single(await Pool("hidden-alias").SelectAsync(Now, false, topK: 4));
         Assert.Equal("hidden-target", alias.ActualModel);
     }
 
@@ -246,7 +277,7 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
             """["LOWER-MODEL"]""",
             settings: """{"lowercaseModelId":true}"""));
 
-        var candidate = Assert.Single(await Pool("lower-model").SelectAsync(Now, false));
+        var candidate = Assert.Single(await Pool("lower-model").SelectAsync(Now, false, topK: 4));
 
         Assert.Equal("LOWER-MODEL", candidate.ActualModel);
     }
@@ -259,7 +290,7 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
             NewChannel(1102, "second", """["tie-model"]""", weight: 50),
             NewChannel(1103, "third", """["tie-model"]""", weight: 10));
 
-        var result = await Pool("tie-model").SelectAsync(Now, trackSelection: false);
+        var result = await Pool("tie-model").SelectAsync(Now, trackSelection: false, topK: 4);
 
         Assert.Equal(TieModelOrder, result.Select(candidate => candidate.ChannelId).ToArray());
     }

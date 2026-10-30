@@ -27,12 +27,10 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
     private const long FailureThreshold = 3;
     private static readonly TimeSpan FailureCooldown = TimeSpan.FromMinutes(5);
 
-    // biz.defaultRetryPolicy: Enabled = true, MaxChannelRetries = 3 → topK = 1 + 3.
-    private const int MaxChannelRetries = 3;
-
     public async Task<ChannelCandidate[]> SelectAsync(
         DateTimeOffset now,
         bool trackSelection,
+        int topK,
         CancellationToken cancellationToken = default)
     {
         var model = this.GetPrimaryKeyString();
@@ -88,7 +86,10 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
             }
         }
 
-        var take = Math.Min(1 + MaxChannelRetries, ordered.Count);
+        // calculateTopK normalizes a non-positive or too-large K to the whole
+        // candidate list before sorting; taking after the full sort keeps the
+        // same first K.
+        var take = topK <= 0 || topK >= ordered.Count ? ordered.Count : topK;
         var result = new ChannelCandidate[take];
         for (var index = 0; index < take; index++)
         {

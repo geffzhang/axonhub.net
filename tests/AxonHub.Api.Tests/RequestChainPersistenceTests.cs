@@ -29,7 +29,7 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
             new OpenAiInboundTransformer(),
             executor,
             new RecordingMetricsRecorder(),
-            policy,
+            new StaticRetryPolicyProvider(policy),
             TimeProvider.System,
             recorder);
 

@@ -16,8 +16,14 @@ public interface IChannelPoolGrain : IGrainWithStringKey
     /// result is counted immediately so concurrent requests spread out, exactly
     /// like <c>LoadBalancer.TrackSelection</c>.
     /// </summary>
+    /// <param name="topK">
+    /// Number of candidates to keep (LoadBalancer.calculateTopK). A non-positive
+    /// value, or one at least as large as the candidate list, keeps every
+    /// candidate.
+    /// </param>
     Task<ChannelCandidate[]> SelectAsync(
         DateTimeOffset now,
         bool trackSelection,
+        int topK,
         CancellationToken cancellationToken = default);
 }

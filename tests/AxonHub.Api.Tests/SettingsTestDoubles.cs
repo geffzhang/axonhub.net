@@ -1,3 +1,4 @@
+using AxonHub.Api.Orchestration;
 using AxonHub.Api.Security;
 using AxonHub.Persistence;
 
@@ -60,5 +61,18 @@ internal sealed class FakeSecuritySettingsProvider : ISecuritySettingsProvider
         _ = cancellationToken;
         Calls++;
         return Task.FromResult(Settings);
+    }
+}
+
+/// <summary>Fixed retry policy for tests that do not exercise the settings row.</summary>
+internal sealed class StaticRetryPolicyProvider(RetryPolicy policy) : IRetryPolicyProvider
+{
+    public int Calls { get; private set; }
+
+    public Task<RetryPolicy> GetRetryPolicyAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Task.FromResult(policy);
     }
 }

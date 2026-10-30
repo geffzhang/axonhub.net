@@ -38,11 +38,8 @@ builder.Services.AddSingleton(static _ => new HttpExecutor(new HttpClient(new So
 builder.Services.AddSingleton<IExecutor>(static services => services.GetRequiredService<HttpExecutor>());
 
 builder.Services.AddSingleton<IInboundTransformer, OpenAiInboundTransformer>();
-builder.Services.AddSingleton(static services =>
-    services.GetRequiredService<IConfiguration>().GetSection("RetryPolicy").Get<RetryPolicy>() ?? new RetryPolicy());
 builder.Services.AddSingleton<IChannelMetricsRecorder, GrainChannelMetricsRecorder>();
 builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorder>();
-builder.Services.AddSingleton<ChatCompletionOrchestrator>();
 
 // API key authentication (server.api.auth): the reference reads allow_no_auth
 // from config.yml and the AXONHUB_* environment; both spellings are accepted.
@@ -72,6 +69,10 @@ builder.Services.AddScoped<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
 builder.Services.AddScoped<ISystemStore, SystemStore>();
 builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
+builder.Services.AddScoped<IRetryPolicyProvider, SystemRetryPolicyService>();
+
+// The orchestrator reads the retry policy through the scoped system store.
+builder.Services.AddScoped<ChatCompletionOrchestrator>();
 
 builder.Host.UseOrleans(silo =>
 {

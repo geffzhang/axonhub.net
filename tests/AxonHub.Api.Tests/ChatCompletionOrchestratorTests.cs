@@ -27,7 +27,7 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
             new OpenAiInboundTransformer(),
             executor,
             metrics,
-            policy,
+            new StaticRetryPolicyProvider(policy),
             TimeProvider.System,
             recorder);
 
@@ -306,6 +306,36 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
     }
 
     [Fact]
+    public async Task RetryPolicyMaxChannelRetriesExtendsTheCandidatePool()
+    {
+        // The pool must honor a policy larger than the reference default
+        // (1 + 3); six channels and five channel retries exhaust all six.
+        fixture.Channels.Set(
+            TestChannels.OpenAi(5601, "wide-pool-model"),
+            TestChannels.OpenAi(5602, "wide-pool-model"),
+            TestChannels.OpenAi(5603, "wide-pool-model"),
+            TestChannels.OpenAi(5604, "wide-pool-model"),
+            TestChannels.OpenAi(5605, "wide-pool-model"),
+            TestChannels.OpenAi(5606, "wide-pool-model"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => throw TestChannels.HttpClient(500),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(
+            executor,
+            metrics,
+            FastPolicy(maxChannelRetries: 5, maxSameChannelRetries: 0));
+
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => orchestrator.ProcessAsync(TestChannels.ChatRequest("wide-pool-model")));
+
+        Assert.Equal(6, executor.Calls);
+        Assert.Equal(6, metrics.Failures.Count);
+    }
+
+    [Fact]
     public async Task NonStreamTimeoutSkipsSameChannelRetryAndSwitchesChannel()
     {
         fixture.Channels.Set(
@@ -322,9 +352,11 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
                 : TestChannels.Completion("non-stream-timeout-model"),
         };
         var metrics = new RecordingMetricsRecorder();
-        var policy = FastPolicy();
-        policy.MaxSingleChannelRetries = 2;
-        policy.NonStreamResponseTimeoutSeconds = 1;
+        var policy = FastPolicy() with
+        {
+            MaxSingleChannelRetries = 2,
+            NonStreamResponseTimeoutSeconds = 1,
+        };
         var orchestrator = NewOrchestrator(executor, metrics, policy);
 
         var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("non-stream-timeout-model"));
@@ -363,8 +395,7 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
                 : new ListStream<StreamEvent>(chunks),
         };
         var metrics = new RecordingMetricsRecorder();
-        var policy = FastPolicy();
-        policy.StreamFirstEventTimeoutSeconds = 1;
+        var policy = FastPolicy() with { StreamFirstEventTimeoutSeconds = 1 };
 
         // The persistent-stream counterpart classifies the terminal event; the
         // metrics middleware only reports the record it marks.
