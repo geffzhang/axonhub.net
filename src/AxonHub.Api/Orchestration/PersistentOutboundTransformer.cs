@@ -25,7 +25,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     private readonly ChannelCandidate[] _candidates;
     private readonly TimeProvider _timeProvider;
     private readonly IChannelMetricsRecorder _metrics;
-    private readonly Func<ChannelCandidate, DateTimeOffset, IOutboundTransformer> _factory;
+    private readonly Func<ChannelCandidate, LlmRequest, DateTimeOffset, IOutboundTransformer> _factory;
 
     private int _candidateIndex;
     private IOutboundTransformer? _current;
@@ -35,7 +35,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         ChannelCandidate[] candidates,
         TimeProvider timeProvider,
         IChannelMetricsRecorder metrics,
-        Func<ChannelCandidate, DateTimeOffset, IOutboundTransformer>? factory = null)
+        Func<ChannelCandidate, LlmRequest, DateTimeOffset, IOutboundTransformer>? factory = null)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -136,7 +136,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         var candidate = _candidates[_candidateIndex];
         CurrentChannelId = candidate.ChannelId;
         CurrentModel = candidate.ActualModel;
-        _current = _factory(candidate, _timeProvider.GetUtcNow());
+        _current = _factory(candidate, request, _timeProvider.GetUtcNow());
 
         // The upstream model is per-candidate: the client's requested model is
         // only used to select candidates.

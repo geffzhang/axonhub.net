@@ -1,8 +1,10 @@
 using AxonHub.Abstractions;
 using AxonHub.Grains.Abstractions;
+using AxonHub.Llm;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Transformer.OpenAI.Responses;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -24,9 +26,13 @@ public static class ChannelOutboundFactory
 
     public const string AnthropicChannelType = "anthropic";
 
-    public static IOutboundTransformer Create(ChannelCandidate candidate, DateTimeOffset now)
+    public static IOutboundTransformer Create(
+        ChannelCandidate candidate,
+        LlmRequest request,
+        DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(request);
 
         var enabledKeys = ChannelCredentials.GetEnabledApiKeys(
             candidate.Credentials,
@@ -42,8 +48,18 @@ public static class ChannelOutboundFactory
             enabledKeys,
             ChannelCredentials.GetAllApiKeys(candidate.Credentials));
 
+        // The reference keys each channel's outbounds by API format (the channel
+        // endpoint map). The slice's candidates carry one base URL, so dispatch
+        // on the inbound API format instead: a Responses request to an openai
+        // channel uses the Responses transformer, everything else the chat one.
         return candidate.Type switch
         {
+            OpenAiChannelType when request.ApiFormat
+                is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
+                => ResponsesOutboundTransformer.Create(
+                    candidate.BaseUrl ?? string.Empty,
+                    provider,
+                    provider.KeyIndex),
             OpenAiChannelType => OpenAiOutboundTransformer.Create(
                 candidate.BaseUrl ?? string.Empty,
                 provider,

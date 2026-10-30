@@ -90,6 +90,9 @@ public sealed class Message
     [JsonPropertyName("inline_tool_results")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<InlineToolResult>? InlineToolResults { get; set; }
+
+    /// <summary>Go struct copy semantics: <c>slices.Clone</c> of a message slice.</summary>
+    public Message ShallowClone() => (Message)MemberwiseClone();
 }
 
 /// <summary>Port of llm.ReasoningItem.</summary>

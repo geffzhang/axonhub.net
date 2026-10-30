@@ -30,6 +30,7 @@ public static class ApiFormats
     public const string OpenAIChatCompletion = "openai/chat_completions";
     public const string OpenAICompletion = "openai/completions";
     public const string OpenAIResponse = "openai/responses";
+    public const string OpenAIResponseCompact = "openai/responses/compact";
     public const string AnthropicMessage = "anthropic/messages";
     public const string GeminiContents = "gemini/contents";
 }

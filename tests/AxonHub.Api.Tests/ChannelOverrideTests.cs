@@ -83,7 +83,7 @@ public sealed class ChannelOverrideTests
             [Candidate(settingsJson, actualModel ?? llmRequest.Model)],
             TimeProvider.System,
             new RecordingMetricsRecorder(),
-            static (_, _) => new StubOutboundTransformer());
+            static (_, _, _) => new StubOutboundTransformer());
 
         outbound.TransformRequest(llmRequest);
         return outbound;
@@ -490,7 +490,8 @@ public sealed class ChannelOverrideTests
 
         Assert.Equal(string.Empty, HttpClientUtils.HeaderGet(absent.Headers, "Extra"));
 
-        // The top-level prompt cache key wins over the (unported) compact one.
+        // The top-level prompt cache key wins over the compact one (the
+        // fallback is covered by PromptCacheKeyFallsBackToTheCompactRequest).
         var topLevel = RunHeaders(
             HeaderOps(Operations),
             new LlmRequest { Model = "gpt-5.5", PromptCacheKey = "top-level-cache-key" },
@@ -502,14 +503,26 @@ public sealed class ChannelOverrideTests
     }
 
     /// <summary>
-    /// Reference case "uses prompt cache key from compact request": the port's
-    /// <see cref="LlmRequest"/> has no Compact sub-request (difference C038).
+    /// Reference case "uses prompt cache key from compact request"
+    /// (override_test.go): when the top-level key is absent the render context
+    /// falls back to CompactRequest.PromptCacheKey (override.go:81-85).
     /// </summary>
-    [Fact(Skip = "C038: LlmRequest.Compact is out of this slice; the reference falls back to Compact.PromptCacheKey")]
+    [Fact]
     public void PromptCacheKeyFallsBackToTheCompactRequest()
     {
-        // Reference: LlmRequest{Model:"gpt-5.5", Compact:&CompactRequest{PromptCacheKey:"compact-cache-key"}}
-        // renders {"session_id":"compact-cache-key"}.
+        var request = RunHeaders(
+            HeaderOps(
+                """{"op":"set","path":"Extra","value":"{\"session_id\":{{toJSON .PromptCacheKey}}}"}"""),
+            new LlmRequest
+            {
+                Model = "gpt-5.5",
+                Compact = new CompactRequest { PromptCacheKey = "compact-cache-key" },
+            },
+            NoHeadersRequest());
+
+        Assert.Equal(
+            """{"session_id":"compact-cache-key"}""",
+            HttpClientUtils.HeaderGet(request.Headers, "Extra"));
     }
 
     /// <summary>Port of TestOverrideParametersWithRequestHeaderTemplate_NoRawRequest.</summary>

@@ -31,6 +31,9 @@ public sealed class Tool
     [JsonPropertyName("cache_control")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CacheControl? CacheControl { get; set; }
+
+    /// <summary>Go struct copy semantics: <c>req.Tools[i]</c> after <c>slices.Clone</c>.</summary>
+    public Tool ShallowClone() => (Tool)MemberwiseClone();
 }
 
 /// <summary>Port of llm.Function.</summary>
@@ -58,6 +61,9 @@ public sealed class Function
     [JsonPropertyName("strict")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Strict { get; set; }
+
+    /// <summary>Go struct copy semantics for the nested Function value.</summary>
+    public Function ShallowClone() => (Function)MemberwiseClone();
 }
 
 /// <summary>Port of llm.FunctionCall.</summary>
@@ -72,6 +78,9 @@ public sealed class FunctionCall
 
     [JsonPropertyName("arguments")]
     public string Arguments { get; set; } = string.Empty;
+
+    /// <summary>Go struct copy semantics for the nested FunctionCall value.</summary>
+    public FunctionCall ShallowClone() => (FunctionCall)MemberwiseClone();
 }
 
 /// <summary>Port of llm.ToolCall.</summary>
@@ -103,6 +112,9 @@ public sealed class ToolCall
     [JsonPropertyName("transformer_metadata")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, JsonElement>? TransformerMetadata { get; set; }
+
+    /// <summary>Go struct copy semantics: <c>slices.Clone(src.ToolCalls)</c>.</summary>
+    public ToolCall ShallowClone() => (ToolCall)MemberwiseClone();
 }
 
 /// <summary>Port of llm.ToolFunction.</summary>

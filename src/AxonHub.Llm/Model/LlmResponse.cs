@@ -57,6 +57,11 @@ public sealed class LlmResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, JsonElement>? TransformerMetadata { get; set; }
 
+    /// <summary>Compact sub-response; present when the request was a compact request (llm/model.go:736).</summary>
+    [JsonPropertyName("compact")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CompactResponse? Compact { get; set; }
+
     [JsonIgnore]
     public StreamCompletionEvidence StreamCompletionEvidence { get; set; }
 
@@ -102,6 +107,9 @@ public sealed class Choice
     [JsonPropertyName("transformer_metadata")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, JsonElement>? TransformerMetadata { get; set; }
+
+    /// <summary>Go struct copy semantics: <c>slices.Clone(src.Choices)</c>.</summary>
+    public Choice ShallowClone() => (Choice)MemberwiseClone();
 }
 
 /// <summary>Port of llm.LogprobsContent.</summary>

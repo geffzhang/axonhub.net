@@ -158,6 +158,18 @@ public sealed class LlmRequest
     [JsonPropertyName("transformer_metadata")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, JsonElement>? TransformerMetadata { get; set; }
+
+    /// <summary>Compact sub-request; set when the request is a compact request (llm/model.go:255).</summary>
+    [JsonPropertyName("compact")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CompactRequest? Compact { get; set; }
+
+    /// <summary>Provider/API-format private sidecar data; never serialized (llm/model.go:307).</summary>
+    [JsonIgnore]
+    public ProviderExtensions? ProviderExtensions { get; set; }
+
+    /// <summary>Go: <c>req := *src</c> — a shallow copy that shares nested objects.</summary>
+    public LlmRequest ShallowClone() => (LlmRequest)MemberwiseClone();
 }
 
 /// <summary>Port of llm.StreamOptions.</summary>

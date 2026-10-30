@@ -11,6 +11,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Persistence;
 using Orleans.Hosting;
 
@@ -46,6 +47,11 @@ builder.Services.AddSingleton<IInboundTransformer, OpenAiInboundTransformer>();
 // reuses the chat handler with a different inbound transformer, exactly like
 // internal/server/api/anthropic.go delegates to ChatCompletionHandlers.
 builder.Services.AddSingleton<AnthropicInboundTransformer>();
+
+// The Responses API surface (POST /v1/responses, POST /v1/responses/compact)
+// uses the same chat handler with the Responses inbound transformers.
+builder.Services.AddSingleton<ResponsesInboundTransformer>();
+builder.Services.AddSingleton<ResponsesCompactInboundTransformer>();
 builder.Services.AddSingleton<IChannelMetricsRecorder, GrainChannelMetricsRecorder>();
 builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorder>();
 
@@ -135,5 +141,22 @@ static Task HandleAnthropicMessagesAsync(
 
 app.MapPost("/v1/messages", HandleAnthropicMessagesAsync);
 app.MapPost("/anthropic/v1/messages", HandleAnthropicMessagesAsync);
+
+// Responses API (routes.go: openaiGroup.POST("/responses") and
+// "/responses/compact"). Streaming is not ported in this slice.
+static Task HandleResponsesAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator,
+    ResponsesInboundTransformer responses)
+    => ChatCompletionEndpoint.HandleAsync(context, orchestrator.WithInbound(responses));
+
+static Task HandleResponsesCompactAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator,
+    ResponsesCompactInboundTransformer compact)
+    => ChatCompletionEndpoint.HandleAsync(context, orchestrator.WithInbound(compact));
+
+app.MapPost("/v1/responses", HandleResponsesAsync);
+app.MapPost("/v1/responses/compact", HandleResponsesCompactAsync);
 
 app.Run();

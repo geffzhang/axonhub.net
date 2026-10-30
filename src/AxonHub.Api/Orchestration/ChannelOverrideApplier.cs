@@ -99,7 +99,11 @@ internal static class ChannelOverrideApplier
             Model = llmRequest.Model,
             Metadata = llmRequest.Metadata is null ? TemplateMap.Nil : new TemplateMap(llmRequest.Metadata),
             RequestHeader = BuildRequestHeaderMap(llmRequest),
-            PromptCacheKey = llmRequest.PromptCacheKey ?? string.Empty,
+            // override.go:81-85: a present top-level key wins (even ""); the
+            // compact request's key is only the fallback when it is absent.
+            PromptCacheKey = llmRequest.PromptCacheKey
+                ?? llmRequest.Compact?.PromptCacheKey
+                ?? string.Empty,
             ReasoningEffort = llmRequest.ReasoningEffort ?? string.Empty,
         };
 
