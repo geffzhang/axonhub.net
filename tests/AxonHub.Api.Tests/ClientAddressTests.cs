@@ -215,6 +215,29 @@ public sealed class ClientAddressTests
         Assert.False(ClientAddress.IsAnyAllowedIp(["10.1.2.3"], ["10.0.0.0/"]));
     }
 
+    [Theory]
+    [InlineData("10.0.0.0/+8")]
+    [InlineData("10.0.0.0/08")]
+    [InlineData("10.0.0.0/ 8")]
+    [InlineData("10.0.0.0/8.0")]
+    public void PrefixBitsFollowNetipStrictness(string entry)
+    {
+        // netip.ParsePrefix accepts 1-3 plain decimal digits only.
+        Assert.False(ClientAddress.IsAnyAllowedIp(["10.1.2.3"], [entry]));
+    }
+
+    [Fact]
+    public void ZonedPrefixesAreRejectedLikeNetip()
+    {
+        Assert.False(ClientAddress.IsAnyAllowedIp(["fe80::2"], ["fe80::1%1/64"]));
+    }
+
+    [Fact]
+    public void EntriesAreTrimmedBeforeParsing()
+    {
+        Assert.True(ClientAddress.IsAnyAllowedIp(["10.1.2.3"], [" 10.0.0.0/8 "]));
+    }
+
     private static HttpRequest Request(
         string? forwardedFor = null,
         string? realIp = null,

@@ -272,6 +272,25 @@ public sealed class ApiKeyRecord
     public long? UserId { get; set; }
 }
 
+/// <summary>Row of the reference <c>systems</c> table (key/value settings).</summary>
+public sealed class SystemRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    /// <summary>Settings key; Ent declares it unique.</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>Settings value; JSON for structured settings.</summary>
+    public string Value { get; set; } = string.Empty;
+}
+
 /// <summary>Row of the reference <c>usage_logs</c> table.</summary>
 public sealed class UsageLogRecord
 {

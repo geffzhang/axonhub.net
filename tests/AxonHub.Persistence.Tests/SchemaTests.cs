@@ -15,7 +15,7 @@ public sealed class SchemaTests(PostgresFixture fixture)
     private static readonly string[] ExpectedTables =
     [
         "api_keys", "channels", "projects", "request_executions", "requests",
-        "usage_logs", "users",
+        "systems", "usage_logs", "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -35,6 +35,10 @@ public sealed class SchemaTests(PostgresFixture fixture)
             "id", "created_at", "updated_at", "deleted_at", "email", "status",
             "prefer_language", "password", "first_name", "last_name", "avatar",
             "is_owner", "scopes",
+        ],
+        ["systems"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "key", "value",
         ],
         ["channels"] =
         [
@@ -110,6 +114,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
                     "email", "status", "prefer_language", "password", "first_name",
                     "last_name", "avatar",
                 ],
+            },
+            ["systems"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["character varying"] = ["key", "value"],
             },
             ["channels"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
@@ -201,6 +211,7 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["api_keys_by_user_id"] = ("api_keys", false, ["user_id"]),
             ["api_keys_by_project_id"] = ("api_keys", false, ["project_id"]),
             ["api_keys_by_key"] = ("api_keys", true, ["key"]),
+            ["systems_key_key"] = ("systems", true, ["key"]),
             ["requests_by_api_key_id_created_at"] = ("requests", false, ["api_key_id", "created_at"]),
             ["requests_by_project_id_created_at"] = ("requests", false, ["project_id", "created_at"]),
             ["requests_by_project_id_user_id_created_at"] =

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.AspNetCore.Http;
@@ -161,6 +162,13 @@ public static class ClientAddress
         return false;
     }
 
+    /// <summary>Port of middleware.isBlockedIP: true when any candidate matches.</summary>
+    public static bool IsBlockedIp(IReadOnlyList<string> clientIps, IReadOnlyList<string> blockedIps)
+    {
+        // isBlockedIP and isAnyAllowedIP share isBlockedAddr in the reference.
+        return IsAnyAllowedIp(clientIps, blockedIps);
+    }
+
     /// <summary>Port of middleware.isAnyAllowedIP: true when any candidate matches.</summary>
     public static bool IsAnyAllowedIp(IReadOnlyList<string> clientIps, IReadOnlyList<string> allowedIps)
     {
@@ -231,15 +239,35 @@ public static class ClientAddress
             return false;
         }
 
-        if (!TryParseAddress(text[..slash], out var address))
+        var addressText = text[..slash];
+        if (addressText.Contains('%', StringComparison.Ordinal))
+        {
+            // netip.ParsePrefix rejects zoned addresses.
+            return false;
+        }
+
+        if (!TryParseAddress(addressText, out var address))
         {
             return false;
         }
 
-        if (!int.TryParse(text[(slash + 1)..], out bits) || bits < 0)
+        // netip.ParsePrefix accepts only 1-3 decimal digits for the bit count:
+        // no sign, no whitespace and no leading zeroes ("+8"/"08" fail).
+        var bitsText = text[(slash + 1)..];
+        if (bitsText.Length > 3 || (bitsText.Length > 1 && bitsText[0] == '0'))
         {
             return false;
         }
+
+        foreach (var c in bitsText)
+        {
+            if (c is < '0' or > '9')
+            {
+                return false;
+            }
+        }
+
+        bits = int.Parse(bitsText, CultureInfo.InvariantCulture);
 
         var maxBits = address.AddressFamily == AddressFamily.InterNetwork ? 32 : 128;
         if (bits > maxBits)

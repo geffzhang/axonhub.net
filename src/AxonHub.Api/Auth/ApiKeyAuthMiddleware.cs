@@ -1,6 +1,4 @@
-using System.Text.Json;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Auth;
@@ -34,51 +32,36 @@ public sealed class ApiKeyAuthMiddleware(
         }
         catch (InvalidApiKeyException)
         {
-            await WriteErrorAsync(context, StatusCodes.Status401Unauthorized, "Invalid API key")
+            await AbortResponse.WriteErrorAsync(
+                    context,
+                    StatusCodes.Status401Unauthorized,
+                    "Invalid API key",
+                    context.RequestAborted)
                 .ConfigureAwait(false);
             return;
         }
         catch (ClientIpForbiddenException)
         {
-            await WriteErrorAsync(
+            await AbortResponse.WriteErrorAsync(
                     context,
                     StatusCodes.Status403Forbidden,
-                    "IP address is not allowed for this API key")
+                    "IP address is not allowed for this API key",
+                    context.RequestAborted)
                 .ConfigureAwait(false);
             return;
         }
         catch (Exception ex)
         {
             LogValidationFailed(logger, ex);
-            await WriteErrorAsync(
+            await AbortResponse.WriteErrorAsync(
                     context,
                     StatusCodes.Status500InternalServerError,
-                    "Failed to validate API key")
+                    "Failed to validate API key",
+                    context.RequestAborted)
                 .ConfigureAwait(false);
             return;
         }
 
         await next(context).ConfigureAwait(false);
-    }
-
-    /// <summary>gin's AbortWithStatusJSON: type is the HTTP status text.</summary>
-    private static async Task WriteErrorAsync(HttpContext context, int statusCode, string message)
-    {
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("error");
-            writer.WriteStartObject();
-            writer.WriteString("type", ReasonPhrases.GetReasonPhrase(statusCode));
-            writer.WriteString("message", message);
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-        }
-
-        context.Response.StatusCode = statusCode;
-        context.Response.ContentType = "application/json; charset=utf-8";
-        await context.Response.Body.WriteAsync(buffer.ToArray(), context.RequestAborted)
-            .ConfigureAwait(false);
     }
 }

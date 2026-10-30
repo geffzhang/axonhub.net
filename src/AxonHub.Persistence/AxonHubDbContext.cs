@@ -36,6 +36,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<ApiKeyRecord> ApiKeys => Set<ApiKeyRecord>();
 
+    public DbSet<SystemRecord> Systems => Set<SystemRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -64,6 +66,26 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureUser(modelBuilder.Entity<UserRecord>());
         ConfigureProject(modelBuilder.Entity<ProjectRecord>());
         ConfigureApiKey(modelBuilder.Entity<ApiKeyRecord>());
+        ConfigureSystem(modelBuilder.Entity<SystemRecord>());
+    }
+
+    private static void ConfigureSystem(EntityTypeBuilder<SystemRecord> builder)
+    {
+        builder.ToTable("systems");
+        builder.HasKey(system => system.Id);
+        builder.Property(system => system.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(system => system.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(system => system.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(system => system.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(system => system.Key).HasColumnName("key").HasColumnType("varchar").IsRequired();
+        builder.Property(system => system.Value).HasColumnName("value").HasColumnType("varchar").IsRequired();
+
+        // Ent's field.String("key").Unique() becomes the PostgreSQL constraint
+        // name "<table>_<column>_key".
+        builder.HasIndex(system => system.Key).HasDatabaseName("systems_key_key").IsUnique();
     }
 
     private static void ConfigureUser(EntityTypeBuilder<UserRecord> builder)

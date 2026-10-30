@@ -3,6 +3,7 @@ using AxonHub.Api.Auth;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
+using AxonHub.Api.Security;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
@@ -69,6 +70,8 @@ builder.Services.AddScoped<IProjectStore, ProjectStore>();
 builder.Services.AddScoped<IUserStore, UserStore>();
 builder.Services.AddScoped<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
+builder.Services.AddScoped<ISystemStore, SystemStore>();
+builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
 
 builder.Host.UseOrleans(silo =>
 {
@@ -86,11 +89,15 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-// The reference mounts WithIPBlocklist + WithAPIKeyConfig on its /v1 group;
-// the slice ports the API key middleware (C023).
+// The reference mounts WithIPBlocklist + WithAPIKeyConfig on its API group, in
+// that order. The slice applies both to the ported /v1 surface.
 app.UseWhen(
     static context => context.Request.Path.StartsWithSegments("/v1"),
-    static branch => branch.UseMiddleware<ApiKeyAuthMiddleware>());
+    static branch =>
+    {
+        branch.UseMiddleware<IpBlocklistMiddleware>();
+        branch.UseMiddleware<ApiKeyAuthMiddleware>();
+    });
 
 app.MapPost("/v1/chat/completions", ChatCompletionEndpoint.HandleAsync);
 
