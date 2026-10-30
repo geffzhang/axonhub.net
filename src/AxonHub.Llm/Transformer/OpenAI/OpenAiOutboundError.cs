@@ -76,12 +76,13 @@ public sealed partial class OpenAiOutboundTransformer
         JsonDocument doc;
         try
         {
-            doc = JsonDocument.Parse(body);
+            // Go's json.Unmarshal repairs ill-formed UTF-8 in string literals
+            // before decoding; System.Text.Json refuses it outright.
+            doc = JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(body) ?? body);
         }
         catch (JsonException)
         {
-            // Invalid UTF-8 and similar: Go replaces or accepts it, but this
-            // port's parser cannot. Treated as a decode failure (fallback).
+            // Anything else the reference also fails to decode (fallback).
             return null;
         }
 

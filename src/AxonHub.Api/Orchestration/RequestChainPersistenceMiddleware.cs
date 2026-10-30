@@ -4,6 +4,7 @@ using AxonHub.Api.Http;
 using AxonHub.Api.Persistence;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Json;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
@@ -1174,7 +1175,8 @@ internal static class RequestChainPayloads
 
         try
         {
-            using var document = JsonDocument.Parse(body);
+            // gjson ignores ill-formed UTF-8; json.Unmarshal repairs it.
+            using var document = JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(body) ?? body);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {

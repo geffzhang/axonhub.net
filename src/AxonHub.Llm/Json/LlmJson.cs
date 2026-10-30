@@ -36,7 +36,18 @@ public static class LlmJson
 
     public static string Serialize<T>(T value) => JsonSerializer.Serialize(value, Options);
 
-    public static T? Deserialize<T>(ReadOnlySpan<byte> utf8Json) => JsonSerializer.Deserialize<T>(utf8Json, Options);
+    /// <summary>
+    /// Decodes a UTF-8 body the way Go's <c>json.Unmarshal</c> does: ill-formed
+    /// bytes and lone surrogate escapes inside string literals are repaired to
+    /// U+FFFD first (see <see cref="GoJsonUtf8"/>).
+    /// </summary>
+    public static T? Deserialize<T>(ReadOnlySpan<byte> utf8Json)
+    {
+        var sanitized = GoJsonUtf8.SanitizeStringLiterals(utf8Json);
+        return sanitized is null
+            ? JsonSerializer.Deserialize<T>(utf8Json, Options)
+            : JsonSerializer.Deserialize<T>(sanitized, Options);
+    }
 
     public static T? Deserialize<T>(string json) => JsonSerializer.Deserialize<T>(json, Options);
 }

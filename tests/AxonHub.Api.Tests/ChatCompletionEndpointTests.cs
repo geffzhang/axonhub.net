@@ -30,6 +30,9 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
             recorder);
 
     private static DefaultHttpContext NewContext(string body)
+        => NewContext(Encoding.UTF8.GetBytes(body));
+
+    private static DefaultHttpContext NewContext(byte[] body)
     {
         var context = new DefaultHttpContext();
         context.Request.Method = "POST";
@@ -37,7 +40,7 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
         context.Request.Host = new HostString("gateway.test");
         context.Request.Path = "/v1/chat/completions";
         context.Request.ContentType = "application/json";
-        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
+        context.Request.Body = new MemoryStream(body);
         context.Response.Body = new MemoryStream();
         return context;
     }
@@ -103,6 +106,27 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
         using var body = JsonDocument.Parse(ResponseBody(context));
         Assert.Equal("hi there", body.RootElement
             .GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task IllFormedUtf8InMessageIsRepairedBeforeForwarding()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4805, "utf8-model"));
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("utf8-model"),
+        };
+        var prefix = Encoding.UTF8.GetBytes(
+            "{\"model\":\"utf8-model\",\"messages\":[{\"role\":\"user\",\"content\":\"caf");
+        var suffix = Encoding.UTF8.GetBytes("\"}]}");
+        var context = NewContext([.. prefix, 0xFF, .. suffix]);
+        var orchestrator = NewOrchestrator(executor, new RecordingMetricsRecorder());
+
+        await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
+
+        Assert.Equal(200, context.Response.StatusCode);
+        var outbound = Encoding.UTF8.GetString(Assert.Single(executor.Requests).Body ?? []);
+        Assert.Contains("caf�\"", outbound, StringComparison.Ordinal);
     }
 
     [Fact]

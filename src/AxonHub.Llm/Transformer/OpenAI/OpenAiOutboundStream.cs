@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Json;
 
 namespace AxonHub.Llm.Transformer.OpenAI;
 
@@ -60,7 +61,7 @@ public sealed partial class OpenAiOutboundTransformer
         // Skip non-standard events with an explicit empty choices array and no
         // usage (e.g. inference-cost). The OpenAI include_usage terminal chunk is
         // choices:[] with a non-null usage, and must be kept.
-        using var doc = JsonDocument.Parse(streamEvent.Data.ToArray());
+        using var doc = JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(streamEvent.Data) ?? streamEvent.Data);
         var root = doc.RootElement;
 
         if (root.ValueKind == JsonValueKind.Object
@@ -99,7 +100,7 @@ public sealed partial class OpenAiOutboundTransformer
             return null;
         }
 
-        using var doc = JsonDocument.Parse(streamEvent.Data.ToArray());
+        using var doc = JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(streamEvent.Data) ?? streamEvent.Data);
         var root = doc.RootElement;
 
         // Prefer the explicit SSE event type when present.

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Json;
 using AxonHub.Llm.Pipeline;
 
 namespace AxonHub.Api.Http;
@@ -162,7 +163,9 @@ public static class StreamErrorFormatter
 
         try
         {
-            return JsonDocument.Parse(data);
+            // The reference decodes upstream payloads with json.Unmarshal,
+            // which repairs ill-formed UTF-8 inside strings.
+            return JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(data) ?? data);
         }
         catch (JsonException)
         {

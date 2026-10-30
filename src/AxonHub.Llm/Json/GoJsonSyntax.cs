@@ -712,6 +712,13 @@ public sealed class GoJsonSyntax
             return ((char)c).ToString();
         }
 
+        // strconv.IsPrint accepts Latin-1 letters, punctuation and symbols, so
+        // only the C1 controls, U+00A0 and the soft hyphen U+00AD are escaped.
+        if (c >= 0xA1 && c != 0xAD)
+        {
+            return ((char)c).ToString();
+        }
+
         var sb = new StringBuilder(6);
         if (c < 0x80)
         {

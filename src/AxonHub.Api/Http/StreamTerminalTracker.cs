@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Json;
 
 namespace AxonHub.Api.Http;
 
@@ -156,7 +157,8 @@ public sealed class StreamTerminalTracker(int expectedChoices)
 
         try
         {
-            return JsonDocument.Parse(data);
+            // gjson (the reference's reader here) ignores ill-formed UTF-8.
+            return JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(data) ?? data);
         }
         catch (JsonException)
         {

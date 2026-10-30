@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AxonHub.Llm.Json;
 
 namespace AxonHub.Api.Http;
 
@@ -14,7 +15,9 @@ public static class ExpectedStreamChoices
 
         try
         {
-            using var document = JsonDocument.Parse(body);
+            // gjson ignores ill-formed UTF-8; repair string literals the way
+            // json.Unmarshal would before handing the body to System.Text.Json.
+            using var document = JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(body) ?? body);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {

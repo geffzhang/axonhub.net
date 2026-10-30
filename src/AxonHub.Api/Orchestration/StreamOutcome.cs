@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Json;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -331,7 +332,8 @@ public static class StreamTerminalClassifier
 
         try
         {
-            return JsonDocument.Parse(data);
+            // gjson (the reference's reader here) ignores ill-formed UTF-8.
+            return JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(data) ?? data);
         }
         catch (JsonException)
         {
