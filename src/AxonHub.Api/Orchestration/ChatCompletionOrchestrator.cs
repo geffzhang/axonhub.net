@@ -1,3 +1,4 @@
+using AxonHub.Api.Auth;
 using AxonHub.Api.Persistence;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
@@ -95,12 +96,25 @@ public sealed class ChatCompletionOrchestrator
     /// request row id as soon as it exists, so the HTTP boundary can write the
     /// downstream response headers (middleware/response_headers.go).
     /// </summary>
+    public Task<ChatCompletionResult> ProcessAsync(
+        HttpRequestData request,
+        Action<long>? onRequestCreated,
+        CancellationToken cancellationToken = default)
+        => ProcessAsync(request, RequestIdentity.Default, onRequestCreated, cancellationToken);
+
+    /// <summary>
+    /// Runs one authenticated client request. The identity carries the API key
+    /// and project the reference reads back from the request context when it
+    /// creates request, execution and usage-log rows.
+    /// </summary>
     public async Task<ChatCompletionResult> ProcessAsync(
         HttpRequestData request,
+        RequestIdentity identity,
         Action<long>? onRequestCreated,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(identity);
 
         // Read the requested model the same way the reference's selectCandidates
         // middleware does: after the inbound transform, before any retry.
@@ -151,7 +165,8 @@ public sealed class ChatCompletionOrchestrator
                 _timeProvider,
                 cancellationToken,
                 onRequestCreated,
-                performance);
+                performance,
+                identity);
             options.Middlewares.Add(persistence);
         }
 

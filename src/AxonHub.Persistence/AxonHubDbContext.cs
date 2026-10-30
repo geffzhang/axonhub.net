@@ -30,6 +30,12 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<UsageLogRecord> UsageLogs => Set<UsageLogRecord>();
 
+    public DbSet<UserRecord> Users => Set<UserRecord>();
+
+    public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
+
+    public DbSet<ApiKeyRecord> ApiKeys => Set<ApiKeyRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -55,6 +61,93 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureRequest(modelBuilder.Entity<RequestRecord>());
         ConfigureRequestExecution(modelBuilder.Entity<RequestExecutionRecord>());
         ConfigureUsageLog(modelBuilder.Entity<UsageLogRecord>());
+        ConfigureUser(modelBuilder.Entity<UserRecord>());
+        ConfigureProject(modelBuilder.Entity<ProjectRecord>());
+        ConfigureApiKey(modelBuilder.Entity<ApiKeyRecord>());
+    }
+
+    private static void ConfigureUser(EntityTypeBuilder<UserRecord> builder)
+    {
+        builder.ToTable("users");
+        builder.HasKey(user => user.Id);
+        builder.Property(user => user.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(user => user.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(user => user.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(user => user.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(user => user.Email).HasColumnName("email").HasColumnType("varchar").IsRequired();
+        builder.Property(user => user.Status).HasColumnName("status").HasColumnType("varchar").IsRequired();
+        builder.Property(user => user.PreferLanguage)
+            .HasColumnName("prefer_language")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(user => user.Password).HasColumnName("password").HasColumnType("varchar").IsRequired();
+        builder.Property(user => user.FirstName)
+            .HasColumnName("first_name")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(user => user.LastName).HasColumnName("last_name").HasColumnType("varchar").IsRequired();
+        builder.Property(user => user.Avatar).HasColumnName("avatar").HasColumnType("varchar");
+        builder.Property(user => user.IsOwner).HasColumnName("is_owner").IsRequired();
+        builder.Property(user => user.Scopes).HasColumnName("scopes").HasColumnType("jsonb");
+
+        builder.HasIndex(user => new { user.Email, user.DeletedAt })
+            .HasDatabaseName("user_email_deleted_at")
+            .IsUnique();
+    }
+
+    private static void ConfigureProject(EntityTypeBuilder<ProjectRecord> builder)
+    {
+        builder.ToTable("projects");
+        builder.HasKey(project => project.Id);
+        builder.Property(project => project.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(project => project.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(project => project.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(project => project.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(project => project.Name).HasColumnName("name").HasColumnType("varchar").IsRequired();
+        builder.Property(project => project.Description)
+            .HasColumnName("description")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(project => project.Status).HasColumnName("status").HasColumnType("varchar").IsRequired();
+        builder.Property(project => project.Profiles).HasColumnName("profiles").HasColumnType("jsonb");
+
+        builder.HasIndex(project => new { project.Name, project.DeletedAt })
+            .HasDatabaseName("projects_by_name")
+            .IsUnique();
+    }
+
+    private static void ConfigureApiKey(EntityTypeBuilder<ApiKeyRecord> builder)
+    {
+        builder.ToTable("api_keys");
+        builder.HasKey(apiKey => apiKey.Id);
+        builder.Property(apiKey => apiKey.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(apiKey => apiKey.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(apiKey => apiKey.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(apiKey => apiKey.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(apiKey => apiKey.Key).HasColumnName("key").HasColumnType("varchar").IsRequired();
+        builder.Property(apiKey => apiKey.Name).HasColumnName("name").HasColumnType("varchar").IsRequired();
+        builder.Property(apiKey => apiKey.Type).HasColumnName("type").HasColumnType("varchar").IsRequired();
+        builder.Property(apiKey => apiKey.Status).HasColumnName("status").HasColumnType("varchar").IsRequired();
+        builder.Property(apiKey => apiKey.Scopes).HasColumnName("scopes").HasColumnType("jsonb");
+        builder.Property(apiKey => apiKey.Profiles).HasColumnName("profiles").HasColumnType("jsonb");
+        builder.Property(apiKey => apiKey.AllowedIps)
+            .HasColumnName("allowed_ips")
+            .HasColumnType("jsonb");
+        builder.Property(apiKey => apiKey.ProjectId).HasColumnName("project_id").IsRequired();
+        builder.Property(apiKey => apiKey.UserId).HasColumnName("user_id");
+
+        builder.HasIndex(apiKey => apiKey.UserId).HasDatabaseName("api_keys_by_user_id");
+        builder.HasIndex(apiKey => apiKey.ProjectId).HasDatabaseName("api_keys_by_project_id");
+        builder.HasIndex(apiKey => apiKey.Key).HasDatabaseName("api_keys_by_key").IsUnique();
     }
 
     private static void ConfigureChannel(EntityTypeBuilder<ChannelRecord> builder)

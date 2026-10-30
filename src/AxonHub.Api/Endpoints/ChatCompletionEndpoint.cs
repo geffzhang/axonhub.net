@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AxonHub.Api.Auth;
 using AxonHub.Api.Http;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
@@ -43,11 +44,19 @@ public static class ChatCompletionEndpoint
         // the handler produces the response (middleware/response_headers.go).
         var requestId = 0L;
 
+        // WithAPIKeyConfig publishes the authenticated identity on the request
+        // context; direct calls (tests/internal handlers) fall back to Default.
+        var identity = context.Items.TryGetValue(RequestIdentity.HttpContextItemKey, out var item)
+            && item is RequestIdentity authenticated
+                ? authenticated
+                : RequestIdentity.Default;
+
         ChatCompletionResult result;
         try
         {
             result = await orchestrator.ProcessAsync(
                 genericRequest,
+                identity,
                 id => requestId = id,
                 cancellationToken);
         }

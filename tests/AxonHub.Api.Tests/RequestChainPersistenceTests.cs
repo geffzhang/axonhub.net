@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using AxonHub.Abstractions;
+using AxonHub.Api.Auth;
 using AxonHub.Api.Http;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
@@ -86,6 +87,7 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
         Assert.Equal("processing", request.Status);
         Assert.False(request.Stream);
         Assert.Equal(1L, request.ProjectId);
+        Assert.Null(request.ApiKeyId);
         Assert.Equal("10.0.0.7", request.ClientIp);
         Assert.Equal("xunit", request.UserAgent);
         Assert.Equal("client-persist", BodyModel(request.RequestBody));
@@ -96,6 +98,7 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
         Assert.Equal("openai/chat_completions", execution.Format);
         Assert.Equal("processing", execution.Status);
         Assert.False(execution.Stream);
+        Assert.Equal(1L, execution.ProjectId);
         Assert.Equal(5101L, execution.ChannelId);
         Assert.Equal(request.Id, execution.RequestId);
         Assert.Equal("http://upstream.test/v1/chat/completions", execution.RequestUrl);
@@ -149,6 +152,41 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
 
         Assert.Empty(recorder.ExecutionStatuses);
         Assert.Empty(recorder.RequestStatuses);
+    }
+
+    [Fact]
+    public async Task AuthenticatedIdentityFlowsIntoRequestExecutionAndUsageRows()
+    {
+        // WithAPIKeyConfig publishes the API key and its project on the request
+        // context; the persistence middleware reads both back when it writes the
+        // request row, every execution row and the usage log.
+        fixture.Channels.Set(TestChannels.OpenAi(5501, "persist-identity"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("persist-identity"),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+        var orchestrator = NewOrchestrator(executor, FastPolicy(), recorder);
+        var identity = new RequestIdentity(9, 77);
+
+        var result = await orchestrator.ProcessAsync(
+            ClientRequest("persist-identity"),
+            identity,
+            onRequestCreated: null);
+
+        Assert.Equal(200, result.Response!.StatusCode);
+
+        var request = Assert.Single(recorder.Requests);
+        Assert.Equal(9L, request.ProjectId);
+        Assert.Equal(77L, request.ApiKeyId);
+
+        var execution = Assert.Single(recorder.Executions);
+        Assert.Equal(9L, execution.ProjectId);
+
+        var usage = Assert.Single(recorder.UsageLogs);
+        Assert.Equal(77L, usage.ApiKeyId);
+        Assert.Equal(9L, usage.ProjectId);
     }
 
     [Fact]

@@ -13,10 +13,29 @@ namespace AxonHub.Persistence.Tests;
 public sealed class SchemaTests(PostgresFixture fixture)
 {
     private static readonly string[] ExpectedTables =
-        ["channels", "request_executions", "requests", "usage_logs"];
+    [
+        "api_keys", "channels", "projects", "request_executions", "requests",
+        "usage_logs", "users",
+    ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
     {
+        ["api_keys"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "key", "name", "type",
+            "status", "scopes", "profiles", "allowed_ips", "project_id", "user_id",
+        ],
+        ["projects"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "name", "description",
+            "status", "profiles",
+        ],
+        ["users"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "email", "status",
+            "prefer_language", "password", "first_name", "last_name", "avatar",
+            "is_owner", "scopes",
+        ],
         ["channels"] =
         [
             "id", "created_at", "updated_at", "deleted_at", "type", "base_url", "name",
@@ -66,6 +85,32 @@ public sealed class SchemaTests(PostgresFixture fixture)
     private static readonly Dictionary<string, Dictionary<string, string[]>> ExpectedTypes =
         new(StringComparer.Ordinal)
         {
+            ["api_keys"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "project_id", "user_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] = ["scopes", "profiles", "allowed_ips"],
+                ["character varying"] = ["key", "name", "type", "status"],
+            },
+            ["projects"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] = ["profiles"],
+                ["character varying"] = ["name", "description", "status"],
+            },
+            ["users"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["boolean"] = ["is_owner"],
+                ["jsonb"] = ["scopes"],
+                ["character varying"] =
+                [
+                    "email", "status", "prefer_language", "password", "first_name",
+                    "last_name", "avatar",
+                ],
+            },
             ["channels"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["bigint"] = ["id", "deleted_at", "ordering_weight"],
@@ -151,6 +196,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
         new(StringComparer.Ordinal)
         {
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
+            ["projects_by_name"] = ("projects", true, ["name", "deleted_at"]),
+            ["user_email_deleted_at"] = ("users", true, ["email", "deleted_at"]),
+            ["api_keys_by_user_id"] = ("api_keys", false, ["user_id"]),
+            ["api_keys_by_project_id"] = ("api_keys", false, ["project_id"]),
+            ["api_keys_by_key"] = ("api_keys", true, ["key"]),
             ["requests_by_api_key_id_created_at"] = ("requests", false, ["api_key_id", "created_at"]),
             ["requests_by_project_id_created_at"] = ("requests", false, ["project_id", "created_at"]),
             ["requests_by_project_id_user_id_created_at"] =

@@ -182,6 +182,96 @@ public sealed class RequestExecutionRecord
     public long RequestId { get; set; }
 }
 
+/// <summary>Row of the reference <c>projects</c> table.</summary>
+public sealed class ProjectRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    public string Status { get; set; } = "active";
+
+    /// <summary>ProjectProfiles JSON; Ent stores it as jsonb.</summary>
+    public string? Profiles { get; set; }
+}
+
+/// <summary>Row of the reference <c>users</c> table.</summary>
+public sealed class UserRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Email { get; set; } = string.Empty;
+
+    public string Status { get; set; } = "activated";
+
+    public string PreferLanguage { get; set; } = "en";
+
+    public string Password { get; set; } = string.Empty;
+
+    public string FirstName { get; set; } = string.Empty;
+
+    public string LastName { get; set; } = string.Empty;
+
+    public string? Avatar { get; set; }
+
+    public bool IsOwner { get; set; }
+
+    /// <summary>JSON string array of system scopes.</summary>
+    public string? Scopes { get; set; }
+}
+
+/// <summary>Row of the reference <c>api_keys</c> table.</summary>
+public sealed class ApiKeyRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Key { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>user, service_account, noauth, or personal.</summary>
+    public string Type { get; set; } = "user";
+
+    /// <summary>enabled, disabled, or archived.</summary>
+    public string Status { get; set; } = "enabled";
+
+    /// <summary>JSON string array; Ent's create default is read_channels/write_requests.</summary>
+    public string? Scopes { get; set; }
+
+    /// <summary>APIKeyProfiles JSON.</summary>
+    public string? Profiles { get; set; }
+
+    /// <summary>JSON string array of allowed CIDRs; empty means no restriction.</summary>
+    public string? AllowedIps { get; set; }
+
+    public long ProjectId { get; set; } = 1;
+
+    public long? UserId { get; set; }
+}
+
 /// <summary>Row of the reference <c>usage_logs</c> table.</summary>
 public sealed class UsageLogRecord
 {

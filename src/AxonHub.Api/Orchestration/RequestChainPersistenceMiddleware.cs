@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using AxonHub.Api.Auth;
 using AxonHub.Api.Http;
 using AxonHub.Api.Persistence;
 using AxonHub.Llm;
@@ -40,6 +41,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     private readonly CancellationToken _cancellationToken;
     private readonly Action<long>? _onRequestCreated;
     private readonly ChannelPerformanceState? _performance;
+    private readonly RequestIdentity _identity;
 
     /// <summary>Per-request stream state shared by the inbound and outbound streams.</summary>
     private readonly RequestStreamState _streamState = new();
@@ -71,7 +73,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         TimeProvider timeProvider,
         CancellationToken cancellationToken,
         Action<long>? onRequestCreated = null,
-        ChannelPerformanceState? performance = null)
+        ChannelPerformanceState? performance = null,
+        RequestIdentity? identity = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -87,6 +90,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         _cancellationToken = cancellationToken;
         _onRequestCreated = onRequestCreated;
         _performance = performance;
+        _identity = identity ?? RequestIdentity.Default;
         _requestTerminalTracker = new StreamTerminalTracker(
             ExpectedStreamChoices.FromRequestBody(rawRequest.Body));
     }
@@ -126,7 +130,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             Stream = _stream,
             ClientIp = raw.ClientIp,
             UserAgent = raw.UserAgent,
-            ProjectId = 1,
+            ApiKeyId = _identity.ApiKeyId,
+            ProjectId = _identity.ProjectId,
         });
 
         // The HTTP boundary uses the id to write the downstream response
@@ -174,7 +179,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         {
             CreatedAt = now.UtcDateTime,
             UpdatedAt = now.UtcDateTime,
-            ProjectId = 1,
+            ProjectId = _identity.ProjectId,
             ModelId = attempt.ModelId,
             Format = attempt.ApiFormat,
             RequestBody = RequestChainPayloads.JsonBody(request.JsonBody ?? request.Body),
@@ -870,12 +875,12 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         var now = _timeProvider.GetUtcNow().UtcDateTime;
 
         // CreateUsageLogFromRequest uses request.APIKeyID, which is Go's zero
-        // value when authentication has not run (C014).
+        // value when authentication has not run.
         _recorder.CreateUsageLog(new UsageLogRecord
         {
             CreatedAt = now,
             UpdatedAt = now,
-            ApiKeyId = 0,
+            ApiKeyId = _identity.ApiKeyId ?? 0,
             ModelId = attempt.ModelId,
             PromptTokens = usage.PromptTokens,
             CompletionTokens = usage.CompletionTokens,
@@ -893,7 +898,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             Format = _format,
             CostItems = "[]",
             ChannelId = attempt.ChannelId,
-            ProjectId = 1,
+            ProjectId = _identity.ProjectId,
             RequestId = _requestId,
         });
 
