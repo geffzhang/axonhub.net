@@ -31,7 +31,9 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
             new RecordingMetricsRecorder(),
             new StaticRetryPolicyProvider(policy),
             TimeProvider.System,
-            recorder);
+            recorder,
+            rateLimitTracker: fixture.RateLimitTracker,
+            channelLimiterManager: fixture.ChannelLimiterManager);
 
     private static RetryPolicy FastPolicy(int maxSameChannelRetries = 0)
         => new()

@@ -32,6 +32,8 @@ public sealed class ChatCompletionOrchestrator
     private readonly IUpstreamErrorPolicyApplier _upstreamErrorPolicy;
     private readonly TimeProvider _timeProvider;
     private readonly IRequestChainRecorder? _requestChainRecorder;
+    private readonly ChannelRequestTracker _rateLimitTracker;
+    private readonly ChannelLimiterManager _channelLimiterManager;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -41,7 +43,9 @@ public sealed class ChatCompletionOrchestrator
         IRetryPolicyProvider retryPolicyProvider,
         TimeProvider timeProvider,
         IRequestChainRecorder? requestChainRecorder = null,
-        IUpstreamErrorPolicyApplier? upstreamErrorPolicy = null)
+        IUpstreamErrorPolicyApplier? upstreamErrorPolicy = null,
+        ChannelRequestTracker? rateLimitTracker = null,
+        ChannelLimiterManager? channelLimiterManager = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -58,6 +62,14 @@ public sealed class ChatCompletionOrchestrator
         _upstreamErrorPolicy = upstreamErrorPolicy ?? new UpstreamErrorPolicyApplier(retryPolicyProvider);
         _timeProvider = timeProvider;
         _requestChainRecorder = requestChainRecorder;
+
+        // The reference's orchestrator and load balancer share one tracker and
+        // one limiter manager per process. Production registers both as
+        // singletons (Program.cs) so the pool grain scores against the same
+        // state the middlewares mutate; the defaults only serve direct
+        // constructions in tests.
+        _rateLimitTracker = rateLimitTracker ?? new ChannelRequestTracker(timeProvider);
+        _channelLimiterManager = channelLimiterManager ?? new ChannelLimiterManager();
     }
 
     /// <summary>The inbound transformer, used by the endpoint to map failures.</summary>
@@ -225,6 +237,17 @@ public sealed class ChatCompletionOrchestrator
                 identity);
             options.Middlewares.Add(persistence);
         }
+
+        // Per-channel admission, then RPM admission, then TPM/cooldown
+        // tracking — the reference registers them after the persistence
+        // middleware (orchestrator.go:298-304). The concurrency limiter runs
+        // first so a queue rejection never consumes an RPM slot.
+        options.Middlewares.Add(new ChannelLimiterMiddleware(
+            outbound,
+            _channelLimiterManager,
+            cancellationToken));
+        options.Middlewares.Add(new RateLimitAdmissionMiddleware(outbound, _rateLimitTracker));
+        options.Middlewares.Add(new RateLimitTrackingMiddleware(outbound, _rateLimitTracker, _timeProvider));
 
         var pipeline = new Pipeline(_executor, _inbound, outbound, options);
 

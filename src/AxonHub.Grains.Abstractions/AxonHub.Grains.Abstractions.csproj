@@ -7,4 +7,9 @@
     <ProjectReference Include="..\AxonHub.Abstractions\AxonHub.Abstractions.csproj" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Go 的 tracker 测试与被测代码同包，可直接读写未导出字段；
+         ChannelRequestTracker 的内部测试钩子只对测试程序集开放。 -->
+    <InternalsVisibleTo Include="AxonHub.Grains.Tests" />
+  </ItemGroup>
 </Project>

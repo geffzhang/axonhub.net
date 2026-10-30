@@ -172,6 +172,16 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             return false;
         }
 
+        // Local admission rejection: the same channel cannot make progress until
+        // its local queue/RPM state changes, so bounce immediately to the next
+        // candidate instead of burning a same-channel retry
+        // (outbound.go: isChannelQueueError / isLocalRPMExhaustedError).
+        if (GoErrors.As<ChannelQueueError>(error) is not null
+            || GoErrors.As<LocalRpmExhaustedError>(error) is not null)
+        {
+            return false;
+        }
+
         // Empty response detection: retry the same channel so the pipeline can
         // re-execute the request.
         if (GoErrors.IsAny(

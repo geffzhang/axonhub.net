@@ -48,4 +48,11 @@ public sealed class ChannelCandidate
     /// <summary>Channel-level request rewrite rules (settings.*Override*).</summary>
     [Id(10)]
     public ChannelOverrideSettings OverrideSettings { get; set; } = new();
+
+    /// <summary>
+    /// Channel-level rate limits (settings.rateLimit), or <see langword="null"/>
+    /// when the channel configures none.
+    /// </summary>
+    [Id(11)]
+    public ChannelRateLimitSettings? RateLimitSettings { get; set; }
 }

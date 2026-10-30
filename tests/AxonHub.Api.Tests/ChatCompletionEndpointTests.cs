@@ -35,7 +35,9 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
                     RetryDelayMs = 0,
                 }),
             TimeProvider.System,
-            recorder);
+            recorder,
+            rateLimitTracker: fixture.RateLimitTracker,
+            channelLimiterManager: fixture.ChannelLimiterManager);
 
     private static RetryPolicy NoRetryPolicy(UpstreamErrorPolicy upstreamErrorPolicy)
         => new()

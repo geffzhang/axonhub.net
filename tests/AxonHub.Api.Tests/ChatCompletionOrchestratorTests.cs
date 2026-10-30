@@ -29,7 +29,9 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
             metrics,
             new StaticRetryPolicyProvider(policy),
             TimeProvider.System,
-            recorder);
+            recorder,
+            rateLimitTracker: fixture.RateLimitTracker,
+            channelLimiterManager: fixture.ChannelLimiterManager);
 
     private static RetryPolicy FastPolicy(int maxChannelRetries = 3, int maxSameChannelRetries = 2)
         => new()

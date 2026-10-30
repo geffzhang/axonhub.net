@@ -15,14 +15,20 @@ namespace AxonHub.Grains;
 /// </list>
 /// Scores are summed exactly like the reference; strategies whose data source is
 /// not ported yet contribute the reference's neutral score (see
-/// <see cref="LatencyNeutralScore"/>, <see cref="RateLimitNeutralScore"/> and
-/// <see cref="CircuitBreakerClosedScore"/>; differences C012 residual).
+/// <see cref="LatencyNeutralScore"/> and <see cref="CircuitBreakerClosedScore"/>;
+/// differences C012 residual). The RateLimitAware strategy reads the same
+/// per-silo tracker and limiter manager the API middlewares write
+/// (<see cref="RateLimitAwareScorer"/>).
 /// <para>
 /// The grain key is the request model ID. Orleans serializes calls per key,
 /// which replaces the reference's per-channel metrics locks.
 /// </para>
 /// </summary>
-public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IGrainFactory grainFactory)
+public sealed class ChannelPoolGrain(
+    IEnabledChannelProvider channelProvider,
+    IGrainFactory grainFactory,
+    ChannelRequestTracker rateLimitTracker,
+    ChannelLimiterManager channelLimiterManager)
     : Grain, IChannelPoolGrain
 {
     private const double RoundRobinMaxScore = 150.0;
@@ -37,8 +43,7 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
     // lb_strategy_latency.go: neutral score when no matching samples exist.
     private const double LatencyNeutralScore = 40.0;
 
-    // lb_strategy_rate_limit.go: full score without RPM/TPM/concurrency limits.
-    private const double RateLimitNeutralScore = 100.0;
+    private readonly RateLimitAwareScorer _rateLimitAware = new(rateLimitTracker, channelLimiterManager);
 
     // lb_strategy_model_aware_circuit_breaker.go: the closed-breaker effective
     // weight is 1.0, so its contribution is maxScore (200); the strategy adds a
@@ -74,12 +79,18 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
                 .GetGrain<IChannelGrain>(channel.Id)
                 .GetMetricsAsync(now);
 
+            // Decode the per-channel rate-limit settings once per selection:
+            // RateLimitAware scores against them and the candidates carry them
+            // to the API middlewares.
+            var rateLimit = ChannelRateLimitSettings.Parse(channel.Settings);
+
             scored.Add(new ScoredCandidate(
                 channel,
                 entry,
                 metrics,
+                rateLimit,
                 index,
-                Score(strategy, channel, metrics, now)));
+                Score(strategy, channel, rateLimit, metrics, now)));
         }
 
         if (scored.Count == 0)
@@ -113,18 +124,23 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
         });
 
         // RoundRobinHealthStrategy: after ranking, move recently failing channels
-        // behind healthy ones. Only the round-robin balancer attaches this filter;
-        // the reference sorts every candidate before applying it, then truncates
-        // to top-K. Hard-unavailable scores cannot occur here because the port's
-        // RateLimitAware is always neutral (C012 residual).
+        // behind healthy ones and hard-unavailable ones (exhausted rate limits or
+        // an active cooldown) behind both. Only the round-robin balancer attaches
+        // this filter; the reference sorts every candidate before applying it,
+        // then truncates to top-K (load_balancer.go:290-320).
         IReadOnlyList<ScoredCandidate> ordered = scored;
         if (strategy == LoadBalancerStrategy.RoundRobin)
         {
             var healthy = new List<ScoredCandidate>(scored.Count);
             var unhealthy = new List<ScoredCandidate>(scored.Count);
+            var hardUnavailable = new List<ScoredCandidate>(scored.Count);
             foreach (var candidate in scored)
             {
-                if (IsUnhealthy(candidate.Metrics, now))
+                if (IsHardUnavailableScore(candidate.Score))
+                {
+                    hardUnavailable.Add(candidate);
+                }
+                else if (IsUnhealthy(candidate.Metrics, now))
                 {
                     unhealthy.Add(candidate);
                 }
@@ -135,6 +151,7 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
             }
 
             healthy.AddRange(unhealthy);
+            healthy.AddRange(hardUnavailable);
             ordered = healthy;
         }
 
@@ -159,6 +176,7 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
                 DisabledApiKeys = candidate.Channel.DisabledApiKeys,
                 RetrySettings = ChannelRetrySettings.Parse(candidate.Channel.Settings),
                 OverrideSettings = ChannelOverrideSettings.Parse(candidate.Channel.Settings),
+                RateLimitSettings = candidate.RateLimit,
             };
         }
 
@@ -183,30 +201,38 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
         _ => LoadBalancerStrategy.Adaptive,
     };
 
-    private static double Score(
+    private double Score(
         LoadBalancerStrategy strategy,
         ChannelDescriptor channel,
+        ChannelRateLimitSettings? rateLimit,
         ChannelMetricsSnapshot metrics,
         DateTimeOffset now)
-        => strategy switch
+    {
+        // Every reference balancer appends RateLimitAware last
+        // (lb_strategy_rate_limit.go); the three other strategies are summed in
+        // the reference's registration order.
+        var rateLimitScore = _rateLimitAware.Score(channel.Id, rateLimit);
+
+        return strategy switch
         {
             LoadBalancerStrategy.RoundRobin =>
-                RoundRobinScore(metrics.RequestCount) + RateLimitNeutralScore,
+                RoundRobinScore(metrics.RequestCount) + rateLimitScore,
             LoadBalancerStrategy.Failover =>
                 WeightScore(channel.OrderingWeight)
                 + (Random.Shared.NextDouble() * 0.5)
-                + RateLimitNeutralScore,
+                + rateLimitScore,
             LoadBalancerStrategy.CircuitBreaker =>
                 WeightScore(channel.OrderingWeight)
                 + CircuitBreakerClosedScore
                 + (Random.Shared.NextDouble() * 0.5)
-                + RateLimitNeutralScore,
+                + rateLimitScore,
             _ =>
                 ErrorAwareScore(metrics, now)
                 + WeightRoundRobinScore(metrics.RequestCount, channel.OrderingWeight)
                 + LatencyNeutralScore
-                + RateLimitNeutralScore,
+                + rateLimitScore,
         };
+    }
 
     // lb_strategy_rr.go: RoundRobinStrategy.
     private static double RoundRobinScore(long requestCount)
@@ -262,6 +288,12 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
         return score < 0 ? 0 : score;
     }
 
+    // load_balancer.go:317: a score at or below half the exhausted score can only
+    // come from RateLimitAware's hard-unavailable branches (cooldown, exhausted
+    // RPM/TPM, or fully saturated concurrency).
+    private static bool IsHardUnavailableScore(double score)
+        => score <= RateLimitAwareScorer.ExhaustedScore / 2;
+
     private static bool IsUnhealthy(ChannelMetricsSnapshot metrics, DateTimeOffset now)
     {
         if (metrics.ConsecutiveFailures < FailureThreshold)
@@ -289,6 +321,7 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
         ChannelDescriptor Channel,
         ChannelModelEntry Entry,
         ChannelMetricsSnapshot Metrics,
+        ChannelRateLimitSettings? RateLimit,
         int Index,
         double Score);
 }

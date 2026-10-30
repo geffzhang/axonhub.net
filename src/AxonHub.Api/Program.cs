@@ -4,6 +4,7 @@ using AxonHub.Api.Endpoints;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.Security;
+using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
@@ -40,6 +41,14 @@ builder.Services.AddSingleton<IExecutor>(static services => services.GetRequired
 builder.Services.AddSingleton<IInboundTransformer, OpenAiInboundTransformer>();
 builder.Services.AddSingleton<IChannelMetricsRecorder, GrainChannelMetricsRecorder>();
 builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorder>();
+
+// One rate-limit state per silo, shared by the API middlewares (writes) and the
+// channel pool grain's RateLimitAware scoring (reads) — the reference's
+// per-process ChannelRequestTracker and ChannelLimiterManager
+// (orchestrator.go: loadBalancerConfig).
+builder.Services.AddSingleton(static services => new ChannelRequestTracker(
+    services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton<ChannelLimiterManager>();
 
 // API key authentication (server.api.auth): the reference reads allow_no_auth
 // from config.yml and the AXONHUB_* environment; both spellings are accepted.

@@ -2626,7 +2626,8 @@ internal static class GoTextTemplate
             ? GoNumbers.FormatG(value)
             : value.ToString("G" + precision.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
 
-    private static string GoQuote(string value)
+    /// <summary>Port of <c>strconv.Quote</c> (Go's <c>%q</c> verb).</summary>
+    internal static string GoQuote(string value)
     {
         var builder = new StringBuilder(value.Length + 2);
         builder.Append('"');
