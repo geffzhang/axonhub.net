@@ -127,12 +127,15 @@ public sealed class ChatCompletionOrchestrator
             StreamFirstEventTimeout = _retryPolicy.Enabled ? _retryPolicy.StreamFirstEventTimeout : TimeSpan.Zero,
             NonStreamTimeout = _retryPolicy.Enabled ? _retryPolicy.NonStreamTimeout : TimeSpan.Zero,
         };
+        // One performance state per client request, shared by the metrics
+        // middleware and the persistent-stream counterpart so both mark the
+        // same per-attempt record (PersistenceState.Perf in the reference).
+        var performance = new ChannelPerformanceState();
         options.Middlewares.Add(new ChannelMetricsMiddleware(
             outbound,
             _metrics,
-            _timeProvider,
-            request.Body,
-            cancellationToken));
+            performance,
+            _timeProvider));
 
         // Registered after the metrics middleware so it runs first on the way
         // out, matching the reference order (persistRequestExecution is the last
@@ -147,7 +150,8 @@ public sealed class ChatCompletionOrchestrator
                 request,
                 _timeProvider,
                 cancellationToken,
-                onRequestCreated);
+                onRequestCreated,
+                performance);
             options.Middlewares.Add(persistence);
         }
 

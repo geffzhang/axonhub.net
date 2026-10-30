@@ -20,8 +20,8 @@
 | `AxonHub.Llm.Tests` | 145 | 145 | 0 | 0 | pipeline 重试 15 + 空响应 9 + 聚合器 1 + HTTP 执行器/SSE 增量解码 9 + Go JSON UTF-8 修复与语法文案 10 + 字段级类型错误文案 101 |
 | `AxonHub.Persistence.Tests` | 34 | 34 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 四表仓储 23 |
 | `AxonHub.Grains.Tests` | 14 | 14 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 4 + 别名解析 3 + 同分顺序/不计数 2 |
-| `AxonHub.Api.Tests` | 62 | 62 | 0 | 0 | HTTP 切片：orchestrator/重试/超时 13（含通道级重试配置 3）+ 请求链路落库 4 + SSE 写帧 7 + 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 8 + 期望流选择 2 + 通道重试谓词与 settings 解析 16 |
-| **合计** | **255** | **255** | **0** | **0** | |
+| `AxonHub.Api.Tests` | 71 | 71 | 0 | 0 | HTTP 切片：orchestrator/重试/超时 15（含通道级重试配置 3、流式性能记录语义 2）+ 请求链路落库 4 + SSE 写帧 7 + 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 8 + 期望流选择 2 + 通道重试谓词与 settings 解析 16 + 通道性能记录 7 |
+| **合计** | **264** | **264** | **0** | **0** | |
 
 命令：`dotnet test AxonHub.slnx`（2026-10-30，Windows 11 / .NET SDK 10.0.401）。
 
@@ -60,10 +60,11 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 
 ## 端到端
 
-- [x] 进程内 HTTP 切片：`POST /v1/chat/completions` 的请求读取、候选选择、重试、SSE 写出由 43 例覆盖，
-  其中 2 例锁定首包超时与非流式超时，4 例锁定请求/执行/用量落库的字段与时机（含流式 Close 的聚合回填与
-  响应头边界写入），12 例锁定请求读取与 gzip/deflate/zstd 解码（含参照 Go 程序产出的 zstd/raw DEFLATE 样本；
-  不启动真实 Kestrel 与 PostgreSQL），1 例锁定消息内容中的非法 UTF-8 经入站解码与出站变换后变为 U+FFFD
+- [x] 进程内 HTTP 切片与通道计数语义：`POST /v1/chat/completions` 的请求读取、候选选择、重试、SSE 写出
+  与通道性能记录由 71 例覆盖，其中 2 例锁定首包超时与非流式超时，4 例锁定请求/执行/用量落库的字段与时机
+  （含流式 Close 的聚合回填与响应头边界写入），12 例锁定请求读取与 gzip/deflate/zstd 解码（含参照 Go
+  程序产出的 zstd/raw DEFLATE 样本；不启动真实 Kestrel 与 PostgreSQL），1 例锁定消息内容中的非法 UTF-8
+  经入站解码与出站变换后变为 U+FFFD，7 例锁定性能记录终态映射，2 例端到端锁定无终态流不计数与聚合完成计成功
 - [x] 真实宿主启动（Kestrel + PostgreSQL + Orleans silo） — 启动冒烟通过（2026-10-30）：
   `dotnet AxonHub.Api.dll` 连接 `postgres:17-alpine`，启动时幂等 DDL 建出 4 张表；`GET /health` 返回
   `200 {"status":"ok"}`；未知模型返回 422 `invalid_model_error`；向 `channels` 插入一条指向拒绝连接端口的
@@ -91,7 +92,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C014：鉴权、限流、成本与通道级请求改写未接入 | 端点对任意客户端开放，usage 已落库但成本为空、通道级改写不生效 | 后续里程碑按参照逐项接入并补测 |
 | C015：zstd 请求体与压缩错误文案 | 已解决：gzip/x-gzip/deflate/zstd 全部解码；gzip 头错误与 zlib/raw DEFLATE 分支逐字/逐分支对齐。残余差异仅损坏/截断压缩体的错误细节（缺 flate 偏移、gzip 尾部校验、zstd 内层文案） | 已关闭（ZstdSharp.Port；残余差异见 C015） |
 | C016：通道级 `retryableStatusCodes` / `retryableErrorPatterns` 未生效 | 已解决：候选携带从 settings 解析的重试规则，`CanRetry` 按参照逐条判断（传输错误、429/5xx、额外状态码、子串/正则文本） | 已关闭（16 个谓词/解析用例 + 3 个端到端用例锁定） |
-| C017：通道性能记录仅成功/失败计数，取消与无终态流语义不同 | 取消不影响健康分；省略终态且靠聚合判定的流不计成功 | 需要性能明细/自动禁用时补齐 |
+| C017：通道性能记录仅成功/失败计数，取消与无终态流语义不同 | 已解决：按 attempt 共享 `ChannelPerformanceRecord`，非流成功与 raw error 由指标中间件标记，流终态分类与聚合完成由持久化副本补记；取消不计故障，无终态且未聚合完整的流不计数。残余仅性能明细字段、自动禁用与异步工作 | 已关闭（7 个记录语义用例 + 2 个端到端用例锁定） |
 | C018：同步 recorder 每次调用一个短生命周期工作单元 | 一次请求链路最多 5 次短事务，request 与 execution 不同事务提交 | 对当前数据路径等价；引入批量/事务需求时重估 |
 | C019：流式响应的 external id / body 与流式 request 响应头未回填 | 已解决：Close 时聚合分块回填两侧归档字段，终态分类与失败路径按参照实现 | 已关闭（测试锁定） |
 | C020：`response_chunks` 与 `store_chunks` / `store_response_body` 存储策略未接入 | 默认配置下与参照一致（chunks 为空、body 写入）；开启存储策略的部署无分块归档 | 随存储策略功能落地 |

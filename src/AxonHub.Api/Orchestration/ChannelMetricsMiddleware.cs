@@ -1,4 +1,3 @@
-using AxonHub.Api.Http;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -12,130 +11,163 @@ namespace AxonHub.Api.Orchestration;
 /// records a success or a failure against the channel that served it.
 /// </summary>
 /// <remarks>
-/// The reference marks success when the unified response is produced and failure
-/// in the raw-error hook; streams are marked when their terminal event is
-/// observed. Client cancellation marks neither (a canceled attempt is not a
-/// channel fault).
+/// The record is created per outbound attempt (OnOutboundRawRequest) and shared
+/// with the request-chain middleware through <see cref="ChannelPerformanceState"/>,
+/// exactly like the reference keeps one PerformanceRecord on PersistenceState.
+/// Non-stream success and raw errors are marked here; stream terminal states and
+/// aggregated completion are marked by the persistent-stream counterpart, so a
+/// canceled stream is never counted as a channel fault and a stream that ends
+/// without a terminal event (and without a complete aggregate) records nothing.
+/// The on-close hook reports the record after the inner stream has finalized,
+/// mirroring recordPerformanceStream.Close + enqueueCompletedPerformance.
 /// </remarks>
 public sealed class ChannelMetricsMiddleware : DummyMiddleware
 {
     private readonly PersistentOutboundTransformer _outbound;
     private readonly IChannelMetricsRecorder _metrics;
+    private readonly ChannelPerformanceState _state;
     private readonly TimeProvider _timeProvider;
-    private readonly CancellationToken _cancellationToken;
-    private readonly int _expectedChoices;
+
+    private bool _stream;
 
     public ChannelMetricsMiddleware(
         PersistentOutboundTransformer outbound,
         IChannelMetricsRecorder metrics,
-        TimeProvider timeProvider,
-        byte[]? requestBody,
-        CancellationToken cancellationToken)
+        ChannelPerformanceState state,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(outbound);
         ArgumentNullException.ThrowIfNull(metrics);
+        ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _outbound = outbound;
         _metrics = metrics;
+        _state = state;
         _timeProvider = timeProvider;
-        _cancellationToken = cancellationToken;
-        _expectedChoices = ExpectedStreamChoices.FromRequestBody(requestBody);
     }
 
-    public override LlmResponse TransformOutboundLlmResponse(LlmResponse response)
+    /// <summary>Port of performanceRecording.OnInboundLlmRequest: the client's stream intent.</summary>
+    public override LlmRequest TransformInboundLlmRequest(LlmRequest request)
     {
-        _metrics.RecordSuccess(_outbound.CurrentChannelId, _timeProvider.GetUtcNow());
-        return response;
-    }
+        ArgumentNullException.ThrowIfNull(request);
 
-    public override void OnOutboundRawError(Exception error)
-    {
-        if (IsCancellation(error))
-        {
-            return;
-        }
-
-        _metrics.RecordFailure(_outbound.CurrentChannelId, _timeProvider.GetUtcNow());
-    }
-
-    public override IStream<LlmResponse> TransformOutboundLlmStream(IStream<LlmResponse> stream)
-        => new MetricsRecordingStream(stream, this);
-
-    private void ObserveStreamEnd(bool terminalSeen, Exception? streamError)
-    {
-        if (_cancellationToken.IsCancellationRequested || IsCancellation(streamError))
-        {
-            return;
-        }
-
-        if (streamError is not null)
-        {
-            _metrics.RecordFailure(_outbound.CurrentChannelId, _timeProvider.GetUtcNow());
-            return;
-        }
-
-        // A stream that ends without a terminal event leaves the outcome to the
-        // persistence layer in the reference; the port records only evidence it
-        // actually has (C014).
-        if (terminalSeen)
-        {
-            _metrics.RecordSuccess(_outbound.CurrentChannelId, _timeProvider.GetUtcNow());
-        }
-    }
-
-    private static bool IsCancellation(Exception? error)
-    {
-        for (var current = error; current is not null; current = current.InnerException)
-        {
-            if (current is OperationCanceledException)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        _stream = request.Stream is true;
+        return request;
     }
 
     /// <summary>
-    /// Port of recordPerformanceStream.Observe: remembers the [DONE] sentinel and
-    /// per-choice finish reasons, and reports a success once every expected
-    /// choice has finished.
+    /// Port of performanceRecording.OnOutboundRawRequest: a fresh record per
+    /// attempt; the channel is the one about to serve it.
     /// </summary>
-    private sealed class MetricsRecordingStream : IStream<LlmResponse>
+    public override HttpRequestData TransformOutboundRawRequest(HttpRequestData request)
     {
-        private readonly IStream<LlmResponse> _stream;
-        private readonly ChannelMetricsMiddleware _owner;
-        private readonly HashSet<int> _choices = [];
-        private readonly HashSet<int> _finished = [];
-        private bool _terminal;
+        ArgumentNullException.ThrowIfNull(request);
+
+        var channelId = _outbound.CurrentChannelId;
+        if (channelId <= 0)
+        {
+            return request;
+        }
+
+        _state.Current = new ChannelPerformanceRecord
+        {
+            ChannelId = channelId,
+            StartTime = _timeProvider.GetUtcNow(),
+            Stream = _stream,
+        };
+
+        return request;
+    }
+
+    /// <summary>Port of performanceRecording.OnOutboundLlmResponse: a non-stream success.</summary>
+    public override LlmResponse TransformOutboundLlmResponse(LlmResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (_state.Current is { } record)
+        {
+            record.MarkSuccess(_timeProvider.GetUtcNow());
+            Record(record);
+        }
+
+        return response;
+    }
+
+    /// <summary>
+    /// Port of performanceRecording.OnOutboundRawError: a client cancellation is
+    /// canceled, not a channel fault; every other error marks the attempt failed.
+    /// </summary>
+    public override void OnOutboundRawError(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+
+        if (_state.Current is not { } record)
+        {
+            return;
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        if (StreamOutcome.IsContextCancellation(error))
+        {
+            // MarkCanceled still completes the record; RecordPerformance records
+            // nothing for a canceled attempt (channel_metrics.go).
+            record.MarkCanceled(now);
+        }
+        else
+        {
+            // Port of performance.ExtractErrorCode: only an HTTP error carries a
+            // provider status; anything else defaults to 500.
+            var statusCode = GoErrors.As<HttpClientError>(error) is { } httpError
+                ? httpError.StatusCode
+                : 500;
+            record.MarkFailed(statusCode, error.Message, now);
+        }
+
+        Record(record);
+    }
+
+    /// <summary>
+    /// Port of performanceRecording.OnOutboundLlmStream. recordPerformanceStream
+    /// only reports the record on Close; the outcome itself was marked by the
+    /// persistent stream (terminal event or aggregation). Disposing the inner
+    /// stream first lets the aggregated-completion mark happen before the report,
+    /// matching OutboundPersistentStream.Close and enqueueCompletedPerformance.
+    /// </summary>
+    public override IStream<LlmResponse> TransformOutboundLlmStream(IStream<LlmResponse> stream)
+        => new PerformanceStream(stream, this);
+
+    /// <summary>
+    /// Port of ChannelService.RecordPerformance's counter side: canceled attempts
+    /// (and incomplete records) change neither successes nor failures.
+    /// </summary>
+    private void Record(ChannelPerformanceRecord? record)
+    {
+        if (record is not { IsValid: true } || record.Canceled)
+        {
+            return;
+        }
+
+        if (record.Success)
+        {
+            _metrics.RecordSuccess(record.ChannelId, record.EndTime);
+        }
+        else
+        {
+            _metrics.RecordFailure(record.ChannelId, record.EndTime);
+        }
+    }
+
+    private sealed class PerformanceStream(IStream<LlmResponse> stream, ChannelMetricsMiddleware owner)
+        : IStream<LlmResponse>
+    {
         private bool _disposed;
 
-        public MetricsRecordingStream(IStream<LlmResponse> stream, ChannelMetricsMiddleware owner)
-        {
-            _stream = stream;
-            _owner = owner;
-        }
+        public LlmResponse? Current => stream.Current;
 
-        public LlmResponse? Current { get; private set; }
+        public Exception? Err => stream.Err;
 
-        public Exception? Err => _stream.Err;
-
-        public bool Next()
-        {
-            if (!_stream.Next())
-            {
-                return false;
-            }
-
-            Current = _stream.Current;
-            if (Current is not null)
-            {
-                Observe(Current);
-            }
-
-            return true;
-        }
+        public bool Next() => stream.Next();
 
         public void Dispose()
         {
@@ -147,36 +179,11 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
             _disposed = true;
             try
             {
-                _owner.ObserveStreamEnd(_terminal, _stream.Err);
+                stream.Dispose();
             }
             finally
             {
-                _stream.Dispose();
-            }
-        }
-
-        private void Observe(LlmResponse response)
-        {
-            if (ReferenceEquals(response, LlmResponse.DoneResponse) || response.Object == "[DONE]")
-            {
-                _terminal = true;
-                return;
-            }
-
-            foreach (var choice in response.Choices)
-            {
-                _choices.Add(choice.Index);
-                if (!string.IsNullOrEmpty(choice.FinishReason))
-                {
-                    _finished.Add(choice.Index);
-                }
-            }
-
-            if (_owner._expectedChoices > 0
-                && _finished.Count >= _owner._expectedChoices
-                && _choices.Count == _owner._expectedChoices)
-            {
-                _terminal = true;
+                owner.Record(owner._state.Current);
             }
         }
     }

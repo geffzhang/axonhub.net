@@ -39,6 +39,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     private readonly TimeProvider _timeProvider;
     private readonly CancellationToken _cancellationToken;
     private readonly Action<long>? _onRequestCreated;
+    private readonly ChannelPerformanceState? _performance;
 
     /// <summary>Per-request stream state shared by the inbound and outbound streams.</summary>
     private readonly RequestStreamState _streamState = new();
@@ -69,7 +70,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         HttpRequestData rawRequest,
         TimeProvider timeProvider,
         CancellationToken cancellationToken,
-        Action<long>? onRequestCreated = null)
+        Action<long>? onRequestCreated = null,
+        ChannelPerformanceState? performance = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -84,6 +86,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         _timeProvider = timeProvider;
         _cancellationToken = cancellationToken;
         _onRequestCreated = onRequestCreated;
+        _performance = performance;
         _requestTerminalTracker = new StreamTerminalTracker(
             ExpectedStreamChoices.FromRequestBody(rawRequest.Body));
     }
@@ -456,12 +459,17 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
 
             // markPerformanceTerminal stops the latency clock at the terminal
             // event, not at Close.
-            attempt.EndedAt = _timeProvider.GetUtcNow();
+            var now = _timeProvider.GetUtcNow();
+            attempt.EndedAt = now;
 
             if (state != StreamTerminalState.Completed)
             {
                 attempt.TerminalError = StreamTerminalClassifier.TerminalErrorMessage(streamEvent, state);
             }
+
+            // The channel outcome follows the same classification: completed and
+            // incomplete count as success, canceled is not a channel fault.
+            _performance?.Current?.MarkStreamTerminal(state, attempt.TerminalError, now);
 
             attempt.Outcome.ObserveTerminal(state);
         }
@@ -559,8 +567,10 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
 
             if (aggregatedCompleted)
             {
-                // markPerformanceTerminal in the validated/aggregated branch.
+                // markPerformanceTerminal in the validated/aggregated branch: a
+                // complete aggregate without a terminal event counts as success.
                 attempt.EndedAt ??= now;
+                _performance?.Current?.MarkStreamTerminal(StreamTerminalState.Completed, string.Empty, now);
             }
 
             if (outcome.HasFinalEvidence)

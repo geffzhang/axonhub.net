@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AxonHub.Api.Http;
 using AxonHub.Api.Orchestration;
+using AxonHub.Api.Persistence;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Transformer;
@@ -19,14 +20,16 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
     private ChatCompletionOrchestrator NewOrchestrator(
         ScriptedExecutor executor,
         IChannelMetricsRecorder metrics,
-        RetryPolicy policy)
+        RetryPolicy policy,
+        IRequestChainRecorder? recorder = null)
         => new(
             fixture.Cluster.GrainFactory,
             new OpenAiInboundTransformer(),
             executor,
             metrics,
             policy,
-            TimeProvider.System);
+            TimeProvider.System,
+            recorder);
 
     private static RetryPolicy FastPolicy(int maxChannelRetries = 3, int maxSameChannelRetries = 2)
         => new()
@@ -362,7 +365,10 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
         var metrics = new RecordingMetricsRecorder();
         var policy = FastPolicy();
         policy.StreamFirstEventTimeoutSeconds = 1;
-        var orchestrator = NewOrchestrator(executor, metrics, policy);
+
+        // The persistent-stream counterpart classifies the terminal event; the
+        // metrics middleware only reports the record it marks.
+        var orchestrator = NewOrchestrator(executor, metrics, policy, new RecordingRequestChainRecorder());
 
         var result = await orchestrator.ProcessAsync(
             TestChannels.ChatRequest("first-event-timeout-model", stream: true));
@@ -419,7 +425,11 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
             OnStream = (_, _, _) => new ListStream<StreamEvent>(chunks),
         };
         var metrics = new RecordingMetricsRecorder();
-        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy());
+        var orchestrator = NewOrchestrator(
+            executor,
+            metrics,
+            FastPolicy(),
+            new RecordingRequestChainRecorder());
 
         var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("stream-model", stream: true));
 
@@ -439,6 +449,99 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
         Assert.True(events.Count >= 2);
         Assert.Equal("[DONE]", System.Text.Encoding.UTF8.GetString(events[^1].Data));
         Assert.Equal(new long[] { 4601 }, metrics.Successes);
+        Assert.Empty(metrics.Failures);
+    }
+
+    /// <summary>
+    /// A transport error that ends a stream without a terminal event is a
+    /// persistence failure, but the reference's markPerformanceTerminal never
+    /// runs for it: the channel keeps neither a success nor a failure (C017).
+    /// </summary>
+    [Fact]
+    public async Task StreamTransportErrorWithoutTerminalEventDoesNotTouchChannelHealth()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(5101, "no-terminal-model"));
+
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"no-terminal-model\",\"choices\":[{\"index\":0,"
+                + "\"delta\":{\"role\":\"assistant\",\"content\":\"par\"},\"finish_reason\":null}]}"),
+        };
+
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(
+                chunks,
+                new IOException("connection reset")),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(
+            executor,
+            metrics,
+            FastPolicy(),
+            new RecordingRequestChainRecorder());
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("no-terminal-model", stream: true));
+
+        Assert.NotNull(result.Stream);
+        while (result.Stream!.Next())
+        {
+            _ = result.Stream.Current;
+        }
+
+        result.Stream.Dispose();
+
+        Assert.Empty(metrics.Successes);
+        Assert.Empty(metrics.Failures);
+    }
+
+    /// <summary>
+    /// No terminal event, but every buffered choice reported a finish reason and
+    /// the aggregate is complete: the reference marks the attempt successful
+    /// (OutboundPersistentStream.Close's aggregated-completion branch), even
+    /// though the stream tracker never saw a terminal event (here because the
+    /// client asked for two choices and the provider sent one).
+    /// </summary>
+    [Fact]
+    public async Task AggregatedCompletionWithoutTerminalEventCountsSuccess()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(5102, "aggregate-model"));
+
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-9\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"aggregate-model\",\"choices\":[{\"index\":0,"
+                + "\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}"),
+            TestChannels.Data("{\"id\":\"chatcmpl-9\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"aggregate-model\",\"choices\":[{\"index\":0,\"delta\":{},"
+                + "\"finish_reason\":\"stop\"}],"
+                + "\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}"),
+        };
+
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(chunks),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(
+            executor,
+            metrics,
+            FastPolicy(),
+            new RecordingRequestChainRecorder());
+
+        var result = await orchestrator.ProcessAsync(
+            TestChannels.ChatRequest("aggregate-model", stream: true, n: 2));
+
+        Assert.NotNull(result.Stream);
+        while (result.Stream!.Next())
+        {
+            _ = result.Stream.Current;
+        }
+
+        result.Stream.Dispose();
+
+        Assert.Equal(new long[] { 5102 }, metrics.Successes);
         Assert.Empty(metrics.Failures);
     }
 }
