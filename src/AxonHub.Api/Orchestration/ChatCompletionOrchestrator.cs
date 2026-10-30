@@ -200,6 +200,13 @@ public sealed class ChatCompletionOrchestrator
             performance,
             _timeProvider));
 
+        // Channel request rewriting runs after the outbound transform (so the
+        // body it patches is the provider body) and before persistence (so the
+        // stored request execution sees the rewritten body and headers), the
+        // same order as override.go's registration in orchestrator.go.
+        options.Middlewares.Add(new ChannelOverrideBodyMiddleware(outbound));
+        options.Middlewares.Add(new ChannelOverrideHeaderMiddleware(outbound));
+
         // Registered after the metrics middleware so it runs first on the way
         // out, matching the reference order (persistRequestExecution is the last
         // outbound middleware).

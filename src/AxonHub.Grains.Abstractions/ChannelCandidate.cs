@@ -44,4 +44,8 @@ public sealed class ChannelCandidate
     /// <summary>Channel-level extra retry rules (settings.retryable*).</summary>
     [Id(9)]
     public ChannelRetrySettings RetrySettings { get; set; } = new();
+
+    /// <summary>Channel-level request rewrite rules (settings.*Override*).</summary>
+    [Id(10)]
+    public ChannelOverrideSettings OverrideSettings { get; set; } = new();
 }

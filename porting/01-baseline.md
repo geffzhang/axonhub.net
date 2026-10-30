@@ -17,6 +17,7 @@
 | `internal/server/middleware/ip_blocklist_test.go`（`TestIsBlockedIP` 9 例、`TestClientIPCandidates*` 3 例）与 `internal/server/biz/system.go` 的 `SecuritySettingsOrDefault` / `normalizeSecuritySettings` 分支（上游无对应单测） | `tests/AxonHub.Api.Tests/IpBlocklistMiddlewareTests.cs`（14 例）+ `SystemSettingsServiceTests.cs`（15 例）+ `ClientAddressTests` 的前缀边界 6 例 | 已改写（9/9 + 3/3 已移植） | `TestIsBlockedIP` 的 9 个子测试逐条覆盖（精确 / CIDR / Trim / IPv6 / 多 candidate / 非法 candidate / 非法条目 / 不匹配）；`TestClientIPCandidates*` 的三种场景改写为中间件与 `ClientAddress` 用例（不受信对端忽略转发头、受信对端取右起首个不受信跳、单一 candidate 的等价去重）。系统设置无上游单测，按源码分支建立：缺行 / 非法 JSON / JSON null / 空对象 / 缺图标 / 大小写键 / 未知字段 / 重复键 / 存储失败 / 软删除全部回退默认，`blocked_ips` 的 Trim / 去空 / 精确去重 / 保序归一化，以及图标开关覆盖。另补 `netip.ParsePrefix` 的 1-3 位十进制、无前导零 / 符号 / 空白、拒绝 zone 的边界 6 例。`WithIPBlocklist` 的 403 响应体与「ClientIP 为空不读设置」由中间件用例锁定。 |
 | `internal/server/biz/system_test.go` 的 `TestNormalizeRetryPolicy_LoadBalancerStrategy` / `TestNormalizeRetryPolicy_MigratesLegacyStatuses`、`system_retry_policy_test.go`，以及 `system.go:1042-1172` 的读取分支（上游单测仅覆盖归一化） | `tests/AxonHub.Api.Tests/SystemRetryPolicyServiceTests.cs`（49 例）+ `ChatCompletionOrchestratorTests` / `ChannelSelectionTests` 的 topK 3 例 | 已改写（子集） | 逐条对照：策略归一化 7 例（合法四种、`weighted`→failover、非法/空→adaptive）、legacy `statuses`→永久规则（含既有 `rules` 优先）、`custom` 空白消息→hidden；参照未覆盖的读取分支按源码建立：缺行/软删除/读库失败/非法文档回退 `defaultRetryPolicy`，`null` 与 `{}` 的零值策略，`null` 标量保持零值，超时夹取 `[0,600]`，其余字段不夹取，嵌套类型错误回退默认。参照的 API-key principal 回归用例（#2080）在端口无 Ent 隐私层对应物：读取路径不依赖身份，策略值由全字段用例锁定。 | 
 | `internal/server/biz/channel_metrics_test.go` 的 `TestPerformanceRecord_Methods` + `internal/server/orchestrator/outbound.go` 的 `markPerformanceTerminal` 分支 | `tests/AxonHub.Api.Tests/ChannelPerformanceRecordTests.cs`（7 例）+ `ChatCompletionOrchestratorTests` 流式语义 3 例 | 已建立 | 逐条对照 MarkSuccess / MarkFailed / MarkCanceled / IsValid；终态四态映射：completed/incomplete → 成功、canceled → 取消、failed → 失败（500 + 终态文案）、none → 无操作，首次终态后不再改写。端到端锁定：无终态传输错误既不记成功也不记失败；无终态但聚合完整记成功；终态 `[DONE]`/finish_reason 记成功。性能明细字段（首 token/TPS/状态码/错误文本/API key/完成 token）、`extractErrorMessageForMatching` 的 8 KiB 截断、异步 worker 与自动禁用未移植，均不参与当前计数（C017）。 |
+| `internal/server/orchestrator/override_test.go`（30 个顶层测试函数，含 `TestParseOverrideOperations`）+ `internal/server/biz/channel_override.go` 的解析/优先级分支 | `tests/AxonHub.Api.Tests/ChannelOverrideTests.cs`（86 例，其中 1 例 Skip）+ `ChannelOverrideSettingsTests.cs`（47 例） | 133/133 已移植（1 Skip 记录 C038） | 逐条对照 30 个测试函数并补充分支用例：模板（`.Model` / `.RequestModel` / `.Metadata` 嵌套 JSON / `.RequestHeader` / `.PromptCacheKey` / user_id）、映射后的请求模型条件、header 模板与 JSON-like 值、legacy `overrideParameters` 的 set/delete/clear 与非法/空设置、AxonHubClear 5 例、新格式 set/delete/rename/copy/条件、legacy 兼容、`set_if_absent` 的现网与原始入站 body 判定、Issue 632、数组 append/prepend/insert/remove 与 splat、非 JSON/multipart 门槛；设置解析 47 例锁定新格式全字段、legacy map 的 GoPrintf 字符串化、新旧字段优先级、大小写不敏感与解码失败整体降级。参照的 `channel_override_template_test.go`（6 例）属通道管理面，未移植（C014）。 |
 
 统计：pipeline 编排层共 38 个可执行用例（15 + 23），已移植 24 个、顺延 14 个（均为非 chat 响应类型，待对应请求类型落地后补测）。
 
@@ -149,7 +150,7 @@ C035（限流未接入，`RateLimitAware` 恒满分 100）、C036（模型级熔
 说明：参照的 `internal/server/orchestrator/*_test.go` 与 `internal/server/api/*_test.go` 依赖 Ent、真实数据库与 gin，
 不能逐条直接移植；本切片用真实 Orleans `TestCluster` + 假通道快照 + 脚本化 `IExecutor` 复现同一调用链，
 断言参照测试同样关心的可观察结果（上游请求、重试次数、客户端错误体、SSE 字节）。
-这条链路的范围裁剪登记为 C014、C013–C021（多 key 粘性；限流/成本与通道级改写（API key 鉴权已接入，C023）；通道级重试配置（已解决，C016）、
+这条链路的范围裁剪登记为 C014、C013–C021（多 key 粘性；限流/成本（API key 鉴权已接入，C023；通道级请求改写已接入，见 §8.4）；通道级重试配置（已解决，C016）、
 性能记录简化（计数语义已解决，C017；性能明细与自动禁用属后续里程碑）、同步 recorder 工作单元、
 流式归档与终态分类（已解决，C019）、response_chunks 与存储策略（C020）、
 响应头捕获差异（C021）；gzip/deflate/zstd 请求体解码已接入（C015，已解决，残余错误文案差异见登记）；
@@ -203,6 +204,29 @@ C035（限流未接入，`RateLimitAware` 恒满分 100）、C036（模型级熔
 `quota_exhausted` 的包装来源（`QuotaExhaustedError` → `wrapQuotaExhaustedAsResponseError`）仍随限流/配额里程碑
 （C014）；gjson 与 System.Text.Json 的报文解析差异登记为 C033。
 
+## 8.4 通道级请求改写（134 例）
+
+参照调用链：候选选择 → `applyOverrideRequestBody` / `applyOverrideRequestHeaders` 两个中间件改写出站请求
+（位于出站变换之后、请求链路落库之前）→ 传输层。端口以 `ChannelOverrideApplier`（`OverrideJson` 树 +
+`GoTextTemplate`）实现，注册顺序为 metrics → `ChannelOverrideBodyMiddleware` →
+`ChannelOverrideHeaderMiddleware` → `RequestChainPersistenceMiddleware`，因此落库的请求体/请求头是改写后的值。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 模板与渲染上下文：`.Model` / `.RequestModel` / `.Metadata` 嵌套 JSON / `.RequestHeader`（规范化键与原始小写键）/ `.PromptCacheKey` / user_id；渲染结果为 JSON 字面量时按 `encoding/json` 解码（数字、布尔、对象、数组） | `ChannelOverrideTests.cs` | 计入 86 |
+| 条件与映射模型：映射后请求模型条件、if/else + 嵌套 JSON + clear 指令、reasoning effort 条件改名、条件真假与缺失条件 | 同上 | 计入上项 |
+| legacy 参数与中间件：`overrideParameters` 的 set/delete/clear、非法 JSON 与空设置降级、AxonHubClear 5 例按 JSON 语义逐字段比对、rename/copy、数字渲染 | 同上 | 计入上项 |
+| 新格式操作：set/delete/rename/copy、模板值、legacy 兼容、`set_if_absent`（现网与原始入站 body 共 17 例）、Issue 632 的 `chat_template_kwargs` | 同上 | 计入上项 |
+| 数组操作：append/prepend/insert（含负数与越界位置）/remove、splat true/false、缺失路径建数组、非数组不改写、嵌套 `cache_control`、模板值、空 eq 与 Trim 后 eq | 同上 | 计入上项 |
+| 头操作：单/多值替换、清空、空 key、空 settings 与空数组、覆盖 `Authorization`、blocked header 9 例（参照不过滤敏感/黑名单头部） | 同上 | 计入上项 |
+| 门槛与敏感头：非 JSON body 与 multipart 跳过、敏感请求头不进入 `.RequestHeader`、小写敏感头识别 | 同上 | 计入上项 |
+| 设置解析 `ChannelOverrideSettings.Parse`：新格式全字段、legacy map 的 GoPrintf 字符串化 11 例、新旧字段优先级、空数组抑制 legacy、解码失败整体降级 8 例、字段大小写不敏感、null index/match/splat | `ChannelOverrideSettingsTests.cs` | 47 |
+| 端到端接线：通道 settings 的 body/header 操作改写出站请求，execution 落库记录改写后的 body 与 header | `ChatCompletionOrchestratorTests.cs` | 1 |
+
+说明：`PromptCacheKeyFallsBackToTheCompactRequest` 以 Skip 保留参照期望（C038，`LlmRequest` 无 Compact
+子请求）。JSON 覆盖用树模型整体重序列化（C039），模板只支持实际使用的 Go 模板子集（C040），
+sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模板 CRUD（`channel_override_template_test.go`）属管理面，未移植（C014）。
+
 ## 9. 真实宿主启动冒烟（2026-10-30）
 
 拓扑：宿主进程 `dotnet AxonHub.Api.dll`（Kestrel 监听 `127.0.0.1:8091` + Orleans silo）直连容器
@@ -235,6 +259,7 @@ C035（限流未接入，`RateLimitAware` 恒满分 100）、C036（模型级熔
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
 | Anthropic 入站/出站、Responses API、Responses 流 | 首期纵向切片只做 OpenAI Chat | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
+| 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` 在写入时拒绝非法操作，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 首个切片只移植 round-robin 路径并由 16 例锁定；默认策略 `adaptive` 的排序尚未实现 | 高 | 补齐策略链后按参照用例逐条扩展（C012） |
 | 持久化（channels / projects / users / api_keys / requests / request_executions / usage_logs / systems） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 50 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |

@@ -10,4 +10,10 @@
     <PackageReference Include="Microsoft.Orleans.Server" />
     <PackageReference Include="ZstdSharp.Port" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Go 的 override 测试与被测代码同包（同 package 可访问未导出标识符）；
+         GoTextTemplate / OverrideJson / ChannelOverrideApplier 保持 internal，
+         只对测试程序集开放。 -->
+    <InternalsVisibleTo Include="AxonHub.Api.Tests" />
+  </ItemGroup>
 </Project>

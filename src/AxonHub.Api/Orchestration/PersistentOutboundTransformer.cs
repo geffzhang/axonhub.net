@@ -28,6 +28,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
 
     private int _candidateIndex;
     private IOutboundTransformer? _current;
+    private bool _originalModelCaptured;
 
     public PersistentOutboundTransformer(
         ChannelCandidate[] candidates,
@@ -54,6 +55,28 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// the final HTTP request, so this is not read back from the body.
     /// </summary>
     public string CurrentModel { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// The model the client originally requested, captured once before the
+    /// first attempt rewrites it (the reference's <c>state.OriginalModel</c>).
+    /// Channel override templates expose it as <c>.RequestModel</c>.
+    /// </summary>
+    public string OriginalModel { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// The unified request the current attempt is transforming (the reference's
+    /// <c>state.LlmRequest</c>). Raw-request middlewares render override
+    /// templates against it.
+    /// </summary>
+    public LlmRequest? CurrentLlmRequest { get; private set; }
+
+    /// <summary>
+    /// The candidate serving the current attempt, or <see langword="null"/> before
+    /// the first transform. Raw-request middlewares read the channel-level
+    /// override settings from here.
+    /// </summary>
+    public ChannelCandidate? CurrentCandidate =>
+        _candidateIndex < _candidates.Length ? _candidates[_candidateIndex] : null;
 
     /// <summary>The wrapped transformer for the current attempt.</summary>
     private IOutboundTransformer Current =>
@@ -85,6 +108,16 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             throw new InvalidOperationException(
                 "server internal error, please try again later: all candidates exhausted");
         }
+
+        // Reference model_mapper captures the client's model once per request,
+        // before the outbound transformer rewrites it per candidate.
+        if (!_originalModelCaptured)
+        {
+            OriginalModel = request.Model;
+            _originalModelCaptured = true;
+        }
+
+        CurrentLlmRequest = request;
 
         var candidate = _candidates[_candidateIndex];
         CurrentChannelId = candidate.ChannelId;

@@ -158,6 +158,7 @@ public sealed class ChannelPoolGrain(IEnabledChannelProvider channelProvider, IG
                 Credentials = candidate.Channel.Credentials,
                 DisabledApiKeys = candidate.Channel.DisabledApiKeys,
                 RetrySettings = ChannelRetrySettings.Parse(candidate.Channel.Settings),
+                OverrideSettings = ChannelOverrideSettings.Parse(candidate.Channel.Settings),
             };
         }
 

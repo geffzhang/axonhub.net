@@ -625,4 +625,78 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
         Assert.Equal(new long[] { 5102 }, metrics.Successes);
         Assert.Empty(metrics.Failures);
     }
+
+    /// <summary>
+    /// Channel request rewriting runs after the outbound transform and before
+    /// request-execution persistence (the reference registers
+    /// persistRequestExecution last), so both the wire request and the stored
+    /// execution carry the rewritten body and headers.
+    /// </summary>
+    [Fact]
+    public async Task ChannelOverridesApplyToTheOutboundRequestAndTheStoredExecution()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(
+            5201,
+            "override-e2e-model",
+            actualModel: "upstream-override-model",
+            settings: """
+            {
+              "modelMappings":[{"from":"override-e2e-model","to":"upstream-override-model"}],
+              "bodyOverrideOperations":[
+                {"op":"set","path":"temperature","value":"0.1"},
+                {"op":"delete","path":"model"},
+                {"op":"set","path":"request_model","value":"{{.RequestModel}}"},
+                {"op":"set","path":"upstream_model","value":"{{.Model}}"}
+              ],
+              "headerOverrideOperations":[
+                {"op":"set","path":"X-Channel-Model","value":"{{.Model}}"},
+                {"op":"delete","path":"X-Remove"}
+              ]
+            }
+            """));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("upstream-override-model", "hi there"),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+        var orchestrator = NewOrchestrator(executor, new RecordingMetricsRecorder(), FastPolicy(), recorder);
+
+        var clientRequest = TestChannels.ChatRequest("override-e2e-model");
+        clientRequest.Headers!["X-Remove"] = ["yes"];
+
+        var result = await orchestrator.ProcessAsync(clientRequest);
+        Assert.NotNull(result.Response);
+
+        var sent = Assert.Single(executor.Requests);
+        using (var sentBody = JsonDocument.Parse(sent.Body!))
+        {
+            var root = sentBody.RootElement;
+            Assert.Equal(0.1, root.GetProperty("temperature").GetDouble());
+            Assert.False(root.TryGetProperty("model", out _));
+            Assert.Equal("override-e2e-model", root.GetProperty("request_model").GetString());
+            Assert.Equal("upstream-override-model", root.GetProperty("upstream_model").GetString());
+        }
+
+        Assert.Equal("upstream-override-model", HttpClientUtils.HeaderGet(sent.Headers, "X-Channel-Model"));
+        Assert.Equal(string.Empty, HttpClientUtils.HeaderGet(sent.Headers, "X-Remove"));
+
+        var execution = Assert.Single(recorder.Executions);
+        using (var storedBody = JsonDocument.Parse(execution.RequestBody))
+        {
+            var root = storedBody.RootElement;
+            Assert.Equal(0.1, root.GetProperty("temperature").GetDouble());
+            Assert.False(root.TryGetProperty("model", out _));
+            Assert.Equal("override-e2e-model", root.GetProperty("request_model").GetString());
+        }
+
+        using (var storedHeaders = JsonDocument.Parse(execution.RequestHeaders!))
+        {
+            var root = storedHeaders.RootElement;
+            Assert.Equal(
+                "upstream-override-model",
+                root.GetProperty("X-Channel-Model")[0].GetString());
+            Assert.False(root.TryGetProperty("X-Remove", out _));
+        }
+    }
 }
