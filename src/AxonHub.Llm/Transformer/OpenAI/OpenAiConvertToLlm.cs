@@ -45,7 +45,9 @@ public static class OpenAiConvertToLlm
             Verbosity = r.Verbosity,
         };
 
-        req.Messages = (r.Messages ?? []).Select(m => m.ToLlmMessage()).ToList();
+        // Go decodes a null element as the zero struct; the wire model keeps
+        // null, so substitute the zero value here.
+        req.Messages = (r.Messages ?? []).Select(m => (m ?? new OpenAiMessage()).ToLlmMessage()).ToList();
 
         if (r.Stop is not null)
         {
@@ -66,7 +68,9 @@ public static class OpenAiConvertToLlm
 
         // Go leaves the slice nil when the client sent no tools: `tools,omitempty`
         // drops a nil/empty slice from the wire, so an empty list would emit "[]".
-        req.Tools = r.Tools is { Count: > 0 } tools ? tools.Select(t => t.ToLlmTool()).ToList() : null;
+        req.Tools = r.Tools is { Count: > 0 } tools
+            ? tools.Select(t => (t ?? new OpenAiTool()).ToLlmTool()).ToList()
+            : null;
 
         req.ToolChoice = r.ToolChoice.ToLlmToolChoice();
 
@@ -127,7 +131,11 @@ public static class OpenAiConvertToLlm
         {
             choice.ToolChoiceMode = t.AllowedTools.Mode;
             choice.Tools = (t.AllowedTools.Tools ?? [])
-                .Select(tool => new ToolOption { Type = tool.Type, Name = tool.Function.Name })
+                .Select(tool =>
+                {
+                    tool ??= new OpenAiNamedToolChoice();
+                    return new ToolOption { Type = tool.Type, Name = tool.Function.Name };
+                })
                 .ToList();
         }
 
@@ -172,7 +180,7 @@ public static class OpenAiConvertToLlm
 
         if (m.ToolCalls is not null)
         {
-            msg.ToolCalls = m.ToolCalls.Select(tc => tc.ToLlmToolCall()).ToList();
+            msg.ToolCalls = m.ToolCalls.Select(tc => (tc ?? new OpenAiToolCall()).ToLlmToolCall()).ToList();
 
             var first = msg.ToolCalls.FirstOrDefault(tc =>
                 tc.TransformerMetadata is not null
@@ -190,7 +198,7 @@ public static class OpenAiConvertToLlm
 
         if (m.Annotations is { Count: > 0 })
         {
-            msg.Annotations = m.Annotations.Select(a => a.ToLlmAnnotation()).ToList();
+            msg.Annotations = m.Annotations.Select(a => (a ?? new OpenAiAnnotation()).ToLlmAnnotation()).ToList();
         }
 
         return msg;

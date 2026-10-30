@@ -185,6 +185,13 @@ public sealed class OpenAiStopJsonConverter : JsonConverter<OpenAiStop>
                     return new OpenAiStop { Multiple = values };
                 }
 
+                // Go decodes a null element as the zero string.
+                if (reader.TokenType == JsonTokenType.Null)
+                {
+                    values.Add(string.Empty);
+                    continue;
+                }
+
                 if (reader.TokenType != JsonTokenType.String)
                 {
                     throw new JsonException("invalid stop type");
@@ -346,8 +353,26 @@ public sealed class OpenAiMessageContentJsonConverter : JsonConverter<OpenAiMess
 
         if (reader.TokenType == JsonTokenType.StartArray)
         {
-            var parts = JsonSerializer.Deserialize<List<OpenAiMessageContentPart>>(ref reader, options);
-            return new OpenAiMessageContent { MultipleContent = parts ?? [] };
+            List<OpenAiMessageContentPart>? parts;
+            try
+            {
+                parts = JsonSerializer.Deserialize<List<OpenAiMessageContentPart>>(ref reader, options);
+            }
+            catch (JsonException ex)
+            {
+                // Go folds every failed []MessageContentPart attempt into its
+                // own sentinel error.
+                throw new JsonException("invalid content type", ex);
+            }
+
+            parts ??= [];
+            for (var i = 0; i < parts.Count; i++)
+            {
+                // Go decodes a null element as the zero part.
+                parts[i] ??= new OpenAiMessageContentPart();
+            }
+
+            return new OpenAiMessageContent { MultipleContent = parts };
         }
 
         throw new JsonException("invalid content type");
@@ -732,6 +757,9 @@ public sealed class OpenAiToolChoiceJsonConverter : JsonConverter<OpenAiToolChoi
         using var doc = JsonDocument.ParseValue(ref reader);
         var root = doc.RootElement.Clone();
 
+        // Go tries the plain named choice whenever the allowed_tools envelope
+        // does not decode; a failed attempt is swallowed and only the last
+        // failure surfaces as the sentinel error.
         if (root.ValueKind == JsonValueKind.Object)
         {
             var type = root.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String
@@ -742,17 +770,36 @@ public sealed class OpenAiToolChoiceJsonConverter : JsonConverter<OpenAiToolChoi
                 && root.TryGetProperty("allowed_tools", out var allowedEl)
                 && allowedEl.ValueKind == JsonValueKind.Object)
             {
-                return new OpenAiToolChoice
+                try
                 {
-                    NamedToolChoice = new OpenAiNamedToolChoice { Type = "allowed_tools" },
-                    AllowedTools = allowedEl.Deserialize<OpenAiAllowedTools>(options) ?? new OpenAiAllowedTools(),
-                };
+                    var allowed = allowedEl.Deserialize<OpenAiAllowedTools>(options);
+                    if (allowed is not null)
+                    {
+                        return new OpenAiToolChoice
+                        {
+                            NamedToolChoice = new OpenAiNamedToolChoice { Type = "allowed_tools" },
+                            AllowedTools = allowed,
+                        };
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Fall through to the named choice.
+                }
             }
 
-            return new OpenAiToolChoice
+            try
             {
-                NamedToolChoice = root.Deserialize<OpenAiNamedToolChoice>(options),
-            };
+                var named = root.Deserialize<OpenAiNamedToolChoice>(options);
+                if (named is not null)
+                {
+                    return new OpenAiToolChoice { NamedToolChoice = named };
+                }
+            }
+            catch (JsonException)
+            {
+                // Fall through to the sentinel error.
+            }
         }
 
         throw new JsonException("invalid tool choice type");

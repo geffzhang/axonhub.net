@@ -47,6 +47,16 @@ public sealed partial class OpenAiInboundTransformer : IInboundTransformer
             throw TransformerErrors.InvalidRequest("model is required");
         }
 
+        // Go's decoder reports field-level type errors with encoding/json's own
+        // wording. The walker runs first so the errors keep that text and the
+        // saved-error precedence (a failing UnmarshalJSON aborts and overrides
+        // an earlier type error).
+        var typeError = OpenAiRequestTypeCheck.Validate(request.Body);
+        if (typeError is not null)
+        {
+            throw TransformerErrors.InvalidRequest("failed to decode openai request: " + typeError);
+        }
+
         OpenAiRequest? oaiReq;
         try
         {

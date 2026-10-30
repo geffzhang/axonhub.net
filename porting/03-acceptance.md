@@ -2,7 +2,7 @@
 
 验收是体检报告，不是"我感觉挺好"。
 
-测量时间：2026-10-30（M2 Llm 切片 + M4 持久化层与请求链路落库 + M3 通道选择与 HTTP 切片，含超时与非法 UTF-8 路径）。
+测量时间：2026-10-30（M2 Llm 切片 + M4 持久化层与请求链路落库 + M3 通道选择与 HTTP 切片，含超时、非法 UTF-8 与字段级类型错误路径）。
 
 ## 构建
 
@@ -17,11 +17,11 @@
 
 | 项目 | 总数 | 通过 | 失败 | 跳过 | 说明 |
 |---|---|---|---|---|---|
-| `AxonHub.Llm.Tests` | 44 | 44 | 0 | 0 | pipeline 重试 15 + 空响应 9 + 聚合器 1 + HTTP 执行器/SSE 增量解码 9 + Go JSON UTF-8 修复与语法文案 10 |
+| `AxonHub.Llm.Tests` | 145 | 145 | 0 | 0 | pipeline 重试 15 + 空响应 9 + 聚合器 1 + HTTP 执行器/SSE 增量解码 9 + Go JSON UTF-8 修复与语法文案 10 + 字段级类型错误文案 101 |
 | `AxonHub.Persistence.Tests` | 34 | 34 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 四表仓储 23 |
 | `AxonHub.Grains.Tests` | 14 | 14 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 4 + 别名解析 3 + 同分顺序/不计数 2 |
-| `AxonHub.Api.Tests` | 42 | 42 | 0 | 0 | HTTP 切片：orchestrator/重试/超时 10 + 请求链路落库 4 + SSE 写帧 7 + 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 7 + 期望流选择 2 |
-| **合计** | **134** | **134** | **0** | **0** | |
+| `AxonHub.Api.Tests` | 43 | 43 | 0 | 0 | HTTP 切片：orchestrator/重试/超时 10 + 请求链路落库 4 + SSE 写帧 7 + 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 8 + 期望流选择 2 |
+| **合计** | **236** | **236** | **0** | **0** | |
 
 命令：`dotnet test AxonHub.slnx`（2026-10-30，Windows 11 / .NET SDK 10.0.401）。
 
@@ -44,13 +44,15 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   `AxonHub.Persistence`（EF Core 写侧 DbContext 与模型、Dapper 读侧仓储、幂等迁移与连接工厂）、
   `AxonHub.Grains` / `AxonHub.Grains.Abstractions`（通道池与通道指标 grain）、
   `AxonHub.Api`（HTTP 宿主、`POST /v1/chat/completions`、请求读取、SSE 写出、orchestrator 适配）
-- 签名差异 / 运行时差异 / 平台限制：见 `02-differences.md`（C001–C021）
+- 签名差异 / 运行时差异 / 平台限制：见 `02-differences.md`（C001–C022）
 
 ## 协议锁定
 
 - [x] 关键协议字段名与顺序由测试锁定（`corpus/upstream-request`、`corpus/unified-request`、
   `corpus/client-response`、`corpus/client-stream`；见 `01-baseline.md` 第 2、3 节）
 - [x] SSE 写出帧与客户端错误事件由 `SseStreamWriterTests` 逐字节锁定（gin-contrib/sse 兼容）
+- [x] 入站请求的字段级解码错误文案与 Go 一致（C003）：结构名、标签路径、Go 类型、数字字面量、
+  硬错误覆盖软错误、null 零值语义由 101 例锁定；期望值全部来自对参照模块的 Go 探针输出
 - [ ] 跨语言数字范围已校验（±2^53−1）：token 计数以 int64 落库并由
   `UsageLogStoreTests.TokenCountsRoundTripAsInt64` 锁定；LLM JSON 数字路径尚未专项审计
 - [x] 编码与行尾归一化策略已确定：`diff_corpus` 自动归一化行尾/BOM；字符串内非法 UTF-8 与
@@ -58,7 +60,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 
 ## 端到端
 
-- [x] 进程内 HTTP 切片：`POST /v1/chat/completions` 的请求读取、候选选择、重试、SSE 写出由 42 例覆盖，
+- [x] 进程内 HTTP 切片：`POST /v1/chat/completions` 的请求读取、候选选择、重试、SSE 写出由 43 例覆盖，
   其中 2 例锁定首包超时与非流式超时，4 例锁定请求/执行/用量落库的字段与时机（含流式 Close 的聚合回填与
   响应头边界写入），12 例锁定请求读取与 gzip/deflate/zstd 解码（含参照 Go 程序产出的 zstd/raw DEFLATE 样本；
   不启动真实 Kestrel 与 PostgreSQL），1 例锁定消息内容中的非法 UTF-8 经入站解码与出站变换后变为 U+FFFD
@@ -96,6 +98,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C021：下游响应头捕获点与服务器自动头集合不同 | Kestrel 与 gin 注入的自动头不同，落库 JSON 键集合有差异；业务头与脱敏一致 | 已接受（测试锁定业务头） |
 | C008：非法 UTF-8 请求体 | 已解决：字符串字面量内的非法字节与孤立代理项转义按 Go 规则修复（每字节一个 U+FFFD，合法代理对保留），结构错误仍用原始字节报告。残余差异仅 JsonElement 承载的原始片段与请求体归档路径 | 已关闭（C008 残余差异见登记） |
 | C010：非 chat 响应类型的空响应探测 | 14 个参照用例顺延 | 随对应端点落地 |
-| C003：字段级 JSON 类型错误文案 | 错误文案与参照不同 | M3 收尾前评估 |
+| C003：字段级 JSON 类型错误文案 | 已解决：入站请求按参照的字段/类型表逐 token 复刻 Go 解码语义，错误文案逐字节一致 | 已关闭（101 例锁定；残余见 C022） |
+| C022：int32 index 上限与响应侧 null 元素 | `tool_calls[].index` 超过 int32 时 Go 接受而本实现报解码错误；上游响应中的 null 元素当前抛 500 而非零值 | 真实缺口；协议实际取值很小，待遇到再按 Go 语义补零值替换 |
 | 持久化测试依赖 Docker（Testcontainers 启动 `postgres:17-alpine`） | 无 Docker 的环境无法运行持久化测试 | CI 必须提供 Docker；随 M3 补 CI 配置 |
 | 其余 Ent 表未移植（projects / api_keys / data_storages / traces / users 等） | 依赖这些表的功能不可用 | 随功能落地 |

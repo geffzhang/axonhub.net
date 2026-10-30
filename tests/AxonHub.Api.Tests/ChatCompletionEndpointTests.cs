@@ -88,6 +88,26 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
     }
 
     [Fact]
+    public async Task FieldTypeErrorReturnsGoDecodeWording()
+    {
+        fixture.Channels.Set();
+        var context = NewContext("{\"model\":123,\"messages\":[]}");
+        var orchestrator = NewOrchestrator(new ScriptedExecutor(), new RecordingMetricsRecorder());
+
+        await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
+
+        Assert.Equal(400, context.Response.StatusCode);
+
+        using var body = JsonDocument.Parse(ResponseBody(context));
+        Assert.Equal("invalid_request_error", body.RootElement
+            .GetProperty("error").GetProperty("type").GetString());
+        Assert.Equal(
+            "invalid request: failed to decode openai request: "
+            + "json: cannot unmarshal number into Go struct field Request.model of type string",
+            body.RootElement.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
     public async Task NonStreamSuccessForwardsStatusContentTypeAndBody()
     {
         fixture.Channels.Set(TestChannels.OpenAi(4801, "endpoint-model"));

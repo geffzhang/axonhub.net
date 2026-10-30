@@ -31,6 +31,9 @@ public sealed class GoSortedMapConverterFactory : JsonConverterFactory
 
     private sealed class SortedMapConverter<TValue> : JsonConverter<Dictionary<string, TValue>>
     {
+        private static TValue ZeroValue
+            => typeof(TValue) == typeof(string) ? (TValue)(object)string.Empty : default!;
+
         public override Dictionary<string, TValue> Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
@@ -49,7 +52,11 @@ public sealed class GoSortedMapConverterFactory : JsonConverterFactory
             {
                 var key = reader.GetString()!;
                 reader.Read();
-                result[key] = valueConverter.Read(ref reader, typeof(TValue), options)!;
+                // Go decodes a null map value as the zero value: 0 for numbers,
+                // "" for strings, nil for slices, pointers and interfaces.
+                result[key] = reader.TokenType == JsonTokenType.Null
+                    ? ZeroValue
+                    : valueConverter.Read(ref reader, typeof(TValue), options)!;
                 reader.Read();
             }
 
