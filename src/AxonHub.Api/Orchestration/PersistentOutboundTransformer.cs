@@ -152,14 +152,14 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
 
         // 429: the upstream is rate-limiting this channel; a same-channel retry
         // would burn the budget without a chance of success.
-        if (ExtractStatusCode(error) == 429)
+        if (ChannelRetryPredicate.ExtractStatusCode(error) == 429)
         {
             return false;
         }
 
         // The reference also advances to the next model inside the same channel
         // here (candidate.Models); the slice's candidates carry one model each.
-        return IsRetryableErrorForChannel(error);
+        return ChannelRetryPredicate.IsRetryable(error, _candidates[_candidateIndex].RetrySettings);
     }
 
     /// <summary>Port of PrepareForRetry: count the retry attempt on the same channel.</summary>
@@ -173,37 +173,4 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
 
     private void RecordSelection(ChannelCandidate candidate)
         => _metrics.RecordSelection(candidate.ChannelId, _timeProvider.GetUtcNow());
-
-    /// <summary>
-    /// Port of isRetryableErrorForChannel minus the channel-level
-    /// RetryableStatusCodes / RetryableErrorPatterns settings (C016).
-    /// </summary>
-    private static bool IsRetryableErrorForChannel(Exception error)
-    {
-        if (UpstreamTransportErrors.IsUpstreamTransportError(error))
-        {
-            return true;
-        }
-
-        var statusCode = ExtractStatusCode(error);
-
-        // httpclient.IsHTTPStatusCodeRetryable: 429 and all 5xx.
-        return statusCode == 429 || statusCode is >= 500 and <= 599;
-    }
-
-    /// <summary>Port of ExtractStatusCodeFromError.</summary>
-    private static int ExtractStatusCode(Exception? error)
-    {
-        if (error is null)
-        {
-            return 0;
-        }
-
-        if (GoErrors.As<HttpClientError>(error) is { } httpError)
-        {
-            return httpError.StatusCode;
-        }
-
-        return GoErrors.As<ResponseError>(error)?.StatusCode ?? 0;
-    }
 }

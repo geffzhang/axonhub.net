@@ -213,6 +213,75 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
     }
 
     [Fact]
+    public async Task RetryableStatusCodesSettingRetriesConfigured400()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(
+            4601,
+            "configured-status-model",
+            settings: "{\"retryableStatusCodes\":[400]}"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (call, _, _) => call == 0
+                ? throw TestChannels.HttpClient(400)
+                : TestChannels.Completion("configured-status-model"),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy(maxSameChannelRetries: 1));
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("configured-status-model"));
+
+        Assert.Equal(200, result.Response!.StatusCode);
+        Assert.Equal(2, executor.Calls);
+        Assert.Equal(new long[] { 4601 }, metrics.Selections);
+    }
+
+    [Fact]
+    public async Task RetryableErrorPatternsSettingRetriesMatchingText()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(
+            4602,
+            "configured-pattern-model",
+            settings: "{\"retryableErrorPatterns\":[{\"pattern\":\"Console API returned 403\"}]}"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (call, _, _) => call == 0
+                ? throw TestChannels.HttpClient(
+                    403,
+                    "{\"error\":{\"message\":\"Console API returned 403\",\"type\":\"upstream_error\"}}")
+                : TestChannels.Completion("configured-pattern-model"),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy(maxSameChannelRetries: 1));
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("configured-pattern-model"));
+
+        Assert.Equal(200, result.Response!.StatusCode);
+        Assert.Equal(2, executor.Calls);
+        Assert.Equal(new long[] { 4602 }, metrics.Selections);
+    }
+
+    [Fact]
+    public async Task Unconfigured400FailsWithoutSameChannelRetry()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4603, "plain-400-model"));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => throw TestChannels.HttpClient(400),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy(maxSameChannelRetries: 2));
+
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => orchestrator.ProcessAsync(TestChannels.ChatRequest("plain-400-model")));
+
+        Assert.Single(executor.Requests);
+        Assert.Empty(metrics.Selections);
+    }
+
+    [Fact]
     public async Task NonStreamRetryableErrorWithoutRetryBudgetThrowsFirstError()
     {
         fixture.Channels.Set(TestChannels.OpenAi(4501, "no-retry-model"));

@@ -20,8 +20,8 @@
 | `AxonHub.Llm.Tests` | 145 | 145 | 0 | 0 | pipeline 重试 15 + 空响应 9 + 聚合器 1 + HTTP 执行器/SSE 增量解码 9 + Go JSON UTF-8 修复与语法文案 10 + 字段级类型错误文案 101 |
 | `AxonHub.Persistence.Tests` | 34 | 34 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 四表仓储 23 |
 | `AxonHub.Grains.Tests` | 14 | 14 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 4 + 别名解析 3 + 同分顺序/不计数 2 |
-| `AxonHub.Api.Tests` | 43 | 43 | 0 | 0 | HTTP 切片：orchestrator/重试/超时 10 + 请求链路落库 4 + SSE 写帧 7 + 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 8 + 期望流选择 2 |
-| **合计** | **236** | **236** | **0** | **0** | |
+| `AxonHub.Api.Tests` | 62 | 62 | 0 | 0 | HTTP 切片：orchestrator/重试/超时 13（含通道级重试配置 3）+ 请求链路落库 4 + SSE 写帧 7 + 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 8 + 期望流选择 2 + 通道重试谓词与 settings 解析 16 |
+| **合计** | **255** | **255** | **0** | **0** | |
 
 命令：`dotnet test AxonHub.slnx`（2026-10-30，Windows 11 / .NET SDK 10.0.401）。
 
@@ -90,7 +90,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C013：多 API key 通道只用首个 key，无 trace/thread 粘性 | 多 key 通道流量集中，限流/配额分布与参照不同 | 接入 trace/thread 后补 TraceStickyKeyProvider |
 | C014：鉴权、限流、成本与通道级请求改写未接入 | 端点对任意客户端开放，usage 已落库但成本为空、通道级改写不生效 | 后续里程碑按参照逐项接入并补测 |
 | C015：zstd 请求体与压缩错误文案 | 已解决：gzip/x-gzip/deflate/zstd 全部解码；gzip 头错误与 zlib/raw DEFLATE 分支逐字/逐分支对齐。残余差异仅损坏/截断压缩体的错误细节（缺 flate 偏移、gzip 尾部校验、zstd 内层文案） | 已关闭（ZstdSharp.Port；残余差异见 C015） |
-| C016：通道级 `retryableStatusCodes` / `retryableErrorPatterns` 未生效 | 配置了额外重试规则的通道少重试 | 接入通道 settings 时补齐 |
+| C016：通道级 `retryableStatusCodes` / `retryableErrorPatterns` 未生效 | 已解决：候选携带从 settings 解析的重试规则，`CanRetry` 按参照逐条判断（传输错误、429/5xx、额外状态码、子串/正则文本） | 已关闭（16 个谓词/解析用例 + 3 个端到端用例锁定） |
 | C017：通道性能记录仅成功/失败计数，取消与无终态流语义不同 | 取消不影响健康分；省略终态且靠聚合判定的流不计成功 | 需要性能明细/自动禁用时补齐 |
 | C018：同步 recorder 每次调用一个短生命周期工作单元 | 一次请求链路最多 5 次短事务，request 与 execution 不同事务提交 | 对当前数据路径等价；引入批量/事务需求时重估 |
 | C019：流式响应的 external id / body 与流式 request 响应头未回填 | 已解决：Close 时聚合分块回填两侧归档字段，终态分类与失败路径按参照实现 | 已关闭（测试锁定） |

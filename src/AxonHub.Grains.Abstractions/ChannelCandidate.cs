@@ -40,4 +40,8 @@ public sealed class ChannelCandidate
     /// <summary>Raw <c>disabled_api_keys</c> jsonb text.</summary>
     [Id(8)]
     public string? DisabledApiKeys { get; set; }
+
+    /// <summary>Channel-level extra retry rules (settings.retryable*).</summary>
+    [Id(9)]
+    public ChannelRetrySettings RetrySettings { get; set; } = new();
 }

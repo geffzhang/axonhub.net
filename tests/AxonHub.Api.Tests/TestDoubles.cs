@@ -309,7 +309,8 @@ internal static class TestChannels
         string model,
         string? actualModel = null,
         string apiKey = "sk-test",
-        string baseUrl = "http://upstream.test")
+        string baseUrl = "http://upstream.test",
+        string? settings = null)
         => new()
         {
             Id = id,
@@ -319,6 +320,7 @@ internal static class TestChannels
             BaseUrl = baseUrl,
             Credentials = "{\"apiKey\":\"" + apiKey + "\"}",
             SupportedModels = "[\"" + (actualModel ?? model) + "\"]",
+            Settings = settings,
         };
 
     public static HttpRequestData ChatRequest(string model, bool stream = false, int? n = null)
