@@ -110,7 +110,7 @@ jsonb 的文本格式由 PostgreSQL 归一化（键序、空白），回环断�
 grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状态串扰。差异登记为 C012（adaptive 策略链未移植、
 指标为 grain 内存态、池每次选择重读快照）。
 
-## 8. HTTP 纵向切片（31 例）
+## 8. HTTP 纵向切片（39 例）
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
@@ -120,15 +120,16 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 | 无候选模型：422 `invalid_model_error` 信封，且未触达传输层 | 同上 | 计入上项 |
 | 流式：SSE 事件透传到 `[DONE]`，终态后记成功 | 同上 | 计入上项 |
 | SSE 写帧：gin-contrib/sse 兼容字节（`data:` 无空格、`\n`→`\ndata:`、`\r`→`\\r`）、响应头、终态后的错误抑制、classified 流错误事件（502 `upstream_stream_interrupted`）、缺终态的不完整流错误、客户端取消时的错误抑制 | `SseStreamWriterTests.cs` | 7 |
-| 请求读取：头部规范化、URL 重建、`X-Forwarded-For` 优先、`Content-Type` 回退、gzip 与 zlib deflate 解压并移除编码头、拒绝未知编码 | `HttpRequestReaderTests.cs` | 4 |
+| 请求读取：头部规范化、URL 重建、`X-Forwarded-For` 优先、`Content-Type` 回退、gzip / deflate / zstd 解压并移除编码头、拒绝未知编码；gzip 头错误按 Go 文案、保留 FLG 位与 FNAME 跳过、raw DEFLATE 回退、大小写不敏感；zstd/raw DEFLATE 样本由参照 Go 程序产出 | `HttpRequestReaderTests.cs` | 12 |
 | 端点胶水：空 body → 400 `JSONError`、无效模型 → 422、非流成功转发状态/内容类型/body、流式响应写 SSE 并带 CORS 头、非流与流式响应头在边界回填 request（C021） | `ChatCompletionEndpointTests.cs` | 6 |
 
 说明：参照的 `internal/server/orchestrator/*_test.go` 与 `internal/server/api/*_test.go` 依赖 Ent、真实数据库与 gin，
 不能逐条直接移植；本切片用真实 Orleans `TestCluster` + 假通道快照 + 脚本化 `IExecutor` 复现同一调用链，
 断言参照测试同样关心的可观察结果（上游请求、重试次数、客户端错误体、SSE 字节）。
-这条链路的范围裁剪登记为 C013–C021（多 key 粘性、鉴权/限流/成本与通道级改写、zstd、通道级重试配置、
+这条链路的范围裁剪登记为 C013–C021（多 key 粘性、鉴权/限流/成本与通道级改写、通道级重试配置、
 性能记录简化、同步 recorder 工作单元、流式归档与终态分类（已解决，C019）、response_chunks 与存储策略（C020）、
-响应头捕获差异（C021））；请求链路落库本身已由第 6 节的 4 例锁定。
+响应头捕获差异（C021）；gzip/deflate/zstd 请求体解码已接入（C015，已解决，残余错误文案差异见登记））；
+请求链路落库本身已由第 6 节的 4 例锁定。
 
 ## 9. 真实宿主启动冒烟（2026-10-30）
 

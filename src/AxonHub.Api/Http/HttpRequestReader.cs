@@ -3,16 +3,19 @@ using System.Text;
 using AxonHub.Llm.Http;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Primitives;
+using ZstdSharp;
 
 namespace AxonHub.Api.Http;
 
 /// <summary>
 /// Port of httpclient.ReadHTTPRequest (llm/httpclient/utils.go:24-146): reads the
-/// client body with the reference's 64 MB cap, decompresses gzip/deflate bodies,
-/// and canonicalizes headers exactly like Go's textproto.
+/// client body with the reference's 64 MB cap, decompresses gzip/deflate/zstd
+/// bodies, and canonicalizes headers exactly like Go's textproto.
 /// </summary>
 /// <remarks>
-/// zstd bodies are not decoded in this slice (C015).
+/// Body-level compression errors keep Go's wrapping prefixes, but the .NET
+/// inflaters do not expose Go's failure detail (deflate offsets, gzip trailer
+/// checks, truncated-stream detection); see C015.
 /// </remarks>
 public static class HttpRequestReader
 {
@@ -87,7 +90,10 @@ public static class HttpRequestReader
         return string.Empty;
     }
 
-    /// <summary>Port of decodeRequestBody: gzip and deflate; <c>identity</c> is a pass-through.</summary>
+    /// <summary>
+    /// Port of decodeRequestBody: gzip/x-gzip, deflate and zstd; <c>identity</c>
+    /// is a pass-through. Encoding matching is case-insensitive and trimmed.
+    /// </summary>
     private static byte[] DecodeRequestBody(byte[] body, Dictionary<string, List<string>> headers)
     {
         var contentEncoding = HttpClientUtils.HeaderGet(headers, "Content-Encoding");
@@ -105,38 +111,249 @@ public static class HttpRequestReader
 
             case "gzip":
             case "x-gzip":
-                using (var gzip = new GZipStream(new MemoryStream(body), CompressionMode.Decompress))
-                {
-                    var decoded = ReadLimited(gzip, MaxRequestBodySize);
-                    headers.Remove("Content-Encoding");
-                    headers.Remove("Content-Length");
-                    return decoded;
-                }
+                var decoded = DecodeGzip(body);
+                DropEncodingHeaders(headers);
+                return decoded;
 
             case "deflate":
-                var inflated = DecodeZlibOrDeflate(body);
-                headers.Remove("Content-Encoding");
-                headers.Remove("Content-Length");
+                var inflated = DecodeDeflate(body);
+                DropEncodingHeaders(headers);
                 return inflated;
+
+            case "zstd":
+                var decompressed = DecodeZstd(body);
+                DropEncodingHeaders(headers);
+                return decompressed;
 
             default:
                 throw new InvalidOperationException("unsupported content encoding: " + contentEncoding);
         }
     }
 
-    /// <summary>Port of decodeZlibOrFlate: zlib framing first, raw DEFLATE as fallback.</summary>
-    private static byte[] DecodeZlibOrDeflate(byte[] body)
+    private static void DropEncodingHeaders(Dictionary<string, List<string>> headers)
+    {
+        headers.Remove("Content-Encoding");
+        headers.Remove("Content-Length");
+    }
+
+    /// <summary>
+    /// Port of the gzip branch. Go validates the member header with
+    /// compress/gzip before touching the deflate stream, so the header is
+    /// checked here with Go's wording; .NET's GZipStream validates far less
+    /// (and rejects reserved FLG bits Go ignores).
+    /// </summary>
+    private static byte[] DecodeGzip(byte[] body)
+    {
+        ValidateGzipHeader(body);
+
+        // Go's gzip.Reader ignores the reserved FLG bits (0xE0); .NET rejects
+        // them, so clear them on a copy before decompressing.
+        var payload = body;
+        if ((body[3] & 0xE0) != 0)
+        {
+            payload = (byte[])body.Clone();
+            payload[3] &= 0x1F;
+        }
+
+        try
+        {
+            using var gzip = new GZipStream(new MemoryStream(payload), CompressionMode.Decompress);
+            return ReadLimited(gzip, MaxRequestBodySize);
+        }
+        catch (RequestBodyTooLargeException ex)
+        {
+            throw new InvalidOperationException("failed to decompress gzip body: " + ex.Message, ex);
+        }
+        catch (InvalidDataException ex)
+        {
+            // .NET folds framing/trailer failures into one message and does not
+            // expose the input offset Go reports (C015).
+            throw new InvalidOperationException("failed to decompress gzip body: flate: corrupt input", ex);
+        }
+        catch (EndOfStreamException ex)
+        {
+            throw new InvalidOperationException("failed to decompress gzip body: unexpected EOF", ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of compress/gzip's readHeader (Go 1.26): magic and method, optional
+    /// FEXTRA/FNAME/FCOMMENT fields, and the FHCRC check. Reserved FLG bits are
+    /// deliberately not rejected — Go ignores them.
+    /// </summary>
+    private static void ValidateGzipHeader(byte[] body)
+    {
+        // io.ReadFull returns EOF for an empty stream and ErrUnexpectedEOF for
+        // a short one; only the optional fields below go through noEOF.
+        if (body.Length == 0)
+        {
+            throw GzipReaderError("EOF");
+        }
+
+        if (body.Length < 10)
+        {
+            throw GzipReaderError("unexpected EOF");
+        }
+
+        if (body[0] != 0x1F || body[1] != 0x8B || body[2] != 8)
+        {
+            throw GzipReaderError("gzip: invalid header");
+        }
+
+        var flags = body[3];
+        var offset = 10;
+
+        if ((flags & 0x04) != 0)
+        {
+            if (body.Length - offset < 2)
+            {
+                throw GzipReaderError("unexpected EOF");
+            }
+
+            var extraLength = body[offset] | (body[offset + 1] << 8);
+            offset += 2;
+            if (body.Length - offset < extraLength)
+            {
+                throw GzipReaderError("unexpected EOF");
+            }
+
+            offset += extraLength;
+        }
+
+        if ((flags & 0x08) != 0)
+        {
+            offset = SkipGzipString(body, offset);
+        }
+
+        if ((flags & 0x10) != 0)
+        {
+            offset = SkipGzipString(body, offset);
+        }
+
+        if ((flags & 0x02) != 0)
+        {
+            if (body.Length - offset < 2)
+            {
+                throw GzipReaderError("unexpected EOF");
+            }
+
+            var expected = (ushort)(body[offset] | (body[offset + 1] << 8));
+            if (expected != (ushort)Crc32(body.AsSpan(0, offset)))
+            {
+                throw GzipReaderError("gzip: invalid header");
+            }
+        }
+    }
+
+    /// <summary>Port of gzip.Reader.readString: at most 512 bytes, NUL terminated.</summary>
+    private static int SkipGzipString(byte[] body, int offset)
+    {
+        for (var index = 0; ; index++)
+        {
+            if (index >= 512)
+            {
+                throw GzipReaderError("gzip: invalid header");
+            }
+
+            if (offset >= body.Length)
+            {
+                throw GzipReaderError("unexpected EOF");
+            }
+
+            if (body[offset++] == 0)
+            {
+                return offset;
+            }
+        }
+    }
+
+    private static InvalidOperationException GzipReaderError(string message)
+        => new("failed to create gzip reader: " + message);
+
+    /// <summary>
+    /// Port of decodeZlibOrFlate: zlib framing is chosen by the RFC 1950
+    /// header exactly like zlib.NewReader (including FDICT), with raw DEFLATE
+    /// as the fallback. Read-time errors never fall back.
+    /// </summary>
+    private static byte[] DecodeDeflate(byte[] body)
     {
         try
         {
-            using var zlib = new ZLibStream(new MemoryStream(body), CompressionMode.Decompress);
-            return ReadLimited(zlib, MaxRequestBodySize);
-        }
-        catch (InvalidDataException)
-        {
+            if (HasValidZlibHeader(body))
+            {
+                using var zlib = new ZLibStream(new MemoryStream(body), CompressionMode.Decompress);
+                return ReadLimited(zlib, MaxRequestBodySize);
+            }
+
             using var deflate = new DeflateStream(new MemoryStream(body), CompressionMode.Decompress);
             return ReadLimited(deflate, MaxRequestBodySize);
         }
+        catch (RequestBodyTooLargeException ex)
+        {
+            throw new InvalidOperationException("failed to decompress deflate body: " + ex.Message, ex);
+        }
+        catch (InvalidDataException ex)
+        {
+            // .NET folds zlib checksum and deflate framing errors into one
+            // message; Go separates "zlib: invalid checksum" from
+            // "flate: corrupt input before offset N" (C015).
+            throw new InvalidOperationException("failed to decompress deflate body: flate: corrupt input", ex);
+        }
+    }
+
+    /// <summary>zlib.NewReader's header checks: CM=deflate, CINFO&lt;=7, FCHECK, no FDICT.</summary>
+    private static bool HasValidZlibHeader(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 2)
+        {
+            return false;
+        }
+
+        var cmf = body[0];
+        var flg = body[1];
+        return (cmf & 0x0F) == 8
+            && cmf >> 4 <= 7
+            && (((cmf << 8) | flg) % 31) == 0
+            && (flg & 0x20) == 0;
+    }
+
+    /// <summary>Port of the zstd branch (klauspost/compress in the reference).</summary>
+    private static byte[] DecodeZstd(byte[] body)
+    {
+        try
+        {
+            using var zstd = new DecompressionStream(new MemoryStream(body));
+            return ReadLimited(zstd, MaxRequestBodySize);
+        }
+        catch (RequestBodyTooLargeException ex)
+        {
+            throw new InvalidOperationException("failed to decode zstd compressed body: " + ex.Message, ex);
+        }
+        catch (ZstdException ex)
+        {
+            throw new InvalidOperationException("failed to decode zstd compressed body: " + ex.Message, ex);
+        }
+        catch (EndOfStreamException ex)
+        {
+            // klauspost's reader reports io.ErrUnexpectedEOF for a cut frame.
+            throw new InvalidOperationException("failed to decode zstd compressed body: unexpected EOF", ex);
+        }
+    }
+
+    /// <summary>IEEE CRC-32 over the gzip header bytes (compress/gzip's FHCRC digest).</summary>
+    private static uint Crc32(ReadOnlySpan<byte> data)
+    {
+        var crc = 0xFFFFFFFFu;
+        foreach (var value in data)
+        {
+            crc ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+            }
+        }
+
+        return ~crc;
     }
 
     private static byte[] ReadLimited(Stream stream, int maxSize)
@@ -157,7 +374,7 @@ public static class HttpRequestReader
 
         if (buffer.Length > maxSize)
         {
-            throw new InvalidOperationException("request body too large");
+            throw new RequestBodyTooLargeException();
         }
 
         return buffer.ToArray();
@@ -186,6 +403,9 @@ public static class HttpRequestReader
 
         return buffer.ToArray();
     }
+
+    /// <summary>Sentinel so the decoders can wrap the cap with their own prefix.</summary>
+    private sealed class RequestBodyTooLargeException() : InvalidOperationException("request body too large");
 
     /// <summary>Canonicalizes header names like textproto.CanonicalMIMEHeaderKey.</summary>
     private static Dictionary<string, List<string>> CanonicalizeHeaders(IHeaderDictionary headers)

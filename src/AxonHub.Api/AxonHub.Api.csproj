@@ -8,5 +8,6 @@
     <ProjectReference Include="..\AxonHub.Llm\AxonHub.Llm.csproj" />
     <ProjectReference Include="..\AxonHub.Persistence\AxonHub.Persistence.csproj" />
     <PackageReference Include="Microsoft.Orleans.Server" />
+    <PackageReference Include="ZstdSharp.Port" />
   </ItemGroup>
 </Project>
