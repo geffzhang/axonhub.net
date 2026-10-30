@@ -4,6 +4,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.OpenAI;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -77,6 +78,19 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// </summary>
     public ChannelCandidate? CurrentCandidate =>
         _candidateIndex < _candidates.Length ? _candidates[_candidateIndex] : null;
+
+    /// <summary>
+    /// The channel key the current attempt sent upstream, when the provider
+    /// exposes it (request_executions.channel_api_key_suffix).
+    /// </summary>
+    public string? CurrentApiKey => (_current as IApiKeyProvenance)?.SelectedApiKey;
+
+    /// <summary>
+    /// The 1-based position of <see cref="CurrentApiKey"/> over the channel's
+    /// full key list, or null for single-key channels and before the first
+    /// transform (request_executions.channel_api_key_index).
+    /// </summary>
+    public int? CurrentApiKeyIndex => (_current as IApiKeyProvenance)?.SelectedApiKeyIndex;
 
     /// <summary>The wrapped transformer for the current attempt.</summary>
     private IOutboundTransformer Current =>

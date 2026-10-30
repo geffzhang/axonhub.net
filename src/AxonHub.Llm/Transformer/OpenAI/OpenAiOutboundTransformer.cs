@@ -23,6 +23,13 @@ public sealed class OpenAiOutboundConfig
 
     public IApiKeyProvider? ApiKeyProvider { get; set; }
 
+    /// <summary>
+    /// Port-only audit field: 1-based position of the key the provider serves in
+    /// the channel's full key list, or null when the channel has a single key.
+    /// Persisted on request_executions.channel_api_key_index.
+    /// </summary>
+    public int? ChannelApiKeyIndex { get; set; }
+
     /// <summary>Null models the reference's unset config: Content is used.</summary>
     public ReasoningField? ReasoningField { get; set; }
 }
@@ -39,10 +46,26 @@ public sealed class StaticApiKeyProvider(string apiKey) : IApiKeyProvider
     public string Get() => apiKey;
 }
 
+/// <summary>
+/// Audit seam for the request-execution rows: the channel credential an outbound
+/// transformer actually put on the wire.
+/// </summary>
+public interface IApiKeyProvenance
+{
+    /// <summary>The key sent by the most recent <c>TransformRequest</c>, or null before it runs.</summary>
+    string? SelectedApiKey { get; }
+
+    /// <summary>1-based index over the channel's full key list, or null when unambiguous.</summary>
+    int? SelectedApiKeyIndex { get; }
+}
+
 /// <summary>Port of llm/transformer/openai/outbound.go (chat path).</summary>
-public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer
+public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
 {
     private readonly OpenAiOutboundConfig _config;
+
+    /// <summary>The key the latest TransformRequest used; null until it runs.</summary>
+    private string? _selectedApiKey;
 
     public OpenAiOutboundTransformer(OpenAiOutboundConfig config)
     {
@@ -64,12 +87,27 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer
 
     /// <summary>Port of NewOutboundTransformer(baseURL, apiKey).</summary>
     public static OpenAiOutboundTransformer Create(string baseUrl, string apiKey)
+        => Create(baseUrl, new StaticApiKeyProvider(apiKey));
+
+    /// <summary>
+    /// Builds a transformer with a key provider and its audit index
+    /// (the reference's getAPIKeyProvider + channel_api_key_index row).
+    /// </summary>
+    public static OpenAiOutboundTransformer Create(
+        string baseUrl,
+        IApiKeyProvider apiKeyProvider,
+        int? channelApiKeyIndex = null)
         => new(new OpenAiOutboundConfig
         {
             PlatformType = OpenAiPlatformType.OpenAi,
             BaseUrl = baseUrl,
-            ApiKeyProvider = new StaticApiKeyProvider(apiKey),
+            ApiKeyProvider = apiKeyProvider,
+            ChannelApiKeyIndex = channelApiKeyIndex,
         });
+
+    public string? SelectedApiKey => _selectedApiKey;
+
+    public int? SelectedApiKeyIndex => _config.ChannelApiKeyIndex;
 
     public string ApiFormat => ApiFormats.OpenAIChatCompletion;
 
@@ -141,6 +179,7 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer
         var body = GoJson.Marshal(oaiReq);
 
         var apiKey = _config.ApiKeyProvider!.Get();
+        _selectedApiKey = apiKey;
 
         var headers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         HttpClientUtils.HeaderSet(headers, "Content-Type", "application/json");

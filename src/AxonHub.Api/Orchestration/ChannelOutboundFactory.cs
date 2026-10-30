@@ -11,9 +11,10 @@ namespace AxonHub.Api.Orchestration;
 /// </summary>
 /// <remarks>
 /// Only the <c>openai</c> channel type is ported (the vertical slice); the other
-/// provider types are registered as a scope cut. Multiple enabled API keys use
-/// the first key because the reference's TraceStickyKeyProvider is deferred
-/// (C013).
+/// provider types are registered as a scope cut. Key selection follows
+/// getAPIKeyProvider: a single enabled key is static, several enabled keys are
+/// chosen at random per attempt because the trace subsystem (and therefore
+/// trace-sticky rendezvous selection) is not ported yet (C013).
 /// </remarks>
 public static class ChannelOutboundFactory
 {
@@ -29,16 +30,23 @@ public static class ChannelOutboundFactory
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName);
         }
 
-        var apiKeys = ChannelCredentials.GetEnabledApiKeys(
+        var enabledKeys = ChannelCredentials.GetEnabledApiKeys(
             candidate.Credentials,
             candidate.DisabledApiKeys,
             now);
 
-        if (apiKeys.Count == 0)
+        if (enabledKeys.Count == 0)
         {
             throw new InvalidOperationException("missing api key for channel " + candidate.ChannelName);
         }
 
-        return OpenAiOutboundTransformer.Create(candidate.BaseUrl ?? string.Empty, apiKeys[0]);
+        var provider = new ChannelApiKeyProvider(
+            enabledKeys,
+            ChannelCredentials.GetAllApiKeys(candidate.Credentials));
+
+        return OpenAiOutboundTransformer.Create(
+            candidate.BaseUrl ?? string.Empty,
+            provider,
+            provider.KeyIndex);
     }
 }

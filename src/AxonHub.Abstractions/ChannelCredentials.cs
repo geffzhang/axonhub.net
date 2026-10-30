@@ -45,8 +45,8 @@ public static class ChannelCredentials
         return enabled;
     }
 
-    /// <summary>Port of GetAllAPIKeys.</summary>
-    private static List<string> GetAllApiKeys(string? credentialsJson)
+    /// <summary>Port of GetAllAPIKeys: legacy apiKey (unless OAuth) first, then apiKeys.</summary>
+    public static IReadOnlyList<string> GetAllApiKeys(string? credentialsJson)
     {
         var keys = new List<string>();
         if (string.IsNullOrWhiteSpace(credentialsJson))

@@ -193,6 +193,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             Stream = _stream,
             RequestId = _requestId,
             ChannelId = attempt.ChannelId,
+            ChannelApiKeySuffix = ApiKeySuffix(_outbound.CurrentApiKey),
+            ChannelApiKeyIndex = _outbound.CurrentApiKeyIndex,
         });
 
         // The transport reports response headers before the first event. The
@@ -987,6 +989,23 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         => _stream && attempt?.FirstTokenAt is { } firstToken
             ? LatencyMs(attempt.StartedAt, firstToken)
             : null;
+
+    /// <summary>
+    /// Port of the channel_api_key_suffix rule (biz/request.go): the last four
+    /// runes, omitted entirely when the key is not longer than four runes.
+    /// </summary>
+    private static string? ApiKeySuffix(string? apiKey)
+    {
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            return null;
+        }
+
+        var runes = apiKey.EnumerateRunes().ToArray();
+        return runes.Length > 4
+            ? string.Concat(runes[^4..].Select(static rune => rune.ToString()))
+            : null;
+    }
 
     /// <summary>
     /// Port of ClampLatency: the reference enforces a minimum of 10ms on every
