@@ -18,8 +18,6 @@ public sealed class AnthropicInboundTransformerTests
 
     private static readonly AnthropicInboundTransformer Transformer = new();
 
-    private static readonly IReadOnlyList<StreamEvent> NoChunks = [];
-
     private static readonly string[] WebSearchCallIds = ["call-1"];
 
     // ------------------------------------------------------------------
@@ -326,13 +324,11 @@ public sealed class AnthropicInboundTransformerTests
         => Assert.Equal(expected, ErrorOf(body));
 
     [Fact]
-    public void RejectsStreamingAsRegisteredDeferredGap()
+    public void AcceptsStreamingRequest()
     {
-        // Streaming is the documented gap in the ledger; reject only after the
-        // reference validations so non-streaming calls stay byte-identical.
-        Assert.Equal(
-            "invalid request: streaming is not supported by this port yet",
-            ErrorOf("{" + Base + "," + Messages + ",\"stream\":true}"));
+        var request = Transform("{" + Base + "," + Messages + ",\"stream\":true}");
+
+        Assert.True(request.Stream);
     }
 
     [Fact]
@@ -877,13 +873,6 @@ public sealed class AnthropicInboundTransformerTests
         Assert.Equal("internal_server_error", root.GetProperty("type").GetString());
         Assert.Equal("internal_server_error", root.GetProperty("error").GetProperty("type").GetString());
         Assert.Equal("boom", root.GetProperty("error").GetProperty("message").GetString());
-    }
-
-    [Fact]
-    public void StreamingIsNotPortedYet()
-    {
-        Assert.Throws<NotSupportedException>(() => Transformer.TransformStream(null!));
-        Assert.Throws<NotSupportedException>(() => Transformer.AggregateStreamChunks(NoChunks, out _));
     }
 
     // ------------------------------------------------------------------

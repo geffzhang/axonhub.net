@@ -2,7 +2,7 @@
 
 验收是体检报告，不是"我感觉挺好"。
 
-测量时间：2026-10-30（M2 Llm 切片 + M4 持久化层与请求链路落库 + M3 通道选择与 HTTP 切片，含超时、非法 UTF-8 与字段级类型错误路径；C014 鉴权子切片新增 API key 中间件、ClientIP/allowlist 与 `projects` / `users` / `api_keys` 三表；C028 新增 `systems` 表、系统安全设置与 `/v1` IP 黑名单；C030 新增 `retry_policy` 读取、归一化与每请求 topK；C031 新增 `upstream_error_policy` 的应用与流式错误改写；C012 新增四条负载均衡策略链，残余 C034/C036；通道级请求改写新增 body/header 覆盖、Go 模板子集与设置解析，残余 C037–C041；C035 新增通道限流与并发准入：RPM/TPM 自然分钟窗口、并发硬信号量与 FIFO 队列、429 Retry-After 冷却、RateLimitAware 打分接线，残余 C042–C045；C046–C049 新增 usage 成本计算与注入：flat_fee / usage_per_unit / usage_tiered / usage_volume 四种定价模式与调度匹配、`channel_model_prices` 表与读取接缝、`system_inject_usage_cost` 门控、`usage_logs` 成本列与响应 `usage.cost`；C013 新增无 trace 的多 key 随机分配与执行 key 审计：`ChannelApiKeyProvider`、rendezvous/FNV-1a 选择器、`channel_api_key_suffix` 与 `channel_api_key_index`；Anthropic Messages 入站（非流式）新增请求/响应转换、Go 解码文案、错误信封与 `POST /v1/messages` + `POST /anthropic/v1/messages` 两条路由（127 例 Llm + 7 例 API，残余 C050/C051））。
+测量时间：2026-10-30（M2 Llm 切片 + M4 持久化层与请求链路落库 + M3 通道选择与 HTTP 切片，含超时、非法 UTF-8 与字段级类型错误路径；C014 鉴权子切片新增 API key 中间件、ClientIP/allowlist 与 `projects` / `users` / `api_keys` 三表；C028 新增 `systems` 表、系统安全设置与 `/v1` IP 黑名单；C030 新增 `retry_policy` 读取、归一化与每请求 topK；C031 新增 `upstream_error_policy` 的应用与流式错误改写；C012 新增四条负载均衡策略链，残余 C034/C036；通道级请求改写新增 body/header 覆盖、Go 模板子集与设置解析，残余 C037–C041；C035 新增通道限流与并发准入：RPM/TPM 自然分钟窗口、并发硬信号量与 FIFO 队列、429 Retry-After 冷却、RateLimitAware 打分接线，残余 C042–C045；C046–C049 新增 usage 成本计算与注入：flat_fee / usage_per_unit / usage_tiered / usage_volume 四种定价模式与调度匹配、`channel_model_prices` 表与读取接缝、`system_inject_usage_cost` 门控、`usage_logs` 成本列与响应 `usage.cost`；C013 新增无 trace 的多 key 随机分配与执行 key 审计：`ChannelApiKeyProvider`、rendezvous/FNV-1a 选择器、`channel_api_key_suffix` 与 `channel_api_key_index`；Anthropic Messages 入站（非流式）新增请求/响应转换、Go 解码文案、错误信封与 `POST /v1/messages` + `POST /anthropic/v1/messages` 两条路由（127 例 Llm + 7 例 API）；C050 新增 Anthropic 入站流式状态机与聚合器：SSE 事件序列、Read 工具参数缓冲、citations/thinking 事件、usage 合并与 4 组 xtest fixture（Llm 由 272 增至 300，C050 闭合，残余 C052–C055；C051 仍为已接受差异））。
 
 ## 构建
 
@@ -17,11 +17,11 @@
 
 | 项目 | 总数 | 通过 | 失败 | 跳过 | 说明 |
 |---|---|---|---|---|---|
-| `AxonHub.Llm.Tests` | 272 | 272 | 0 | 0 | pipeline 重试 15 + 空响应 9 + 聚合器 1 + HTTP 执行器/SSE 增量解码 9 + Go JSON UTF-8 修复与语法文案 10 + 字段级类型错误文案 101 + Anthropic 入站 127（请求/响应转换、校验文案、Go 解码语义 90 例、错误信封） |
+| `AxonHub.Llm.Tests` | 300 | 300 | 0 | 0 | pipeline 重试 15 + 空响应 9 + OpenAI 聚合器 1 + HTTP 执行器/SSE 增量解码 9 + Go JSON UTF-8 修复与语法文案 10 + 字段级类型错误文案 101 + Anthropic 入站 155（请求/响应转换与校验、Go 解码语义、错误信封、流式状态机 17、Anthropic 聚合器与 usage_test 表 12） |
 | `AxonHub.Persistence.Tests` | 56 | 56 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 九表仓储 45（projects / users / api_keys 各 4 例，systems 4 例，channel_model_prices 6 例） |
 | `AxonHub.Grains.Tests` | 88 | 88 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 6（含 topK 截断与归一化 2）+ 别名解析 3 + 同分顺序/不计数 2 + 负载均衡策略 8（adaptive 中性总分/线性衰减 2、冷却边界 1、权重 tie-break 与未知回退 2、failover 1、circuit-breaker 1、策略切换 1）；限流与并发准入 64：ChannelLimiter 10 + ChannelLimiterManager 12 + ChannelRequestTracker 24 + RateLimitAwareScorer 18 |
 | `AxonHub.Api.Tests` | 495 | 494 | 0 | 1 | HTTP 切片 86：orchestrator/重试/超时 17（含通道级重试配置 3、流式性能记录语义 2、策略 topK 1、负载均衡策略接线 1）+ 请求链路落库 5（含鉴权身份传播 1）+ SSE 写帧 9（含上游错误策略 2）+ 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 18（OpenAI 11 含上游错误策略 3，Anthropic Messages 两条路由 7）+ 期望流选择 2 + 通道重试谓词与 settings 解析 16 + 通道性能记录 7；API key 鉴权与 ClientIP 73：header 提取 14 + 鉴权器流程 13 + ClientIP/allowlist 与中间件文案 46；系统设置与 IP 黑名单 29：SecuritySettings 回退/归一化 15 + 黑名单放行/命中/受信代理 14；重试策略系统设置 49：回退/零值/类型错误 16 + 解析与重复键 7 + 归一化 26；上游错误策略 applier 29：非流改写/本地错误/quota 11 + 响应体字段 8 + 流式分类与策略读取次数 10 + 通道级请求改写 134：body/header 改写与设置解析 133（ChannelOverrideTests 86 含 1 Skip + ChannelOverrideSettingsTests 47）+ 端到端落库 1；限流中间件 29：RPM 准入 5 + TPM/冷却追踪 13 + 队列错误 4 + 连接准入与让位 7；usage 成本 43：计算器 26 + 价格读取 12 + 注入与落库 5；多 key 选择与执行 key 审计 23：provider 16 + 审计 7 |
-| **合计** | **911** | **910** | **0** | **1** | |
+| **合计** | **939** | **938** | **0** | **1** | |
 
 命令：`dotnet test AxonHub.slnx`（2026-10-30，Windows 11 / .NET SDK 10.0.401）。
 
@@ -74,10 +74,12 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   （根值类型、每层字段类型、`content cannot be null` / `invalid content type` / `invalid system prompt format`
   硬错误优先级、大小写折叠、重复键与显式 null 接受集）；结构名、标签路径、Go 类型、数字字面量逐一比对，
   期望值全部来自对参照模块的 Go 探针输出
-- [x] Anthropic Messages 非流式协议由 127 + 7 例锁定：请求/响应转换与 `stop_reason`/usage 映射、
+- [x] Anthropic Messages 入站协议由 155 + 7 例锁定：请求/响应转换与 `stop_reason`/usage 映射、
   校验顺序与文案、六类错误信封（422 `invalid_model_error`、400 `invalid_request_error`、
   500 `internal_server_error`/`error`、ResponseError 与 `HttpClientError` 分支）、
-  两条路由共用的端点胶水；`stream:true` 在参照校验之后以 400 拒绝（C050），
+  两条路由共用的端点胶水；流式 17 例锁定 SSE 事件序列（4 组 xtest fixture 逐事件对比）、
+  Read 工具参数缓冲、citations/thinking 与终止事件；聚合器 12 例锁定分块合成与
+  `usage_test.go` 的 15 项表（C050 已闭合，残余 C052–C055）；
   `input_schema`/`caller` 的显式 null 与缺失合并登记为 C051
 - [ ] 跨语言数字范围已校验（±2^53−1）：token 计数以 int64 落库并由
   `UsageLogStoreTests.TokenCountsRoundTripAsInt64` 锁定；LLM JSON 数字路径尚未专项审计
@@ -155,7 +157,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C003：字段级 JSON 类型错误文案 | 已解决：入站请求按参照的字段/类型表逐 token 复刻 Go 解码语义，错误文案逐字节一致 | 已关闭（101 例锁定；残余见 C022） |
 | C022：int32 index 上限与响应侧 null 元素 | `tool_calls[].index` 超过 int32 时 Go 接受而本实现报解码错误；上游响应中的 null 元素当前抛 500 而非零值 | 真实缺口；协议实际取值很小，待遇到再按 Go 语义补零值替换 |
 | 持久化测试依赖 Docker（Testcontainers 启动 `postgres:17-alpine`） | 无 Docker 的环境无法运行持久化测试 | CI 必须提供 Docker；随 M3 补 CI 配置 |
-| C050–C051：Anthropic 入站的范围裁剪与 raw JSON 载体 | C050 真实缺口：Anthropic 流式（SSE 事件序列与聚合器）未移植，`stream:true` 在参照校验后返回 400 `invalid_request_error`；C051 已接受：`input_schema`/`caller` 的显式 null 与缺失合并（Go `json.RawMessage` 保留 `"null"`，端口 `JsonElement?` 置 null），仅在显式 null 时出站 body 少一个 `"parameters":null`，`caller` 差异要等 Anthropic 出站 transformer 落地才可观察 | 非流式行为与参照等价；流式按 inbound_stream.go/aggregator.go 后续移植并补语料 |
+| C050–C055：Anthropic 入站流式与聚合器 | C050 已解决：流式状态机与聚合器按 `inbound_stream.go`/`aggregator.go` 移植，4 组 xtest fixture 逐事件对比，`stream:true` 返回 200 `text/event-stream`；C051 已接受（raw JSON 载体，见登记）；C052 已接受：多条非法工具调用按 index 升序报告（参照 map 迭代随机）；C053 已接受：聚合器跳过负 index（参照 panic）；C054 已接受：无效工具输入在聚合早期抛 `InvalidOperationException`（参照在 `json.Marshal` 时失败，死 jsonrepair 省略）；C055 已接受：省略从未赋值的 `pendingReasoningItemID` 死字段 | C050 已关闭（测试锁定）；C052–C055 仅影响畸形输入或内部错误文案 |
 | C024–C027：鉴权子切片的已接受差异 | noauth key 指向已删除项目时参照触发唯一键冲突返回 500，本实现返回 401 且不改动该行（C024）；owner 选择在参照中无 `ORDER BY`，多 owner 时顺序不定（C025）；无 API key/项目缓存，每次请求读库（C026）；配置载体为 ASP.NET Core 配置而非 YAML 结构体（C027） | 已接受，测试锁定 401 行为（C024/C025），C026/C027 为性能与载体差异 |
 | C028–C029：系统安全设置与 IP 黑名单 | C028 已解决：`systems` 表、`SecuritySettingsOrDefault` 的回退/归一化与 `/v1` 黑名单中间件按参照实现，403 信封逐字节一致；C029 已接受：系统设置无进程内缓存，每个 `/v1` 请求（有 ClientIP 时）读一次库，外部改库立即可见 | 已关闭；缓存随配置/缓存里程碑（C029） |
 | C030–C033：重试策略与上游错误策略 | C030 已解决：`retry_policy` 的读取/归一化与每请求 topK 已接入（49 例 + 3 例），禁用时 1 个候选，策略计数大于默认值时能打满候选；C031 已解决：`upstream_error_policy` 的 hidden/custom 按参照应用到非流与流式错误（含"非流传输错误不被改写"的真实不对称），34 例锁定；C032 已接受：重复键后跟 `null` 时 .NET 与 Go 解码语义不同；C033 已接受：错误体解析用 System.Text.Json 而非 gjson，截断报文与重复键的结果不同 | C030/C031 已关闭；C032/C033 仅手改库或畸形上游报文可触发 |

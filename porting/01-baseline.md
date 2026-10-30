@@ -305,9 +305,9 @@ sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模�
 请求/执行落库与掩码均与上述宿主进程冒烟一致（耗时约 3.1s，容器内拒绝连接无宿主端口映射的额外等待）；
 详见 `03-acceptance.md`「端到端」。
 
-## 10. Anthropic Messages 入站（127 例）
+## 10. Anthropic Messages 入站（155 例）
 
-参照路线：`llm/transformer/anthropic/inbound.go` + `inbound_convert.go` + `usage.go` 的非流式子集。
+参照路线：`llm/transformer/anthropic/inbound.go` + `inbound_convert.go` + `inbound_stream.go` + `aggregator.go` + `usage.go`。
 两条路由 `POST /v1/messages` 与 `POST /anthropic/v1/messages` 与 `/v1` 同属参照的 apiGroup
 （`routes.go`），端口把它们挂在同一段中间件之后，复用 `ChatCompletionEndpoint`，
 只通过 `ChatCompletionOrchestrator.WithInbound` 把入站变换换成 `AnthropicInboundTransformer`。
@@ -319,10 +319,14 @@ sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模�
 | Go 解码语义（C003 扩展）：根值类型、每层字段类型错误 64 例、硬错误优先级（content cannot be null / invalid content type / invalid system prompt format）、大小写折叠、重复键、显式 null 接受集 16 例；期望值来自 `E:\tmp\anthprobe` 对真实参照模块（commit 见 00-reference）的逐条探针输出 | 同上 | 80 |
 | 响应转换：文本 / 思考（签名生成）/ 工具调用 / 内联工具结果 / usage 映射与 stop_reason，响应头 `Content-Type: application/json` + `Cache-Control: no-cache` | 同上 | 计入 127 |
 | 错误信封：nil → 500 `error`、InvalidModel → 422 `invalid_model_error`、ResponseError → 状态码 + detail、`HttpClientError` 原样 body、InvalidRequest → 400、其它 → 500 | 同上 | 计入 127 |
-| 端点胶水：成功 → Anthropic message 信封；校验失败与流式 → `invalid_request_error`；无效模型 → 422；空 body 仍为 OpenAI 风格 `JSONError`（`api.JSONError` 在变换器之前）；上游 429 经出站解析后以 Anthropic 信封返回；ResponseError 信封 | `tests/AxonHub.Api.Tests/AnthropicMessagesEndpointTests.cs` | 7 |
+| 入站流式状态机：message_start / content_block_start 生命周期、thinking（含随机签名占位）/ text / tool_use 块、citations_delta 在 block_stop 之前、Read 工具参数缓冲与空 `pages` 清理、终止时工具参数校验（多条非法调用按 index 升序）、usage 只在终止块选择、重复终止事件抑制、源错误不 finalize；4 组 xtest fixture（stop / parallel / think / or-tool）逐事件对比后再用实际事件聚合校验 | `tests/AxonHub.Llm.Tests/AnthropicInboundStreamTests.cs` | 17 |
+| 聚合器：文本 / 思考 / 签名 / input_json_delta 拼接、缺失内容块补齐、message_delta 与 message_start 的 usage 合并、默认 `msg_unknown` 消息、citations、3 组 fixture 与 `usage_test.go` 的 15 项表、负 index 跳过与非法工具输入错误 | `tests/AxonHub.Llm.Tests/AnthropicAggregatorTests.cs` | 12 |
+| 端点胶水：成功 → Anthropic message 信封；校验失败 → `invalid_request_error`；`stream:true` → 200 `text/event-stream` 且以 `message_stop` 结尾（无 `event:error` 尾随）；无效模型 → 422；空 body 仍为 OpenAI 风格 `JSONError`（`api.JSONError` 在变换器之前）；上游 429 经出站解析后以 Anthropic 信封返回；ResponseError 信封 | `tests/AxonHub.Api.Tests/AnthropicMessagesEndpointTests.cs` | 7 |
 
-说明：`stream:true` 在完成参照的全部校验后以 400 拒绝，登记为 C050（流式与聚合器缺口）；
-`input_schema` / `caller` 的显式 null 与缺失合并登记为 C051；解码文案机制是 C003 的协议扩展。
+说明：C050（流式与聚合器缺口）已闭合，事件序列由 4 组 fixture 锁定；写入的残余差异为
+C052（工具参数校验顺序确定化）、C053（负 index 跳过）、C054（无效工具输入的错误时机/文案）与
+C055（省略死字段）。`input_schema` / `caller` 的显式 null 与缺失合并登记为 C051；
+解码文案机制是 C003 的协议扩展。
 
 ## 覆盖缺口
 
@@ -332,7 +336,7 @@ sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模�
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
-| Anthropic 出站、Anthropic 流式、Responses API、Responses 流 | Anthropic Messages 入站（非流式）已实现并由第 10 节的 127 + 7 例锁定；流式入站与聚合器为 C050，出站 transformer 与 Responses 尚未移植 | 中 | 后续阶段 |
+| Anthropic 出站、Responses API、Responses 流 | Anthropic Messages 入站（非流式与流式）已实现并由第 10 节的 155 + 7 例锁定；出站 transformer 与 Responses 尚未移植 | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

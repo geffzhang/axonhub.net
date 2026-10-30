@@ -9,13 +9,9 @@ namespace AxonHub.Llm.Transformer.Anthropic;
 /// <summary>
 /// Port of llm/transformer/anthropic/inbound.go: the Anthropic Messages
 /// inbound transformer (<c>POST /v1/messages</c>,
-/// <c>POST /anthropic/v1/messages</c>).
+/// <c>POST /anthropic/v1/messages</c>), including the streaming half
+/// (inbound_stream.go) and the stream aggregator (aggregator.go).
 /// </summary>
-/// <remarks>
-/// The streaming half of the reference (inbound_stream.go and aggregator.go) is
-/// not ported yet: <c>stream: true</c> requests are rejected with an
-/// invalid-request error, registered in the difference ledger.
-/// </remarks>
 public sealed class AnthropicInboundTransformer : IInboundTransformer
 {
     /// <summary>Port of TransformRequest: client HTTP request to unified request.</summary>
@@ -180,14 +176,6 @@ public sealed class AnthropicInboundTransformer : IInboundTransformer
             }
         }
 
-        // Deferred gap: the reference streams through inbound_stream.go and
-        // aggregator.go, which are not ported yet. Reject after the reference
-        // validations so only otherwise-valid streaming calls differ.
-        if (anthropicReq.Stream is true)
-        {
-            throw TransformerErrors.InvalidRequest("streaming is not supported by this port yet");
-        }
-
         return AnthropicConvertToLlm.ConvertToLlmRequest(anthropicReq);
     }
 
@@ -214,13 +202,13 @@ public sealed class AnthropicInboundTransformer : IInboundTransformer
         };
     }
 
-    /// <summary>Deferred gap: the reference's inbound stream transformer.</summary>
+    /// <summary>Port of TransformStream (inbound_stream.go).</summary>
     public IStream<StreamEvent> TransformStream(IStream<LlmResponse> stream)
-        => throw new NotSupportedException("anthropic inbound streaming is not ported yet");
+        => new AnthropicInboundStream(stream);
 
-    /// <summary>Deferred gap: the reference's stream aggregator.</summary>
+    /// <summary>Port of AggregateStreamChunks (inbound.go:118-150).</summary>
     public byte[] AggregateStreamChunks(IReadOnlyList<StreamEvent> chunks, out ResponseMeta meta)
-        => throw new NotSupportedException("anthropic stream aggregation is not ported yet");
+        => AnthropicAggregator.AggregateStreamChunks(chunks, AnthropicPlatformType.Direct, out meta);
 
     /// <summary>
     /// Port of TransformError: maps orchestrator failures back to the Anthropic

@@ -487,7 +487,13 @@ public sealed class AnthropicUsage
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public long CachedTokens { get; set; }
 
+    /// <summary>
+    /// Port of Usage.UnmarshalJSON (usage_json.go): cost is parsed by
+    /// xjson.ParseOptionalFloat64, so a numeric string is accepted and any
+    /// other shape is ignored rather than failing the whole decode.
+    /// </summary>
     [JsonPropertyName("cost")]
+    [JsonConverter(typeof(GoOptionalNumberConverter))]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? Cost { get; set; }
 }

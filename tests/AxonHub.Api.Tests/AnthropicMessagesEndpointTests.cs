@@ -159,24 +159,49 @@ public sealed class AnthropicMessagesEndpointTests(GrainClusterFixture fixture)
     }
 
     [Fact]
-    public async Task StreamingRequestIsRejectedWithInvalidRequestEnvelope()
+    public async Task StreamingRequestReturnsAnthropicSseEvents()
     {
         fixture.Channels.Set(TestChannels.OpenAi(4903, "anthropic-stream-model"));
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data(
+                "{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"anthropic-stream-model\",\"choices\":[{\"index\":0,"
+                + "\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}"),
+            TestChannels.Data(
+                "{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"anthropic-stream-model\",\"choices\":[{\"index\":0,\"delta\":{},"
+                + "\"finish_reason\":\"stop\"}],"
+                + "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}"),
+            TestChannels.Data("[DONE]"),
+        };
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(chunks),
+        };
         var context = NewContext(RequestBody("anthropic-stream-model", stream: true));
         var orchestrator = WithAnthropicInbound(NewOrchestrator(
-            new ScriptedExecutor(),
+            executor,
             new RecordingMetricsRecorder()));
 
         await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
 
-        Assert.Equal(400, context.Response.StatusCode);
+        Assert.Equal(200, context.Response.StatusCode);
+        Assert.StartsWith("text/event-stream", context.Response.ContentType, StringComparison.Ordinal);
 
-        using var body = JsonDocument.Parse(ResponseBody(context));
-        var root = body.RootElement;
-        Assert.Equal("invalid_request_error", root.GetProperty("type").GetString());
-        Assert.Equal(
-            "invalid request: streaming is not supported by this port yet",
-            root.GetProperty("error").GetProperty("message").GetString());
+        var body = ResponseBody(context);
+        Assert.Contains("event:message_start", body, StringComparison.Ordinal);
+        Assert.Contains("event:content_block_start", body, StringComparison.Ordinal);
+        Assert.Contains("event:content_block_delta", body, StringComparison.Ordinal);
+        Assert.Contains("event:content_block_stop", body, StringComparison.Ordinal);
+        Assert.Contains("event:message_delta", body, StringComparison.Ordinal);
+        // message_stop is the last event; the writer must not append an
+        // ErrStreamIncomplete error event after it.
+        Assert.EndsWith(
+            "event:message_stop\ndata:{\"type\":\"message_stop\"}\n\n",
+            body,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("event:error", body, StringComparison.Ordinal);
     }
 
     [Fact]

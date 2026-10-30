@@ -35,6 +35,15 @@ internal static class AnthropicJson
            && (blockType?.EndsWith("_tool_result", StringComparison.Ordinal) ?? false);
 
     /// <summary>
+    /// Port of isAnthropicToolUseLike (tool_blocks.go): the plain and the
+    /// provider-native (<c>*_tool_use</c>) tool-use blocks both accumulate
+    /// input_json_delta fragments.
+    /// </summary>
+    public static bool IsAnthropicToolUseLike(string? blockType)
+        => string.Equals(blockType, "tool_use", StringComparison.Ordinal)
+           || (blockType?.EndsWith("_tool_use", StringComparison.Ordinal) ?? false);
+
+    /// <summary>
     /// Port of setAnthropicSpecialMeta. Returns the (possibly created) map so
     /// callers can assign it back to the property that owns it.
     /// </summary>
@@ -245,6 +254,75 @@ internal static class AnthropicJson
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    /// <summary>Port of isReadToolName.</summary>
+    public static bool IsReadToolName(string? name)
+        => name is not null && name.Equals("read", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Port of normalizeReadToolArguments (read_tool_args.go): returns the
+    /// sanitized argument string and whether the sanitizer accepted the input.
+    /// When <c>Complete</c> is false the caller must keep the original string.
+    /// </summary>
+    public static (string Sanitized, bool Complete) NormalizeReadToolArguments(string arguments)
+        => SanitizeEmptyReadPages(arguments, unchangedOk: true);
+
+    private static (string Sanitized, bool Complete) SanitizeEmptyReadPages(
+        string arguments,
+        bool unchangedOk)
+    {
+        if (arguments.Length == 0)
+        {
+            return (arguments, false);
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(arguments);
+        }
+        catch (JsonException)
+        {
+            return (arguments, false);
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+
+            // Go unmarshals into map[string]any: null yields a nil map without
+            // an error, so it reaches the pages check and reports unchangedOK.
+            if (root.ValueKind == JsonValueKind.Null)
+            {
+                return (arguments, unchangedOk);
+            }
+
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return (arguments, false);
+            }
+
+            if (!root.TryGetProperty("pages", out var pages)
+                || pages.ValueKind != JsonValueKind.String
+                || pages.GetString()!.Length > 0)
+            {
+                return (arguments, unchangedOk);
+            }
+
+            var map = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (var property in root.EnumerateObject())
+            {
+                // Go's map decode keeps the last duplicate key.
+                map[property.Name] = property.Value;
+            }
+
+            map.Remove("pages");
+
+            var builder = new StringBuilder();
+            AppendGoValue(builder, map);
+            return (builder.ToString(), true);
         }
     }
 
