@@ -67,7 +67,13 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   库内写入 1 条 `failed` request（`channel_id` 已回填）、3 条 `failed` execution（每次尝试一行，`response_status_code=502`、
   有 `error_message`、无延迟指标）、0 条 usage log；execution 请求头中的 `Authorization` 为 `******`，请求体以
   jsonb 原样落库。
-- [ ] 容器内 — 未开始（本轮以宿主进程直连容器化 PostgreSQL，尚未构建应用镜像）
+- [x] 容器内（应用镜像 + PostgreSQL 容器） — 2026-10-30：多阶段 `Dockerfile`（`sdk:10.0` 构建 → `aspnet:10.0` 运行，
+  监听 8080）构建出 `axonhub-api:smoke`（253 MB）；镜像与 `postgres:17-alpine` 同网络启动，启动时幂等 DDL 建出 4 张表；
+  `GET /health` 返回 `200 {"status":"ok"}`；未知模型 422 `invalid_model_error`；插入指向 `http://127.0.0.1:1` 的启用通道后，
+  `POST /v1/chat/completions` 3 次尝试后返回 502 `upstream_error`（`upstream_stream_interrupted`，约 3.1s，容器内拒绝连接更快）；
+  库内 1 条 `failed` request（`channel_id` 已回填）、3 条 `failed` execution（`response_status_code=502`、有 `error_message`、
+  无延迟指标、`Authorization` 落库为 `******`）、0 条 usage log；请求体以 jsonb 原样落库；容器日志无未处理异常；
+  冒烟后删除容器与网络
 - [ ] 跨平台（Windows / Linux / macOS） — 目前仅在 Windows 11 验证
 - [ ] 跨传输（stdio / HTTP / 进程内） — 仅进程内 HTTP 切片
 
@@ -75,7 +81,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 
 | 风险 | 影响 | 处置 |
 |---|---|---|
-| 真实宿主已通过启动冒烟，但尚未构建/运行应用容器镜像 | 部署形态未验证（网络、时区、secrets 注入） | 容器化验收时补 Dockerfile 与镜像冒烟 |
+| 应用容器镜像与部署形态未验证 | 已解决：多阶段 Dockerfile 构建的镜像与 PostgreSQL 容器同网络启动，健康检查、422/502 链路与落库均通过（见「端到端」） | 已关闭（镜像冒烟） |
 | C012：默认 `adaptive` 负载均衡策略链未移植，仅 round-robin 排序 | 默认配置下通道顺序可能与参照不同 | 补齐策略链后按参照用例扩展 |
 | C013：多 API key 通道只用首个 key，无 trace/thread 粘性 | 多 key 通道流量集中，限流/配额分布与参照不同 | 接入 trace/thread 后补 TraceStickyKeyProvider |
 | C014：鉴权、限流、成本与通道级请求改写未接入 | 端点对任意客户端开放，usage 已落库但成本为空、通道级改写不生效 | 后续里程碑按参照逐项接入并补测 |

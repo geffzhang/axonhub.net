@@ -147,7 +147,10 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 | 掩码 | execution 请求头中的 `Authorization` 为 `******` |
 | 日志 | 无未处理异常；冒烟后停止宿主进程并删除容器 |
 
-容器内运行（应用镜像）尚未验证，见覆盖缺口与 `03-acceptance.md`「端到端」。
+容器内运行（应用镜像 + PostgreSQL 容器）随后验证：多阶段 `Dockerfile`（`sdk:10.0` → `aspnet:10.0`，监听 8080）
+构建的镜像与 `postgres:17-alpine` 在同一容器网络启动，启动 DDL、`/health`、未知模型 422 与 502 失败链路、
+请求/执行落库与掩码均与上述宿主进程冒烟一致（耗时约 3.1s，容器内拒绝连接无宿主端口映射的额外等待）；
+详见 `03-acceptance.md`「端到端」。
 
 ## 覆盖缺口
 
@@ -155,7 +158,7 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 |---|---|---|---|
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
-| 数据库接线的端到端启动 | 已用真实宿主冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；尚未构建应用容器镜像 | 低 | 容器化验收时补 Dockerfile 与镜像冒烟 |
+| 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
 | Anthropic 入站/出站、Responses API、Responses 流 | 首期纵向切片只做 OpenAI Chat | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |

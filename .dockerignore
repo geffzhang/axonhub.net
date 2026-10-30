@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+.git/
+.vs/
+.idea/
+tests/
+porting/
+corpus/
+tools/
+*.user
+Dockerfile
+.dockerignore
