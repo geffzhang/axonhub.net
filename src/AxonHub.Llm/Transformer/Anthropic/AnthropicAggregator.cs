@@ -5,17 +5,6 @@ using AxonHub.Llm.Json;
 namespace AxonHub.Llm.Transformer.Anthropic;
 
 /// <summary>
-/// Port of anthropic.PlatformType for the aggregator's cache-token branches
-/// (usage.go). Only the two behaviours the reference distinguishes are
-/// modelled: Moonshot and everything else (direct / bedrock / vertex).
-/// </summary>
-public enum AnthropicPlatformType
-{
-    Direct,
-    Moonshot,
-}
-
-/// <summary>
 /// Port of llm/transformer/anthropic/aggregator.go: folds Anthropic streaming
 /// chunks into one complete Messages response. Used when a non-streaming
 /// client request had to stream upstream.

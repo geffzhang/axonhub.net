@@ -44,6 +44,14 @@ internal static class AnthropicJson
            || (blockType?.EndsWith("_tool_use", StringComparison.Ordinal) ?? false);
 
     /// <summary>
+    /// Port of isAnthropicToolResultLike (tool_blocks.go): true for plain
+    /// tool_result and every provider-native <c>*_tool_result</c> block.
+    /// </summary>
+    public static bool IsAnthropicToolResultLike(string? blockType)
+        => string.Equals(blockType, "tool_result", StringComparison.Ordinal)
+           || (blockType?.EndsWith("_tool_result", StringComparison.Ordinal) ?? false);
+
+    /// <summary>
     /// Port of setAnthropicSpecialMeta. Returns the (possibly created) map so
     /// callers can assign it back to the property that owns it.
     /// </summary>

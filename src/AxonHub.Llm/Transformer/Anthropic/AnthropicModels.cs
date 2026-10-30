@@ -22,51 +22,67 @@ public sealed class AnthropicMessageRequest
     public List<AnthropicMessageParam>? Messages { get; set; }
 
     [JsonPropertyName("model")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Model { get; set; }
 
     [JsonPropertyName("anthropic_version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AnthropicVersion { get; set; }
 
     [JsonPropertyName("anthropic_beta")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? AnthropicBeta { get; set; }
 
     [JsonPropertyName("temperature")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? Temperature { get; set; }
 
     [JsonPropertyName("top_k")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? TopK { get; set; }
 
     [JsonPropertyName("top_p")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? TopP { get; set; }
 
     [JsonPropertyName("metadata")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicMetadata? Metadata { get; set; }
 
     [JsonPropertyName("service_tier")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ServiceTier { get; set; }
 
     [JsonPropertyName("stop_sequences")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? StopSequences { get; set; }
 
     [JsonPropertyName("system")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicSystemPrompt? System { get; set; }
 
     [JsonPropertyName("thinking")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicThinking? Thinking { get; set; }
 
     [JsonPropertyName("output_config")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicOutputConfig? OutputConfig { get; set; }
 
     [JsonPropertyName("tools")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<AnthropicTool>? Tools { get; set; }
 
     [JsonPropertyName("tool_choice")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicToolChoice? ToolChoice { get; set; }
 
     [JsonPropertyName("stream")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Stream { get; set; }
 
     [JsonPropertyName("cache_control")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicCacheControl? CacheControl { get; set; }
 }
 
@@ -74,6 +90,7 @@ public sealed class AnthropicMessageRequest
 public sealed class AnthropicMetadata
 {
     [JsonPropertyName("user_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? UserId { get; set; }
 }
 
@@ -154,6 +171,7 @@ public sealed class AnthropicSystemPromptPart
     public string? Text { get; set; }
 
     [JsonPropertyName("cache_control")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicCacheControl? CacheControl { get; set; }
 }
 
@@ -165,9 +183,11 @@ public sealed class AnthropicThinking
 
     /// <summary>Go int64: JSON null leaves 0, so the CLR type stays nullable.</summary>
     [JsonPropertyName("budget_tokens")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? BudgetTokens { get; set; }
 
     [JsonPropertyName("display")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Display { get; set; }
 }
 
@@ -175,6 +195,7 @@ public sealed class AnthropicThinking
 public sealed class AnthropicOutputConfig
 {
     [JsonPropertyName("effort")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Effort { get; set; }
 }
 
@@ -185,9 +206,11 @@ public sealed class AnthropicToolChoice
     public string? Type { get; set; }
 
     [JsonPropertyName("disable_parallel_tool_use")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? DisableParallelToolUse { get; set; }
 
     [JsonPropertyName("name")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Name { get; set; }
 }
 
@@ -195,33 +218,42 @@ public sealed class AnthropicToolChoice
 public sealed class AnthropicTool
 {
     [JsonPropertyName("type")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Type { get; set; }
 
     [JsonPropertyName("name")]
     public string? Name { get; set; }
 
     [JsonPropertyName("description")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Description { get; set; }
 
     [JsonPropertyName("input_schema")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? InputSchema { get; set; }
 
     [JsonPropertyName("cache_control")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicCacheControl? CacheControl { get; set; }
 
     [JsonPropertyName("max_uses")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? MaxUses { get; set; }
 
     [JsonPropertyName("strict")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Strict { get; set; }
 
     [JsonPropertyName("allowed_domains")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? AllowedDomains { get; set; }
 
     [JsonPropertyName("blocked_domains")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? BlockedDomains { get; set; }
 
     [JsonPropertyName("user_location")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AnthropicWebSearchToolUserLocation? UserLocation { get; set; }
 }
 
@@ -229,15 +261,19 @@ public sealed class AnthropicTool
 public sealed class AnthropicWebSearchToolUserLocation
 {
     [JsonPropertyName("city")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? City { get; set; }
 
     [JsonPropertyName("country")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Country { get; set; }
 
     [JsonPropertyName("region")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Region { get; set; }
 
     [JsonPropertyName("timezone")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Timezone { get; set; }
 
     [JsonPropertyName("type")]
@@ -251,6 +287,7 @@ public sealed class AnthropicCacheControl
     public string? Type { get; set; }
 
     [JsonPropertyName("ttl")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Ttl { get; set; }
 }
 

@@ -326,7 +326,28 @@ sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模�
 说明：C050（流式与聚合器缺口）已闭合，事件序列由 4 组 fixture 锁定；写入的残余差异为
 C052（工具参数校验顺序确定化）、C053（负 index 跳过）、C054（无效工具输入的错误时机/文案）与
 C055（省略死字段）。`input_schema` / `caller` 的显式 null 与缺失合并登记为 C051；
-解码文案机制是 C003 的协议扩展。
+解码文案机制是 C003 的协议扩展。出站方向见第 11 节。
+
+## 11. Anthropic Messages 出站（67 例）
+
+参照路线：`llm/transformer/anthropic/outbound.go` + `outbound_convert.go` + `outbound_stream.go` +
+`ensure_cache_control.go`（含 `config.go` 的 URL/认证形状）。端口由
+`AnthropicOutboundTransformer`（`IOutboundTransformer`）实现；请求/响应按参照逐字段映射，
+流式事件经 `AnthropicOutboundStream` 转为统一 chunk，映射为空的事件按 `streams.NoNil` 的等价语义跳过。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 请求转换：method/URL/headers、`api_key` + `X-API-Key`、model/max_tokens/messages/system 与省略字段、`ResolveMaxTokens` 优先级表、模型卡默认值、`EndpointPath` 覆盖、DeepSeek `output_config.effort`、Ollama bearer 与本地 URL、Vertex 构造期拒绝 | `tests/AxonHub.Llm.Tests/AnthropicOutboundTransformerTests.cs` | 计入 28 |
+| 校验：nil 请求、model 必填、messages 必填（含 system-only 会话文案）、max_tokens 正值、compact 仅 Responses；错误类型统一为 `InvalidRequest` | 同上 | 计入 28 |
+| 工具：函数工具过滤、空工具省略、null schema → `{"type":"object","properties":{}}`、strict 保留、native web_search 与 `Anthropic-Beta`、tool_choice auto/none/required/具名、parallel disable、非法参数修复、空参数 `{}` | 同上 | 计入 28 |
+| 响应与错误：message → `chat.completion`、文本块拼接、错误响应（空 body / 非 2xx / 非法 JSON）与 `TransformError` 兜底（嵌套信封、顶层 message 回退、纯文本状态码短语） | 同上 | 计入 28 |
+| 出站流式 fixture：stop / tool / think 三组 Anthropic SSE → 期望 LLM chunk 逐条对比（id/object/model/created/choice/delta/工具调用/内联结果/usage），`[DONE]` 哨兵；错误事件（zai 中文消息、code）；Zhipu 最终 prompt token 合并；finish_reason 块必带 delta；`server_tool_use` / `web_search_tool_result` 无 panic 回放；错误事件解析三例 | `tests/AxonHub.Llm.Tests/AnthropicOutboundStreamTests.cs` | 14 |
+| 缓存断点优化器：计数、零断点注入（tools/system/消息尾部）、预算内保留、超限裁剪（消息优先/结构兜底）、自适应密度（≥20 块两个锚点、窗口边界 29/49）、system string 形式归一、结构锚点补齐与不重复、thinking/空文本清洗、raw 嵌套断点计数/裁剪与 1h 锚点保护 | `tests/AxonHub.Llm.Tests/AnthropicCacheControlOptimizerTests.cs` | 25 |
+
+说明：出站路径发现并修复了 `GoSortedMapConverterFactory` 的缺陷（`TValue = object` 时直接调用元素
+转换器的 `Write` 跳过运行时类型分派，`object` 值被写成 `{}`），raw 断点裁剪用例锁定该回归。
+残余差异为 C056（Vertex 执行器未移植，Bedrock 仅直连报文形状）、C057（缺失 `delta.type` 时跳过而非
+panic）与 C058（流错误事件的 gjson 宽松解析 vs 严格 JSON）。
 
 ## 覆盖缺口
 
@@ -336,7 +357,7 @@ C055（省略死字段）。`input_schema` / `caller` 的显式 null 与缺失�
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
-| Anthropic 出站、Responses API、Responses 流 | Anthropic Messages 入站（非流式与流式）已实现并由第 10 节的 155 + 7 例锁定；出站 transformer 与 Responses 尚未移植 | 中 | 后续阶段 |
+| Responses API、Responses 流 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses API 与 Responses 流尚未移植 | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

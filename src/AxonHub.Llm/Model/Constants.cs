@@ -34,6 +34,21 @@ public static class ApiFormats
     public const string GeminiContents = "gemini/contents";
 }
 
+/// <summary>
+/// Port of llm.ReasoningEffort* (llm/reasoning.go): protocol-independent
+/// labels carried by <see cref="LlmRequest.ReasoningEffort"/>.
+/// </summary>
+public static class ReasoningEfforts
+{
+    public const string None = "none";
+    public const string Minimal = "minimal";
+    public const string Low = "low";
+    public const string Medium = "medium";
+    public const string High = "high";
+    public const string XHigh = "xhigh";
+    public const string Max = "max";
+}
+
 /// <summary>Port of llm.ToolType* constants.</summary>
 public static class ToolTypes
 {

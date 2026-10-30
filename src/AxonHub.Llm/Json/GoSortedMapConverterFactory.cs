@@ -65,13 +65,16 @@ public sealed class GoSortedMapConverterFactory : JsonConverterFactory
 
         public override void Write(Utf8JsonWriter writer, Dictionary<string, TValue> value, JsonSerializerOptions options)
         {
-            var valueConverter = (JsonConverter<TValue>)options.GetConverter(typeof(TValue));
-
             writer.WriteStartObject();
             foreach (var key in value.Keys.OrderBy(static k => k, StringComparer.Ordinal))
             {
                 writer.WritePropertyName(key);
-                valueConverter.Write(writer, value[key], options);
+                // Go through the serializer rather than calling the element
+                // converter's Write directly: for TValue == object the direct
+                // call skips the runtime-type dispatch and emits {} for every
+                // value (the cache_control raw-content round-trip depends on
+                // serializing object-typed maps correctly).
+                JsonSerializer.Serialize(writer, value[key], options);
             }
 
             writer.WriteEndObject();

@@ -145,6 +145,52 @@ public sealed class PrependStream<T>(IStream<T> stream, params T[] prependItems)
     public void Dispose() => stream.Dispose();
 }
 
+/// <summary>
+/// Port of streams.AppendStream: yields the source items, then the appended
+/// items only when the source ended without an error.
+/// </summary>
+public sealed class AppendStream<T>(IStream<T> stream, params T[] appendItems) : IStream<T>
+    where T : class
+{
+    private int _appendIndex;
+    private bool _streamDone;
+
+    public T? Current { get; private set; }
+
+    public Exception? Err => stream.Err;
+
+    public bool Next()
+    {
+        if (!_streamDone)
+        {
+            if (stream.Next())
+            {
+                Current = stream.Current;
+                return true;
+            }
+
+            _streamDone = true;
+
+            // If the source stream has an error, don't append items.
+            if (stream.Err is not null)
+            {
+                return false;
+            }
+        }
+
+        if (_appendIndex < appendItems.Length)
+        {
+            Current = appendItems[_appendIndex];
+            _appendIndex++;
+            return true;
+        }
+
+        return false;
+    }
+
+    public void Dispose() => stream.Dispose();
+}
+
 /// <summary>Port of streams.Filter: yields only items matching the predicate.</summary>
 public sealed class FilterStream<T>(IStream<T> stream, Func<T, bool> predicate) : IStream<T>
     where T : class
