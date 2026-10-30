@@ -38,21 +38,31 @@ public static class ChatCompletionEndpoint
             return;
         }
 
+        // The request row id is only known once the persistence middleware has
+        // created it; response headers are written by the HTTP boundary after
+        // the handler produces the response (middleware/response_headers.go).
+        var requestId = 0L;
+
         ChatCompletionResult result;
         try
         {
-            result = await orchestrator.ProcessAsync(genericRequest, cancellationToken);
+            result = await orchestrator.ProcessAsync(
+                genericRequest,
+                id => requestId = id,
+                cancellationToken);
         }
         catch (Exception ex)
         {
             var classified = UpstreamTransportErrors.Classify(ex);
             await WriteTransformedErrorAsync(context, orchestrator.Inbound.TransformError(classified), cancellationToken);
+            RecordResponseHeaders(context, orchestrator, requestId);
             return;
         }
 
         if (result.Response is { } response)
         {
             await WriteResponseAsync(context, response, cancellationToken);
+            RecordResponseHeaders(context, orchestrator, requestId);
             return;
         }
 
@@ -71,8 +81,42 @@ public static class ChatCompletionEndpoint
             finally
             {
                 stream.Dispose();
+                RecordResponseHeaders(context, orchestrator, requestId);
             }
         }
+    }
+
+    /// <summary>
+    /// Snapshots the response headers once the handler has written the response.
+    /// ASP.NET freezes headers after the first write, so this matches the
+    /// reference's capture at first Write/WriteHeaderNow.
+    /// </summary>
+    private static void RecordResponseHeaders(
+        HttpContext context,
+        ChatCompletionOrchestrator orchestrator,
+        long requestId)
+    {
+        if (requestId == 0)
+        {
+            return;
+        }
+
+        var headers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var header in context.Response.Headers)
+        {
+            var values = new List<string>(header.Value.Count);
+            foreach (var value in header.Value)
+            {
+                if (value is not null)
+                {
+                    values.Add(value);
+                }
+            }
+
+            headers[header.Key] = values;
+        }
+
+        orchestrator.RecordResponseHeaders(requestId, headers);
     }
 
     /// <summary>gin: <c>c.Data(resp.StatusCode, contentType, resp.Body)</c>.</summary>

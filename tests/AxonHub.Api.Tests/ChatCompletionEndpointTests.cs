@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.Orchestration;
+using AxonHub.Api.Persistence;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Transformer.OpenAI;
 using Microsoft.AspNetCore.Http;
@@ -15,14 +16,18 @@ namespace AxonHub.Api.Tests;
 [Collection(OrleansCollection.Name)]
 public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
 {
-    private ChatCompletionOrchestrator NewOrchestrator(ScriptedExecutor executor, RecordingMetricsRecorder metrics)
+    private ChatCompletionOrchestrator NewOrchestrator(
+        ScriptedExecutor executor,
+        RecordingMetricsRecorder metrics,
+        IRequestChainRecorder? recorder = null)
         => new(
             fixture.Cluster.GrainFactory,
             new OpenAiInboundTransformer(),
             executor,
             metrics,
             new RetryPolicy { Enabled = true, MaxChannelRetries = 3, MaxSingleChannelRetries = 0, RetryDelayMs = 0 },
-            TimeProvider.System);
+            TimeProvider.System,
+            recorder);
 
     private static DefaultHttpContext NewContext(string body)
     {
@@ -101,6 +106,26 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
     }
 
     [Fact]
+    public async Task NonStreamSuccessRecordsResponseHeaders()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4803, "endpoint-headers"));
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("endpoint-headers"),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+        var context = NewContext(RequestBody("endpoint-headers"));
+        var orchestrator = NewOrchestrator(executor, new RecordingMetricsRecorder(), recorder);
+
+        await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
+
+        var request = Assert.Single(recorder.Requests);
+        var headers = Assert.Single(recorder.RequestHeaders);
+        Assert.Equal(request.Id, headers.RequestId);
+        Assert.Contains("\"Content-Type\":[\"application/json\"]", headers.HeadersJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task StreamingResponseWritesSseWithCorsHeader()
     {
         fixture.Channels.Set(TestChannels.OpenAi(4802, "endpoint-stream-model"));
@@ -129,5 +154,40 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
         Assert.Equal("*", context.Response.Headers["Access-Control-Allow-Origin"].ToString());
         Assert.EndsWith("data:[DONE]\n\n", ResponseBody(context), StringComparison.Ordinal);
         Assert.DoesNotContain("event:error", ResponseBody(context), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StreamingResponseRecordsResponseHeaders()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4804, "endpoint-stream-headers"));
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"endpoint-stream-headers\",\"choices\":[{\"index\":0,"
+                + "\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}"),
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"endpoint-stream-headers\",\"choices\":[{\"index\":0,\"delta\":{},"
+                + "\"finish_reason\":\"stop\"}]}"),
+            TestChannels.Data("[DONE]"),
+        };
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(chunks),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+        var context = NewContext(RequestBody("endpoint-stream-headers", stream: true));
+        var orchestrator = NewOrchestrator(executor, new RecordingMetricsRecorder(), recorder);
+
+        await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
+
+        var request = Assert.Single(recorder.Requests);
+        var headers = Assert.Single(recorder.RequestHeaders);
+        Assert.Equal(request.Id, headers.RequestId);
+        Assert.Contains("text/event-stream", headers.HeadersJson, StringComparison.Ordinal);
+        Assert.Contains("Access-Control-Allow-Origin", headers.HeadersJson, StringComparison.Ordinal);
+
+        // The stream finalized both rows once the client-facing stream closed.
+        var requestResult = Assert.Single(recorder.RequestResults);
+        Assert.Equal("completed", requestResult.Status);
     }
 }

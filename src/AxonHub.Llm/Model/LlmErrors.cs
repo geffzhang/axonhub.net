@@ -14,7 +14,17 @@ public static class LlmErrors
 public sealed class StreamIncompleteException : Exception
 {
     public StreamIncompleteException()
-        : base("stream ended without terminal event")
+        : this("stream ended without terminal event")
+    {
+    }
+
+    /// <summary>
+    /// A message constructor so the orchestrator can carry its own
+    /// <c>ErrStreamIncomplete</c> sentinel with the reference's wording
+    /// ("stream ended without terminal event or completed response").
+    /// </summary>
+    public StreamIncompleteException(string message)
+        : base(message)
     {
     }
 }

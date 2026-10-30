@@ -17,16 +17,27 @@ public interface IRequestStore
         DateTime updatedAt,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Port of UpdateRequestFinalized: status and external id are always
+    /// written, the body is stored under the default storage policy, metrics
+    /// only when the caller supplies them, and headers never (they go through
+    /// <see cref="UpdateResponseHeadersAsync"/>).
+    /// </summary>
     Task<bool> UpdateResultAsync(
         long id,
         string status,
         string? externalId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of UpdateRequestResponseHeaders: the downstream response headers only.</summary>
+    Task<bool> UpdateResponseHeadersAsync(
+        long id,
+        string responseHeaders,
         DateTime updatedAt,
         CancellationToken cancellationToken = default);
 
@@ -102,9 +113,7 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
         long id,
         string status,
         string? externalId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
@@ -122,12 +131,49 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
 
         request.Status = status;
         request.ExternalId = externalId;
-        request.ResponseHeaders = responseHeaders;
+
+        // The reference stores the finalized body whenever the storage policy
+        // allows it (default true); response chunks are written only by
+        // SaveRequestChunks, which this slice does not port (C020).
         request.ResponseBody = responseBody;
-        request.ResponseChunks = responseChunks;
-        request.MetricsLatencyMs = latencyMs;
-        request.MetricsFirstTokenLatencyMs = firstTokenLatencyMs;
-        request.MetricsReasoningDurationMs = reasoningDurationMs;
+
+        if (latencyMs is not null)
+        {
+            request.MetricsLatencyMs = latencyMs;
+        }
+
+        if (firstTokenLatencyMs is not null)
+        {
+            request.MetricsFirstTokenLatencyMs = firstTokenLatencyMs;
+        }
+
+        if (reasoningDurationMs is not null)
+        {
+            request.MetricsReasoningDurationMs = reasoningDurationMs;
+        }
+
+        request.UpdatedAt = updatedAt;
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> UpdateResponseHeadersAsync(
+        long id,
+        string responseHeaders,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var request = await db.Requests
+            .FirstOrDefaultAsync(request => request.Id == id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (request is null)
+        {
+            return false;
+        }
+
+        request.ResponseHeaders = responseHeaders;
         request.UpdatedAt = updatedAt;
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

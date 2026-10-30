@@ -84,7 +84,7 @@ public sealed class SseStreamWriterTests
     }
 
     [Fact]
-    public async Task WritesErrorEventWhenStreamFailsWithoutTerminal()
+    public async Task WritesClassifiedErrorEventWhenStreamFailsWithoutTerminal()
     {
         var (context, body) = NewContext();
         var stream = new ListStream<StreamEvent>(
@@ -93,13 +93,17 @@ public sealed class SseStreamWriterTests
 
         await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
 
+        // writeSSEErrorEvent classifies first: a broken upstream connection is a
+        // 502 upstream_stream_interrupted, not a bare exception message.
         Assert.Equal(
-            "event:error\ndata:{\"error\":{\"code\":\"\",\"message\":\"connection reset\",\"type\":\"server_error\"},\"request_id\":\"\"}\n\n",
+            "event:error\ndata:{\"error\":{\"code\":\"upstream_stream_interrupted\","
+            + "\"message\":\"Upstream provider closed the connection before the response completed: connection reset\","
+            + "\"type\":\"upstream_error\"},\"request_id\":\"\"}\n\n",
             Encoding.UTF8.GetString(body.ToArray()));
     }
 
     [Fact]
-    public async Task WritesIncompleteStreamErrorWhenStreamEndsWithoutTerminal()
+    public async Task WritesClassifiedIncompleteStreamErrorWhenStreamEndsWithoutTerminal()
     {
         var (context, body) = NewContext();
         var stream = new ListStream<StreamEvent>([]);
@@ -107,7 +111,25 @@ public sealed class SseStreamWriterTests
         await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
 
         Assert.Equal(
-            "event:error\ndata:{\"error\":{\"code\":\"\",\"message\":\"stream ended without terminal event\",\"type\":\"server_error\"},\"request_id\":\"\"}\n\n",
+            "event:error\ndata:{\"error\":{\"code\":\"upstream_stream_interrupted\","
+            + "\"message\":\"Upstream provider closed the connection before the response completed: "
+            + "stream ended without terminal event or completed response\","
+            + "\"type\":\"upstream_error\"},\"request_id\":\"\"}\n\n",
             Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task SuppressesErrorEventWhenClientCancelled()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new IOException("connection reset"));
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, cancellation.Token);
+
+        Assert.Equal(string.Empty, Encoding.UTF8.GetString(body.ToArray()));
     }
 }

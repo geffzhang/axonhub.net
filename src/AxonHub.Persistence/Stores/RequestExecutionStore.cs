@@ -29,19 +29,30 @@ public interface IRequestExecutionStore
         DateTime updatedAt,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Port of UpdateRequestExecutionFinalized (response_status_code is never set here).</summary>
+    /// <summary>
+    /// Port of UpdateRequestExecutionFinalized (response_status_code is never
+    /// set here): status and external id are always written, the body is stored
+    /// under the default storage policy, upstream model / error message only
+    /// when non-empty, metrics only when supplied; headers and chunks go
+    /// through their own updates.
+    /// </summary>
     Task<bool> UpdateResultAsync(
         long id,
         string status,
         string? externalId,
         string? upstreamModelId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of UpdateRequestExecutionResponseHeaders: the upstream response headers only.</summary>
+    Task<bool> UpdateResponseHeadersAsync(
+        long id,
+        string responseHeaders,
         DateTime updatedAt,
         CancellationToken cancellationToken = default);
 }
@@ -156,9 +167,7 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
         string status,
         string? externalId,
         string? upstreamModelId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
@@ -188,12 +197,48 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
             execution.ErrorMessage = errorMessage;
         }
 
-        execution.ResponseHeaders = responseHeaders;
+        // Headers and chunks are written by their own updates (and chunks only
+        // when the storage policy enables them, C020), so finalization cannot
+        // clear them.
         execution.ResponseBody = responseBody;
-        execution.ResponseChunks = responseChunks;
-        execution.MetricsLatencyMs = latencyMs;
-        execution.MetricsFirstTokenLatencyMs = firstTokenLatencyMs;
-        execution.MetricsReasoningDurationMs = reasoningDurationMs;
+
+        if (latencyMs is not null)
+        {
+            execution.MetricsLatencyMs = latencyMs;
+        }
+
+        if (firstTokenLatencyMs is not null)
+        {
+            execution.MetricsFirstTokenLatencyMs = firstTokenLatencyMs;
+        }
+
+        if (reasoningDurationMs is not null)
+        {
+            execution.MetricsReasoningDurationMs = reasoningDurationMs;
+        }
+
+        execution.UpdatedAt = updatedAt;
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> UpdateResponseHeadersAsync(
+        long id,
+        string responseHeaders,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var execution = await db.RequestExecutions
+            .FirstOrDefaultAsync(execution => execution.Id == id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (execution is null)
+        {
+            return false;
+        }
+
+        execution.ResponseHeaders = responseHeaders;
         execution.UpdatedAt = updatedAt;
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

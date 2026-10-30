@@ -18,10 +18,10 @@
 | 项目 | 总数 | 通过 | 失败 | 跳过 | 说明 |
 |---|---|---|---|---|---|
 | `AxonHub.Llm.Tests` | 34 | 34 | 0 | 0 | pipeline 重试 15 + 空响应 9 + 聚合器 1 + HTTP 执行器/SSE 增量解码 9 |
-| `AxonHub.Persistence.Tests` | 32 | 32 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 四表仓储 21 |
+| `AxonHub.Persistence.Tests` | 34 | 34 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 四表仓储 23 |
 | `AxonHub.Grains.Tests` | 14 | 14 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 4 + 别名解析 3 + 同分顺序/不计数 2 |
-| `AxonHub.Api.Tests` | 28 | 28 | 0 | 0 | HTTP 切片：orchestrator/重试/超时 10 + 请求链路落库 4 + SSE 写帧 6 + 请求读取 4 + 端点胶水 4 |
-| **合计** | **108** | **108** | **0** | **0** | |
+| `AxonHub.Api.Tests` | 31 | 31 | 0 | 0 | HTTP 切片：orchestrator/重试/超时 10 + 请求链路落库 4 + SSE 写帧 7 + 请求读取 4 + 端点胶水 6 |
+| **合计** | **113** | **113** | **0** | **0** | |
 
 命令：`dotnet test AxonHub.slnx`（2026-10-30，Windows 11 / .NET SDK 10.0.401）。
 
@@ -44,7 +44,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   `AxonHub.Persistence`（EF Core 写侧 DbContext 与模型、Dapper 读侧仓储、幂等迁移与连接工厂）、
   `AxonHub.Grains` / `AxonHub.Grains.Abstractions`（通道池与通道指标 grain）、
   `AxonHub.Api`（HTTP 宿主、`POST /v1/chat/completions`、请求读取、SSE 写出、orchestrator 适配）
-- 签名差异 / 运行时差异 / 平台限制：见 `02-differences.md`（C001–C019）
+- 签名差异 / 运行时差异 / 平台限制：见 `02-differences.md`（C001–C021）
 
 ## 协议锁定
 
@@ -57,10 +57,17 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 
 ## 端到端
 
-- [x] 进程内 HTTP 切片：`POST /v1/chat/completions` 的请求读取、候选选择、重试、SSE 写出由 28 例覆盖，
-  其中 2 例锁定首包超时与非流式超时，4 例锁定请求/执行/用量落库的字段与时机（不启动真实 Kestrel 与 PostgreSQL）
-- [ ] 真实宿主启动（Kestrel + PostgreSQL + Orleans silo） — 未测试
-- [ ] 容器内 — 未开始
+- [x] 进程内 HTTP 切片：`POST /v1/chat/completions` 的请求读取、候选选择、重试、SSE 写出由 31 例覆盖，
+  其中 2 例锁定首包超时与非流式超时，4 例锁定请求/执行/用量落库的字段与时机（含流式 Close 的聚合回填与
+  响应头边界写入；不启动真实 Kestrel 与 PostgreSQL）
+- [x] 真实宿主启动（Kestrel + PostgreSQL + Orleans silo） — 启动冒烟通过（2026-10-30）：
+  `dotnet AxonHub.Api.dll` 连接 `postgres:17-alpine`，启动时幂等 DDL 建出 4 张表；`GET /health` 返回
+  `200 {"status":"ok"}`；未知模型返回 422 `invalid_model_error`；向 `channels` 插入一条指向拒绝连接端口的
+  启用通道后，`POST /v1/chat/completions` 在 3 次尝试后返回 502 `upstream_error`（`upstream_stream_interrupted`）；
+  库内写入 1 条 `failed` request（`channel_id` 已回填）、3 条 `failed` execution（每次尝试一行，`response_status_code=502`、
+  有 `error_message`、无延迟指标）、0 条 usage log；execution 请求头中的 `Authorization` 为 `******`，请求体以
+  jsonb 原样落库。
+- [ ] 容器内 — 未开始（本轮以宿主进程直连容器化 PostgreSQL，尚未构建应用镜像）
 - [ ] 跨平台（Windows / Linux / macOS） — 目前仅在 Windows 11 验证
 - [ ] 跨传输（stdio / HTTP / 进程内） — 仅进程内 HTTP 切片
 
@@ -68,7 +75,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 
 | 风险 | 影响 | 处置 |
 |---|---|---|
-| HTTP 端点与 Orleans 调用链已接通，但真实宿主启动（Kestrel + PostgreSQL 迁移 + silo）未测试 | 数据库或配置错误可能到部署时才暴露 | 容器化验收时补启动冒烟 |
+| 真实宿主已通过启动冒烟，但尚未构建/运行应用容器镜像 | 部署形态未验证（网络、时区、secrets 注入） | 容器化验收时补 Dockerfile 与镜像冒烟 |
 | C012：默认 `adaptive` 负载均衡策略链未移植，仅 round-robin 排序 | 默认配置下通道顺序可能与参照不同 | 补齐策略链后按参照用例扩展 |
 | C013：多 API key 通道只用首个 key，无 trace/thread 粘性 | 多 key 通道流量集中，限流/配额分布与参照不同 | 接入 trace/thread 后补 TraceStickyKeyProvider |
 | C014：鉴权、限流、成本与通道级请求改写未接入 | 端点对任意客户端开放，usage 已落库但成本为空、通道级改写不生效 | 后续里程碑按参照逐项接入并补测 |
@@ -76,7 +83,9 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C016：通道级 `retryableStatusCodes` / `retryableErrorPatterns` 未生效 | 配置了额外重试规则的通道少重试 | 接入通道 settings 时补齐 |
 | C017：通道性能记录仅成功/失败计数，取消与无终态流语义不同 | 取消不影响健康分；省略终态且靠聚合判定的流不计成功 | 需要性能明细/自动禁用时补齐 |
 | C018：同步 recorder 每次调用一个短生命周期工作单元 | 一次请求链路最多 5 次短事务，request 与 execution 不同事务提交 | 对当前数据路径等价；引入批量/事务需求时重估 |
-| C019：流式响应的 external id / body / chunks 与流式 request 响应头未回填 | 流式请求在控制台可见状态与用量，但归档字段为空 | 接入 raw-stream 分块聚合后补齐 |
+| C019：流式响应的 external id / body 与流式 request 响应头未回填 | 已解决：Close 时聚合分块回填两侧归档字段，终态分类与失败路径按参照实现 | 已关闭（测试锁定） |
+| C020：`response_chunks` 与 `store_chunks` / `store_response_body` 存储策略未接入 | 默认配置下与参照一致（chunks 为空、body 写入）；开启存储策略的部署无分块归档 | 随存储策略功能落地 |
+| C021：下游响应头捕获点与服务器自动头集合不同 | Kestrel 与 gin 注入的自动头不同，落库 JSON 键集合有差异；业务头与脱敏一致 | 已接受（测试锁定业务头） |
 | C008：非法 UTF-8 请求体 | 与 Go 的 U+FFFD 替换行为不同 | HTTP 切片已落地，M3 收尾前决策 |
 | C010：非 chat 响应类型的空响应探测 | 14 个参照用例顺延 | 随对应端点落地 |
 | C003：字段级 JSON 类型错误文案 | 错误文案与参照不同 | M3 收尾前评估 |

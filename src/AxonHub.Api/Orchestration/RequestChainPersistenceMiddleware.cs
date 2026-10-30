@@ -6,6 +6,7 @@ using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
+using AxonHub.Llm.Transformer;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.Orchestration;
@@ -18,8 +19,9 @@ namespace AxonHub.Api.Orchestration;
 /// <remarks>
 /// One middleware instance is created per client request. It creates the request
 /// row on the inbound hook, one execution row per attempt on the outbound raw
-/// request hook, and finalizes both at the terminal event (or at the error that
-/// ended the attempt). The recorder is synchronous by design; see C018.
+/// request hook, and finalizes both when their streams end, exactly like
+/// InboundPersistentStream.Close and OutboundPersistentStream.Close. The recorder
+/// is synchronous by design; see C018.
 /// </remarks>
 public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
 {
@@ -27,49 +29,60 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     private const string StatusCompleted = "completed";
     private const string StatusFailed = "failed";
     private const string StatusCanceled = "canceled";
+    private const int MinLatencyMs = 10;
 
     private readonly IRequestChainRecorder _recorder;
     private readonly PersistentOutboundTransformer _outbound;
+    private readonly IInboundTransformer _inbound;
     private readonly HttpRequestData _rawRequest;
     private readonly TimeProvider _timeProvider;
     private readonly CancellationToken _cancellationToken;
+    private readonly Action<long>? _onRequestCreated;
+
+    /// <summary>Per-request stream state shared by the inbound and outbound streams.</summary>
+    private readonly RequestStreamState _streamState = new();
+
     private readonly StreamTerminalTracker _requestTerminalTracker;
+    private readonly StreamOutcome _requestOutcome = new();
+    private readonly List<StreamEvent> _requestChunks = [];
+    private StreamTerminalState _requestTerminalState = StreamTerminalState.None;
 
     private long _requestId;
-    private long _executionId;
     private long? _requestChannelId;
     private bool _stream;
     private string _format = ApiFormats.OpenAIChatCompletion;
     private DateTimeOffset _requestStartedAt;
-    private DateTimeOffset _attemptStartedAt;
-    private DateTimeOffset? _firstTokenAt;
-    private HttpResponseData? _rawResponse;
-    private LlmResponse? _llmResponse;
-    private IReadOnlyDictionary<string, List<string>>? _rawResponseHeaders;
-    private Usage? _streamUsage;
-    private string _upstreamModelId = string.Empty;
-    private bool _executionTerminal;
-    private bool _executionCompleted;
     private bool _requestFinalized;
-    private bool _usageLogged;
+    private ExecutionAttempt? _attempt;
+
+    /// <summary>
+    /// The unified response stored by persistRequest.OnOutboundLlmResponse; the
+    /// non-stream finalization hook refuses to persist without it.
+    /// </summary>
+    private LlmResponse? _llmResponse;
 
     public RequestChainPersistenceMiddleware(
         IRequestChainRecorder recorder,
         PersistentOutboundTransformer outbound,
+        IInboundTransformer inbound,
         HttpRequestData rawRequest,
         TimeProvider timeProvider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<long>? onRequestCreated = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(outbound);
+        ArgumentNullException.ThrowIfNull(inbound);
         ArgumentNullException.ThrowIfNull(rawRequest);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _recorder = recorder;
         _outbound = outbound;
+        _inbound = inbound;
         _rawRequest = rawRequest;
         _timeProvider = timeProvider;
         _cancellationToken = cancellationToken;
+        _onRequestCreated = onRequestCreated;
         _requestTerminalTracker = new StreamTerminalTracker(
             ExpectedStreamChoices.FromRequestBody(rawRequest.Body));
     }
@@ -112,6 +125,10 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             ProjectId = 1,
         });
 
+        // The HTTP boundary uses the id to write the downstream response
+        // headers after the handler returns (middleware/response_headers.go).
+        _onRequestCreated?.Invoke(_requestId);
+
         return request;
     }
 
@@ -125,43 +142,54 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             return request;
         }
 
+        var transformer = _outbound.CurrentTransformer;
         var now = _timeProvider.GetUtcNow();
-        _attemptStartedAt = now;
-        _rawResponse = null;
-        _rawResponseHeaders = null;
-        _firstTokenAt = null;
-        _streamUsage = null;
-        _upstreamModelId = string.Empty;
-        _executionTerminal = false;
-        _executionCompleted = false;
+        var attempt = new ExecutionAttempt
+        {
+            StartedAt = now,
+            Transformer = transformer,
+            Request = request,
+            ApiFormat = string.IsNullOrEmpty(request.ApiFormat) ? transformer.ApiFormat : request.ApiFormat,
+            ModelId = _outbound.CurrentModel,
+            ChannelId = _outbound.CurrentChannelId,
+            Tracker = new StreamTerminalTracker(
+                ExpectedStreamChoices.FromRequestBody(_rawRequest.Body)),
+        };
+
+        _attempt = attempt;
+
+        // PrepareForRetry / NextChannel reset these before every new attempt
+        // (outbound.go): a previous attempt's terminal event must not classify
+        // this one's stream.
+        _streamState.OutboundStreamTerminal = StreamTerminalState.None;
+        _streamState.CleanEofCompletionEvidence = false;
 
         // Both writes return their error in the reference, so a failure here
         // fails the attempt instead of letting it run unrecorded.
-        _executionId = _recorder.CreateExecution(new RequestExecutionRecord
+        attempt.ExecutionId = _recorder.CreateExecution(new RequestExecutionRecord
         {
             CreatedAt = now.UtcDateTime,
             UpdatedAt = now.UtcDateTime,
             ProjectId = 1,
-            ModelId = _outbound.CurrentModel,
-            Format = _outbound.ApiFormat,
+            ModelId = attempt.ModelId,
+            Format = attempt.ApiFormat,
             RequestBody = RequestChainPayloads.JsonBody(request.JsonBody ?? request.Body),
             RequestHeaders = RequestChainPayloads.MaskedHeadersJson(request.Headers),
             RequestUrl = request.Url,
             Status = StatusProcessing,
             Stream = _stream,
             RequestId = _requestId,
-            ChannelId = _outbound.CurrentChannelId,
+            ChannelId = attempt.ChannelId,
         });
 
-        // The transport reports stream response headers before the first event;
-        // the execution row can store them even though a stream never produces a
-        // raw HttpResponseData.
-        request.OnResponseHeaders = headers => _rawResponseHeaders = headers;
+        // The transport reports response headers before the first event. The
+        // reference persists them immediately (executionHeaderObserver).
+        request.OnResponseHeaders = headers => ObserveExecutionHeaders(attempt, headers);
 
-        if (_outbound.CurrentChannelId != 0 && _requestChannelId != _outbound.CurrentChannelId)
+        if (attempt.ChannelId != 0 && _requestChannelId != attempt.ChannelId)
         {
-            _recorder.UpdateRequestChannel(_requestId, _outbound.CurrentChannelId);
-            _requestChannelId = _outbound.CurrentChannelId;
+            _recorder.UpdateRequestChannel(_requestId, attempt.ChannelId);
+            _requestChannelId = attempt.ChannelId;
         }
 
         return request;
@@ -169,27 +197,77 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
 
     public override HttpResponseData TransformOutboundRawResponse(HttpResponseData response)
     {
-        _rawResponse = response;
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (_attempt is { } attempt)
+        {
+            attempt.RawResponse = response;
+
+            if (!attempt.HeadersObserved)
+            {
+                ObserveExecutionHeaders(attempt, response.Headers);
+            }
+        }
+
         return response;
     }
 
+    /// <summary>
+    /// Port of persistRequestExecution.OnOutboundLlmResponse: a non-stream
+    /// attempt completed. Response headers were persisted when the transport
+    /// reported them, never here.
+    /// </summary>
     public override LlmResponse TransformOutboundLlmResponse(LlmResponse response)
     {
-        _llmResponse = response;
-        FinalizeExecution(response);
+        ArgumentNullException.ThrowIfNull(response);
+
+        // persistRequest.OnOutboundLlmResponse stores the unified response; the
+        // non-stream finalization hook refuses to persist without it.
+        if (_requestId != 0)
+        {
+            _llmResponse = response;
+        }
+
+        if (_attempt is not { } attempt || attempt.ExecutionId == 0 || attempt.NonStreamFinalized)
+        {
+            return response;
+        }
+
+        attempt.NonStreamFinalized = true;
+
+        TryPersist(() =>
+        {
+            var now = _timeProvider.GetUtcNow();
+            var rawResponse = attempt.RawResponse;
+            var upstreamModel = RequestChainPayloads.ReportedModel(rawResponse?.Body);
+
+            _recorder.UpdateExecutionResult(
+                attempt.ExecutionId,
+                StatusCompleted,
+                response.Id,
+                NullIfEmpty(upstreamModel),
+                RequestChainPayloads.JsonBody(rawResponse?.Body),
+                null,
+                LatencyMs(attempt.StartedAt, attempt.EndedAt ?? now),
+                FirstTokenLatencyMs(attempt),
+                now.UtcDateTime);
+
+            LogUsage(response.Usage, attempt);
+        });
+
         return response;
     }
 
     /// <summary>
     /// Port of persistRequestExecution.OnOutboundRawError. The reference always
     /// records the attempt as failed here; a client cancellation is turned into
-    /// "canceled" by the orchestrator's final status update.
+    /// "canceled" by the final status update.
     /// </summary>
     public override void OnOutboundRawError(Exception error)
     {
         ArgumentNullException.ThrowIfNull(error);
 
-        if (_executionId == 0 || _executionCompleted)
+        if (_attempt is not { } attempt || attempt.ExecutionId == 0)
         {
             return;
         }
@@ -201,10 +279,10 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             // The reference passes nil metrics and derives the upstream model
             // from the raw response, so this update only records the outcome.
             _recorder.UpdateExecutionStatus(
-                _executionId,
+                attempt.ExecutionId,
                 StatusFailed,
                 RequestChainPayloads.ErrorStatusCode(classified),
-                NullIfEmpty(RequestChainPayloads.ReportedModel(_rawResponse?.Body)),
+                NullIfEmpty(RequestChainPayloads.ReportedModel(attempt.RawResponse?.Body)),
                 RequestChainPayloads.ErrorMessage(classified),
                 null,
                 null,
@@ -212,9 +290,35 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         });
     }
 
-    public override IStream<LlmResponse> TransformOutboundLlmStream(IStream<LlmResponse> stream)
-        => new ExecutionObservationStream(stream, this);
+    /// <summary>
+    /// Port of persistRequestExecution.OnOutboundRawStream: wraps the provider's
+    /// raw stream so its chunks can be aggregated when it ends
+    /// (OutboundPersistentStream).
+    /// </summary>
+    public override IStream<StreamEvent> TransformOutboundRawStream(IStream<StreamEvent> stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
 
+        if (_requestId == 0 || _attempt is not { ExecutionId: not 0 } attempt)
+        {
+            return stream;
+        }
+
+        return new ExecutionRawStream(stream, this, attempt);
+    }
+
+    /// <summary>First-token observation for streams (the reference's recordPerformanceStream).</summary>
+    public override IStream<LlmResponse> TransformOutboundLlmStream(IStream<LlmResponse> stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return _attempt is { } attempt ? new FirstTokenStream(stream, attempt, this) : stream;
+    }
+
+    /// <summary>
+    /// Port of persistRequest.OnInboundRawResponse: a non-stream request
+    /// completed. The downstream response headers are written separately at the
+    /// HTTP boundary, exactly like the reference.
+    /// </summary>
     public override HttpResponseData TransformInboundRawResponse(HttpResponseData response)
     {
         ArgumentNullException.ThrowIfNull(response);
@@ -224,38 +328,50 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             return response;
         }
 
+        // The reference logs and returns without persisting when no unified
+        // response was stored (the response hook cannot run before it).
+        if (_llmResponse is null)
+        {
+            return response;
+        }
+
+        _requestFinalized = true;
+
         TryPersist(() =>
         {
             var now = _timeProvider.GetUtcNow();
+            var startedAt = _attempt?.StartedAt ?? _requestStartedAt;
 
-            // UpdateRequestFinalized writes status and external id, keeps latency
-            // metrics, and stores the client-facing body. Response headers are
-            // written by the downstream response-header middleware in the
-            // reference; the port stores the client response headers here.
+            // UpdateRequestFinalized writes status, external id and the
+            // client-facing body; non-stream requests have no first-token
+            // latency.
             _recorder.UpdateRequestResult(
                 _requestId,
                 StatusCompleted,
-                _llmResponse?.Id,
-                RequestChainPayloads.MaskedHeadersJson(response.Headers),
+                _llmResponse.Id,
                 RequestChainPayloads.JsonBody(response.Body),
-                null,
-                ElapsedMs(_requestStartedAt),
+                LatencyMs(startedAt, _attempt?.EndedAt ?? now),
                 null,
                 now.UtcDateTime);
-
-            _requestFinalized = true;
         });
 
         return response;
     }
 
+    /// <summary>
+    /// Port of persistRequest.OnInboundRawStream: wraps the client-facing event
+    /// stream whenever the client asked for a stream (InboundPersistentStream).
+    /// </summary>
     public override IStream<StreamEvent> TransformInboundRawStream(IStream<StreamEvent> stream)
-        => new RequestObservationStream(stream, this);
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return _requestId == 0 ? stream : new RequestRawStream(stream, this);
+    }
 
     /// <summary>
     /// Port of the orchestrator's post-Process failure handling: the last
-    /// execution and the request are marked canceled (client cancellation) or
-    /// failed. Called once the pipeline throws.
+    /// execution and the request are marked canceled (when the failure itself is
+    /// a cancellation) or failed. Called once the pipeline throws.
     /// </summary>
     public void FinalizeFailure(Exception error)
     {
@@ -264,16 +380,15 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         TryPersist(() =>
         {
             var now = _timeProvider.GetUtcNow();
-            var canceled = RequestChainPayloads.IsCancellation(error, _cancellationToken);
-            var status = canceled ? StatusCanceled : StatusFailed;
+            var status = StreamOutcome.IsContextCancellation(error) ? StatusCanceled : StatusFailed;
             var classified = UpstreamTransportErrors.Classify(error);
 
-            if (_executionId != 0 && !_executionCompleted)
+            if (_attempt is { ExecutionId: not 0 } attempt)
             {
                 // persistRequestExecutionFailure is called with nil metrics and
                 // an empty upstream model id, so only the outcome is rewritten.
                 _recorder.UpdateExecutionStatus(
-                    _executionId,
+                    attempt.ExecutionId,
                     status,
                     RequestChainPayloads.ErrorStatusCode(classified),
                     null,
@@ -291,155 +406,452 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         });
     }
 
-    /// <summary>Finalizes the request after the client stream ended.</summary>
-    internal void FinalizeRequestStream(Exception? streamError)
+    private void ObserveExecutionHeaders(
+        ExecutionAttempt attempt,
+        IReadOnlyDictionary<string, List<string>>? headers)
+    {
+        // The reference marks the header as observed before it tries to write,
+        // so a nil/empty header map never results in a second write.
+        attempt.HeadersObserved = true;
+
+        if (attempt.ExecutionId == 0 || headers is null || headers.Count == 0)
+        {
+            return;
+        }
+
+        var json = RequestChainPayloads.MaskedHeadersJson(headers);
+
+        TryPersist(() => _recorder.UpdateExecutionResponseHeaders(
+            attempt.ExecutionId,
+            json,
+            _timeProvider.GetUtcNow().UtcDateTime));
+    }
+
+    private void ObserveExecutionRawEvent(ExecutionAttempt attempt, StreamEvent? streamEvent)
+    {
+        if (streamEvent is null)
+        {
+            return;
+        }
+
+        if (attempt.UpstreamModelId.Length == 0)
+        {
+            attempt.UpstreamModelId = RequestChainPayloads.EventModel(streamEvent, attempt.ApiFormat);
+        }
+
+        // Only a size summary is kept for binary audio payloads.
+        attempt.Chunks.Add(StreamEvent.SummarizeBinaryChunk(streamEvent)!);
+
+        if (attempt.TerminalState != StreamTerminalState.None)
+        {
+            return;
+        }
+
+        if (attempt.Tracker.Observe(streamEvent))
+        {
+            var state = StreamTerminalClassifier.ClassifyAcceptedTerminalEvent(streamEvent);
+            attempt.TerminalState = state;
+            _streamState.OutboundStreamTerminal = state;
+
+            // markPerformanceTerminal stops the latency clock at the terminal
+            // event, not at Close.
+            attempt.EndedAt = _timeProvider.GetUtcNow();
+
+            if (state != StreamTerminalState.Completed)
+            {
+                attempt.TerminalError = StreamTerminalClassifier.TerminalErrorMessage(streamEvent, state);
+            }
+
+            attempt.Outcome.ObserveTerminal(state);
+        }
+    }
+
+    /// <summary>Port of OutboundPersistentStream.Close.</summary>
+    private void FinalizeExecutionStream(ExecutionAttempt attempt, Exception? streamError)
+    {
+        if (attempt.Closed || attempt.ExecutionId == 0)
+        {
+            return;
+        }
+
+        attempt.Closed = true;
+
+        var contextError = _cancellationToken.IsCancellationRequested
+            ? new OperationCanceledException(_cancellationToken)
+            : null;
+        var outcome = attempt.Outcome;
+
+        outcome.ObserveTransportError(streamError);
+        outcome.ObserveContextError(contextError);
+
+        if (outcome.HasFinalEvidence)
+        {
+            attempt.TerminalState = outcome.FinalState();
+        }
+
+        TryPersist(() =>
+        {
+            var now = _timeProvider.GetUtcNow();
+
+            // A terminal event carries the final outcome. Persist its structured
+            // response even if a transport or context error arrives afterward.
+            if (attempt.TerminalState != StreamTerminalState.None)
+            {
+                PersistExecutionResponseChunks(attempt, now);
+                return;
+            }
+
+            byte[]? responseBody = null;
+            var meta = new ResponseMeta();
+            Exception? aggregateError = null;
+            var aggregatedCompleted = false;
+
+            // If we never received a terminal event, the buffered chunks may
+            // still form a complete response (models that aggregate internally,
+            // or a proxy that dropped after the full payload).
+            if (attempt.Chunks.Count > 0)
+            {
+                try
+                {
+                    responseBody = attempt.Transformer.AggregateStreamChunks(
+                        attempt.Request,
+                        attempt.Chunks,
+                        out meta);
+                    aggregatedCompleted = responseBody.Length > 0
+                        && meta.Completed
+                        && !string.IsNullOrEmpty(meta.Id);
+                }
+                catch (Exception ex)
+                {
+                    aggregateError = ex;
+                }
+
+                if (attempt.ApiFormat == ApiFormats.OpenAIChatCompletion
+                    && (streamError is not null || contextError is not null))
+                {
+                    // Aggregation alone cannot prove a multi-choice stream
+                    // completed after the connection broke.
+                    aggregatedCompleted = aggregatedCompleted && attempt.Tracker.AllChoicesFinished();
+                }
+            }
+
+            if (!aggregatedCompleted
+                && _streamState.CleanEofCompletionEvidence
+                && streamError is null
+                && aggregateError is null
+                && responseBody is { Length: > 0 })
+            {
+                aggregatedCompleted = true;
+                outcome.ObserveValidatedCompletion();
+            }
+            else if (aggregatedCompleted)
+            {
+                if (streamError is not null || contextError is not null)
+                {
+                    outcome.ObserveValidatedCompletion();
+                }
+                else
+                {
+                    outcome.ObserveAggregatedCompletion(true);
+                }
+            }
+
+            if (aggregatedCompleted)
+            {
+                // markPerformanceTerminal in the validated/aggregated branch.
+                attempt.EndedAt ??= now;
+            }
+
+            if (outcome.HasFinalEvidence)
+            {
+                attempt.TerminalState = outcome.FinalState();
+            }
+
+            var decision = outcome.FinalDecision();
+            if (attempt.TerminalState == StreamTerminalState.None)
+            {
+                attempt.TerminalState = decision.State;
+            }
+
+            if (decision.State != StreamTerminalState.Completed)
+            {
+                // Both reference branches (transport/context error and clean EOF
+                // without a terminal event) write the same outcome.
+                PersistExecutionFailure(attempt, decision.Cause, now);
+                return;
+            }
+
+            if (responseBody is { Length: > 0 })
+            {
+                PersistAggregatedExecution(attempt, responseBody, meta, now);
+                return;
+            }
+
+            PersistExecutionResponseChunks(attempt, now);
+        });
+    }
+
+    /// <summary>Port of OutboundPersistentStream.persistResponseChunks.</summary>
+    private void PersistExecutionResponseChunks(ExecutionAttempt attempt, DateTimeOffset now)
+    {
+        byte[] responseBody;
+        ResponseMeta meta;
+
+        try
+        {
+            responseBody = attempt.Transformer.AggregateStreamChunks(
+                attempt.Request,
+                attempt.Chunks,
+                out meta);
+        }
+        catch (Exception)
+        {
+            // Aggregation failure must not discard a known terminal outcome or
+            // overwrite it with a local processing error. Persist the status
+            // alone, without trusting any partial response or usage.
+            _recorder.UpdateExecutionStatus(
+                attempt.ExecutionId,
+                attempt.TerminalState.ToExecutionStatus(),
+                null,
+                NullIfEmpty(attempt.UpstreamModelId),
+                NullIfEmpty(attempt.TerminalError),
+                LatencyMs(attempt.StartedAt, attempt.EndedAt ?? now),
+                FirstTokenLatencyMs(attempt),
+                now.UtcDateTime);
+            return;
+        }
+
+        PersistAggregatedExecution(attempt, responseBody, meta, now);
+    }
+
+    /// <summary>Port of OutboundPersistentStream.persistAggregatedResponse.</summary>
+    private void PersistAggregatedExecution(
+        ExecutionAttempt attempt,
+        byte[] responseBody,
+        ResponseMeta meta,
+        DateTimeOffset now)
+    {
+        if (meta.Usage is { } usage)
+        {
+            LogUsage(usage, attempt);
+        }
+
+        _recorder.UpdateExecutionResult(
+            attempt.ExecutionId,
+            attempt.TerminalState.ToExecutionStatus(),
+            meta.Id,
+            NullIfEmpty(attempt.UpstreamModelId),
+            RequestChainPayloads.JsonBody(responseBody),
+            NullIfEmpty(attempt.TerminalError),
+            LatencyMs(attempt.StartedAt, attempt.EndedAt ?? now),
+            FirstTokenLatencyMs(attempt),
+            now.UtcDateTime);
+    }
+
+    /// <summary>Port of persistRequestExecutionFailure.</summary>
+    private void PersistExecutionFailure(ExecutionAttempt attempt, Exception? cause, DateTimeOffset now)
+    {
+        var classified = cause is null ? null : UpstreamTransportErrors.Classify(cause);
+        var status = cause is not null && StreamOutcome.IsContextCancellation(cause)
+            ? StatusCanceled
+            : StatusFailed;
+
+        _recorder.UpdateExecutionStatus(
+            attempt.ExecutionId,
+            status,
+            RequestChainPayloads.ErrorStatusCode(classified),
+            NullIfEmpty(attempt.UpstreamModelId),
+            RequestChainPayloads.ErrorMessage(classified),
+            LatencyMs(attempt.StartedAt, attempt.EndedAt ?? now),
+            FirstTokenLatencyMs(attempt),
+            now.UtcDateTime);
+    }
+
+    private void ObserveRequestEvent(StreamEvent? streamEvent)
+    {
+        if (streamEvent is null)
+        {
+            return;
+        }
+
+        // Only a size summary is kept for binary audio payloads.
+        _requestChunks.Add(StreamEvent.SummarizeBinaryChunk(streamEvent)!);
+
+        // The reference stops observing once a terminal event was accepted.
+        if (_requestTerminalState != StreamTerminalState.None)
+        {
+            return;
+        }
+
+        if (streamEvent.CleanEofCompletionEvidence)
+        {
+            _streamState.CleanEofCompletionEvidence = true;
+        }
+
+        if (_requestTerminalTracker.Observe(streamEvent))
+        {
+            _requestTerminalState = StreamTerminalClassifier.ClassifyAcceptedTerminalEvent(streamEvent);
+
+            // The generic finish_reason may hide a provider failure the
+            // outbound stream already saw.
+            _requestTerminalState = FinalRequestTerminalState();
+            _requestOutcome.ObserveTerminal(_requestTerminalState);
+        }
+    }
+
+    /// <summary>
+    /// Generic finish_reason/message_stop events can lose the provider's failure
+    /// or cancellation; the outbound stream's non-successful outcome wins.
+    /// </summary>
+    private StreamTerminalState FinalRequestTerminalState()
+        => _streamState.OutboundStreamTerminal is StreamTerminalState.Failed
+            or StreamTerminalState.Incomplete
+            or StreamTerminalState.Canceled
+            ? _streamState.OutboundStreamTerminal
+            : _requestTerminalState;
+
+    /// <summary>Port of InboundPersistentStream.Close.</summary>
+    private void FinalizeRequestStream(Exception? streamError)
     {
         if (_requestId == 0 || _requestFinalized)
         {
             return;
         }
 
+        _requestFinalized = true;
+
+        var contextError = _cancellationToken.IsCancellationRequested
+            ? new OperationCanceledException(_cancellationToken)
+            : null;
+        var outcome = _requestOutcome;
+
+        outcome.ObserveTransportError(streamError);
+        outcome.ObserveContextError(contextError);
+        _requestTerminalState = FinalRequestTerminalState();
+
+        if (outcome.HasFinalEvidence)
+        {
+            _requestTerminalState = outcome.FinalState();
+        }
+
         TryPersist(() =>
         {
             var now = _timeProvider.GetUtcNow();
-            var completed = _requestTerminalTracker.Terminal;
 
-            if (completed)
+            if (_requestTerminalState != StreamTerminalState.None)
             {
-                _recorder.UpdateRequestResult(
-                    _requestId,
-                    StatusCompleted,
-                    null,
-                    null,
-                    null,
-                    null,
-                    ElapsedMs(_requestStartedAt),
-                    FirstTokenLatencyMs(),
-                    now.UtcDateTime);
+                PersistRequestResponseChunks(now);
+                return;
             }
-            else
+
+            byte[]? responseBody = null;
+            var meta = new ResponseMeta();
+            Exception? aggregateError = null;
+
+            if (_requestChunks.Count > 0 && !outcome.HasFinalEvidence)
             {
+                try
+                {
+                    responseBody = _inbound.AggregateStreamChunks(_requestChunks, out meta);
+                }
+                catch (Exception ex)
+                {
+                    aggregateError = ex;
+                }
+
+                var aggregatedCompleted = meta.Completed;
+                if (_format == ApiFormats.OpenAIChatCompletion
+                    && (streamError is not null || contextError is not null))
+                {
+                    aggregatedCompleted = aggregatedCompleted && _requestTerminalTracker.AllChoicesFinished();
+                }
+
+                if (aggregateError is null
+                    && !string.IsNullOrEmpty(meta.Id)
+                    && responseBody is { Length: > 0 }
+                    && aggregatedCompleted)
+                {
+                    if (streamError is not null || contextError is not null)
+                    {
+                        outcome.ObserveValidatedCompletion();
+                    }
+                    else
+                    {
+                        outcome.ObserveAggregatedCompletion(true);
+                    }
+                }
+            }
+
+            if (outcome.HasFinalEvidence)
+            {
+                _requestTerminalState = outcome.FinalState();
+            }
+
+            var decision = outcome.FinalDecision();
+            if (_requestTerminalState == StreamTerminalState.None)
+            {
+                _requestTerminalState = decision.State;
+            }
+
+            if (decision.State != StreamTerminalState.Completed)
+            {
+                // UpdateRequestStatusFromError, called with a detached context,
+                // only looks at the error itself.
                 _recorder.UpdateRequestStatus(
                     _requestId,
-                    RequestChainPayloads.TerminalStatus(streamError, _cancellationToken),
+                    RequestChainPayloads.StatusFromError(decision.Cause),
                     now.UtcDateTime);
+                return;
             }
 
-            _requestFinalized = true;
-        });
-    }
-
-    private void ObserveRequestEvent(StreamEvent? streamEvent)
-        => _requestTerminalTracker.Observe(streamEvent);
-
-    private void ObserveExecutionEvent(LlmResponse? response)
-    {
-        if (response is null)
-        {
-            return;
-        }
-
-        if (IsTerminal(response))
-        {
-            _executionTerminal = true;
-        }
-
-        if (response.Usage is { } usage)
-        {
-            _streamUsage = usage;
-        }
-
-        if (_upstreamModelId.Length == 0)
-        {
-            _upstreamModelId = RequestChainPayloads.ValidModel(response.Model);
-        }
-
-        if (_firstTokenAt is null && ResponseContent.HasResponseContent(response))
-        {
-            _firstTokenAt = _timeProvider.GetUtcNow();
-        }
-    }
-
-    /// <summary>Finalizes the execution after the unified stream ended.</summary>
-    internal void FinalizeExecutionStream(Exception? streamError)
-    {
-        if (_executionId == 0 || _executionCompleted)
-        {
-            return;
-        }
-
-        TryPersist(() =>
-        {
-            var now = _timeProvider.GetUtcNow();
-            var completed = _executionTerminal;
-
-            if (completed)
+            if (responseBody is { Length: > 0 })
             {
-                _recorder.UpdateExecutionResult(
-                    _executionId,
-                    StatusCompleted,
-                    null,
-                    NullIfEmpty(_upstreamModelId),
-                    RequestChainPayloads.MaskedHeadersJson(_rawResponseHeaders),
-                    null,
-                    null,
-                    null,
-                    ElapsedMs(_attemptStartedAt),
-                    FirstTokenLatencyMs(),
-                    now.UtcDateTime);
-
-                _executionCompleted = true;
-                LogUsage(_streamUsage);
+                PersistRequestResponse(responseBody, meta, now);
+                return;
             }
-            else
-            {
-                var classified = streamError is null ? null : UpstreamTransportErrors.Classify(streamError);
 
-                _recorder.UpdateExecutionStatus(
-                    _executionId,
-                    RequestChainPayloads.TerminalStatus(streamError, _cancellationToken),
-                    RequestChainPayloads.ErrorStatusCode(classified),
-                    NullIfEmpty(_upstreamModelId),
-                    classified is null
-                        ? RequestChainPayloads.StreamEndedMessage(_cancellationToken)
-                        : RequestChainPayloads.ErrorMessage(classified),
-                    ElapsedMs(_attemptStartedAt),
-                    FirstTokenLatencyMs(),
-                    now.UtcDateTime);
-            }
+            PersistRequestResponseChunks(now);
         });
     }
 
-    private void FinalizeExecution(LlmResponse response)
+    /// <summary>Port of InboundPersistentStream.persistResponseChunks.</summary>
+    private void PersistRequestResponseChunks(DateTimeOffset now)
     {
-        if (_executionId == 0 || _executionCompleted)
+        var responseBody = Array.Empty<byte>();
+        var meta = new ResponseMeta();
+
+        try
         {
-            return;
+            responseBody = _inbound.AggregateStreamChunks(_requestChunks, out meta);
+        }
+        catch (Exception)
+        {
+            // The reference logs the aggregation failure and still persists the
+            // terminal status with the zero meta (empty external id).
         }
 
-        TryPersist(() =>
-        {
-            _recorder.UpdateExecutionResult(
-                _executionId,
-                StatusCompleted,
-                response.Id,
-                NullIfEmpty(RequestChainPayloads.ReportedModel(_rawResponse?.Body)),
-                RequestChainPayloads.MaskedHeadersJson(_rawResponse?.Headers),
-                RequestChainPayloads.JsonBody(_rawResponse?.Body),
-                null,
-                null,
-                ElapsedMs(_attemptStartedAt),
-                FirstTokenLatencyMs(),
-                _timeProvider.GetUtcNow().UtcDateTime);
-
-            _executionCompleted = true;
-            LogUsage(response.Usage);
-        });
+        PersistRequestResponse(responseBody, meta, now);
     }
 
-    private void LogUsage(Usage? usage)
+    /// <summary>Port of InboundPersistentStream._persistResponse.</summary>
+    private void PersistRequestResponse(byte[] responseBody, ResponseMeta meta, DateTimeOffset now)
     {
-        if (usage is null || _usageLogged || _requestId == 0 || _executionId == 0)
+        var startedAt = _attempt?.StartedAt ?? _requestStartedAt;
+
+        _recorder.UpdateRequestResult(
+            _requestId,
+            _requestTerminalState.ToRequestStatus(),
+            meta.Id,
+            RequestChainPayloads.JsonBody(responseBody),
+            LatencyMs(startedAt, _attempt?.EndedAt ?? now),
+            FirstTokenLatencyMs(_attempt),
+            now.UtcDateTime);
+    }
+
+    /// <summary>Port of CreateUsageLogFromRequest for this slice.</summary>
+    private void LogUsage(Usage? usage, ExecutionAttempt attempt)
+    {
+        if (usage is null || attempt.UsageLogged || _requestId == 0 || attempt.ExecutionId == 0)
         {
             return;
         }
@@ -453,7 +865,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             CreatedAt = now,
             UpdatedAt = now,
             ApiKeyId = 0,
-            ModelId = _outbound.CurrentModel,
+            ModelId = attempt.ModelId,
             PromptTokens = usage.PromptTokens,
             CompletionTokens = usage.CompletionTokens,
             TotalTokens = usage.TotalTokens,
@@ -469,41 +881,31 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             Source = "api",
             Format = _format,
             CostItems = "[]",
-            ChannelId = _outbound.CurrentChannelId,
+            ChannelId = attempt.ChannelId,
             ProjectId = 1,
             RequestId = _requestId,
         });
 
-        _usageLogged = true;
+        attempt.UsageLogged = true;
     }
 
-    private long? FirstTokenLatencyMs()
-        => _firstTokenAt is { } firstToken ? ElapsedMs(_attemptStartedAt, firstToken) : null;
+    /// <summary>
+    /// First-token latency mirrors PerformanceRecord: only streams report it,
+    /// and it is clamped like every other latency (biz.MinLatencyMs).
+    /// </summary>
+    private long? FirstTokenLatencyMs(ExecutionAttempt? attempt)
+        => _stream && attempt?.FirstTokenAt is { } firstToken
+            ? LatencyMs(attempt.StartedAt, firstToken)
+            : null;
 
-    private long ElapsedMs(DateTimeOffset since) => ElapsedMs(since, _timeProvider.GetUtcNow());
-
-    private static long ElapsedMs(DateTimeOffset since, DateTimeOffset until)
-        => Math.Max(0, (long)(until - since).TotalMilliseconds);
+    /// <summary>
+    /// Port of ClampLatency: the reference enforces a minimum of 10ms on every
+    /// reported latency, never a maximum.
+    /// </summary>
+    private static long LatencyMs(DateTimeOffset start, DateTimeOffset end)
+        => Math.Max(MinLatencyMs, (long)(end - start).TotalMilliseconds);
 
     private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
-
-    private static bool IsTerminal(LlmResponse response)
-    {
-        if (ReferenceEquals(response, LlmResponse.DoneResponse) || response.Object == "[DONE]")
-        {
-            return true;
-        }
-
-        foreach (var choice in response.Choices)
-        {
-            if (!string.IsNullOrEmpty(choice.FinishReason))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     private static void TryPersist(Action action)
     {
@@ -518,25 +920,84 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         }
     }
 
-    private sealed class ExecutionObservationStream(IStream<LlmResponse> stream, RequestChainPersistenceMiddleware owner)
-        : IStream<LlmResponse>
+    /// <summary>State one attempt owns (reset when the next attempt starts).</summary>
+    private sealed class ExecutionAttempt
+    {
+        public long ExecutionId { get; set; }
+
+        public DateTimeOffset StartedAt { get; init; }
+
+        /// <summary>
+        /// The performance record's EndTime: set when the terminal event (or the
+        /// aggregated completion) is observed, so latency stops there.
+        /// </summary>
+        public DateTimeOffset? EndedAt { get; set; }
+
+        public IOutboundTransformer Transformer { get; init; } = null!;
+
+        public HttpRequestData? Request { get; init; }
+
+        public string ApiFormat { get; init; } = ApiFormats.OpenAIChatCompletion;
+
+        public string ModelId { get; init; } = string.Empty;
+
+        public long ChannelId { get; init; }
+
+        public string UpstreamModelId { get; set; } = string.Empty;
+
+        public DateTimeOffset? FirstTokenAt { get; set; }
+
+        public List<StreamEvent> Chunks { get; } = [];
+
+        public StreamTerminalTracker Tracker { get; init; } = null!;
+
+        public StreamOutcome Outcome { get; } = new();
+
+        public StreamTerminalState TerminalState { get; set; } = StreamTerminalState.None;
+
+        public string TerminalError { get; set; } = string.Empty;
+
+        public HttpResponseData? RawResponse { get; set; }
+
+        public bool HeadersObserved { get; set; }
+
+        public bool NonStreamFinalized { get; set; }
+
+        public bool Closed { get; set; }
+
+        /// <summary>CreateUsageLogFromRequest runs once per successful attempt.</summary>
+        public bool UsageLogged { get; set; }
+    }
+
+    /// <summary>PersistenceState subset shared by the inbound and outbound streams.</summary>
+    private sealed class RequestStreamState
+    {
+        public StreamTerminalState OutboundStreamTerminal { get; set; } = StreamTerminalState.None;
+
+        public bool CleanEofCompletionEvidence { get; set; }
+    }
+
+    /// <summary>Port of OutboundPersistentStream's stream surface.</summary>
+    private sealed class ExecutionRawStream(
+        IStream<StreamEvent> stream,
+        RequestChainPersistenceMiddleware owner,
+        ExecutionAttempt attempt) : IStream<StreamEvent>
     {
         private bool _disposed;
 
-        public LlmResponse? Current => stream.Current;
+        public StreamEvent? Current
+        {
+            get
+            {
+                var streamEvent = stream.Current;
+                owner.ObserveExecutionRawEvent(attempt, streamEvent);
+                return streamEvent;
+            }
+        }
 
         public Exception? Err => stream.Err;
 
-        public bool Next()
-        {
-            if (!stream.Next())
-            {
-                return false;
-            }
-
-            owner.ObserveExecutionEvent(stream.Current);
-            return true;
-        }
+        public bool Next() => stream.Next();
 
         public void Dispose()
         {
@@ -548,7 +1009,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             _disposed = true;
             try
             {
-                owner.FinalizeExecutionStream(stream.Err);
+                owner.FinalizeExecutionStream(attempt, stream.Err);
             }
             finally
             {
@@ -557,25 +1018,25 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         }
     }
 
-    private sealed class RequestObservationStream(IStream<StreamEvent> stream, RequestChainPersistenceMiddleware owner)
+    /// <summary>Port of InboundPersistentStream's stream surface.</summary>
+    private sealed class RequestRawStream(IStream<StreamEvent> stream, RequestChainPersistenceMiddleware owner)
         : IStream<StreamEvent>
     {
         private bool _disposed;
 
-        public StreamEvent? Current => stream.Current;
+        public StreamEvent? Current
+        {
+            get
+            {
+                var streamEvent = stream.Current;
+                owner.ObserveRequestEvent(streamEvent);
+                return streamEvent;
+            }
+        }
 
         public Exception? Err => stream.Err;
 
-        public bool Next()
-        {
-            if (!stream.Next())
-            {
-                return false;
-            }
-
-            owner.ObserveRequestEvent(stream.Current);
-            return true;
-        }
+        public bool Next() => stream.Next();
 
         public void Dispose()
         {
@@ -593,6 +1054,47 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             {
                 stream.Dispose();
             }
+        }
+    }
+
+    /// <summary>Marks the first token on the first unified event with real content.</summary>
+    private sealed class FirstTokenStream(
+        IStream<LlmResponse> stream,
+        ExecutionAttempt attempt,
+        RequestChainPersistenceMiddleware owner) : IStream<LlmResponse>
+    {
+        private bool _disposed;
+
+        public LlmResponse? Current => stream.Current;
+
+        public Exception? Err => stream.Err;
+
+        public bool Next()
+        {
+            if (!stream.Next())
+            {
+                return false;
+            }
+
+            if (attempt.FirstTokenAt is null
+                && stream.Current is { } response
+                && ResponseContent.HasMeaningfulStreamOutput(response))
+            {
+                attempt.FirstTokenAt = owner._timeProvider.GetUtcNow();
+            }
+
+            return true;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            stream.Dispose();
         }
     }
 }
@@ -642,6 +1144,20 @@ internal static class RequestChainPayloads
         {
             return JsonSerializer.Serialize(Encoding.UTF8.GetString(body));
         }
+    }
+
+    /// <summary>
+    /// Port of modelname.FromEvent for the OpenAI chat format: the first event
+    /// that reports a valid model name. Binary audio chunks carry no metadata.
+    /// </summary>
+    public static string EventModel(StreamEvent streamEvent, string apiFormat)
+    {
+        if (apiFormat != ApiFormats.OpenAIChatCompletion || streamEvent.IsBinaryAudioChunk())
+        {
+            return string.Empty;
+        }
+
+        return ReportedModel(streamEvent.Data);
     }
 
     /// <summary>
@@ -740,37 +1256,10 @@ internal static class RequestChainPayloads
         return responseError is { StatusCode: not 0 } ? responseError.StatusCode : null;
     }
 
-    public static string TerminalStatus(Exception? streamError, CancellationToken cancellationToken)
-        => IsCancellation(streamError, cancellationToken) ? "canceled" : "failed";
+    /// <summary>Port of UpdateRequestStatusFromError's status choice.</summary>
+    public static string StatusFromError(Exception? cause)
+        => cause is not null && StreamOutcome.IsContextCancellation(cause) ? "canceled" : "failed";
 
-    public static string StreamEndedMessage(CancellationToken cancellationToken)
-        => cancellationToken.IsCancellationRequested
-            ? "request canceled"
-            : "stream ended without terminal event";
-
-    public static bool IsCancellation(Exception? error, CancellationToken cancellationToken)
-    {
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return true;
-        }
-
-        for (var current = error; current is not null; current = current.InnerException)
-        {
-            if (current is OperationCanceledException)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Port of orchestrator.ExtractErrorMessage's gjson lookup. gjson reports a
-    /// string field as found even when empty, so only the <c>errors[0].message</c>
-    /// fallback requires a non-empty value.
-    /// </summary>
     private static string HttpErrorMessage(HttpClientError error)
     {
         if (error.Body.Length > 0)

@@ -59,6 +59,12 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     private IOutboundTransformer Current =>
         _current ?? throw new InvalidOperationException("no candidate selected yet");
 
+    /// <summary>
+    /// The provider transformer of the current attempt, for middleware that
+    /// aggregates the provider's raw stream (request_execution persistence).
+    /// </summary>
+    internal IOutboundTransformer CurrentTransformer => Current;
+
     public string ApiFormat => Current.ApiFormat;
 
     public HttpRequestData TransformRequest(LlmRequest? request)

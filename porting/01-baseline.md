@@ -87,7 +87,7 @@ jsonb 的文本格式由 PostgreSQL 归一化（键序、空白），回环断�
 | 非流成功：request/execution 各创建一行（request 记录客户端模型，execution 记录路由实际模型与通道），通道回填、掩码后的请求头、完成态 external id / 上游模型 / 响应体 / 延迟指标、usage log（api_key_id=0、cost_items=[]） | `tests/AxonHub.Api.Tests/RequestChainPersistenceTests.cs` | 1 |
 | 重试：每次尝试一行 execution；首次失败写 failed + 状态码 500 + 错误消息且不写指标（参照传 nil metrics），第二次 completed；usage 记到最终通道；请求通道先后回填 5201 → 5202 | 同上 | 1 |
 | 最终失败：raw-error 钩子与 orchestrator 的 `persistRequestExecutionFailure` 各写一次 failed（503 / "boom" / 无指标），request 只改 status，不产生 usage / 响应归档 | 同上 | 1 |
-| 流式成功：消费并 Dispose 后 execution / request 均 completed，上游模型取自首个上报模型的 chunk，首 token 延迟写入，usage 取自终块的 usage；external id / body / chunks 仍为 null（C019） | 同上 | 1 |
+| 流式成功：消费并 Dispose 后 execution / request 均 completed；Close 时聚合缓冲分块，回填 external id（`chatcmpl-9`）与完整响应体；上游模型取自首个上报模型的 chunk，首 token 延迟写入，usage 取自聚合 meta；`response_chunks` 不写入（默认 store_chunks=false，C020） | 同上 | 1 |
 
 这组测试用真实 Orleans `TestCluster` + 脚本化 `IExecutor` + 内存版 `IRequestChainRecorder`，逐条对照
 `request.go` / `request_execution.go` 的写入时机与字段集合；不依赖数据库（SQL 语义由第 5 节锁定）。
@@ -110,7 +110,7 @@ jsonb 的文本格式由 PostgreSQL 归一化（键序、空白），回环断�
 grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状态串扰。差异登记为 C012（adaptive 策略链未移植、
 指标为 grain 内存态、池每次选择重读快照）。
 
-## 8. HTTP 纵向切片（28 例）
+## 8. HTTP 纵向切片（31 例）
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
@@ -119,15 +119,35 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 | 超时语义：非流式超时按取消处理（不记失败）且跳过同通道重试；首包超时记失败、跳过同通道重试并切换通道 | 同上 | 计入上项 |
 | 无候选模型：422 `invalid_model_error` 信封，且未触达传输层 | 同上 | 计入上项 |
 | 流式：SSE 事件透传到 `[DONE]`，终态后记成功 | 同上 | 计入上项 |
-| SSE 写帧：gin-contrib/sse 兼容字节（`data:` 无空格、`\n`→`\ndata:`、`\r`→`\\r`）、响应头、终态后的错误抑制、流错误事件、缺终态的不完整流错误 | `SseStreamWriterTests.cs` | 6 |
+| SSE 写帧：gin-contrib/sse 兼容字节（`data:` 无空格、`\n`→`\ndata:`、`\r`→`\\r`）、响应头、终态后的错误抑制、classified 流错误事件（502 `upstream_stream_interrupted`）、缺终态的不完整流错误、客户端取消时的错误抑制 | `SseStreamWriterTests.cs` | 7 |
 | 请求读取：头部规范化、URL 重建、`X-Forwarded-For` 优先、`Content-Type` 回退、gzip 与 zlib deflate 解压并移除编码头、拒绝未知编码 | `HttpRequestReaderTests.cs` | 4 |
-| 端点胶水：空 body → 400 `JSONError`、无效模型 → 422、非流成功转发状态/内容类型/body、流式响应写 SSE 并带 CORS 头 | `ChatCompletionEndpointTests.cs` | 4 |
+| 端点胶水：空 body → 400 `JSONError`、无效模型 → 422、非流成功转发状态/内容类型/body、流式响应写 SSE 并带 CORS 头、非流与流式响应头在边界回填 request（C021） | `ChatCompletionEndpointTests.cs` | 6 |
 
 说明：参照的 `internal/server/orchestrator/*_test.go` 与 `internal/server/api/*_test.go` 依赖 Ent、真实数据库与 gin，
 不能逐条直接移植；本切片用真实 Orleans `TestCluster` + 假通道快照 + 脚本化 `IExecutor` 复现同一调用链，
 断言参照测试同样关心的可观察结果（上游请求、重试次数、客户端错误体、SSE 字节）。
-这条链路的范围裁剪登记为 C013–C019（多 key 粘性、鉴权/限流/成本与通道级改写、zstd、通道级重试配置、
-性能记录简化、同步 recorder 工作单元、流式归档字段）；请求链路落库本身已由第 6 节的 4 例锁定。
+这条链路的范围裁剪登记为 C013–C021（多 key 粘性、鉴权/限流/成本与通道级改写、zstd、通道级重试配置、
+性能记录简化、同步 recorder 工作单元、流式归档与终态分类（已解决，C019）、response_chunks 与存储策略（C020）、
+响应头捕获差异（C021））；请求链路落库本身已由第 6 节的 4 例锁定。
+
+## 9. 真实宿主启动冒烟（2026-10-30）
+
+拓扑：宿主进程 `dotnet AxonHub.Api.dll`（Kestrel 监听 `127.0.0.1:8091` + Orleans silo）直连容器
+`postgres:17-alpine`（宿主端口 55432，库 `axonhub_smoke`）。
+
+| 观察点 | 结果 |
+|---|---|
+| 启动 DDL | 幂等 DDL 建出 `channels` / `requests` / `request_executions` / `usage_logs` 四表 |
+| 健康检查 | `GET /health` → `200 {"status":"ok"}` |
+| 未知模型 | `POST /v1/chat/completions` → 422 `invalid_model_error`，未触达传输层 |
+| 上游失败链路 | 插入指向 `http://127.0.0.1:1` 的启用通道后，3 次尝试（首次 + 同通道预算 2）→ 502 `upstream_error`（`upstream_stream_interrupted`，约 10.6s） |
+| request 落库 | 1 条 `failed`：`channel_id` 已回填，请求体以 jsonb 原样保存 |
+| execution 落库 | 3 条 `failed`（每次尝试一行）：`response_status_code=502`、有 `error_message`、无延迟指标；最后一条被 orchestrator 终态覆盖为带 `failed to do request:` 前缀的文案 |
+| usage | 0 条（失败链路不写用量） |
+| 掩码 | execution 请求头中的 `Authorization` 为 `******` |
+| 日志 | 无未处理异常；冒烟后停止宿主进程并删除容器 |
+
+容器内运行（应用镜像）尚未验证，见覆盖缺口与 `03-acceptance.md`「端到端」。
 
 ## 覆盖缺口
 
@@ -135,10 +155,10 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 |---|---|---|---|
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
-| 数据库接线的端到端启动 | `Program` 启动时执行幂等 DDL 并从 PostgreSQL 读取通道快照；API 测试用假 provider，未启动真实 Kestrel/数据库 | 中 | 容器化验收时补 |
+| 数据库接线的端到端启动 | 已用真实宿主冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；尚未构建应用容器镜像 | 低 | 容器化验收时补 Dockerfile 与镜像冒烟 |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
 | Anthropic 入站/出站、Responses API、Responses 流 | 首期纵向切片只做 OpenAI Chat | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 首个切片只移植 round-robin 路径并由 14 例锁定；默认策略 `adaptive` 的排序尚未实现 | 高 | 补齐策略链后按参照用例逐条扩展（C012） |
-| 持久化（channels / requests / request_executions / usage_logs） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 32 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量经 `RequestChainPersistenceMiddleware` 落库并由 4 例锁定。流式归档字段（external id / body / chunks）与流式 request 响应头仍缺（C019） | 中 | 补齐 C019 后做容器化验收 |
+| 持久化（channels / requests / request_executions / usage_logs） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 34 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量经 `RequestChainPersistenceMiddleware` 落库并由 4 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
 | 其余 Ent 表（projects / api_keys / data_storages / traces / users 等） | 首期只落请求链路四表 | 中 | 随对应功能落地 |

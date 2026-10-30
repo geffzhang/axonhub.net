@@ -49,7 +49,7 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
-    public async Task UpdateResultWritesOutcomeAndCanClearValues()
+    public async Task UpdateResultWritesOutcomeAndKeepsHeadersAndChunks()
     {
         await using var db = new TestDatabase(fixture);
         await db.MigrateAsync();
@@ -65,9 +65,7 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
             "completed",
             externalId: "resp-2",
             upstreamModelId: "gpt-4o-2026-02-01",
-            responseHeaders: """{"content-type":"text/event-stream"}""",
             responseBody: null,
-            responseChunks: """[{"delta":"hi"}]""",
             errorMessage: null,
             latencyMs: 55,
             firstTokenLatencyMs: 5,
@@ -89,8 +87,37 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
         // Finalization passes an empty error message, and the store only writes
         // non-empty values, so a previously captured message survives.
         Assert.Equal("none", actual.ErrorMessage);
+
+        // Headers and chunks go through their own updates, so finalization
+        // cannot clear them.
+        RecordAssert.Json("""{"content-type":"application/json"}""", actual.ResponseHeaders);
         RecordAssert.Json("""[{"delta":"hi"}]""", actual.ResponseChunks);
         Assert.Equal(55L, actual.MetricsLatencyMs);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateResponseHeadersWritesOnlyHeaders()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var id = await store.CreateAsync(NewExecution(606));
+        var changedAt = UpdatedAt.AddMinutes(4);
+
+        var updated = await store.UpdateResponseHeadersAsync(
+            id,
+            """{"content-type":["text/event-stream"]}""",
+            changedAt);
+
+        Assert.True(updated);
+
+        var actual = (await store.ListByRequestIdAsync(606)).Single();
+        RecordAssert.Json("""{"content-type":["text/event-stream"]}""", actual.ResponseHeaders);
+        Assert.Equal("chatcmpl-1", actual.ExternalId);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
         Assert.Equal(changedAt, actual.UpdatedAt);
     }
 
@@ -172,7 +199,8 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
         Assert.False(await store.UpdateStatusAsync(
             12345, "failed", null, null, null, null, null, null, UpdatedAt));
         Assert.False(await store.UpdateResultAsync(
-            12345, "failed", null, null, null, null, null, null, null, null, null, UpdatedAt));
+            12345, "failed", null, null, null, null, null, null, null, UpdatedAt));
+        Assert.False(await store.UpdateResponseHeadersAsync(12345, "{}", UpdatedAt));
     }
 
     private static RequestExecutionRecord NewExecution(long requestId) => new()

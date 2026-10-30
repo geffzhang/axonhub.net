@@ -72,22 +72,20 @@ internal sealed record RequestResultUpdate(
     long RequestId,
     string Status,
     string? ExternalId,
-    string? ResponseHeaders,
     string? ResponseBody,
-    string? ResponseChunks,
     long? LatencyMs,
     long? FirstTokenLatencyMs);
 
 internal sealed record RequestStatusUpdate(long RequestId, string Status);
+
+internal sealed record RequestHeaderUpdate(long RequestId, string HeadersJson);
 
 internal sealed record ExecutionResultUpdate(
     long ExecutionId,
     string Status,
     string? ExternalId,
     string? UpstreamModelId,
-    string? ResponseHeaders,
     string? ResponseBody,
-    string? ResponseChunks,
     string? ErrorMessage,
     long? LatencyMs,
     long? FirstTokenLatencyMs);
@@ -100,6 +98,8 @@ internal sealed record ExecutionStatusUpdate(
     string? ErrorMessage,
     long? LatencyMs,
     long? FirstTokenLatencyMs);
+
+internal sealed record ExecutionHeaderUpdate(long ExecutionId, string HeadersJson);
 
 /// <summary>
 /// In-memory port of the request-chain write seam. Tests assert the rows the
@@ -121,9 +121,13 @@ internal sealed class RecordingRequestChainRecorder : IRequestChainRecorder
 
     public List<RequestResultUpdate> RequestResults { get; } = [];
 
+    public List<RequestHeaderUpdate> RequestHeaders { get; } = [];
+
     public List<ExecutionStatusUpdate> ExecutionStatuses { get; } = [];
 
     public List<ExecutionResultUpdate> ExecutionResults { get; } = [];
+
+    public List<ExecutionHeaderUpdate> ExecutionHeaders { get; } = [];
 
     public long CreateRequest(RequestRecord request)
     {
@@ -148,9 +152,7 @@ internal sealed class RecordingRequestChainRecorder : IRequestChainRecorder
         long requestId,
         string status,
         string? externalId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         long? latencyMs,
         long? firstTokenLatencyMs,
         DateTime updatedAt)
@@ -160,11 +162,15 @@ internal sealed class RecordingRequestChainRecorder : IRequestChainRecorder
             requestId,
             status,
             externalId,
-            responseHeaders,
             responseBody,
-            responseChunks,
             latencyMs,
             firstTokenLatencyMs));
+    }
+
+    public void UpdateRequestResponseHeaders(long requestId, string responseHeaders, DateTime updatedAt)
+    {
+        _ = updatedAt;
+        RequestHeaders.Add(new RequestHeaderUpdate(requestId, responseHeaders));
     }
 
     public long CreateExecution(RequestExecutionRecord execution)
@@ -200,9 +206,7 @@ internal sealed class RecordingRequestChainRecorder : IRequestChainRecorder
         string status,
         string? externalId,
         string? upstreamModelId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
@@ -214,12 +218,16 @@ internal sealed class RecordingRequestChainRecorder : IRequestChainRecorder
             status,
             externalId,
             upstreamModelId,
-            responseHeaders,
             responseBody,
-            responseChunks,
             errorMessage,
             latencyMs,
             firstTokenLatencyMs));
+    }
+
+    public void UpdateExecutionResponseHeaders(long executionId, string responseHeaders, DateTime updatedAt)
+    {
+        _ = updatedAt;
+        ExecutionHeaders.Add(new ExecutionHeaderUpdate(executionId, responseHeaders));
     }
 
     public void CreateUsageLog(UsageLogRecord usageLog)

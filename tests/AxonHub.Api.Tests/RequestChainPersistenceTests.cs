@@ -110,21 +110,29 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
         Assert.Equal("chatcmpl-1", executionResult.ExternalId);
         Assert.Equal("upstream-persist", executionResult.UpstreamModelId);
         Assert.NotNull(executionResult.ResponseBody);
-        Assert.NotNull(executionResult.ResponseHeaders);
         Assert.Null(executionResult.ErrorMessage);
         Assert.NotNull(executionResult.LatencyMs);
 
         // First token latency exists only for streams.
         Assert.Null(executionResult.FirstTokenLatencyMs);
 
+        // Response headers travel through their own update (the transport
+        // reports them before the body is transformed), never through the
+        // finalized-row update.
+        var executionHeaders = Assert.Single(recorder.ExecutionHeaders);
+        Assert.Equal(execution.Id, executionHeaders.ExecutionId);
+        Assert.Contains("\"Content-Type\"", executionHeaders.HeadersJson);
+
         var requestResult = Assert.Single(recorder.RequestResults);
         Assert.Equal(request.Id, requestResult.RequestId);
         Assert.Equal("completed", requestResult.Status);
         Assert.Equal("chatcmpl-1", requestResult.ExternalId);
         Assert.NotNull(requestResult.ResponseBody);
-        Assert.NotNull(requestResult.ResponseHeaders);
         Assert.NotNull(requestResult.LatencyMs);
-        Assert.Null(requestResult.ResponseChunks);
+
+        // The downstream response headers are written by the HTTP boundary
+        // (middleware/response_headers.go), not by the orchestrator.
+        Assert.Empty(recorder.RequestHeaders);
 
         var usage = Assert.Single(recorder.UsageLogs);
         Assert.Equal(0L, usage.ApiKeyId);
@@ -288,14 +296,16 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
         Assert.NotNull(executionResult.LatencyMs);
         Assert.NotNull(executionResult.FirstTokenLatencyMs);
 
-        // C019: the port does not aggregate the stream back into a body,
-        // chunks or an external id yet.
-        Assert.Null(executionResult.ExternalId);
-        Assert.Null(executionResult.ResponseBody);
-        Assert.Null(executionResult.ResponseChunks);
+        // Close aggregates the buffered provider chunks into the finalized
+        // execution row: external id and body come from the aggregated meta.
+        Assert.Equal("chatcmpl-9", executionResult.ExternalId);
+        Assert.Contains("\"chatcmpl-9\"", executionResult.ResponseBody);
+        Assert.Contains("\"hello\"", executionResult.ResponseBody);
 
         var requestResult = Assert.Single(recorder.RequestResults);
         Assert.Equal("completed", requestResult.Status);
+        Assert.Equal("chatcmpl-9", requestResult.ExternalId);
+        Assert.Contains("\"chatcmpl-9\"", requestResult.ResponseBody);
         Assert.NotNull(requestResult.LatencyMs);
         Assert.NotNull(requestResult.FirstTokenLatencyMs);
 

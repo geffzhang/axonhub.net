@@ -1,5 +1,5 @@
 using System.Text;
-using AxonHub.Llm;
+using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
@@ -108,14 +108,23 @@ public static class SseStreamWriter
             return;
         }
 
+        // writeSSEErrorEvent always classifies first: a broken upstream
+        // connection reaches the client as a 502 upstream_stream_interrupted
+        // error object, never as a bare exception message.
         if (streamError is not null)
         {
-            if (IsCancellation(streamError))
+            // The reference suppresses the event when the error is
+            // context.Canceled or the request context is already canceled
+            // (client disconnected).
+            if (IsCancellation(streamError) || cancellationToken.IsCancellationRequested)
             {
                 return;
             }
 
-            await TryWriteErrorEventAsync(context, streamError, cancellationToken);
+            await TryWriteErrorEventAsync(
+                context,
+                UpstreamTransportErrors.Classify(streamError),
+                cancellationToken);
             return;
         }
 
@@ -124,7 +133,13 @@ public static class SseStreamWriter
             return;
         }
 
-        await TryWriteErrorEventAsync(context, LlmErrors.StreamIncomplete, cancellationToken);
+        // The reference reports orchestrator.ErrStreamIncomplete (not the
+        // llm-level sentinel): the stream ended without a terminal event or a
+        // completed aggregated response.
+        await TryWriteErrorEventAsync(
+            context,
+            UpstreamTransportErrors.Classify(StreamOutcome.ErrStreamIncomplete),
+            cancellationToken);
     }
 
     /// <summary>Port of writeSSEErrorEvent + encodeStreamError.</summary>

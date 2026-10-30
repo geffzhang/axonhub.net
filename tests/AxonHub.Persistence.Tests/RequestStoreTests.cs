@@ -75,9 +75,7 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
             id,
             "failed",
             externalId: "resp-2",
-            responseHeaders: """{"content-type":"application/json"}""",
             responseBody: """{"error":"boom"}""",
-            responseChunks: """[{"error":"boom"}]""",
             latencyMs: 88,
             firstTokenLatencyMs: 9,
             reasoningDurationMs: 0,
@@ -93,6 +91,36 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
         Assert.Equal(88L, actual.MetricsLatencyMs);
         Assert.Equal(9L, actual.MetricsFirstTokenLatencyMs);
         Assert.Equal(0L, actual.MetricsReasoningDurationMs);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+
+        // Finalization never clears data captured by the dedicated updates.
+        RecordAssert.Json("""{"content-type":"application/json"}""", actual.ResponseHeaders);
+        RecordAssert.Json("""[{"delta":"hi"}]""", actual.ResponseChunks);
+    }
+
+    [Fact]
+    public async Task UpdateResponseHeadersWritesOnlyHeaders()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        var id = await store.CreateAsync(NewRequest());
+        var changedAt = UpdatedAt.AddMinutes(5);
+
+        var updated = await store.UpdateResponseHeadersAsync(
+            id,
+            """{"content-type":["text/event-stream;charset=utf-8"]}""",
+            changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        RecordAssert.Json("""{"content-type":["text/event-stream;charset=utf-8"]}""", actual.ResponseHeaders);
+        Assert.Equal("chatcmpl-1", actual.ExternalId);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
         Assert.Equal(changedAt, actual.UpdatedAt);
     }
 
@@ -152,7 +180,8 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
 
         Assert.False(await store.UpdateStatusAsync(12345, "failed", UpdatedAt));
         Assert.False(await store.UpdateResultAsync(
-            12345, "failed", null, null, null, null, null, null, null, UpdatedAt));
+            12345, "failed", null, null, null, null, null, UpdatedAt));
+        Assert.False(await store.UpdateResponseHeadersAsync(12345, "{}", UpdatedAt));
         Assert.False(await store.UpdateChannelAsync(12345, 1, UpdatedAt));
         Assert.Null(await store.GetByIdAsync(12345));
     }

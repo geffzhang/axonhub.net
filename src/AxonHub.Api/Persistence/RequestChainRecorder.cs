@@ -26,12 +26,16 @@ public interface IRequestChainRecorder
         long requestId,
         string status,
         string? externalId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         long? latencyMs,
         long? firstTokenLatencyMs,
         DateTime updatedAt);
+
+    /// <summary>
+    /// Port of UpdateRequestResponseHeaders: the masked downstream response
+    /// headers, captured at the HTTP boundary after the handler returns.
+    /// </summary>
+    void UpdateRequestResponseHeaders(long requestId, string responseHeaders, DateTime updatedAt);
 
     long CreateExecution(RequestExecutionRecord execution);
 
@@ -52,13 +56,17 @@ public interface IRequestChainRecorder
         string status,
         string? externalId,
         string? upstreamModelId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
         DateTime updatedAt);
+
+    /// <summary>
+    /// Port of UpdateRequestExecutionResponseHeaders: the masked upstream
+    /// response headers, written as soon as the transport reports them.
+    /// </summary>
+    void UpdateExecutionResponseHeaders(long executionId, string responseHeaders, DateTime updatedAt);
 
     void CreateUsageLog(UsageLogRecord usageLog);
 }
@@ -99,9 +107,7 @@ public sealed class PostgresRequestChainRecorder(IAxonHubDbContextFactory dbFact
         long requestId,
         string status,
         string? externalId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         long? latencyMs,
         long? firstTokenLatencyMs,
         DateTime updatedAt)
@@ -112,13 +118,20 @@ public sealed class PostgresRequestChainRecorder(IAxonHubDbContextFactory dbFact
                 requestId,
                 status,
                 externalId,
-                responseHeaders,
                 responseBody,
-                responseChunks,
                 latencyMs,
                 firstTokenLatencyMs,
                 null,
                 updatedAt)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    public void UpdateRequestResponseHeaders(long requestId, string responseHeaders, DateTime updatedAt)
+    {
+        using var context = dbFactory.CreateDbContext();
+        _ = new RequestStore(context)
+            .UpdateResponseHeadersAsync(requestId, responseHeaders, updatedAt)
             .GetAwaiter()
             .GetResult();
     }
@@ -162,9 +175,7 @@ public sealed class PostgresRequestChainRecorder(IAxonHubDbContextFactory dbFact
         string status,
         string? externalId,
         string? upstreamModelId,
-        string? responseHeaders,
         string? responseBody,
-        string? responseChunks,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
@@ -177,14 +188,21 @@ public sealed class PostgresRequestChainRecorder(IAxonHubDbContextFactory dbFact
                 status,
                 externalId,
                 upstreamModelId,
-                responseHeaders,
                 responseBody,
-                responseChunks,
                 errorMessage,
                 latencyMs,
                 firstTokenLatencyMs,
                 null,
                 updatedAt)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    public void UpdateExecutionResponseHeaders(long executionId, string responseHeaders, DateTime updatedAt)
+    {
+        using var context = dbFactory.CreateDbContext();
+        _ = new RequestExecutionStore(context)
+            .UpdateResponseHeadersAsync(executionId, responseHeaders, updatedAt)
             .GetAwaiter()
             .GetResult();
     }

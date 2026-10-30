@@ -29,6 +29,16 @@ public sealed class StreamTerminalTracker(int expectedChoices)
 
     public bool Terminal => _terminal;
 
+    /// <summary>
+    /// Port of StreamTerminalTracker.AllChoicesFinished: every expected choice
+    /// reported a finish reason. Aggregation alone cannot prove a multi-choice
+    /// OpenAI stream completed after the connection broke.
+    /// </summary>
+    public bool AllChoicesFinished()
+        => expectedChoices > 0
+            && _choices.Count == expectedChoices
+            && _finished.Count == expectedChoices;
+
     /// <summary>Port of StreamTerminalTracker.Observe.</summary>
     public bool Observe(StreamEvent? streamEvent)
     {

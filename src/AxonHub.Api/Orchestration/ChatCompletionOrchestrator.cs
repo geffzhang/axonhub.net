@@ -59,8 +59,45 @@ public sealed class ChatCompletionOrchestrator
     /// <summary>The inbound transformer, used by the endpoint to map failures.</summary>
     public IInboundTransformer Inbound => _inbound;
 
+    /// <summary>
+    /// Port of middleware/response_headers.go: persists the masked downstream
+    /// response headers once the handler has written the response. The reference
+    /// captures them at the first write; ASP.NET freezes headers after that, so
+    /// a snapshot taken after the handler carries the same value.
+    /// </summary>
+    public void RecordResponseHeaders(long requestId, IReadOnlyDictionary<string, List<string>>? headers)
+    {
+        if (_requestChainRecorder is null || requestId == 0 || headers is null || headers.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _requestChainRecorder.UpdateRequestResponseHeaders(
+                requestId,
+                RequestChainPayloads.MaskedHeadersJson(headers),
+                _timeProvider.GetUtcNow().UtcDateTime);
+        }
+        catch (Exception)
+        {
+            // A header write must never turn a delivered response into an error.
+        }
+    }
+
+    public Task<ChatCompletionResult> ProcessAsync(
+        HttpRequestData request,
+        CancellationToken cancellationToken = default)
+        => ProcessAsync(request, onRequestCreated: null, cancellationToken);
+
+    /// <summary>
+    /// Runs one client request; <paramref name="onRequestCreated"/> receives the
+    /// request row id as soon as it exists, so the HTTP boundary can write the
+    /// downstream response headers (middleware/response_headers.go).
+    /// </summary>
     public async Task<ChatCompletionResult> ProcessAsync(
         HttpRequestData request,
+        Action<long>? onRequestCreated,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -106,9 +143,11 @@ public sealed class ChatCompletionOrchestrator
             persistence = new RequestChainPersistenceMiddleware(
                 _requestChainRecorder,
                 outbound,
+                _inbound,
                 request,
                 _timeProvider,
-                cancellationToken);
+                cancellationToken,
+                onRequestCreated);
             options.Middlewares.Add(persistence);
         }
 

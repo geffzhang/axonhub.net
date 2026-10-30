@@ -75,4 +75,41 @@ public static class ResponseContent
 
         return false;
     }
+
+    /// <summary>
+    /// Port of <c>hasMeaningfulStreamOutput</c> (orchestrator/performance.go):
+    /// does this streamed delta carry anything a client could read? The
+    /// first-token clock only starts on such a delta.
+    /// </summary>
+    public static bool HasMeaningfulStreamOutput(LlmResponse? resp)
+    {
+        if (resp is null)
+        {
+            return false;
+        }
+
+        foreach (var choice in resp.Choices)
+        {
+            var delta = choice.Delta;
+            if (delta is null)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(delta.Content?.Content)
+                || delta.Content?.MultipleContent is { Count: > 0 }
+                || delta.ToolCalls is { Count: > 0 }
+                || !string.IsNullOrEmpty(delta.ReasoningContent)
+                || !string.IsNullOrEmpty(delta.Reasoning)
+                || delta.ReasoningItems is { Count: > 0 }
+                || delta.InlineToolResults is { Count: > 0 }
+                || delta.Audio is not null
+                || !string.IsNullOrEmpty(delta.Refusal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
