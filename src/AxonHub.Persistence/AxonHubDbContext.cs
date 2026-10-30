@@ -24,6 +24,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 {
     public DbSet<ChannelRecord> Channels => Set<ChannelRecord>();
 
+    public DbSet<ChannelModelPriceRecord> ChannelModelPrices => Set<ChannelModelPriceRecord>();
+
     public DbSet<RequestRecord> Requests => Set<RequestRecord>();
 
     public DbSet<RequestExecutionRecord> RequestExecutions => Set<RequestExecutionRecord>();
@@ -60,6 +62,7 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureChannel(modelBuilder.Entity<ChannelRecord>());
+        ConfigureChannelModelPrice(modelBuilder.Entity<ChannelModelPriceRecord>());
         ConfigureRequest(modelBuilder.Entity<RequestRecord>());
         ConfigureRequestExecution(modelBuilder.Entity<RequestExecutionRecord>());
         ConfigureUsageLog(modelBuilder.Entity<UsageLogRecord>());
@@ -222,6 +225,33 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
         builder.HasIndex(channel => new { channel.Name, channel.DeletedAt })
             .HasDatabaseName("channels_by_name")
+            .IsUnique();
+    }
+
+    private static void ConfigureChannelModelPrice(EntityTypeBuilder<ChannelModelPriceRecord> builder)
+    {
+        builder.ToTable("channel_model_prices");
+        builder.HasKey(price => price.Id);
+        builder.Property(price => price.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(price => price.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(price => price.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(price => price.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(price => price.ModelId).HasColumnName("model_id").HasColumnType("varchar").IsRequired();
+        builder.Property(price => price.Price).HasColumnName("price").HasColumnType("jsonb").IsRequired();
+        builder.Property(price => price.ReferenceId)
+            .HasColumnName("reference_id")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(price => price.ChannelId).HasColumnName("channel_id").IsRequired();
+
+        builder.HasIndex(price => new { price.ChannelId, price.ModelId, price.DeletedAt })
+            .HasDatabaseName("channel_model_prices_by_channel_id_model_id")
+            .IsUnique();
+        builder.HasIndex(price => price.ReferenceId)
+            .HasDatabaseName("channel_model_prices_reference_id_key")
             .IsUnique();
     }
 

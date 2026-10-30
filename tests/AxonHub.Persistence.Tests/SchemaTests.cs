@@ -14,8 +14,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
 {
     private static readonly string[] ExpectedTables =
     [
-        "api_keys", "channels", "projects", "request_executions", "requests",
-        "systems", "usage_logs", "users",
+        "api_keys", "channel_model_prices", "channels", "projects",
+        "request_executions", "requests", "systems", "usage_logs", "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -39,6 +39,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
         ["systems"] =
         [
             "id", "created_at", "updated_at", "deleted_at", "key", "value",
+        ],
+        ["channel_model_prices"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "model_id", "price",
+            "reference_id", "channel_id",
         ],
         ["channels"] =
         [
@@ -120,6 +125,13 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["bigint"] = ["id", "deleted_at"],
                 ["timestamp with time zone"] = ["created_at", "updated_at"],
                 ["character varying"] = ["key", "value"],
+            },
+            ["channel_model_prices"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "channel_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] = ["price"],
+                ["character varying"] = ["model_id", "reference_id"],
             },
             ["channels"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
@@ -205,6 +217,10 @@ public sealed class SchemaTests(PostgresFixture fixture)
     private static readonly Dictionary<string, (string Table, bool Unique, string[] Columns)> ExpectedIndexes =
         new(StringComparer.Ordinal)
         {
+            ["channel_model_prices_by_channel_id_model_id"] =
+                ("channel_model_prices", true, ["channel_id", "model_id", "deleted_at"]),
+            ["channel_model_prices_reference_id_key"] =
+                ("channel_model_prices", true, ["reference_id"]),
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
             ["projects_by_name"] = ("projects", true, ["name", "deleted_at"]),
             ["user_email_deleted_at"] = ("users", true, ["email", "deleted_at"]),

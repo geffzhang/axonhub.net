@@ -2,7 +2,7 @@
 
 验收是体检报告，不是"我感觉挺好"。
 
-测量时间：2026-10-30（M2 Llm 切片 + M4 持久化层与请求链路落库 + M3 通道选择与 HTTP 切片，含超时、非法 UTF-8 与字段级类型错误路径；C014 鉴权子切片新增 API key 中间件、ClientIP/allowlist 与 `projects` / `users` / `api_keys` 三表；C028 新增 `systems` 表、系统安全设置与 `/v1` IP 黑名单；C030 新增 `retry_policy` 读取、归一化与每请求 topK；C031 新增 `upstream_error_policy` 的应用与流式错误改写；C012 新增四条负载均衡策略链，残余 C034/C036；通道级请求改写新增 body/header 覆盖、Go 模板子集与设置解析，残余 C037–C041；C035 新增通道限流与并发准入：RPM/TPM 自然分钟窗口、并发硬信号量与 FIFO 队列、429 Retry-After 冷却、RateLimitAware 打分接线，残余 C042–C045）。
+测量时间：2026-10-30（M2 Llm 切片 + M4 持久化层与请求链路落库 + M3 通道选择与 HTTP 切片，含超时、非法 UTF-8 与字段级类型错误路径；C014 鉴权子切片新增 API key 中间件、ClientIP/allowlist 与 `projects` / `users` / `api_keys` 三表；C028 新增 `systems` 表、系统安全设置与 `/v1` IP 黑名单；C030 新增 `retry_policy` 读取、归一化与每请求 topK；C031 新增 `upstream_error_policy` 的应用与流式错误改写；C012 新增四条负载均衡策略链，残余 C034/C036；通道级请求改写新增 body/header 覆盖、Go 模板子集与设置解析，残余 C037–C041；C035 新增通道限流与并发准入：RPM/TPM 自然分钟窗口、并发硬信号量与 FIFO 队列、429 Retry-After 冷却、RateLimitAware 打分接线，残余 C042–C045；C046–C049 新增 usage 成本计算与注入：flat_fee / usage_per_unit / usage_tiered / usage_volume 四种定价模式与调度匹配、`channel_model_prices` 表与读取接缝、`system_inject_usage_cost` 门控、`usage_logs` 成本列与响应 `usage.cost`）。
 
 ## 构建
 
@@ -18,10 +18,10 @@
 | 项目 | 总数 | 通过 | 失败 | 跳过 | 说明 |
 |---|---|---|---|---|---|
 | `AxonHub.Llm.Tests` | 145 | 145 | 0 | 0 | pipeline 重试 15 + 空响应 9 + 聚合器 1 + HTTP 执行器/SSE 增量解码 9 + Go JSON UTF-8 修复与语法文案 10 + 字段级类型错误文案 101 |
-| `AxonHub.Persistence.Tests` | 50 | 50 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 八表仓储 39（projects / users / api_keys 各 4 例，systems 4 例） |
+| `AxonHub.Persistence.Tests` | 56 | 56 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 九表仓储 45（projects / users / api_keys 各 4 例，systems 4 例，channel_model_prices 6 例） |
 | `AxonHub.Grains.Tests` | 88 | 88 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 6（含 topK 截断与归一化 2）+ 别名解析 3 + 同分顺序/不计数 2 + 负载均衡策略 8（adaptive 中性总分/线性衰减 2、冷却边界 1、权重 tie-break 与未知回退 2、failover 1、circuit-breaker 1、策略切换 1）；限流与并发准入 64：ChannelLimiter 10 + ChannelLimiterManager 12 + ChannelRequestTracker 24 + RateLimitAwareScorer 18 |
-| `AxonHub.Api.Tests` | 422 | 421 | 0 | 1 | HTTP 切片 79：orchestrator/重试/超时 17（含通道级重试配置 3、流式性能记录语义 2、策略 topK 1、负载均衡策略接线 1）+ 请求链路落库 5（含鉴权身份传播 1）+ SSE 写帧 9（含上游错误策略 2）+ 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 11（含上游错误策略 3）+ 期望流选择 2 + 通道重试谓词与 settings 解析 16 + 通道性能记录 7；API key 鉴权与 ClientIP 73：header 提取 14 + 鉴权器流程 13 + ClientIP/allowlist 与中间件文案 46；系统设置与 IP 黑名单 29：SecuritySettings 回退/归一化 15 + 黑名单放行/命中/受信代理 14；重试策略系统设置 49：回退/零值/类型错误 16 + 解析与重复键 7 + 归一化 26；上游错误策略 applier 29：非流改写/本地错误/quota 11 + 响应体字段 8 + 流式分类与策略读取次数 10 + 通道级请求改写 134：body/header 改写与设置解析 133（ChannelOverrideTests 86 含 1 Skip + ChannelOverrideSettingsTests 47）+ 端到端落库 1；限流中间件 29：RPM 准入 5 + TPM/冷却追踪 13 + 队列错误 4 + 连接准入与让位 7 |
-| **合计** | **705** | **704** | **0** | **1** | |
+| `AxonHub.Api.Tests` | 465 | 464 | 0 | 1 | HTTP 切片 79：orchestrator/重试/超时 17（含通道级重试配置 3、流式性能记录语义 2、策略 topK 1、负载均衡策略接线 1）+ 请求链路落库 5（含鉴权身份传播 1）+ SSE 写帧 9（含上游错误策略 2）+ 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 11（含上游错误策略 3）+ 期望流选择 2 + 通道重试谓词与 settings 解析 16 + 通道性能记录 7；API key 鉴权与 ClientIP 73：header 提取 14 + 鉴权器流程 13 + ClientIP/allowlist 与中间件文案 46；系统设置与 IP 黑名单 29：SecuritySettings 回退/归一化 15 + 黑名单放行/命中/受信代理 14；重试策略系统设置 49：回退/零值/类型错误 16 + 解析与重复键 7 + 归一化 26；上游错误策略 applier 29：非流改写/本地错误/quota 11 + 响应体字段 8 + 流式分类与策略读取次数 10 + 通道级请求改写 134：body/header 改写与设置解析 133（ChannelOverrideTests 86 含 1 Skip + ChannelOverrideSettingsTests 47）+ 端到端落库 1；限流中间件 29：RPM 准入 5 + TPM/冷却追踪 13 + 队列错误 4 + 连接准入与让位 7；usage 成本 43：计算器 26 + 价格读取 12 + 注入与落库 5 |
+| **合计** | **754** | **753** | **0** | **1** | |
 
 命令：`dotnet test AxonHub.slnx`（2026-10-30，Windows 11 / .NET SDK 10.0.401）。
 
@@ -46,8 +46,8 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   `AxonHub.Grains` / `AxonHub.Grains.Abstractions`（通道池与通道指标 grain、ChannelLimiter/ChannelLimiterManager/ChannelRequestTracker/RateLimitAwareScorer）、
   `AxonHub.Api`（HTTP 宿主、`POST /v1/chat/completions`、请求读取、SSE 写出、orchestrator 适配、
   API key 鉴权中间件与 header 提取、gin 兼容的 ClientIP 与 allowlist 匹配、`projects` / `users` / `api_keys` / `systems` 仓储、
-  系统安全设置读取与 `/v1` IP 黑名单中间件）
-- 签名差异 / 运行时差异 / 平台限制：见 `02-differences.md`（C001–C045）
+  系统安全设置读取与 `/v1` IP 黑名单中间件、Billing（成本计算器、价格读取/注入接缝与 CostItem JSON 形状））
+- 签名差异 / 运行时差异 / 平台限制：见 `02-differences.md`（C001–C049）
 
 ## 协议锁定
 
@@ -60,6 +60,9 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   队列超时/取消、429 Retry-After 冷却、本地拒绝不冷却且不允许同通道重试、
   流关闭先拆上游再让位；RateLimitAware 的四个子分与 -10000 硬耗尽（C035；
   残余 C042–C045 已登记）
+- [x] usage 成本由 43 例锁定：四种定价模式与调度匹配（含跨午夜/时区/优先级）、
+  写缓存 5m/1h 变体、`system_inject_usage_cost` 门控、CostItem 的 trimmed-decimal
+  字符串与省略字段、未命中价格的 `cost_items=null` 语义（C046–C049）
 - [x] 入站请求的字段级解码错误文案与 Go 一致（C003）：结构名、标签路径、Go 类型、数字字面量、
   硬错误覆盖软错误、null 零值语义由 101 例锁定；期望值全部来自对参照模块的 Go 探针输出
 - [ ] 跨语言数字范围已校验（±2^53−1）：token 计数以 int64 落库并由
@@ -87,7 +90,9 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   134 例锁定通道级请求改写：body/header 覆盖、Go 模板渲染、数组与头操作、非 JSON 门槛与设置解析，
   其中 1 例端到端断言出站请求与 execution 落库都记录改写后的 body/header；93 例锁定通道限流与
   并发准入（RPM 准入与同通道重试、TPM 追踪、429 冷却、队列拒绝信封、并发让位与流关闭顺序；
-  等待方在专用线程上驱动，不依赖真实上游）
+  等待方在专用线程上驱动，不依赖真实上游）；43 例锁定 usage 成本：四种定价模式与调度匹配、
+  写缓存 5m/1h 变体、价格读取回退与损坏价格整通道失效、`system_inject_usage_cost` 开关、
+  非流与流式 chunk 注入、usage 行成本列与响应 `usage.cost`
 - [x] 真实宿主启动（Kestrel + PostgreSQL + Orleans silo） — 启动冒烟通过（2026-10-30）：
   `dotnet AxonHub.Api.dll` 连接 `postgres:17-alpine`，启动时幂等 DDL 建出当时切片的 4 张表
   （C023 新增 `projects` / `users` / `api_keys`、C028 新增 `systems` 后总数为 8；本次冒烟未重跑，鉴权与黑名单路径由进程内测试覆盖）；`GET /health` 返回
@@ -116,7 +121,8 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C035：RateLimitAware 恒满分 | 已解决：`ChannelRequestTracker`（自然分钟窗口、只延长的冷却、惰性清理）、`ChannelLimiter`/`ChannelLimiterManager`（硬信号量、FIFO、配置重建）、`RateLimitAwareScorer`（RPM/TPM 与并发取最小值、-10000）接入四条策略链；RPM 准入、TPM 追踪与 429 冷却中间件挂在请求链路上；93 个用例锁定（64 grain + 29 API）。残余：C042（阻塞线程）、C043（单 InnerException）、C044（OTel 指标未移植）、C045（nil tracker 的 noop 不可达） | 已关闭；残余已登记 |
 | C013：多 API key 通道只用首个 key，无 trace/thread 粘性 | 多 key 通道流量集中，限流/配额分布与参照不同；`trace_sticky_mode` 已解析并归一化，但无 trace/thread 可粘 | 接入 trace/thread 后补 TraceStickyKeyProvider |
 | C042–C045：限流的实现结构差异 | C042 等待中的请求占用线程而非 goroutine；C043 队列错误用 `Cause` 属性承载类型化原因而非多错误 Unwrap；C044 五个 OTel 限流指标未移植，部署方拿不到 inflight/waiting/拒绝计数；C045 nil tracker 的 noop 路径不可达 | 准入与打分行为等价，差异在资源模型与可观测性；接入 OTel 时按同名 instrument 与 Snapshot 回调补 C044 |
-| C014：成本计费、用户鉴权（JWT/OIDC/角色）与通道管理面未接入 | API key 鉴权与身份传播已接入（C023），系统安全设置与 IP 黑名单已接入（C028）：`/v1` 先过黑名单再过鉴权，request/execution/usage 的 project/api_key 已回填；通道级请求改写已接入（body/header 覆盖、模板渲染、sjson 路径语义，134 例锁定，残余 C037–C041）；通道限流与并发准入已接入（C035，93 例锁定，残余 C042–C045）；但 usage 成本仍为空、无用户登录与管理面权限，通道写入校验与覆盖模板 CRUD 未接入（C037） | 后续里程碑按参照逐项接入并补测 |
+| C014：成本计费、用户鉴权（JWT/OIDC/角色）与通道管理面未接入 | API key 鉴权与身份传播已接入（C023），系统安全设置与 IP 黑名单已接入（C028）：`/v1` 先过黑名单再过鉴权，request/execution/usage 的 project/api_key 已回填；通道级请求改写已接入（body/header 覆盖、模板渲染、sjson 路径语义，134 例锁定，残余 C037–C041）；通道限流与并发准入已接入（C035，93 例锁定，残余 C042–C045）；usage 成本计费与注入已接入（C046–C049，43 例锁定）；但仍无用户登录与管理面权限，通道写入校验、覆盖模板 CRUD 与 `channel_model_prices` 管理面未接入（C037/C048） | 后续里程碑按参照逐项接入并补测 |
+| C046–C049：成本计费的精度、读取与未命中语义 | C046 已接受：金额用 `System.Decimal`（约 28–29 位有效数字），参照为 shopspring 任意精度，极端乘积可能有末位差异；C047 已接受：价格按请求实时读库（注入开启时最多两次查询），参照为进程内缓存，外部改价立即生效；C048 真实缺口：`channel_model_prices` 管理面（写入、reference-id 轮换、版本表、自动定价）未移植；C049 推断：未命中价格时 `cost_items` 写 JSON `null`（Ent `SetCostItems(nil)` 语义，Ent 源码不可得） | 读取路径与可观察金额一致；管理面随通道管理面落地；C049 若日后用真实 Ent 数据库核对为 `[]`，只需改中间件字面量并更新条目与测试 |
 | C015：zstd 请求体与压缩错误文案 | 已解决：gzip/x-gzip/deflate/zstd 全部解码；gzip 头错误与 zlib/raw DEFLATE 分支逐字/逐分支对齐。残余差异仅损坏/截断压缩体的错误细节（缺 flate 偏移、gzip 尾部校验、zstd 内层文案） | 已关闭（ZstdSharp.Port；残余差异见 C015） |
 | C016：通道级 `retryableStatusCodes` / `retryableErrorPatterns` 未生效 | 已解决：候选携带从 settings 解析的重试规则，`CanRetry` 按参照逐条判断（传输错误、429/5xx、额外状态码、子串/正则文本） | 已关闭（16 个谓词/解析用例 + 3 个端到端用例锁定） |
 | C017：通道性能记录仅成功/失败计数，取消与无终态流语义不同 | 已解决：按 attempt 共享 `ChannelPerformanceRecord`，非流成功与 raw error 由指标中间件标记，流终态分类与聚合完成由持久化副本补记；取消不计故障，无终态且未聚合完整的流不计数。`retry_policy.auto_disable_channel` 的规则已解析并归一化（legacy statuses 迁移），但自动禁用动作未执行；残余还有性能明细字段与异步工作 | 已关闭（7 个记录语义用例 + 2 个端到端用例锁定） |

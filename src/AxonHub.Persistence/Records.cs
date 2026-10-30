@@ -57,6 +57,28 @@ public sealed class ChannelRecord
     public string? Endpoints { get; set; }
 }
 
+/// <summary>Row of the reference <c>channel_model_prices</c> table.</summary>
+public sealed class ChannelModelPriceRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live.</summary>
+    public long DeletedAt { get; set; }
+
+    public string ModelId { get; set; } = string.Empty;
+
+    /// <summary>objects.ModelPrice JSON; decimals are strings, as Go marshals them.</summary>
+    public string Price { get; set; } = "null";
+
+    public string ReferenceId { get; set; } = string.Empty;
+
+    public long ChannelId { get; set; }
+}
+
 /// <summary>Row of the reference <c>requests</c> table.</summary>
 public sealed class RequestRecord
 {

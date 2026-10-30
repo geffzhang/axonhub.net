@@ -1,5 +1,6 @@
 using AxonHub.Abstractions;
 using AxonHub.Api.Auth;
+using AxonHub.Api.Billing;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
@@ -41,6 +42,13 @@ builder.Services.AddSingleton<IExecutor>(static services => services.GetRequired
 builder.Services.AddSingleton<IInboundTransformer, OpenAiInboundTransformer>();
 builder.Services.AddSingleton<IChannelMetricsRecorder, GrainChannelMetricsRecorder>();
 builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorder>();
+
+// Usage-cost pricing: the reference preloads channel_model_prices into a
+// per-process cache; the port reads the same rows through the recorder-style
+// synchronous seam (IChannelPricingSource). The cost service is stateless, so
+// one instance serves every scoped orchestrator.
+builder.Services.AddSingleton<IChannelPricingSource, PostgresChannelPricingSource>();
+builder.Services.AddSingleton<IUsageCostService, UsageCostService>();
 
 // One rate-limit state per silo, shared by the API middlewares (writes) and the
 // channel pool grain's RateLimitAware scoring (reads) — the reference's

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using AxonHub.Api.Auth;
+using AxonHub.Api.Billing;
 using AxonHub.Api.Http;
 using AxonHub.Api.Persistence;
 using AxonHub.Llm;
@@ -34,6 +35,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     private const int MinLatencyMs = 10;
 
     private readonly IRequestChainRecorder _recorder;
+    private readonly IUsageCostService? _usageCostService;
     private readonly PersistentOutboundTransformer _outbound;
     private readonly IInboundTransformer _inbound;
     private readonly HttpRequestData _rawRequest;
@@ -74,7 +76,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         CancellationToken cancellationToken,
         Action<long>? onRequestCreated = null,
         ChannelPerformanceState? performance = null,
-        RequestIdentity? identity = null)
+        RequestIdentity? identity = null,
+        IUsageCostService? usageCostService = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -83,6 +86,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _recorder = recorder;
+        _usageCostService = usageCostService;
         _outbound = outbound;
         _inbound = inbound;
         _rawRequest = rawRequest;
@@ -229,6 +233,11 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     public override LlmResponse TransformOutboundLlmResponse(LlmResponse response)
     {
         ArgumentNullException.ThrowIfNull(response);
+
+        // persistRequest.OnOutboundLlmResponse injects the calculated cost into
+        // the unified response before the usage log is written and before the
+        // client-facing response is serialized.
+        InjectUsageCost(response);
 
         // persistRequest.OnOutboundLlmResponse stores the unified response; the
         // non-stream finalization hook refuses to persist without it.
@@ -874,6 +883,11 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
 
+        // CreateUsageLogFromRequest prices the usage independently of the
+        // inject-usage-cost setting; injection only decides whether the cost is
+        // exposed to the client.
+        var cost = TryComputeCost(usage, attempt);
+
         // CreateUsageLogFromRequest uses request.APIKeyID, which is Go's zero
         // value when authentication has not run.
         _recorder.CreateUsageLog(new UsageLogRecord
@@ -896,13 +910,73 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             CompletionRejectedPredictionTokens = usage.CompletionTokensDetails?.RejectedPredictionTokens,
             Source = "api",
             Format = _format,
-            CostItems = "[]",
+            TotalCost = cost?.TotalCost,
+
+            // SetCostItems is always called: without a price it receives nil,
+            // which Ent marshals as JSON null (bypassing the "[]" column
+            // default). When the cost seam is absent the previous port
+            // behaviour is kept.
+            CostItems = cost is not null
+                ? BillingJson.SerializeCostItems(cost.Items)
+                : _usageCostService is null ? "[]" : "null",
+            CostPriceReferenceId = string.IsNullOrEmpty(cost?.ReferenceId) ? null : cost.ReferenceId,
             ChannelId = attempt.ChannelId,
             ProjectId = _identity.ProjectId,
             RequestId = _requestId,
         });
 
         attempt.UsageLogged = true;
+    }
+
+    /// <summary>
+    /// Port of persistRequestMiddleware.injectUsageCost: writes the calculated
+    /// cost onto the unified usage (null when no price matches) when
+    /// system_inject_usage_cost is true.
+    /// </summary>
+    private void InjectUsageCost(LlmResponse? response)
+    {
+        if (_usageCostService is null
+            || response?.Usage is not { } usage
+            || _attempt is not { } attempt)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!_usageCostService.InjectUsageCostEnabled())
+            {
+                return;
+            }
+
+            // A lookup miss clears an upstream-reported cost as well.
+            usage.Cost = _usageCostService.Compute(attempt.ChannelId, attempt.ModelId, usage)?.TotalCost;
+        }
+        catch (Exception)
+        {
+            // The reference logs a warning and leaves usage untouched when the
+            // setting cannot be read; cost lookup is never allowed to fail a
+            // client call.
+        }
+    }
+
+    /// <summary>The usage-log side of computeUsageCost, independent of the injection gate.</summary>
+    private UsageCost? TryComputeCost(Usage usage, ExecutionAttempt attempt)
+    {
+        if (_usageCostService is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _usageCostService.Compute(attempt.ChannelId, attempt.ModelId, usage);
+        }
+        catch (Exception)
+        {
+            // Cost is derived data: a lookup failure must not lose the token log.
+            return null;
+        }
     }
 
     /// <summary>
@@ -1081,7 +1155,20 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     {
         private bool _disposed;
 
-        public LlmResponse? Current => stream.Current;
+        /// <summary>
+        /// Port of usageCostStream.Current: every response handed to the inbound
+        /// side gets its usage cost injected, so streamed chunks carry
+        /// usage.cost just like non-stream responses.
+        /// </summary>
+        public LlmResponse? Current
+        {
+            get
+            {
+                var response = stream.Current;
+                owner.InjectUsageCost(response);
+                return response;
+            }
+        }
 
         public Exception? Err => stream.Err;
 

@@ -1,4 +1,5 @@
 using AxonHub.Api.Auth;
+using AxonHub.Api.Billing;
 using AxonHub.Api.Persistence;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
@@ -32,6 +33,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IUpstreamErrorPolicyApplier _upstreamErrorPolicy;
     private readonly TimeProvider _timeProvider;
     private readonly IRequestChainRecorder? _requestChainRecorder;
+    private readonly IUsageCostService? _usageCostService;
     private readonly ChannelRequestTracker _rateLimitTracker;
     private readonly ChannelLimiterManager _channelLimiterManager;
 
@@ -45,7 +47,8 @@ public sealed class ChatCompletionOrchestrator
         IRequestChainRecorder? requestChainRecorder = null,
         IUpstreamErrorPolicyApplier? upstreamErrorPolicy = null,
         ChannelRequestTracker? rateLimitTracker = null,
-        ChannelLimiterManager? channelLimiterManager = null)
+        ChannelLimiterManager? channelLimiterManager = null,
+        IUsageCostService? usageCostService = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -62,6 +65,7 @@ public sealed class ChatCompletionOrchestrator
         _upstreamErrorPolicy = upstreamErrorPolicy ?? new UpstreamErrorPolicyApplier(retryPolicyProvider);
         _timeProvider = timeProvider;
         _requestChainRecorder = requestChainRecorder;
+        _usageCostService = usageCostService;
 
         // The reference's orchestrator and load balancer share one tracker and
         // one limiter manager per process. Production registers both as
@@ -234,7 +238,8 @@ public sealed class ChatCompletionOrchestrator
                 cancellationToken,
                 onRequestCreated,
                 performance,
-                identity);
+                identity,
+                _usageCostService);
             options.Middlewares.Add(persistence);
         }
 
