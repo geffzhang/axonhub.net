@@ -105,11 +105,11 @@ jsonb 的文本格式由 PostgreSQL 归一化（键序、空白），回环断�
 这组测试用真实 Orleans `TestCluster` + 脚本化 `IExecutor` + 内存版 `IRequestChainRecorder`，逐条对照
 `request.go` / `request_execution.go` 的写入时机与字段集合；不依赖数据库（SQL 语义由第 5 节锁定）。
 
-## 7. Orleans 通道选择（16 例）
+## 7. Orleans 通道选择（24 例）
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
-| 模型过滤：只有 `supported_models` 解析出该请求模型的通道参与选择；零请求 150 分 | `ChannelSelectionTests.cs` | 1 |
+| 模型过滤：只有 `supported_models` 解析出该请求模型的通道参与选择；round-robin 零请求总分 250（`RoundRobin(0)=150` + 中性 `RateLimitAware=100`） | `ChannelSelectionTests.cs` | 1 |
 | round-robin 打分：请求数按 `150/(1+count/150)` 拉低；20 次带计数选择在两个同权重通道间 10/10 均摊 | 同上 | 1 |
 | 不计数模式（`trackSelection=false`）不写入选择数 | 同上 | 1 |
 | 健康分区：连续失败 3 次且最近 5 分钟内失败的通道排到健康通道之后；topK=4 时被挤出候选 | 同上 | 2 |
@@ -118,17 +118,25 @@ jsonb 的文本格式由 PostgreSQL 归一化（键序、空白），回环断�
 | 成功清零连续失败，但窗口内已计入的失败数保留 | 同上 | 1 |
 | 窗口：10 分钟内计数保留，超过即过期；窗口推进后迟到的旧事件被丢弃 | 同上 | 2 |
 | `GetModelEntries` 别名：prefix / auto_trim / modelMappings 解析出正确的 ActualModel；hideOriginalModels + hideMappedModels；lowercaseModelId | 同上 | 3 |
-| 同分保持 `ordering_weight DESC` 的输入顺序（无权重 tie-breaker） | 同上 | 1 |
+| round-robin 同分保持输入顺序（`WithoutWeightTieBreaker`，与权重无关） | 同上 | 1 |
+| adaptive 打分：`ErrorAware(200 - (30×连续失败 + 40)×冷却比例)` + `WeightRoundRobin(150/(1+(count/(weight/100))/150))` + `LatencyAware` 中性 40 + `RateLimitAware` 中性 100；零请求零失败 490，3 次失败在 4 分钟前 464（比例 0.2） | 同上 | 2 |
+| adaptive 冷却边界：恰好 5 分钟外的失败不再惩罚，两通道同为 490 并按输入顺序 | 同上 | 1 |
+| adaptive 同分按 `ordering_weight DESC`；未知策略名回退 adaptive | 同上 | 2 |
+| failover：`Weight + Random(0-0.5) + RateLimitAware`，按权重降序，首候选分数落在 [200, 200.5) | 同上 | 1 |
+| circuit-breaker：`Weight + 关闭态熔断 200 + Random(0-0.5) + RateLimitAware`，按权重降序，首候选分数落在 [400, 400.5) | 同上 | 1 |
+| 策略切换：同一状态下 adaptive 与 round-robin 的首候选不同（健康分区只属于 round-robin） | 同上 | 1 |
 
 测试用真实 `TestCluster`（Orleans 10.4.1）+ 假 `IEnabledChannelProvider` 驱动，不依赖 Docker 或数据库；
-grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状态串扰。差异登记为 C012（adaptive 策略链未移植、
-指标为 grain 内存态、池每次选择重读快照）。
+grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状态串扰。C012 已解决（四条策略链、tie-breaker、
+健康分区与 topK 按参照移植）；残余差异为 C034（延迟样本未记录，`LatencyAware` 恒中性 40）、
+C035（限流未接入，`RateLimitAware` 恒满分 100）、C036（模型级熔断无状态，按关闭态计分），
+以及指标为 grain 内存态、池每次选择重读快照（C012 决策中说明的既有范围裁剪）。
 
-## 8. HTTP 纵向切片（50 例）
+## 8. HTTP 纵向切片（51 例）
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
-| 候选选择 → 出站变换：实际模型改写、通道 BaseUrl 拼接、`Authorization: Bearer <首个 key>`、客户端响应 body | `tests/AxonHub.Api.Tests/ChatCompletionOrchestratorTests.cs` | 16 |
+| 候选选择 → 出站变换：实际模型改写、通道 BaseUrl 拼接、`Authorization: Bearer <首个 key>`、客户端响应 body；`retry_policy.load_balancer_strategy` 接线（failover 按权重选高权重通道、round-robin 按输入顺序忽略权重） | `tests/AxonHub.Api.Tests/ChatCompletionOrchestratorTests.cs` | 17 |
 | 重试语义：500 切通道、429 跳过同通道重试、同通道预算耗尽、策略关闭不重试、逐通道成功/失败计数、池初始选择计数 | 同上 | 计入上项 |
 | 超时语义：非流式超时按取消处理（不记失败）且跳过同通道重试；首包超时记失败、跳过同通道重试并切换通道 | 同上 | 计入上项 |
 | 无候选模型：422 `invalid_model_error` 信封，且未触达传输层 | 同上 | 计入上项 |

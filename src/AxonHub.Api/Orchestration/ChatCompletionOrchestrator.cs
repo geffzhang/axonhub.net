@@ -158,7 +158,8 @@ public sealed class ChatCompletionOrchestrator
 
         // orchestrator.Process reads the policy once per request; the load
         // balancer derives top-K from the same values (1 + MaxChannelRetries,
-        // or a single candidate when retries are disabled).
+        // or a single candidate when retries are disabled) and switches the
+        // scoring chain by the configured strategy.
         var retryPolicy = await _retryPolicyProvider
             .GetRetryPolicyAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -166,7 +167,12 @@ public sealed class ChatCompletionOrchestrator
 
         var candidates = await _grainFactory
             .GetGrain<IChannelPoolGrain>(model)
-            .SelectAsync(_timeProvider.GetUtcNow(), trackSelection: true, topK, cancellationToken);
+            .SelectAsync(
+                _timeProvider.GetUtcNow(),
+                trackSelection: true,
+                topK,
+                retryPolicy.LoadBalancerStrategy,
+                cancellationToken);
 
         if (candidates.Length == 0)
         {

@@ -336,6 +336,56 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
     }
 
     [Fact]
+    public async Task LoadBalancerStrategyFromPolicySelectsTheChain()
+    {
+        fixture.Channels.Set(
+            WeightedChannel(5701, "failover-strategy-model", "http://low.test", weight: 10),
+            WeightedChannel(5702, "failover-strategy-model", "http://high.test", weight: 100),
+            WeightedChannel(5711, "round-robin-strategy-model", "http://low.test", weight: 10),
+            WeightedChannel(5712, "round-robin-strategy-model", "http://high.test", weight: 100));
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("selected"),
+        };
+        var metrics = new RecordingMetricsRecorder();
+
+        // failover = Weight + Random + RateLimitAware: the weight gap decides.
+        var failover = NewOrchestrator(
+            executor,
+            metrics,
+            FastPolicy() with { LoadBalancerStrategy = RetryPolicy.FailoverStrategy });
+        await failover.ProcessAsync(TestChannels.ChatRequest("failover-strategy-model"));
+
+        Assert.StartsWith("http://high.test", executor.Requests[^1].Url, StringComparison.Ordinal);
+
+        // round-robin disables the weight tie-breaker: equal scores keep the
+        // provider order, so the first enabled channel wins despite its weight.
+        var roundRobin = NewOrchestrator(
+            executor,
+            metrics,
+            FastPolicy() with { LoadBalancerStrategy = RetryPolicy.RoundRobinStrategy });
+        await roundRobin.ProcessAsync(TestChannels.ChatRequest("round-robin-strategy-model"));
+
+        Assert.StartsWith("http://low.test", executor.Requests[^1].Url, StringComparison.Ordinal);
+    }
+
+    private static AxonHub.Abstractions.ChannelDescriptor WeightedChannel(
+        long id,
+        string model,
+        string baseUrl,
+        long weight) => new()
+        {
+            Id = id,
+            Name = "channel-" + id,
+            OrderingWeight = weight,
+            Type = "openai",
+            BaseUrl = baseUrl,
+            Credentials = "{\"apiKey\":\"sk-test\"}",
+            SupportedModels = "[\"" + model + "\"]",
+        };
+
+    [Fact]
     public async Task NonStreamTimeoutSkipsSameChannelRetryAndSwitchesChannel()
     {
         fixture.Channels.Set(
