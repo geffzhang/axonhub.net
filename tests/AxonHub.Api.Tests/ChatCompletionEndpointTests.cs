@@ -19,16 +19,32 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
     private ChatCompletionOrchestrator NewOrchestrator(
         ScriptedExecutor executor,
         RecordingMetricsRecorder metrics,
-        IRequestChainRecorder? recorder = null)
+        IRequestChainRecorder? recorder = null,
+        RetryPolicy? policy = null)
         => new(
             fixture.Cluster.GrainFactory,
             new OpenAiInboundTransformer(),
             executor,
             metrics,
             new StaticRetryPolicyProvider(
-                new RetryPolicy { Enabled = true, MaxChannelRetries = 3, MaxSingleChannelRetries = 0, RetryDelayMs = 0 }),
+                policy ?? new RetryPolicy
+                {
+                    Enabled = true,
+                    MaxChannelRetries = 3,
+                    MaxSingleChannelRetries = 0,
+                    RetryDelayMs = 0,
+                }),
             TimeProvider.System,
             recorder);
+
+    private static RetryPolicy NoRetryPolicy(UpstreamErrorPolicy upstreamErrorPolicy)
+        => new()
+        {
+            MaxChannelRetries = 0,
+            MaxSingleChannelRetries = 0,
+            RetryDelayMs = 0,
+            UpstreamErrorPolicy = upstreamErrorPolicy,
+        };
 
     private static DefaultHttpContext NewContext(string body)
         => NewContext(Encoding.UTF8.GetBytes(body));
@@ -234,5 +250,110 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
         // The stream finalized both rows once the client-facing stream closed.
         var requestResult = Assert.Single(recorder.RequestResults);
         Assert.Equal("completed", requestResult.Status);
+    }
+
+    [Fact]
+    public async Task CustomUpstreamErrorPolicyRewritesProviderErrors()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4811, "policy-model"));
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => throw new HttpClientError(
+                "POST",
+                "http://upstream/v1/chat/completions",
+                429,
+                "429 Too Many Requests",
+                Encoding.UTF8.GetBytes(
+                    """{"error":{"message":"raw provider secret","type":"rate_limit_error","code":"provider_rate_limit"}}""")),
+        };
+        var context = NewContext(RequestBody("policy-model"));
+        var orchestrator = NewOrchestrator(
+            executor,
+            new RecordingMetricsRecorder(),
+            policy: NoRetryPolicy(
+                new UpstreamErrorPolicy(RetryPolicy.UpstreamErrorModeCustom, "模型服务暂时不可用，请稍后再试")));
+
+        await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
+
+        Assert.Equal(429, context.Response.StatusCode);
+        var responseBody = ResponseBody(context);
+        Assert.DoesNotContain("raw provider secret", responseBody, StringComparison.Ordinal);
+
+        using var body = JsonDocument.Parse(responseBody);
+        var error = body.RootElement.GetProperty("error");
+        Assert.Equal("模型服务暂时不可用，请稍后再试", error.GetProperty("message").GetString());
+        Assert.Equal("rate_limit_error", error.GetProperty("type").GetString());
+        Assert.Equal("provider_rate_limit", error.GetProperty("code").GetString());
+    }
+
+    /// <summary>
+    /// The reference classifies transport failures into a bare ResponseError
+    /// before the policy runs, which drops the upstream marker: hidden/custom
+    /// modes do not rewrite them on the non-stream path (C031).
+    /// </summary>
+    [Fact]
+    public async Task HiddenPolicyDoesNotRewriteClassifiedTransportErrors()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4812, "policy-transport-model"));
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => throw new IOException("connection reset"),
+        };
+        var context = NewContext(RequestBody("policy-transport-model"));
+        var orchestrator = NewOrchestrator(
+            executor,
+            new RecordingMetricsRecorder(),
+            policy: NoRetryPolicy(new UpstreamErrorPolicy(RetryPolicy.UpstreamErrorModeHidden, string.Empty)));
+
+        await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
+
+        Assert.Equal(502, context.Response.StatusCode);
+
+        using var body = JsonDocument.Parse(ResponseBody(context));
+        var error = body.RootElement.GetProperty("error");
+        Assert.Equal("upstream_error", error.GetProperty("type").GetString());
+        Assert.Equal("upstream_stream_interrupted", error.GetProperty("code").GetString());
+        Assert.Contains("connection reset", error.GetProperty("message").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HiddenPolicyRewritesTrailingStreamErrors()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4813, "policy-stream-model"));
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"policy-stream-model\",\"choices\":[{\"index\":0,"
+                + "\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}"),
+        };
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(
+                chunks,
+                new IOException("connection reset")),
+        };
+        var context = NewContext(RequestBody("policy-stream-model", stream: true));
+        var orchestrator = NewOrchestrator(
+            executor,
+            new RecordingMetricsRecorder(),
+            policy: NoRetryPolicy(new UpstreamErrorPolicy(RetryPolicy.UpstreamErrorModeHidden, string.Empty)));
+
+        await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
+
+        var responseBody = ResponseBody(context);
+        Assert.DoesNotContain("connection reset", responseBody, StringComparison.Ordinal);
+
+        const string marker = "event:error\ndata:";
+        var start = responseBody.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, "missing SSE error event: " + responseBody);
+        start += marker.Length;
+        var end = responseBody.IndexOf("\n\n", start, StringComparison.Ordinal);
+        Assert.True(end > start);
+
+        using var body = JsonDocument.Parse(responseBody[start..end]);
+        var error = body.RootElement.GetProperty("error");
+        Assert.Equal(UpstreamErrorPolicyApplier.DefaultMessage, error.GetProperty("message").GetString());
+        Assert.Equal("upstream_error", error.GetProperty("type").GetString());
+        Assert.Equal("upstream_stream_interrupted", error.GetProperty("code").GetString());
     }
 }

@@ -1,5 +1,6 @@
 using System.Text;
 using AxonHub.Api.Http;
+using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using Microsoft.AspNetCore.Http;
 
@@ -131,5 +132,69 @@ public sealed class SseStreamWriterTests
         await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, cancellation.Token);
 
         Assert.Equal(string.Empty, Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    /// <summary>
+    /// The synthesized incomplete-stream error never passes through the
+    /// upstream error policy in the reference: only stream.Err() does
+    /// (upstreamErrorStream.Err), and that is nil here.
+    /// </summary>
+    [Fact]
+    public async Task DoesNotTransformSynthesizedIncompleteStreamErrors()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>([]);
+        var calls = 0;
+
+        await SseStreamWriter.WriteAsync(
+            context,
+            stream,
+            expectedChoices: 1,
+            CancellationToken.None,
+            (_, _) =>
+            {
+                calls++;
+                return Task.FromResult<Exception?>(new ResponseError
+                {
+                    Detail = new ErrorDetail { Message = "safe", Type = "upstream_error" },
+                });
+            });
+
+        Assert.Equal(0, calls);
+        Assert.Contains(
+            "stream ended without terminal event",
+            Encoding.UTF8.GetString(body.ToArray()),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TransformStreamErrorRewritesTheTrailingErrorEvent()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new IOException("connection reset"));
+
+        await SseStreamWriter.WriteAsync(
+            context,
+            stream,
+            expectedChoices: 1,
+            CancellationToken.None,
+            (_, _) => Task.FromResult<Exception?>(new ResponseError
+            {
+                StatusCode = 502,
+                Detail = new ErrorDetail
+                {
+                    Message = "safe",
+                    Type = "upstream_error",
+                    Code = "upstream_stream_interrupted",
+                },
+            }));
+
+        Assert.Contains(
+            "data:{\"error\":{\"code\":\"upstream_stream_interrupted\",\"message\":\"safe\","
+            + "\"type\":\"upstream_error\"},\"request_id\":\"\"}",
+            Encoding.UTF8.GetString(body.ToArray()),
+            StringComparison.Ordinal);
     }
 }

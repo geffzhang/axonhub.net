@@ -36,36 +36,22 @@ public static class StreamErrorFormatter
         var requestId = string.Empty;
         var message = ExtractErrorMessage(error);
 
-        if (GoErrors.As<HttpClientError>(error) is { } httpError && httpError.Body.Length > 0)
+        if (GoErrors.As<HttpClientError>(error) is { } httpError)
         {
-            using var document = TryParse(httpError.Body);
-            if (document is not null && document.RootElement.ValueKind == JsonValueKind.Object)
+            var fields = HttpErrorBodyFields.Parse(httpError.Body);
+            if (fields.Type.Length > 0)
             {
-                var root = document.RootElement;
-                if (root.TryGetProperty("error", out var errorObject)
-                    && errorObject.ValueKind == JsonValueKind.Object)
-                {
-                    if (errorObject.TryGetProperty("type", out var type)
-                        && type.ValueKind == JsonValueKind.String
-                        && !string.IsNullOrEmpty(type.GetString()))
-                    {
-                        errorType = type.GetString()!;
-                    }
+                errorType = fields.Type;
+            }
 
-                    if (errorObject.TryGetProperty("code", out var code)
-                        && code.ValueKind == JsonValueKind.String
-                        && !string.IsNullOrEmpty(code.GetString()))
-                    {
-                        errorCode = code.GetString()!;
-                    }
-                }
+            if (fields.Code.Length > 0)
+            {
+                errorCode = fields.Code;
+            }
 
-                if (root.TryGetProperty("request_id", out var id)
-                    && id.ValueKind == JsonValueKind.String
-                    && !string.IsNullOrEmpty(id.GetString()))
-                {
-                    requestId = id.GetString()!;
-                }
+            if (fields.RequestId.Length > 0)
+            {
+                requestId = fields.RequestId;
             }
         }
 

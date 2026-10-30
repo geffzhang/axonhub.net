@@ -62,8 +62,12 @@ public static class ChatCompletionEndpoint
         }
         catch (Exception ex)
         {
-            var classified = UpstreamTransportErrors.Classify(ex);
-            await WriteTransformedErrorAsync(context, orchestrator.Inbound.TransformError(classified), cancellationToken);
+            // api.transformOrchestratorError: classify, apply the upstream error
+            // policy, then map through the inbound transformer.
+            await WriteTransformedErrorAsync(
+                context,
+                await orchestrator.TransformErrorAsync(ex, cancellationToken),
+                cancellationToken);
             RecordResponseHeaders(context, orchestrator, requestId);
             return;
         }
@@ -85,7 +89,8 @@ public static class ChatCompletionEndpoint
                     context,
                     stream,
                     ExpectedStreamChoices.FromRequestBody(genericRequest.Body),
-                    cancellationToken);
+                    cancellationToken,
+                    orchestrator.TransformStreamErrorAsync);
             }
             finally
             {

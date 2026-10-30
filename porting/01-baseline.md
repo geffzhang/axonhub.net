@@ -105,14 +105,15 @@ jsonb 的文本格式由 PostgreSQL 归一化（键序、空白），回环断�
 这组测试用真实 Orleans `TestCluster` + 脚本化 `IExecutor` + 内存版 `IRequestChainRecorder`，逐条对照
 `request.go` / `request_execution.go` 的写入时机与字段集合；不依赖数据库（SQL 语义由第 5 节锁定）。
 
-## 7. Orleans 通道选择（14 例）
+## 7. Orleans 通道选择（16 例）
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
-| 模型过滤：只有 `supported_models` 解析出该请求模型的通道参与选择 | `ChannelSelectionTests.cs` | 1 |
-| round-robin 打分：零请求 150 分，请求数按 `150/(1+count/150)` 拉低；20 次带计数选择在两个同权重通道间 10/10 均摊 | 同上 | 2 |
+| 模型过滤：只有 `supported_models` 解析出该请求模型的通道参与选择；零请求 150 分 | `ChannelSelectionTests.cs` | 1 |
+| round-robin 打分：请求数按 `150/(1+count/150)` 拉低；20 次带计数选择在两个同权重通道间 10/10 均摊 | 同上 | 1 |
 | 不计数模式（`trackSelection=false`）不写入选择数 | 同上 | 1 |
 | 健康分区：连续失败 3 次且最近 5 分钟内失败的通道排到健康通道之后；topK=4 时被挤出候选 | 同上 | 2 |
+| `calculateTopK`：topK=1/2/3 截断到策略预算；topK<=0 或 >= 候选数时保留全部 | 同上 | 2 |
 | 冷却：超过 5 分钟恢复为健康，恰好 5 分钟即视为健康（`<` 边界） | 同上 | 2 |
 | 成功清零连续失败，但窗口内已计入的失败数保留 | 同上 | 1 |
 | 窗口：10 分钟内计数保留，超过即过期；窗口推进后迟到的旧事件被丢弃 | 同上 | 2 |
@@ -123,18 +124,18 @@ jsonb 的文本格式由 PostgreSQL 归一化（键序、空白），回环断�
 grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状态串扰。差异登记为 C012（adaptive 策略链未移植、
 指标为 grain 内存态、池每次选择重读快照）。
 
-## 8. HTTP 纵向切片（42 例）
+## 8. HTTP 纵向切片（50 例）
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
-| 候选选择 → 出站变换：实际模型改写、通道 BaseUrl 拼接、`Authorization: Bearer <首个 key>`、客户端响应 body | `tests/AxonHub.Api.Tests/ChatCompletionOrchestratorTests.cs` | 10 |
+| 候选选择 → 出站变换：实际模型改写、通道 BaseUrl 拼接、`Authorization: Bearer <首个 key>`、客户端响应 body | `tests/AxonHub.Api.Tests/ChatCompletionOrchestratorTests.cs` | 16 |
 | 重试语义：500 切通道、429 跳过同通道重试、同通道预算耗尽、策略关闭不重试、逐通道成功/失败计数、池初始选择计数 | 同上 | 计入上项 |
 | 超时语义：非流式超时按取消处理（不记失败）且跳过同通道重试；首包超时记失败、跳过同通道重试并切换通道 | 同上 | 计入上项 |
 | 无候选模型：422 `invalid_model_error` 信封，且未触达传输层 | 同上 | 计入上项 |
 | 流式：SSE 事件透传到 `[DONE]`，终态后记成功 | 同上 | 计入上项 |
-| SSE 写帧：gin-contrib/sse 兼容字节（`data:` 无空格、`\n`→`\ndata:`、`\r`→`\\r`）、响应头、终态后的错误抑制、classified 流错误事件（502 `upstream_stream_interrupted`）、缺终态的不完整流错误、客户端取消时的错误抑制 | `SseStreamWriterTests.cs` | 7 |
+| SSE 写帧：gin-contrib/sse 兼容字节（`data:` 无空格、`\n`→`\ndata:`、`\r`→`\\r`）、响应头、终态后的错误抑制、classified 流错误事件（502 `upstream_stream_interrupted`）、缺终态的不完整流错误、客户端取消时的错误抑制、策略变换器改写尾随错误事件、合成的不完整错误绕过策略（C031） | `SseStreamWriterTests.cs` | 9 |
 | 请求读取：头部规范化、URL 重建、`X-Forwarded-For` 优先、`Content-Type` 回退、gzip / deflate / zstd 解压并移除编码头、拒绝未知编码；gzip 头错误按 Go 文案、保留 FLG 位与 FNAME 跳过、raw DEFLATE 回退、大小写不敏感；zstd/raw DEFLATE 样本由参照 Go 程序产出 | `HttpRequestReaderTests.cs` | 12 |
-| 端点胶水：空 body → 400 `JSONError`、无效模型 → 422、非流成功转发状态/内容类型/body、流式响应写 SSE 并带 CORS 头、非流与流式响应头在边界回填 request（C021）、消息内容中的非法 UTF-8 在转发前修复为 U+FFFD（C008） | `ChatCompletionEndpointTests.cs` | 7 |
+| 端点胶水：空 body → 400 `JSONError`、无效模型 → 422、非流成功转发状态/内容类型/body、流式响应写 SSE 并带 CORS 头、非流与流式响应头在边界回填 request（C021）、消息内容中的非法 UTF-8 在转发前修复为 U+FFFD（C008）、custom/hidden 上游错误策略的 3 条端到端路径（C031） | `ChatCompletionEndpointTests.cs` | 11 |
 | 期望流选择：`n` 与 `stream` 从含非法 UTF-8 的原始请求体读取（gjson 不校验 UTF-8） | `ExpectedStreamChoicesTests.cs` | 2 |
 
 说明：参照的 `internal/server/orchestrator/*_test.go` 与 `internal/server/api/*_test.go` 依赖 Ent、真实数据库与 gin，
@@ -163,18 +164,36 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 黑名单中间件挂在 `/v1` 分支上，顺序为 `IpBlocklistMiddleware` → `ApiKeyAuthMiddleware`，与参照的
 `WithIPBlocklist` → `WithAPIKeyConfig` 一致。
 
-## 8.2 重试策略系统设置（52 例）
+## 8.2 重试策略系统设置（49 例）
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
 | 回退：缺行、软删除行、读库失败、JSON 语法错误（`{` / 空串 / 非对象）、`null` 文档与 `{}` 的零值策略、顶层与 `auto_disable_channel` / `upstream_error_policy` 内部成员类型错误 → `defaultRetryPolicy`（enabled=true、3/2/1000ms、adaptive、prefer_previous_channel、passthrough） | `SystemRetryPolicyServiceTests.cs` | 16 |
 | 解析：全字段 snake_case、缺成员保持 Go 零值、`null` 标量保持零值、键大小写不敏感、未知成员忽略、重复键后者胜出（含 C032 的重复键 + null 边界） | 同上 | 7 |
 | 归一化：策略 7（合法值 / `weighted`→failover / 非法与空→adaptive）、超时夹取 5、trace 粘性 4、上游模式 5、负计数与延迟不夹取 1、`null` 切片元素按 Go 零值 1、legacy `statuses` 迁移 1、既有 `rules` 优先 1、`custom` 空白消息回 hidden 1 | 同上 | 26 |
-| 端到端 topK：策略 5 次通道重试 + 6 个候选时打满 6 次尝试；池的 topK=1/2/3 截断、topK<=0 或超大时保留全部 | `ChatCompletionOrchestratorTests.cs` / `ChannelSelectionTests.cs` | 3 |
+| 端到端 topK（跨节引用，不重复计入）：策略 5 次通道重试 + 6 个候选时打满 6 次尝试（计入 §8 的 16 例）；池的 topK 截断与归一化（计入 §7 的 2 例） | `ChatCompletionOrchestratorTests.cs` / `ChannelSelectionTests.cs` | — |
 
 端口每个请求读取一次策略（C029 的无缓存语义同样适用于本设置），并按 `1 + MaxChannelRetries`
-（禁用时 1）计算 topK 交给池；池按参照 `calculateTopK` 在排序后截断。adaptive 策略链、trace/thread 粘性、
-自动禁用规则的作用与上游错误策略的应用分别登记为 C012/C013/C017/C031。
+（禁用时 1）计算 topK 交给池；池按参照 `calculateTopK` 在排序后截断。adaptive 策略链、trace/thread 粘性与
+自动禁用规则的作用分别登记为 C012/C013/C017；`upstream_error_policy` 的应用由 §8.3 锁定，C031 已关闭。
+
+## 8.3 上游错误策略的应用（34 例）
+
+参照调用链：`transformOrchestratorError` = quota 包装 → `ClassifyUpstreamTransportError` →
+`applyUpstreamErrorPolicy` → `Inbound.TransformError`；流式路径由 `upstreamErrorStream.Err` 先分类再套策略。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 非流 `ApplyAsync`：custom 改写消息并保留状态码 / type / code / request_id，hidden 用默认文案；空 type → `upstream_error`；消息按 Go `strings.TrimSpace` 处理、custom 空白回退默认文案；passthrough 与空模式恒等；本地错误（无 upstream 标记）不改写；无结构化详情的 upstream 标记错误 → 502；code 或 type 为 `quota_exhausted` 的 ResponseError 跳过改写 | `UpstreamErrorPolicyApplierTests.cs` | 11 |
+| `HttpClientError` 响应体字段：gjson 语义的 `error.type` / `error.code` / 顶层 `request_id`（仅非空字符串；非对象、非字符串、空串、非 JSON 均视为缺失）；截断报文与重复键锁定 C033 的严格解析差异 | 同上 | 8 |
+| 流式 `ApplyToStreamErrorAsync`：先分类再改写（IOException → 502 `upstream_stream_interrupted`，hidden/custom 保留 code）；passthrough 分类后原样返回；普通错误在 passthrough 下原样、在激活策略下变 502；取消原样；pipeline 的 ResponseError 改写；策略读取次数（passthrough 1 次、改写 2 次，复刻参照的两次读取）；策略存储失败回退 passthrough | 同上 | 10 |
+| 端点胶水：非流 custom 策略改写 429 上游错误（type/code 保留、原始报文不泄漏）；hidden 不改写非流传输错误（参照先分类成裸 ResponseError，丢失 upstream 标记）；hidden 改写流尾错误事件（默认文案 + `upstream_stream_interrupted`） | `ChatCompletionEndpointTests.cs` | 3 |
+| SSE 写出：合成的"流不完整"错误不经过策略（参照只对 `stream.Err()` 调用 `upstreamErrorStream.Err`）；注入的变换器改写尾随错误事件字节 | `SseStreamWriterTests.cs` | 2 |
+
+非流与流式的不对称是参照的真实行为而非缺陷：非流路径的分类发生在策略之前且产出裸 `ResponseError`，
+因此 hidden/custom 对传输错误无效果；流式路径先分类再由策略包装，502 与 code 得以保留。残余差异为
+`quota_exhausted` 的包装来源（`QuotaExhaustedError` → `wrapQuotaExhaustedAsResponseError`）仍随限流/配额里程碑
+（C014）；gjson 与 System.Text.Json 的报文解析差异登记为 C033。
 
 ## 9. 真实宿主启动冒烟（2026-10-30）
 

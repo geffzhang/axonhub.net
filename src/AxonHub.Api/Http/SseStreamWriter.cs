@@ -24,7 +24,8 @@ public static class SseStreamWriter
         HttpContext context,
         IStream<StreamEvent> stream,
         int expectedChoices,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<Exception, CancellationToken, Task<Exception?>>? transformStreamError = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(stream);
@@ -48,7 +49,12 @@ public static class SseStreamWriter
         {
             if (!stream.Next())
             {
-                await WriteStreamEndAsync(context, stream.Err, terminalSeen, cancellationToken);
+                await WriteStreamEndAsync(
+                    context,
+                    stream.Err,
+                    terminalSeen,
+                    transformStreamError,
+                    cancellationToken);
                 return;
             }
 
@@ -61,6 +67,7 @@ public static class SseStreamWriter
                         context,
                         new OperationCanceledException(cancellationToken),
                         terminalSeen,
+                        transformStreamError,
                         cancellationToken);
                     return;
                 }
@@ -99,6 +106,7 @@ public static class SseStreamWriter
         HttpContext context,
         Exception? streamError,
         bool terminalSeen,
+        Func<Exception, CancellationToken, Task<Exception?>>? transformStreamError,
         CancellationToken cancellationToken)
     {
         if (terminalSeen)
@@ -121,9 +129,17 @@ public static class SseStreamWriter
                 return;
             }
 
+            // Port of newUpstreamErrorStream: classify and apply the upstream
+            // error policy to the trailing stream error, if a policy transformer
+            // was supplied. The writer still classifies afterwards, which is a
+            // no-op for an already classified result, as in writeSSEErrorEvent.
+            var reported = transformStreamError is null
+                ? streamError
+                : await transformStreamError(streamError, cancellationToken).ConfigureAwait(false) ?? streamError;
+
             await TryWriteErrorEventAsync(
                 context,
-                UpstreamTransportErrors.Classify(streamError),
+                UpstreamTransportErrors.Classify(reported),
                 cancellationToken);
             return;
         }

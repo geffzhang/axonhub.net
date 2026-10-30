@@ -29,6 +29,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IExecutor _executor;
     private readonly IChannelMetricsRecorder _metrics;
     private readonly IRetryPolicyProvider _retryPolicyProvider;
+    private readonly IUpstreamErrorPolicyApplier _upstreamErrorPolicy;
     private readonly TimeProvider _timeProvider;
     private readonly IRequestChainRecorder? _requestChainRecorder;
 
@@ -39,7 +40,8 @@ public sealed class ChatCompletionOrchestrator
         IChannelMetricsRecorder metrics,
         IRetryPolicyProvider retryPolicyProvider,
         TimeProvider timeProvider,
-        IRequestChainRecorder? requestChainRecorder = null)
+        IRequestChainRecorder? requestChainRecorder = null,
+        IUpstreamErrorPolicyApplier? upstreamErrorPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -53,6 +55,7 @@ public sealed class ChatCompletionOrchestrator
         _executor = executor;
         _metrics = metrics;
         _retryPolicyProvider = retryPolicyProvider;
+        _upstreamErrorPolicy = upstreamErrorPolicy ?? new UpstreamErrorPolicyApplier(retryPolicyProvider);
         _timeProvider = timeProvider;
         _requestChainRecorder = requestChainRecorder;
     }
@@ -84,6 +87,38 @@ public sealed class ChatCompletionOrchestrator
         {
             // A header write must never turn a delivered response into an error.
         }
+    }
+
+    /// <summary>
+    /// Port of api.transformOrchestratorError (internal/server/api/upstream_error_policy.go:19-33):
+    /// classify a transport failure, apply the upstream error policy, then let the
+    /// inbound transformer build the client envelope. The reference's quota
+    /// conversion has no port yet (quota is C014).
+    /// </summary>
+    public async Task<HttpResponseData> TransformErrorAsync(
+        Exception error,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+
+        var classified = UpstreamTransportErrors.Classify(error);
+        var rewritten = await _upstreamErrorPolicy
+            .ApplyAsync(classified, cancellationToken)
+            .ConfigureAwait(false);
+
+        return _inbound.TransformError(rewritten);
+    }
+
+    /// <summary>
+    /// Port of api.upstreamErrorStream.Err: what the SSE writer reports when the
+    /// client-facing stream ends with an error.
+    /// </summary>
+    public Task<Exception?> TransformStreamErrorAsync(
+        Exception error,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return _upstreamErrorPolicy.ApplyToStreamErrorAsync(error, cancellationToken);
     }
 
     public Task<ChatCompletionResult> ProcessAsync(
