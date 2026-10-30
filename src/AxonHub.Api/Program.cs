@@ -9,6 +9,7 @@ using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Persistence;
 using Orleans.Hosting;
@@ -40,6 +41,11 @@ builder.Services.AddSingleton(static _ => new HttpExecutor(new HttpClient(new So
 builder.Services.AddSingleton<IExecutor>(static services => services.GetRequiredService<HttpExecutor>());
 
 builder.Services.AddSingleton<IInboundTransformer, OpenAiInboundTransformer>();
+
+// The Anthropic Messages surface (POST /v1/messages, POST /anthropic/v1/messages)
+// reuses the chat handler with a different inbound transformer, exactly like
+// internal/server/api/anthropic.go delegates to ChatCompletionHandlers.
+builder.Services.AddSingleton<AnthropicInboundTransformer>();
 builder.Services.AddSingleton<IChannelMetricsRecorder, GrainChannelMetricsRecorder>();
 builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorder>();
 
@@ -110,7 +116,8 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 // The reference mounts WithIPBlocklist + WithAPIKeyConfig on its API group, in
 // that order. The slice applies both to the ported /v1 surface.
 app.UseWhen(
-    static context => context.Request.Path.StartsWithSegments("/v1"),
+    static context => context.Request.Path.StartsWithSegments("/v1")
+        || context.Request.Path.StartsWithSegments("/anthropic/v1"),
     static branch =>
     {
         branch.UseMiddleware<IpBlocklistMiddleware>();
@@ -118,5 +125,15 @@ app.UseWhen(
     });
 
 app.MapPost("/v1/chat/completions", ChatCompletionEndpoint.HandleAsync);
+
+// Anthropic Messages: both spellings the reference mounts in routes.go.
+static Task HandleAnthropicMessagesAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator,
+    AnthropicInboundTransformer anthropic)
+    => ChatCompletionEndpoint.HandleAsync(context, orchestrator.WithInbound(anthropic));
+
+app.MapPost("/v1/messages", HandleAnthropicMessagesAsync);
+app.MapPost("/anthropic/v1/messages", HandleAnthropicMessagesAsync);
 
 app.Run();

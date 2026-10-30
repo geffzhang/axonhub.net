@@ -80,6 +80,30 @@ public sealed class ChatCompletionOrchestrator
     public IInboundTransformer Inbound => _inbound;
 
     /// <summary>
+    /// Returns an orchestrator that speaks another client protocol (for example
+    /// Anthropic Messages) while sharing this one's dependencies, mirroring the
+    /// reference's per-route handler that swaps the inbound transformer
+    /// (internal/server/api/anthropic.go: CreateMessage).
+    /// </summary>
+    public ChatCompletionOrchestrator WithInbound(IInboundTransformer inbound)
+    {
+        ArgumentNullException.ThrowIfNull(inbound);
+
+        return new ChatCompletionOrchestrator(
+            _grainFactory,
+            inbound,
+            _executor,
+            _metrics,
+            _retryPolicyProvider,
+            _timeProvider,
+            _requestChainRecorder,
+            _upstreamErrorPolicy,
+            _rateLimitTracker,
+            _channelLimiterManager,
+            _usageCostService);
+    }
+
+    /// <summary>
     /// Port of middleware/response_headers.go: persists the masked downstream
     /// response headers once the handler has written the response. The reference
     /// captures them at the first write; ASP.NET freezes headers after that, so

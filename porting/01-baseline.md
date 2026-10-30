@@ -164,7 +164,7 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 | 流式：SSE 事件透传到 `[DONE]`，终态后记成功 | 同上 | 计入上项 |
 | SSE 写帧：gin-contrib/sse 兼容字节（`data:` 无空格、`\n`→`\ndata:`、`\r`→`\\r`）、响应头、终态后的错误抑制、classified 流错误事件（502 `upstream_stream_interrupted`）、缺终态的不完整流错误、客户端取消时的错误抑制、策略变换器改写尾随错误事件、合成的不完整错误绕过策略（C031） | `SseStreamWriterTests.cs` | 9 |
 | 请求读取：头部规范化、URL 重建、`X-Forwarded-For` 优先、`Content-Type` 回退、gzip / deflate / zstd 解压并移除编码头、拒绝未知编码；gzip 头错误按 Go 文案、保留 FLG 位与 FNAME 跳过、raw DEFLATE 回退、大小写不敏感；zstd/raw DEFLATE 样本由参照 Go 程序产出 | `HttpRequestReaderTests.cs` | 12 |
-| 端点胶水：空 body → 400 `JSONError`、无效模型 → 422、非流成功转发状态/内容类型/body、流式响应写 SSE 并带 CORS 头、非流与流式响应头在边界回填 request（C021）、消息内容中的非法 UTF-8 在转发前修复为 U+FFFD（C008）、custom/hidden 上游错误策略的 3 条端到端路径（C031） | `ChatCompletionEndpointTests.cs` | 11 |
+| 端点胶水：空 body → 400 `JSONError`、无效模型 → 422、非流成功转发状态/内容类型/body、流式响应写 SSE 并带 CORS 头、非流与流式响应头在边界回填 request（C021）、消息内容中的非法 UTF-8 在转发前修复为 U+FFFD（C008）、custom/hidden 上游错误策略的 3 条端到端路径（C031）；Anthropic Messages 两条路由的 7 例见 §10 | `ChatCompletionEndpointTests.cs`（11）/ `AnthropicMessagesEndpointTests.cs`（7） | 18 |
 | 期望流选择：`n` 与 `stream` 从含非法 UTF-8 的原始请求体读取（gjson 不校验 UTF-8） | `ExpectedStreamChoicesTests.cs` | 2 |
 
 说明：参照的 `internal/server/orchestrator/*_test.go` 与 `internal/server/api/*_test.go` 依赖 Ent、真实数据库与 gin，
@@ -305,6 +305,25 @@ sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模�
 请求/执行落库与掩码均与上述宿主进程冒烟一致（耗时约 3.1s，容器内拒绝连接无宿主端口映射的额外等待）；
 详见 `03-acceptance.md`「端到端」。
 
+## 10. Anthropic Messages 入站（127 例）
+
+参照路线：`llm/transformer/anthropic/inbound.go` + `inbound_convert.go` + `usage.go` 的非流式子集。
+两条路由 `POST /v1/messages` 与 `POST /anthropic/v1/messages` 与 `/v1` 同属参照的 apiGroup
+（`routes.go`），端口把它们挂在同一段中间件之后，复用 `ChatCompletionEndpoint`，
+只通过 `ChatCompletionOrchestrator.WithInbound` 把入站变换换成 `AnthropicInboundTransformer`。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 请求转换：string / array system、多模态块、tool_use / tool_result、thinking 与 redacted_thinking、特殊工具块（web_search_*）及 caller/type 元数据、stop_sequences、tool_choice、thinking/output_config、tools 过滤与 web_search 工具、cache_control 三处位置、MessageIndex / ReasoningItems / 聚合签名 | `tests/AxonHub.Llm.Tests/AnthropicInboundTransformerTests.cs` | 计入 127 |
+| 校验顺序与文案：model / messages / max_tokens、system prompt 类型、thinking.type / budget_tokens / effort、tool_choice | 同上 | 10 |
+| Go 解码语义（C003 扩展）：根值类型、每层字段类型错误 64 例、硬错误优先级（content cannot be null / invalid content type / invalid system prompt format）、大小写折叠、重复键、显式 null 接受集 16 例；期望值来自 `E:\tmp\anthprobe` 对真实参照模块（commit 见 00-reference）的逐条探针输出 | 同上 | 80 |
+| 响应转换：文本 / 思考（签名生成）/ 工具调用 / 内联工具结果 / usage 映射与 stop_reason，响应头 `Content-Type: application/json` + `Cache-Control: no-cache` | 同上 | 计入 127 |
+| 错误信封：nil → 500 `error`、InvalidModel → 422 `invalid_model_error`、ResponseError → 状态码 + detail、`HttpClientError` 原样 body、InvalidRequest → 400、其它 → 500 | 同上 | 计入 127 |
+| 端点胶水：成功 → Anthropic message 信封；校验失败与流式 → `invalid_request_error`；无效模型 → 422；空 body 仍为 OpenAI 风格 `JSONError`（`api.JSONError` 在变换器之前）；上游 429 经出站解析后以 Anthropic 信封返回；ResponseError 信封 | `tests/AxonHub.Api.Tests/AnthropicMessagesEndpointTests.cs` | 7 |
+
+说明：`stream:true` 在完成参照的全部校验后以 400 拒绝，登记为 C050（流式与聚合器缺口）；
+`input_schema` / `caller` 的显式 null 与缺失合并登记为 C051；解码文案机制是 C003 的协议扩展。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -313,7 +332,7 @@ sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模�
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
-| Anthropic 入站/出站、Responses API、Responses 流 | 首期纵向切片只做 OpenAI Chat | 中 | 后续阶段 |
+| Anthropic 出站、Anthropic 流式、Responses API、Responses 流 | Anthropic Messages 入站（非流式）已实现并由第 10 节的 127 + 7 例锁定；流式入站与聚合器为 C050，出站 transformer 与 Responses 尚未移植 | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
