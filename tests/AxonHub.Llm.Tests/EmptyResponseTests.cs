@@ -157,6 +157,85 @@ public sealed class EmptyResponseTests
         }));
     }
 
+    // Port of empty_response.go audio branches (speech, transcription, stream events).
+    [Fact]
+    public void HasResponseContent_SpeechAudio()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Speech = new SpeechResponse { Audio = [0x01, 0x02] },
+        }));
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Speech = new SpeechResponse(),
+        }));
+    }
+
+    [Fact]
+    public void HasResponseContent_TranscriptionTextOrRaw()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Transcription = new TranscriptionResponse { Text = "hello" },
+        }));
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Transcription = new TranscriptionResponse { Raw = [0x7b] },
+        }));
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Transcription = new TranscriptionResponse(),
+        }));
+    }
+
+    [Fact]
+    public void HasResponseContent_SpeechStreamEventAudioBase64()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            SpeechStreamEvent = new SpeechStreamEvent { AudioBase64 = "YWJjZA==" },
+        }));
+        // A bare speech.audio.done event carries no audio payload.
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            SpeechStreamEvent = new SpeechStreamEvent { Type = "speech.audio.done" },
+        }));
+    }
+
+    [Fact]
+    public void HasResponseContent_SpeechAudioChunk()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            SpeechAudioChunk = new SpeechAudioChunk { Audio = [0x01] },
+        }));
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            SpeechAudioChunk = new SpeechAudioChunk(),
+        }));
+    }
+
+    [Fact]
+    public void HasResponseContent_TranscriptionStreamEvent()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            TranscriptionStreamEvent = new TranscriptionStreamEvent { Delta = "hello " },
+        }));
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            TranscriptionStreamEvent = new TranscriptionStreamEvent { Text = "hello" },
+        }));
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            TranscriptionStreamEvent = new TranscriptionStreamEvent { Type = "transcript.text.done" },
+        }));
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            TranscriptionStreamEvent = new TranscriptionStreamEvent(),
+        }));
+    }
+
     // Port of TestHasResponseContent/reasoning content.
     [Fact]
     public void HasResponseContent_ReasoningContent()

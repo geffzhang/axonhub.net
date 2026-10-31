@@ -116,8 +116,9 @@ public sealed partial class OpenAiInboundTransformer : IInboundTransformer
 
     /// <summary>
     /// Strips the decoder's position suffix so messages read like Go's.
+    /// Public for the API assembly's route probes (SpeechEndpoint).
     /// </summary>
-    internal static string JsonErrorText(JsonException ex)
+    public static string JsonErrorText(JsonException ex)
     {
         var message = ex.Message;
         var pathIndex = message.IndexOf(" Path: ", StringComparison.Ordinal);

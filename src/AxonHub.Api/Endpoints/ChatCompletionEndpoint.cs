@@ -3,6 +3,7 @@ using AxonHub.Api.Auth;
 using AxonHub.Api.Http;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Streams;
 using Microsoft.AspNetCore.Http;
 
 namespace AxonHub.Api.Endpoints;
@@ -13,7 +14,29 @@ namespace AxonHub.Api.Endpoints;
 /// </summary>
 public static class ChatCompletionEndpoint
 {
-    public static async Task HandleAsync(HttpContext context, ChatCompletionOrchestrator orchestrator)
+    /// <summary>
+    /// Port of api.StreamWriter: invoked for a streaming response. The
+    /// reference swaps it in with WithStreamWriter; binary TTS routes
+    /// <see cref="BinaryStreamWriter.WriteAsync"/> instead of SSE.
+    /// </summary>
+    public delegate Task StreamWriterDelegate(
+        HttpContext context,
+        IStream<StreamEvent> stream,
+        int expectedChoices,
+        CancellationToken cancellationToken,
+        Func<Exception, CancellationToken, Task<Exception?>>? transformStreamError);
+
+    /// <summary>
+    /// Port of ChatCompletion + ChatCompletionWithRequest. The audio speech
+    /// route reads the request once to decide between SSE and binary streaming,
+    /// then hands the parsed request over via <paramref name="preReadRequest"/>
+    /// and the chosen writer via <paramref name="streamWriter"/>.
+    /// </summary>
+    public static async Task HandleAsync(
+        HttpContext context,
+        ChatCompletionOrchestrator orchestrator,
+        HttpRequestData? preReadRequest = null,
+        StreamWriterDelegate? streamWriter = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(orchestrator);
@@ -21,16 +44,23 @@ public static class ChatCompletionEndpoint
         var cancellationToken = context.RequestAborted;
 
         HttpRequestData genericRequest;
-        try
+        if (preReadRequest is not null)
         {
-            genericRequest = await HttpRequestReader.ReadAsync(context.Request, cancellationToken);
+            genericRequest = preReadRequest;
         }
-        catch (Exception ex)
+        else
         {
-            // ReadHTTPRequest failures go through the inbound transformer, which
-            // maps an unknown error to 500 unexpected/internal_server_error.
-            await WriteTransformedErrorAsync(context, orchestrator.Inbound.TransformError(ex), cancellationToken);
-            return;
+            try
+            {
+                genericRequest = await HttpRequestReader.ReadAsync(context.Request, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // ReadHTTPRequest failures go through the inbound transformer, which
+                // maps an unknown error to 500 unexpected/internal_server_error.
+                await WriteTransformedErrorAsync(context, orchestrator.Inbound.TransformError(ex), cancellationToken);
+                return;
+            }
         }
 
         if (genericRequest.Body is null || genericRequest.Body.Length == 0)
@@ -83,9 +113,10 @@ public static class ChatCompletionEndpoint
         {
             context.Response.Headers["Access-Control-Allow-Origin"] = "*";
 
+            var writer = streamWriter ?? new StreamWriterDelegate(SseStreamWriter.WriteAsync);
             try
             {
-                await SseStreamWriter.WriteAsync(
+                await writer(
                     context,
                     stream,
                     ExpectedStreamChoices.FromRequestBody(genericRequest.Body),
@@ -151,7 +182,7 @@ public static class ChatCompletionEndpoint
     }
 
     /// <summary>gin: <c>c.JSON(status, json.RawMessage(httpErr.Body))</c>.</summary>
-    private static async Task WriteTransformedErrorAsync(
+    internal static async Task WriteTransformedErrorAsync(
         HttpContext context,
         HttpResponseData errorResponse,
         CancellationToken cancellationToken)

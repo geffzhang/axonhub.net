@@ -40,7 +40,33 @@ public static class OpenAiRequestTypeCheck
     public static string? ValidateImageEdit(ReadOnlySpan<byte> utf8Json)
         => ValidateAgainst(ImageEditJsonRequestSchema, utf8Json);
 
+    /// <summary>
+    /// Port of the type errors <c>json.Unmarshal</c> reports for
+    /// openai.SpeechRequestBody (audio_outbound.go:21-30). The struct name is a
+    /// parameter because the route-level probe decodes into
+    /// <c>api.speechRouteRequestBody</c>, whose schema is only stream_format.
+    /// </summary>
+    public static string? ValidateSpeech(ReadOnlySpan<byte> utf8Json, string structName)
+        => ValidateAgainst(SpeechRequestBodySchema, structName, utf8Json);
+
+    /// <summary>
+    /// Port of the type errors <c>json.Unmarshal</c> reports for
+    /// api.speechRouteRequestBody (openai.go:436-438, stream_format only).
+    /// </summary>
+    public static string? ValidateSpeechRoute(ReadOnlySpan<byte> utf8Json)
+        => ValidateAgainst(SpeechRouteRequestBodySchema, SpeechRouteRequestBodySchema.GoName, utf8Json);
+
+    /// <summary>
+    /// Port of the type errors <c>json.Unmarshal</c> reports for
+    /// llm.TranscriptionResponse (audio_outbound.go:411-415).
+    /// </summary>
+    public static string? ValidateTranscriptionResponse(ReadOnlySpan<byte> utf8Json)
+        => ValidateAgainst(TranscriptionResponseSchema, utf8Json);
+
     private static string? ValidateAgainst(Schema schema, ReadOnlySpan<byte> utf8Json)
+        => ValidateAgainst(schema, schema.GoName, utf8Json);
+
+    private static string? ValidateAgainst(Schema schema, string structName, ReadOnlySpan<byte> utf8Json)
     {
         var sanitized = GoJsonUtf8.SanitizeStringLiterals(utf8Json);
         ReadOnlySpan<byte> data = sanitized is null ? utf8Json : sanitized;
@@ -58,7 +84,7 @@ public static class OpenAiRequestTypeCheck
                 return null;
             }
 
-            return new Check().CheckRoot(schema, ref reader);
+            return new Check().CheckRoot(schema, structName, ref reader);
         }
         catch (JsonException)
         {
@@ -73,9 +99,9 @@ public static class OpenAiRequestTypeCheck
     {
         private string? _firstError;
 
-        public string? CheckRoot(Schema schema, ref Utf8JsonReader reader)
+        public string? CheckRoot(Schema schema, string structName, ref Utf8JsonReader reader)
         {
-            var hard = CheckObject(schema, path: string.Empty, ref reader);
+            var hard = CheckObject(schema, structName, string.Empty, ref reader);
             return hard ?? _firstError;
         }
 
@@ -84,7 +110,7 @@ public static class OpenAiRequestTypeCheck
         /// <c>UnmarshalJSON</c> error, which Go lets override any earlier type
         /// error, or <see langword="null"/>.
         /// </summary>
-        private string? CheckObject(Schema schema, string path, ref Utf8JsonReader reader)
+        private string? CheckObject(Schema schema, string structName, string path, ref Utf8JsonReader reader)
         {
             while (reader.Read())
             {
@@ -108,7 +134,7 @@ public static class OpenAiRequestTypeCheck
                 }
 
                 var fieldPath = path.Length == 0 ? field.Name : path + "." + field.Name;
-                var hard = CheckValue(ref reader, field.Type, schema.GoName, fieldPath);
+                var hard = CheckValue(ref reader, field.Type, structName, fieldPath);
                 if (hard is not null)
                 {
                     return hard;
@@ -181,7 +207,7 @@ public static class OpenAiRequestTypeCheck
                 case GoKind.Struct:
                     if (reader.TokenType == JsonTokenType.StartObject)
                     {
-                        return CheckObject(type.Struct!, fieldPath, ref reader);
+                        return CheckObject(type.Struct!, type.Struct!.GoName, fieldPath, ref reader);
                     }
 
                     SaveMismatch(ref reader, structName, fieldPath, type.Name);
@@ -548,15 +574,13 @@ public static class OpenAiRequestTypeCheck
 
     /// <summary>
     /// Go: strconv.ParseFloat(literal, 64). Overflow reports ErrRange and is a
-    /// type error; underflow silently rounds to zero and is accepted.
+    /// type error; underflow silently rounds to zero and is accepted. The full
+    /// strconv port (hex floats, NaN/Inf, underscores, the zero-mantissa
+    /// short-circuit) lives in <see cref="GoCast.TryParseFloat"/>; see the
+    /// ParseFloatFidelity tests for the probed ground truth.
     /// </summary>
     private static bool FitsFloat64(ref Utf8JsonReader reader)
-        => double.TryParse(
-                Literal(ref reader),
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out var value)
-            && !double.IsInfinity(value);
+        => GoCast.TryParseFloat(Literal(ref reader), out _);
 
     private static void SkipValue(ref Utf8JsonReader reader)
     {
@@ -820,6 +844,29 @@ public static class OpenAiRequestTypeCheck
         new GoField("height", Int64Type),
         new GoField("seed", Int64Type),
         new GoField("prompt_optimizer", BoolType));
+
+    /// <summary>Go: openai.SpeechRequestBody (audio_outbound.go:21-30).</summary>
+    private static readonly Schema SpeechRequestBodySchema = new(
+        "SpeechRequestBody",
+        new GoField("model", StringType),
+        new GoField("input", StringType),
+        new GoField("voice", StringType),
+        new GoField("response_format", StringType),
+        new GoField("speed", DoubleType),
+        new GoField("instructions", StringType),
+        new GoField("stream_format", StringType));
+
+    /// <summary>Go: api.speechRouteRequestBody (openai.go:78-80, stream_format only).</summary>
+    private static readonly Schema SpeechRouteRequestBodySchema = new(
+        "speechRouteRequestBody",
+        new GoField("stream_format", StringType));
+
+    /// <summary>Go: llm.TranscriptionResponse (llm/audio.go:139-156).</summary>
+    private static readonly Schema TranscriptionResponseSchema = new(
+        "TranscriptionResponse",
+        new GoField("text", StringType),
+        new GoField("language", StringType),
+        new GoField("duration", DoubleType));
 
     /// <summary>Go: openai.ImageEditJSONRequest (image_inbound.go:361-378).</summary>
     private static readonly Schema ImageEditJsonRequestSchema = new(

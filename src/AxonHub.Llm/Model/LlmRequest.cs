@@ -189,6 +189,21 @@ public sealed class LlmRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DecisionsRequest? Decisions { get; set; }
 
+    /// <summary>Speech sub-request; set when the request is a TTS request (llm/model.go:262).</summary>
+    [JsonPropertyName("speech")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SpeechRequest? Speech { get; set; }
+
+    /// <summary>Transcription sub-request; set when the request is an STT request (llm/model.go:262).</summary>
+    [JsonPropertyName("transcription")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TranscriptionRequest? Transcription { get; set; }
+
+    /// <summary>Translation sub-request; set when the request is an STT translation request (llm/model.go:262).</summary>
+    [JsonPropertyName("translation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TranslationRequest? Translation { get; set; }
+
     /// <summary>Provider/API-format private sidecar data; never serialized (llm/model.go:307).</summary>
     [JsonIgnore]
     public ProviderExtensions? ProviderExtensions { get; set; }

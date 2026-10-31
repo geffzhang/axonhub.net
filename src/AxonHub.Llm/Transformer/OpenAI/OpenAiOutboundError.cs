@@ -13,14 +13,27 @@ public sealed partial class OpenAiOutboundTransformer
     /// <summary>
     /// Port of OutboundTransformer.AggregateStreamChunks. The reference routes
     /// speech/transcription/translation API formats to dedicated aggregators;
-    /// this build's TransformRequest rejects those request types, so only the
-    /// chat aggregation is reachable.
+    /// everything else uses the chat aggregation.
     /// </summary>
     public byte[] AggregateStreamChunks(
         HttpRequestData? request,
         IReadOnlyList<StreamEvent> chunks,
         out ResponseMeta meta)
-        => OpenAiAggregator.AggregateStreamChunks(chunks, OpenAiAggregator.DefaultTransformChunk, out meta);
+    {
+        if (request is not null)
+        {
+            switch (request.ApiFormat)
+            {
+                case ApiFormats.OpenAISpeech:
+                    return AggregateSpeechStreamChunks(chunks, out meta);
+                case ApiFormats.OpenAITranscription:
+                case ApiFormats.OpenAITranslation:
+                    return AggregateTranscriptionStreamChunks(chunks, out meta);
+            }
+        }
+
+        return OpenAiAggregator.AggregateStreamChunks(chunks, OpenAiAggregator.DefaultTransformChunk, out meta);
+    }
 
     /// <summary>
     /// Port of OutboundTransformer.TransformError. The provider error body is

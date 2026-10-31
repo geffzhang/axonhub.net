@@ -87,6 +87,30 @@ public sealed class LlmResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DecisionsResponse? Decisions { get; set; }
 
+    /// <summary>Speech sub-response; present when the response is a TTS response (llm/model.go:751).</summary>
+    [JsonPropertyName("speech")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SpeechResponse? Speech { get; set; }
+
+    /// <summary>Transcription sub-response; present for transcription/translation responses (llm/model.go:751).</summary>
+    [JsonPropertyName("transcription")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TranscriptionResponse? Transcription { get; set; }
+
+    /// <summary>SSE event from a streaming TTS provider (llm/model.go:748).</summary>
+    [JsonPropertyName("speech_stream_event")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SpeechStreamEvent? SpeechStreamEvent { get; set; }
+
+    /// <summary>Binary audio chunk from a chunked TTS provider; never serialized (llm/model.go:752).</summary>
+    [JsonIgnore]
+    public SpeechAudioChunk? SpeechAudioChunk { get; set; }
+
+    /// <summary>SSE event from a streaming STT provider (llm/model.go:755).</summary>
+    [JsonPropertyName("transcription_stream_event")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TranscriptionStreamEvent? TranscriptionStreamEvent { get; set; }
+
     [JsonIgnore]
     public StreamCompletionEvidence StreamCompletionEvidence { get; set; }
 

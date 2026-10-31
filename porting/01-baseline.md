@@ -9,7 +9,7 @@
 | 上游测试 | 本实现测试 | 状态 | 说明 |
 |---|---|---|---|
 | `llm/pipeline/pipeline_retry_test.go`（4 个子测试 + 11 个顶层测试 = 15 例） | `tests/AxonHub.Llm.Tests/PipelineRetryTests.cs`（15 个 `[Fact]`） | 15/15 已移植 | 逐条对照：同通道重试、跨通道切换、混合重试、预算耗尽、原始流意图保持、元数据不泄漏、提交前错误重试、内容提交后不重试、预提交缓冲上限（事件数/字节数）、大内容首事件放行、超大 SSE 事件绕过重试。`preReadLlmStream` 通过 `InternalsVisibleTo` 直接驱动，等价于 Go 的同包测试。 |
-| `llm/pipeline/empty_response_test.go`（23 个可执行用例） | `tests/AxonHub.Llm.Tests/EmptyResponseTests.cs`（9 个 `[Fact]`） | 9/23 已移植，14 例顺延 | 已移植：`TestHasResponseContent` 的 4 个 chat 子测试 + 独立签名用例、流式空响应检测 2 例、非流式空响应检测 2 例。顺延的 14 例依赖 decisions / alpha-search / speech / transcription / embedding / moderation 等尚未进入统一模型的响应类型（见"覆盖缺口"），属于范围裁剪，非行为差异。 |
+| `llm/pipeline/empty_response_test.go`（23 个可执行用例） | `tests/AxonHub.Llm.Tests/EmptyResponseTests.cs`（14 个 `[Fact]`） | 14/23 已移植，9 例顺延 | 已移植：`TestHasResponseContent` 的 4 个 chat 子测试 + 独立签名用例、流式空响应检测 2 例、非流式空响应检测 2 例、音频空响应探测 5 例（speech 音频、transcription 文本/原始体、speech 流事件 audio_base64、speech 二进制块、transcription 流事件，见第 19 节）。顺延的 9 例依赖 rerank / video 等尚未进入统一模型的响应类型（见"覆盖缺口"），属于范围裁剪，非行为差异。 |
 | `internal/server/orchestrator/lb_strategy_rr_test.go`（RoundRobinStrategy 路径）+ `load_balancer_test.go`（排序/健康/topK 子集） | `tests/AxonHub.Grains.Tests/ChannelSelectionTests.cs`（16 个 `[Fact]`） | 16 例已改写（子集） | 覆盖：模型过滤、零请求满分 150、请求数拉低分数、同分保持输入顺序（`WithoutWeightTieBreaker`）、健康通道降级与冷却边界、topK 排除不健康通道、`calculateTopK` 的 1/2/3 截断与非正/超大值归一为全部候选、模型别名解析、10 分钟窗口过期与迟到事件丢弃、不计数模式。C012 已补齐 WeightRoundRobin / error-aware / additive 等策略链（本文件另有 8 例，共 24 例），rate-limit 策略由 §7.1 的 18 例 `RateLimitAwareScorerTests` 单独覆盖；真实数据库用例仍顺延（C014）。 |
 | `llm/transformer/openai/model.go` 的 `encoding/json` 解码语义（上游无对应单测） | `tests/AxonHub.Llm.Tests/OpenAiRequestTypeCheckTests.cs`（101 例） | 已建立（探针证据） | 用独立 Go 探针（`E:\tmp\typrobe`，直接编译参照模块）与 C# 探针对同一 106 条输入逐条比对；锁定错误文案 67 例、Go 接受 32 例、null 零值/tool_choice 回退 2 例。覆盖结构名与标签路径、整数/浮点字面量规则、大小写不敏感匹配、重复键、未知字段、硬错误覆盖软错误。残余差异见 C022。 |
 | `internal/server/orchestrator/retry_test.go` 的 `TestIsRetryableErrorForChannel`（10 个断言） | `tests/AxonHub.Api.Tests/ChannelRetryPredicateTests.cs`（10 个用例 + 6 个解析/降级用例） | 10/10 已移植 | 逐条对照：nil、默认 5xx、包装的传输错误、配置 400 / 未配置 401、子串匹配、正则匹配、未匹配文本、空 settings、ResponseError 详情文本。另锁定 settings jsonb 解析、损坏 settings 降级、非法正则不匹配（Go 行为）。`Normalize*`（写入侧校验）未移植：本切片无通道写 API。 |
@@ -25,7 +25,7 @@
 
 | `llm/transformer/openai/responses/websocket_executor_test.go`（32 个顶层测试函数，其中 3 个表驱动） + `http_executor_test.go`（3 个） | `tests/AxonHub.Llm.Tests/ResponsesWebSocketExecutorTests.cs`（32 个方法 / 37 个用例）+ `ResponsesHttpTransportExecutorTests.cs`（3 例）+ `tests/AxonHub.Api.Tests/TransportRequestFinalizerTests.cs`（5 例） | 37/37 + 3/3 已移植，接缝另锁 5 例 | 逐条对照：执行器缓存、response.create 发送、终态停止、取消优先级（读阻塞/已关闭/不覆盖终态）、顶层 error、官方错误状态与 body、failed/cancelled/incomplete 聚合、会话复用与不池化、显式 previous_response_id 四种对账、payload 恢复、assistant 后缀重连、复用连接提前关闭、组织头分池、失败/取消逐出、仅新输入、输入超限、非追加重连、提前关闭逐出、trace 头不影响池键、后台清理与 Close、事件规范化、URL 映射、握手头观察。参照用 `httptest` + gorilla upgrader；端口用 `ResponsesWebSocketTestServer`（loopback TcpListener + 手写 101 握手）。编排层 `CustomizeExecutor` / `finalizeTransportRequest` 在参照中位于 responses 包的 outbound.go，端口位于 `PersistentOutboundTransformer`，故 5 个接缝用例放在 Api.Tests。 |
 
-统计：pipeline 编排层共 38 个可执行用例（15 + 23），已移植 24 个、顺延 14 个（均为非 chat 响应类型，待对应请求类型落地后补测）。
+统计：pipeline 编排层共 38 个可执行用例（15 + 23），已移植 29 个、顺延 9 个（均为非 chat 响应类型，待对应请求类型落地后补测）。
 
 ## 2. 差分语料
 
@@ -558,6 +558,43 @@ JSON 嵌套上限统一为 Go 的 10000 层。`Program.cs` 按 routes.go 注册
 合计 19 + 110 + 2 + 6 = 137 例。C077 闭合；C010 的 decisions / alpha-search
 分支随之闭合，剩余 speech / transcription / rerank / video 仍在缺口清单中。
 
+## 19. OpenAI Audio 客户端变换器与路由接线（102 例，2026-10-31）
+
+参照路线：`llm/transformer/openai/audio_inbound.go`、`audio_outbound.go`，测试
+`audio_inbound_test.go`（329 行）与 `audio_outbound_test.go`（547 行，全部 15 个
+测试函数逐条移植），路由 `internal/server/routes.go` 的 `/v1/audio/*` 三条路由，
+以及 `internal/server/api/chat.go:668-757` 的 `WriteBinaryStream` 与
+`internal/server/api/openai.go:437-465` 的二进制流探测。端口新增
+`OpenAiAudioInboundTransformer`（Speech / Transcription / Translation 三个工厂）、
+`OpenAiOutboundAudio`（请求构造、响应变换与流聚合）、`AudioModels`
+（事件模型、二进制解码器注册表）、`GoMultipartReader` / `GoMultipartWriter`、
+`BinaryStreamWriter` 与 `SpeechEndpoint.ShouldUseBinarySpeechStream` 路由探测；
+`Program.cs` 注册 `POST /v1/audio/speech`、`/v1/audio/transcriptions`、
+`/v1/audio/translations`。speech 的 `stream_format`（trim + lower 后与
+`sse` / `audio` 比较）决定三种传输形态：非流式二进制、SSE 流（`audio_bytes`
+base64 事件）、二进制流（原始音频块 + `binary.done`，Accept `*/*`）；STT 支持
+multipart（`file` + 文本字段）、JSON 与 SRT / verbose_json 响应透传。
+`GoCast.TryParseFloat` 完整复刻 strconv.ParseFloat 64（hex 浮点负偏置、
+零尾数短路、下划线规则、inf / nan、范围错误），差异登记 C079。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| speech 入站：JSON 校验链（语法 → 根类型 → 字段类型 → 解码）与逐字段错误文案、缺 model / input / voice、空 body、二进制响应透传、stream_format 三形态与非法值（GoQuote 原文）、缺省非流式 | `tests/AxonHub.Llm.Tests/OpenAiAudioTransformerTests.cs` | 10 |
+| transcription 入站：multipart 解析（file 必填、重复 file 拒绝、extra 字段保留、非法 temperature）、非 multipart 拒绝、JSON / verbose_json 原始体 / SRT 响应透传 | `tests/AxonHub.Llm.Tests/OpenAiAudioTransformerTests.cs` | 10 |
+| translation 入站：`api_format` 标记与基本请求 | `tests/AxonHub.Llm.Tests/OpenAiAudioTransformerTests.cs` | 2 |
+| 出站：speech 请求线路形状（`/v1/audio/speech` URL、voice / speed / stream_format 字段）、STT multipart 线路形状（文件名、extra 字段）、translation URL、speech 响应变换（括号文本不误判为 JSON、缺 CT 非法 JSON 原样透传、缺 CT 合法 JSON 解析）、transcription 响应变换（text / language / duration 空值置 null） | `tests/AxonHub.Llm.Tests/OpenAiAudioTransformerTests.cs` | 12 |
+| 出站：`TransformTranscriptionResponse` 的 SRT 原始体透传 | `tests/AxonHub.Llm.Tests/OpenAiAudioTransformerTests.cs` | 1 |
+| 往返：speech 请求 → 统一模型 → 出站请求、响应 → 统一模型 → 出站响应 | `tests/AxonHub.Llm.Tests/OpenAiAudioTransformerTests.cs` | 1 |
+| 流式：SSE speech 聚合（4 上游事件 → 3 收集、audio_bytes 拼接、usage、终态 `speech.audio.done`）、二进制 speech 块（3 块拼接、meta id `audio.speech.stream`、usage null）、transcription SSE（`name="stream"`、delta 聚合、usage）、错误事件传播（upstream broke / rate limited） | `tests/AxonHub.Llm.Tests/OpenAiAudioTransformerTests.cs` | 5 |
+| 空响应探测：speech 音频、transcription 文本/原始体、speech 流事件 audio_base64（裸 done 不计）、speech 二进制块、transcription 流事件 | `tests/AxonHub.Llm.Tests/EmptyResponseTests.cs` | 5 |
+| speech 路由探测：nil 请求、空 body、非 JSON 跳过解码、stream_format 判定表 8 例（大小写/空白/缺省/null）、解码错误文案 4 例（语法、根类型、字段类型含结构体路径） | `tests/AxonHub.Api.Tests/AudioEndpointTests.cs` | 15 |
+| strconv.ParseFloat 保真表：36 例（普通/科学计数/尾随点、零尾数短路 `0e10000`、hex 浮点含负偏置 `0x_1p2`、下划线、nan / inf / Infinity / ±Inf、范围错误 `1e400` / `1e309`、非法语法） | `tests/AxonHub.Api.Tests/AudioEndpointTests.cs` | 36 |
+| 二进制流写入器：原始块直写与首块 CT / Cache-Control / Connection / ACAO 头、无类型块回退 CT、binary.done 与空块吞掉、headers 前的分类错误 502 + 精确信封、ResponseError 状态码、headers 后错误只记日志、取消只记日志 | `tests/AxonHub.Api.Tests/AudioEndpointTests.cs` | 7 |
+
+合计 39（transformer）+ 5（空响应）+ 58（端点：15 探测 + 36 保真表 + 7 写入器）
+= 102 例。差异登记 C079 闭合；C010 的 speech / transcription 分支随之闭合，
+剩余 rerank / video 仍在缺口清单中。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -565,8 +602,8 @@ JSON 嵌套上限统一为 Go 的 10000 层。`Program.cs` 按 routes.go 注册
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
-| 非 chat 响应类型的空响应探测（speech / transcription / rerank / video） | 已由第 16.1、17、18 节先后闭合图片、embedding / moderation 与 decisions / alpha-search 分支；剩余类型尚未进入统一模型 | 中 | 随对应请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合） | 中 | 后续阶段 |
+| 非 chat 响应类型的空响应探测（rerank / video） | 已由第 16.1、17、18、19 节先后闭合图片、embedding / moderation、decisions / alpha-search 与 speech / transcription 分支；仅剩 rerank / video 尚未进入统一模型 | 中 | 随对应请求类型落地 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

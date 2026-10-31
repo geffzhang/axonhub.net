@@ -9,16 +9,32 @@ public sealed partial class OpenAiOutboundTransformer
 {
     /// <summary>
     /// Port of TransformStream: upstream SSE events to a unified chat stream.
-    /// Events the reference filters (null chunks) are dropped.
+    /// Events the reference filters (null chunks) are dropped. Audio APIs use
+    /// dedicated SSE event schemas; they are routed to the audio decoders so
+    /// chat-completion parsing is not applied to transcript.text.delta /
+    /// speech.audio.delta.
     /// </summary>
-    /// <remarks>
-    /// The request only matters for the audio endpoints, which this build does
-    /// not route (see <see cref="OpenAiOutboundTransformer"/>'s chat-only scope).
-    /// </remarks>
     public Streams.IStream<LlmResponse> TransformStream(
         HttpRequestData? request,
         Streams.IStream<StreamEvent> stream)
-        => new Streams.MapStream<StreamEvent, LlmResponse>(stream, TransformStreamChunk);
+    {
+        if (request is not null)
+        {
+            switch (request.ApiFormat)
+            {
+                case ApiFormats.OpenAISpeech:
+                    return new Streams.MapStream<StreamEvent, LlmResponse>(stream, SpeechStreamChunkTransform);
+                case ApiFormats.OpenAITranscription:
+                    return new Streams.MapStream<StreamEvent, LlmResponse>(
+                        stream, e => TransformTranscriptionStreamChunk(e, ApiFormats.OpenAITranscription));
+                case ApiFormats.OpenAITranslation:
+                    return new Streams.MapStream<StreamEvent, LlmResponse>(
+                        stream, e => TransformTranscriptionStreamChunk(e, ApiFormats.OpenAITranslation));
+            }
+        }
+
+        return new Streams.MapStream<StreamEvent, LlmResponse>(stream, TransformStreamChunk);
+    }
 
     /// <summary>
     /// Port of TransformStream for chat completions: one SSE event in, one

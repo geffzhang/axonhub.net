@@ -1,5 +1,6 @@
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
+using AxonHub.Llm.Transformer.Shared;
 
 namespace AxonHub.Llm.Http;
 
@@ -142,9 +143,20 @@ public sealed class HttpExecutor : IExecutor
             };
         }
 
-        var stream = new HttpSseEventStream(
-            raw.Content.ReadAsStream(cancellationToken),
-            raw);
+        // client.go:408-426 — decoder selection: the response Content-Type is
+        // looked up case-sensitively, then as a parsed (lowercased) media type,
+        // then falls back to SSE.
+        var contentType = HttpClientUtils.HeaderGet(headers, "Content-Type");
+        if (contentType.Length == 0)
+        {
+            contentType = "text/event-stream";
+        }
+
+        var bodyStream = raw.Content.ReadAsStream(cancellationToken);
+        var binaryContentType = SelectBinaryDecoderContentType(contentType);
+        IStream<StreamEvent> stream = binaryContentType is not null
+            ? new HttpBinaryEventStream(bodyStream, binaryContentType, cancellationToken, raw)
+            : new HttpSseEventStream(bodyStream, raw);
 
         // Codex turn-state propagation: only the first event carries it.
         var firstEventHeaders = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -276,6 +288,44 @@ public sealed class HttpExecutor : IExecutor
 
             return buffer.ToArray();
         }
+    }
+
+    /// <summary>
+    /// decoder.go init: content types routed to the binary chunk decoder,
+    /// keyed by the exact registered string. Everything else (including the
+    /// SSE entries) falls back to the default SSE decoder.
+    /// </summary>
+    private static readonly Dictionary<string, string> BinaryDecoderContentTypes = new(StringComparer.Ordinal)
+    {
+        ["audio/mpeg"] = "audio/mpeg",
+        ["audio/mp3"] = "audio/mpeg",
+        ["audio/wav"] = "audio/wav",
+        ["audio/x-wav"] = "audio/wav",
+        ["audio/opus"] = "audio/opus",
+        ["audio/aac"] = "audio/aac",
+        ["audio/flac"] = "audio/flac",
+        ["audio/pcm"] = "audio/pcm",
+        ["application/octet-stream"] = "application/octet-stream",
+    };
+
+    /// <summary>
+    /// Port of the decoder lookup at client.go:412-422: exact registry hit
+    /// first, then the parsed (lowercased) media type. Null means SSE.
+    /// </summary>
+    private static string? SelectBinaryDecoderContentType(string contentType)
+    {
+        if (BinaryDecoderContentTypes.TryGetValue(contentType, out var canonical))
+        {
+            return canonical;
+        }
+
+        if (GoMimeTypes.TryParseMediaType(contentType, out var mediaType, out _)
+            && BinaryDecoderContentTypes.TryGetValue(mediaType, out canonical))
+        {
+            return canonical;
+        }
+
+        return null;
     }
 
     /// <summary>Attaches headers only to the first event, like the reference map.</summary>

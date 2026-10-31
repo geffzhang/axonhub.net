@@ -55,9 +55,10 @@ public static class ResponseContent
 
     /// <summary>
     /// Port of <c>hasResponseContent</c> for the implemented response kinds
-    /// (chat, moderation, embedding, images, alpha search and decisions). The
-    /// remaining non-chat branches (rerank, video, speech, ...) land together
-    /// with those request types; see porting/01-baseline.md.
+    /// (chat, moderation, embedding, images, audio, alpha search and
+    /// decisions). The remaining non-chat branches (rerank, video, compact,
+    /// system one, completion) land together with those request types; see
+    /// porting/01-baseline.md.
     /// </summary>
     public static bool HasResponseContent(LlmResponse? resp)
     {
@@ -67,8 +68,8 @@ public static class ResponseContent
         }
 
         // empty_response.go's order: moderation, embedding, rerank, image,
-        // video, ... — the non-chat kinds carry no choices, so each of them is
-        // content when its result list is non-empty.
+        // video, compact, speech, transcription, ... — the non-chat kinds carry
+        // no choices, so each of them is content when its result is non-empty.
         if (resp.Moderation is { Results.Count: > 0 })
         {
             return true;
@@ -80,6 +81,38 @@ public static class ResponseContent
         }
 
         if (resp.Image is { Data.Count: > 0 })
+        {
+            return true;
+        }
+
+        if (resp.Speech is { Audio.Length: > 0 })
+        {
+            return true;
+        }
+
+        if (resp.Transcription is not null
+            && (!string.IsNullOrEmpty(resp.Transcription.Text) || resp.Transcription.Raw.Length > 0))
+        {
+            return true;
+        }
+
+        // Only audio deltas count as content. A bare "speech.audio.done" event
+        // with no audio chunks must still be treated as empty so empty-response
+        // detection can retry instead of completing a request with audio_bytes=0.
+        if (resp.SpeechStreamEvent is not null && !string.IsNullOrEmpty(resp.SpeechStreamEvent.AudioBase64))
+        {
+            return true;
+        }
+
+        if (resp.SpeechAudioChunk is { Audio.Length: > 0 })
+        {
+            return true;
+        }
+
+        if (resp.TranscriptionStreamEvent is not null
+            && (!string.IsNullOrEmpty(resp.TranscriptionStreamEvent.Delta)
+                || !string.IsNullOrEmpty(resp.TranscriptionStreamEvent.Text)
+                || resp.TranscriptionStreamEvent.Type.Length > 0))
         {
             return true;
         }

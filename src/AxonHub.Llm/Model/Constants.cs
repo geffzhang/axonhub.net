@@ -38,6 +38,9 @@ public static class ApiFormats
     public const string OpenAIImageGeneration = "openai/image_generation";
     public const string OpenAIImageEdit = "openai/image_edit";
     public const string OpenAIImageVariation = "openai/image_variation";
+    public const string OpenAISpeech = "openai/audio_speech";
+    public const string OpenAITranscription = "openai/audio_transcriptions";
+    public const string OpenAITranslation = "openai/audio_translations";
     public const string AnthropicMessage = "anthropic/messages";
     public const string GeminiContents = "gemini/contents";
 }

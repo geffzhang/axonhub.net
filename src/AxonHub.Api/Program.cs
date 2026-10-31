@@ -220,4 +220,30 @@ static Task HandleDecisionsAsync(
 app.MapPost("/v1/alpha/search", HandleAlphaSearchAsync);
 app.MapPost("/v1/decisions", HandleDecisionsAsync);
 
+// Audio API (routes.go:220-222): speech reads the request once to pick
+// between SSE and binary streaming; transcription/translation delegate to
+// the shared chat handler with the dedicated inbound transformers.
+static Task HandleSpeechAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => SpeechEndpoint.HandleAsync(context, orchestrator.WithInbound(AudioInboundTransformer.Speech()));
+
+static Task HandleTranscriptionAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(AudioInboundTransformer.Transcription()));
+
+static Task HandleTranslationAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(AudioInboundTransformer.Translation()));
+
+app.MapPost("/v1/audio/speech", HandleSpeechAsync);
+app.MapPost("/v1/audio/transcriptions", HandleTranscriptionAsync);
+app.MapPost("/v1/audio/translations", HandleTranslationAsync);
+
 app.Run();
