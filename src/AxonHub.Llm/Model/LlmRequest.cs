@@ -164,6 +164,11 @@ public sealed class LlmRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CompactRequest? Compact { get; set; }
 
+    /// <summary>Image sub-request; set when the request is an image request (llm/model.go:249).</summary>
+    [JsonPropertyName("image")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImageRequest? Image { get; set; }
+
     /// <summary>Provider/API-format private sidecar data; never serialized (llm/model.go:307).</summary>
     [JsonIgnore]
     public ProviderExtensions? ProviderExtensions { get; set; }

@@ -349,7 +349,7 @@ C055（省略死字段）。`input_schema` / `caller` 的显式 null 与缺失�
 残余差异为 C056（Vertex 执行器未移植，Bedrock 仅直连报文形状）、C057（缺失 `delta.type` 时跳过而非
 panic）与 C058（流错误事件的 gjson 宽松解析 vs 严格 JSON）。
 
-## 12. Responses API 非流式双向变换（160 例，2026-10-31）
+## 12. Responses API 非流式双向变换（158 例，2026-10-31）
 
 参照路线：`llm/transformer/openai/responses/` 的 `model.go`、`usage.go`、`usage_json.go`、
 `inbound.go`、`inbound_convert.go`、`outbound.go`、`outbound_convert.go`、`compact_inbound.go`、
@@ -357,23 +357,23 @@ panic）与 C058（流错误事件的 gjson 宽松解析 vs 严格 JSON）。
 `ResponsesCompactInboundTransformer` 与 `ResponsesOutboundTransformer` 实现；路由
 `POST /v1/responses` 与 `POST /v1/responses/compact` 复用 `ChatCompletionEndpoint`，只通过
 `ChatCompletionOrchestrator.WithInbound` 替换入站变换（`Program.cs`）。本切片覆盖非流式路径；
-流式状态机与聚合器由第 13 节补齐（C063 已闭合），WebSocket 传输与图片请求/响应仍登记为
-C061/C059。
+流式状态机与聚合器由第 13 节补齐（C063 已闭合），图片请求/响应由第 14 节补齐（C059 已闭合），
+WebSocket 传输仍登记为 C061。
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
 | 入站请求：string / item 数组 input、instructions、采样与 token 上限、function/namespace/image_generation/web_search/google_search 工具、strict 工具、reasoning（effort/budget/summary）、tool_choice、metadata/store/service_tier、text.format、previous_response_id、additional_tools 原样片段 | `tests/AxonHub.Llm.Tests/ResponsesInboundTransformerTests.cs` | 计入 38 |
 | 入站校验与 Go 解码语义：nil / 空 body、Content-Type、`stream_id` → 400（C060）、Go 语法错误与顶层根类型文案、字段级 STJ 文案（C064）、model 必填 | 同上 | 计入 38 |
 | 入站响应与错误：message 信封、output item、finish_reason→status、usage 明细、previous_response_id、错误信封（nil / InvalidRequest / InvalidModel / ResponseError / HttpClientError） | 同上 | 计入 38 |
-| 出站请求：URL/认证形状、compact 路由、省略 temperature、system→instructions、工具映射（function/namespace 聚合、image_generation、web_search/google_search、不支持类型跳过）、strict schema 归一（C065/C066）、tool_choice、raw 工具/输入项回放、client_metadata、Responses-Lite parallel_tool_calls、共享会话回退（C062） | `tests/AxonHub.Llm.Tests/ResponsesOutboundTransformerTests.cs` | 56 |
-| 出站响应与错误：文本 / 图片生成结果 / 加密推理输出、status→finish_reason、工具调用优先、usage、上游错误信封与兜底、紧凑响应路由 | 同上 | 计入 56 |
-| 出站缺口显式失败：image 请求/响应（C059） | 同上 | 计入 56 |
+| 出站请求：URL/认证形状、compact 路由、省略 temperature、system→instructions、工具映射（function/namespace 聚合、image_generation、web_search/google_search、不支持类型跳过）、strict schema 归一（C065/C066）、tool_choice、raw 工具/输入项回放、client_metadata、Responses-Lite parallel_tool_calls、共享会话回退（C062） | `tests/AxonHub.Llm.Tests/ResponsesOutboundTransformerTests.cs` | 54 |
+| 出站响应与错误：文本 / 图片生成结果 / 加密推理输出、status→finish_reason、工具调用优先、usage、上游错误信封与兜底、紧凑响应路由 | 同上 | 计入 54 |
 | 压缩入站：nil / 空 body、model 必填、text input、instructions / prompt_cache_key、compaction summary 响应、流式拒绝、错误委托 | `tests/AxonHub.Llm.Tests/ResponsesCompactTransformerTests.cs` | 16 |
 | 压缩出站：compact 请求与 URL、官方可选字段透传、压缩响应转换、HTTP 错误信封、空 body | 同上 | 计入 16 |
 | usage 与 model：ResponsesUsage↔统一 Usage、cost 的 Go float 兼容（`xjson.ParseOptionalFloat64` 语义与 `GoJsonFloat` 的 Go 数字格式）、created_at 兼容表（整数/科学计数/极值/拒绝集） | `tests/AxonHub.Llm.Tests/ResponsesUsageAndModelTests.cs` | 50 |
 
-合计 38 + 56 + 16 + 50 = 160 例（流式另见第 13 节的 86 例）。本切片登记的差异为 C059（图片路径
-未移植，缺口）、C060（stream_id 探测的 gjson 宽松度）、C061（WebSocket 传输未移植，缺口）、
+合计 38 + 54 + 16 + 50 = 158 例（流式另见第 13 节的 86 例，图片路径另见第 14 节的 26 例）。
+本切片登记的差异为 C059（图片路径，已由第 14 节闭合）、C060（stream_id 探测的 gjson 宽松度）、
+C061（WebSocket 传输未移植，缺口）、
 C062（会话 ID 接缝）、C063（流式与聚合，已由第 13 节闭合）、C064（字段级解码文案）、
 C065（strict required 顺序）、C066（工具 schema 数字词法）、C067（cost 之外的 double 仍用
 STJ 数字格式，缺口）与 C068（并行工具调用收尾顺序与元数据编码）。
@@ -398,9 +398,33 @@ fixture 取自参照 `testdata/`（16 个文件，`tests/AxonHub.Llm.Tests/testd
 | 聚合器：空/ nil 事件流拒绝、取消态规范化、9 行完成快照表（status/id/model/created_at/previous_response_id/error/incomplete_details/usage 与 ResponseMeta）、2 组 fixture、基础事件合成、注解保留与回退、previous_response_id、非法 JSON 与 `[DONE]` 跳过、多段推理摘要、推理文本、非法 content index（4 行）、图片生成调用 | `tests/AxonHub.Llm.Tests/ResponsesAggregatorTests.cs` | 28 |
 
 合计 24 + 34 + 28 = 86 例。C063 闭合；新增 C068（Go map 随机的并行工具收尾顺序改为插入序、
-元数据经 JSON 字符串/对象往返）。图片流式聚合仍随 C059、WebSocket 传输仍随 C061 保留；
-WebSocket 的 `error` 事件在流层可移植，已由出站表锁定。16 个 fixture 同时覆盖
+元数据经 JSON 字符串/对象往返）。图片流式聚合已随 C059（第 14 节）闭合；WebSocket 传输仍随
+C061 保留；WebSocket 的 `error` 事件在流层可移植，已由出站表锁定。16 个 fixture 同时覆盖
 `response.metadata`、`error` 与 `stop` 三个小型事件流。
+
+## 14. Responses 图片请求/响应路径（26 例，2026-10-31）
+
+参照路线：`llm/transformer/openai/responses/image_request.go`、`image_response.go`、
+`image_stream_test.go`、`image_roundtrip_test.go` 与 `outbound_test.go` 的图片用例。
+端口新增统一模型 `Model/Image.cs`（`ImageRequest` / `ImageResponse` / `ImageData`）、
+`LlmRequest.Image` / `LlmResponse.Image` 与 `api_format`（`openai/image_generation`、
+`openai/image_edit`、`openai/image_variation`）；请求构造与响应还原由 `ResponsesImageConvert`
+（`BuildImageToolRequest`、`BuildImageResponse`、`ImageDataUrls`、`MaskDataUrl`、
+`ImageUrlsFromRawJson`、`BytesToImageDataUrl`）实现，`ResponsesOutboundTransformer` 在
+`RequestType=image` 时改走图片工具请求，并把 `image` 回写到线路请求以选择响应分支。
+图片流式聚合（codex 的 `response.output_item.done` 携带 `result`）由现有
+`ResponsesAggregate` 与 `BuildImageResponse` 组合覆盖。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 图片工具请求构造：默认系统指令 + 保留系统消息 + user 文本/图片分片；nil 请求、非法 api_format、空 prompt、`n > 1`、编辑无图五类校验与文案；原始 JSON `image`/`mask` 的 `data:image/` 取值、字节图片的 Go `DetectContentType` 子集（PNG、JPEG 与 `text/plain`→`image/png` 回落）、工具模型覆盖（trim、空白回退）与 `codex_image_*` 元数据 | `tests/AxonHub.Llm.Tests/ResponsesImageTests.cs` | 9 |
+| 图片响应还原：nil 与上游 error、`image_generation_call` 结果收集与空值跳过、`data:` 前缀剥离、默认 `png` 与质量/尺寸/背景回显、`codex_image_model` 覆盖、无结果文案 | 同上 | 11 |
+| 出站接线：线路 `RequestType` 回写、`/v1/responses` payload（model/tool_choice/instructions/tools/输入 data URL）、编辑往返（`image.generation`、webp/high/1024x1024、b64_json）、HTTP ≥400 与空 body/非对象根的解码错误文案 | 同上 | 4 |
+| codex 图片流：13 个事件（`partial_image` 与 `output_item.done` 的 `result`、裸字符串 action）聚合后还原为单图响应 | 同上 | 1 |
+| `ItemAction` 三态解码：裸字符串、web_search 对象、`action: null`（线路指针语义） | 同上 | 1 |
+
+合计 9 + 11 + 4 + 1 + 1 = 26 例。C059 闭合；客户端面向的 OpenAI Images 入站/出站变换器
+（`image_inbound.go` / `image_outbound.go`）仍为缺口，登记为 C069。
 
 ## 覆盖缺口
 
@@ -410,7 +434,7 @@ WebSocket 的 `error` 事件在流层可移植，已由出站表锁定。16 个 
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 160 例锁定，流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合）。仍未移植：WebSocket 传输（C061）、图片请求/响应路径与图片流式聚合（C059） | 中 | 后续阶段 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合）。仍未移植：WebSocket 传输（C061）、客户端 OpenAI Images 变换器（C069） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

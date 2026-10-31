@@ -62,6 +62,11 @@ public sealed class LlmResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CompactResponse? Compact { get; set; }
 
+    /// <summary>Image sub-response; present when the response is an image response (llm/model.go:730).</summary>
+    [JsonPropertyName("image")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImageResponse? Image { get; set; }
+
     [JsonIgnore]
     public StreamCompletionEvidence StreamCompletionEvidence { get; set; }
 

@@ -690,33 +690,6 @@ public sealed class ResponsesOutboundTransformerTests
     }
 
     [Fact]
-    public void RejectsImageRequestAsNotPorted()
-    {
-        var transformer = ResponsesOutboundTransformer.Create("https://api.openai.com", "test-api-key");
-        var ex = Assert.Throws<NotSupportedException>(() => transformer.TransformRequest(new LlmRequest
-        {
-            Model = "gpt-4o",
-            RequestType = RequestTypes.Image,
-        }));
-
-        // buildImageToolRequest is out of scope for this slice (difference C059).
-        Assert.Equal("responses image requests are not ported", ex.Message);
-    }
-
-    [Fact]
-    public void RejectsImageResponseAsNotPorted()
-    {
-        var transformer = ResponsesOutboundTransformer.Create("https://api.openai.com", "test-api-key");
-        var ex = Assert.Throws<NotSupportedException>(() => transformer.TransformResponse(new HttpResponseData
-        {
-            StatusCode = 200,
-            Request = new HttpRequestData { RequestType = RequestTypes.Image },
-        }));
-
-        Assert.Equal("responses image responses are not ported", ex.Message);
-    }
-
-    [Fact]
     public void TransformResponseRejectsNil()
     {
         var transformer = ResponsesOutboundTransformer.Create("https://api.openai.com", "test-api-key");

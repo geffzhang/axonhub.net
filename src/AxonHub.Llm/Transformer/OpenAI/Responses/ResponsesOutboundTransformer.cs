@@ -64,9 +64,7 @@ public sealed class ResponsesOutboundConfig
 /// compact_outbound.go).
 /// </summary>
 /// <remarks>
-/// Scope cut: the image request/response path (<c>buildImageToolRequest</c>,
-/// <c>BuildImageResponse</c>) and the WebSocket transport executor are not
-/// ported; both are registered as gaps in the difference ledger.
+/// The WebSocket transport executor is not ported (difference C061).
 /// </remarks>
 public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
 {
@@ -151,14 +149,16 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             throw new InvalidOperationException("chat request is nil");
         }
 
+        var originalRequestType = request.RequestType;
+        var isImageRequest = originalRequestType == RequestTypes.Image;
+
         switch (request.RequestType)
         {
             case RequestTypes.Compact:
                 return TransformCompactRequest(request);
             case RequestTypes.Image:
-                // buildImageToolRequest / BuildImageResponse are out of scope
-                // for this slice (difference C059).
-                throw new NotSupportedException("responses image requests are not ported");
+                request = ResponsesImageConvert.BuildImageToolRequest(request);
+                break;
             case null:
             case "":
             case RequestTypes.Chat:
@@ -331,7 +331,7 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
         HttpClientUtils.HeaderSet(headers, "Content-Type", "application/json");
         HttpClientUtils.HeaderSet(headers, "Accept", "application/json");
 
-        return new HttpRequestData
+        var httpRequest = new HttpRequestData
         {
             Method = "POST",
             Url = BuildFullRequestUrl(),
@@ -347,6 +347,15 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             SkipInboundQueryMerge = true,
             Metadata = null,
         };
+
+        // Keep the image request type on the wire request so TransformResponse
+        // selects the image response conversion.
+        if (isImageRequest)
+        {
+            httpRequest.RequestType = originalRequestType!;
+        }
+
+        return httpRequest;
     }
 
     /// <summary>Port of buildFullRequestURL.</summary>
@@ -392,12 +401,53 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
 
         if (response.Request is not null && response.Request.RequestType == RequestTypes.Image)
         {
-            // transformImageResponse / BuildImageResponse are out of scope for
-            // this slice (difference C059).
-            throw new NotSupportedException("responses image responses are not ported");
+            return TransformImageResponse(response);
         }
 
         return TransformStandardResponse(response);
+    }
+
+    /// <summary>Port of transformImageResponse (outbound.go:415-431).</summary>
+    private static LlmResponse TransformImageResponse(HttpResponseData response)
+    {
+        if (response.StatusCode >= 400)
+        {
+            throw new InvalidOperationException(
+                "HTTP error " + response.StatusCode + ": " + BodyText(response.Body).Trim());
+        }
+
+        var body = response.Body ?? [];
+        var syntaxError = GoJsonSyntax.Validate(body);
+        if (syntaxError is not null)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal responses api image response: " + syntaxError);
+        }
+
+        var rootKind = GoStructJson.RootKind(body);
+        if (rootKind is not null && rootKind != "null")
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal responses api image response: "
+                + GoStructJson.TypeMismatch(rootKind, "responses.Response"));
+        }
+
+        ResponsesResponse? upstream;
+        try
+        {
+            upstream = rootKind == "null"
+                ? new ResponsesResponse()
+                : LlmJson.Deserialize<ResponsesResponse>(body);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal responses api image response: "
+                + OpenAiInboundTransformer.JsonErrorText(ex), ex);
+        }
+
+        var metadata = response.Request?.TransformerMetadata;
+        return ResponsesImageConvert.BuildImageResponse(upstream, metadata);
     }
 
     /// <summary>Port of transformStandardResponse.</summary>
