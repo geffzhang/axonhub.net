@@ -529,6 +529,35 @@ moderation 与 embedding 分支（检查顺序与 `empty_response.go` 一致）�
 合计 43 + 16 + 5 + 7 = 71 例。C076 闭合；C010 的 embedding/moderation 分支随之闭合，
 剩余非 chat 响应类型仍在缺口清单中。
 
+## 18. OpenAI Alpha Search / Decisions 客户端变换器与路由接线（137 例，2026-10-31）
+
+参照路线：`llm/transformer/openai/alpha_search_inbound.go`、
+`alpha_search_outbound.go` 与 `decisions/{inbound,outbound}.go`，测试
+`alpha_search_test.go` 与 decisions 的 5 个测试文件，路由
+`internal/server/routes.go:213-214` 以及 `empty_response.go` 的两个非 chat 分支。
+端口新增 `AlphaSearchRequest` / `AlphaSearchResponse`、`DecisionsRequest` /
+`DecisionsUsage` / `DecisionsResponse` 与 `LlmRequest` / `LlmResponse` 的对应字段，
+`AlphaSearchInboundTransformer`、`DecisionsInboundTransformer`、
+`DecisionsOutboundTransformer`，`OpenAiOutboundTransformer` 按 `RequestType` 的
+alpha 分派，以及 `RawJsonModelPatch`：只改写顶层 `model`、其余字节原样保留，
+缺键时在闭括号前追加，与 sjson 的 `SetBytes` 语义一致。decisions 入站与出站都
+做严格信封校验（对象根、model/input/questions/answers 的逐层类型检查），逐字段
+错误文案按 Go 1.26.4 运行结果对齐，并复刻 `json.Decoder` 的首值与尾随二段扫描；
+JSON 嵌套上限统一为 Go 的 10000 层。`Program.cs` 按 routes.go 注册
+`POST /v1/alpha/search` 与 `POST /v1/decisions`，两者复用 chat 处理器、只替换
+入站变换器；`ResponseContent.HasResponseContent` 增加 `AlphaSearch.Body` 与
+`Decisions.Answers` 分支。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| alpha 入站/出站往返、缺 model（含纯空白）、model 补丁（替换/追加/自定义 EndpointPath）、非对象信封与非法 JSON 文案、Content-Type 校验、空 body/nil 请求、空成功响应、流式拒绝两例、嵌套深度超过 64、上游错误响应映射 | `tests/AxonHub.Llm.Tests/OpenAiAlphaSearchTransformerTests.cs` | 19 |
+| decisions 请求解码（Go 结构体类型错误、根 null、字段大小写折叠与重复键、截断/空输入、语法错误优先于类型错误、尾随数据二段解码）、严格校验文案、item 键大小写敏感、流式拒绝、出站 model 补丁/URL/线路形状/配置校验、响应解码（answers/model/usage 逐字段类型错误、token 字面量、重复键合并、空 body 视图）、入站响应原样回传、`TransformError` 四分支与宽松解码 | `tests/AxonHub.Llm.Tests/OpenAiDecisionsTransformerTests.cs` | 110 |
+| 空响应探测：alpha-search body 与 decisions answers 计为内容 | `tests/AxonHub.Llm.Tests/EmptyResponseTests.cs` | 2 |
+| 路由接线：alpha-search 原样转发与上游 `/v1/alpha/search` 线路形状、缺 model 的 400 信封、上游错误的重新封套；decisions 原样转发与 `/v1/decisions` 线路形状、缺 questions 的 400 信封、上游错误的原始字节透传 | `tests/AxonHub.Api.Tests/AlphaSearchDecisionsEndpointTests.cs` | 6 |
+
+合计 19 + 110 + 2 + 6 = 137 例。C077 闭合；C010 的 decisions / alpha-search
+分支随之闭合，剩余 speech / transcription / rerank / video 仍在缺口清单中。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -536,8 +565,8 @@ moderation 与 embedding 分支（检查顺序与 `empty_response.go` 一致）�
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
-| 非 chat 响应类型的空响应探测（speech / transcription / decisions / alpha-search / rerank / video） | 统一模型尚未包含这些请求类型；embedding / moderation 已由第 17 节闭合（5 例），图片由第 16.1 节闭合 | 中 | 随对应请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合） | 中 | 后续阶段 |
+| 非 chat 响应类型的空响应探测（speech / transcription / rerank / video） | 已由第 16.1、17、18 节先后闭合图片、embedding / moderation 与 decisions / alpha-search 分支；剩余类型尚未进入统一模型 | 中 | 随对应请求类型落地 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

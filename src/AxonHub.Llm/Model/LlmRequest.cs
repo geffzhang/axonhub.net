@@ -179,6 +179,16 @@ public sealed class LlmRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ModerationRequest? Moderation { get; set; }
 
+    /// <summary>Alpha search sub-request; the raw opaque body (llm/model.go:272).</summary>
+    [JsonPropertyName("alpha_search_request")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AlphaSearchRequest? AlphaSearch { get; set; }
+
+    /// <summary>Decisions sub-request; set when the request is a decisions request (llm/model.go:275).</summary>
+    [JsonPropertyName("decisions_request")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DecisionsRequest? Decisions { get; set; }
+
     /// <summary>Provider/API-format private sidecar data; never serialized (llm/model.go:307).</summary>
     [JsonIgnore]
     public ProviderExtensions? ProviderExtensions { get; set; }

@@ -4,6 +4,7 @@ using AxonHub.Llm;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 
 namespace AxonHub.Api.Orchestration;
@@ -57,6 +58,11 @@ public static class ChannelOutboundFactory
             OpenAiChannelType when request.ApiFormat
                 is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
                 => ResponsesOutboundTransformer.Create(
+                    candidate.BaseUrl ?? string.Empty,
+                    provider,
+                    provider.KeyIndex),
+            OpenAiChannelType when request.ApiFormat == ApiFormats.OpenAIDecisions
+                => DecisionsOutboundTransformer.Create(
                     candidate.BaseUrl ?? string.Empty,
                     provider,
                     provider.KeyIndex),

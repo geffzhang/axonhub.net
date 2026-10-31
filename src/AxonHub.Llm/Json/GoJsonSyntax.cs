@@ -77,6 +77,14 @@ public sealed class GoJsonSyntax
     private bool _endTop;
     private string? _error;
 
+    // Streaming mode (json.Decoder.readValue): the scanner stops as soon as one
+    // top-level value completes, leaving the byte that revealed the end
+    // unconsumed ("scanEnd is delayed one byte").
+    private bool _streamMode;
+    private bool _valueComplete;
+    private int _valueEnd;
+    private int _byteIndex;
+
     /// <summary>
     /// Returns Go's <c>SyntaxError</c> text for <paramref name="data"/>, or
     /// <see langword="null"/> when the document is valid JSON.
@@ -85,6 +93,29 @@ public sealed class GoJsonSyntax
     {
         var scanner = new GoJsonSyntax();
         return scanner.Run(data);
+    }
+
+    /// <summary>
+    /// Port of one <c>json.Decoder.Decode</c> scan step
+    /// (<c>Decoder.readValue</c>): scans exactly one top-level value starting at
+    /// <paramref name="start"/> and leaves every later byte untouched.
+    /// </summary>
+    /// <param name="data">The whole body.</param>
+    /// <param name="start">Offset of the next unread byte.</param>
+    /// <param name="end">Offset just past the decoded value on success.</param>
+    /// <returns>
+    /// <see langword="null"/> when a value was decoded; <c>"EOF"</c> when only
+    /// whitespace remains (Go's <c>io.EOF</c>); <c>"unexpected EOF"</c> when the
+    /// input ends inside a value (Go's <c>io.ErrUnexpectedEOF</c>); otherwise the
+    /// scanner's own <c>SyntaxError</c> text.
+    /// </returns>
+    public static string? ScanDecoderValue(ReadOnlySpan<byte> data, int start, out int end)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(start);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(start, data.Length);
+
+        var scanner = new GoJsonSyntax { _streamMode = true };
+        return scanner.ScanStream(data, start, out end);
     }
 
     private string? Run(ReadOnlySpan<byte> data)
@@ -103,6 +134,59 @@ public sealed class GoJsonSyntax
         }
 
         return EndOfInput() ? null : _error;
+    }
+
+    /// <summary>Port of <c>Decoder.readValue</c>'s scan loop.</summary>
+    private string? ScanStream(ReadOnlySpan<byte> data, int start, out int end)
+    {
+        _state = SBeginValue;
+        _parseState.Clear();
+        _error = null;
+        _endTop = false;
+        _valueComplete = false;
+
+        for (var i = start; i < data.Length; i++)
+        {
+            _byteIndex = i;
+            if (Step(data[i]) == OpError)
+            {
+                end = data.Length;
+                return _error;
+            }
+
+            if (_valueComplete)
+            {
+                end = _valueEnd;
+                return null;
+            }
+        }
+
+        // readValue invents one space byte at EOF. A value that ends there is
+        // complete; otherwise readValue discards any scanner error from that
+        // synthetic step and reports io.EOF / io.ErrUnexpectedEOF instead.
+        _byteIndex = data.Length;
+        _ = Step((byte)' ');
+        if (_valueComplete)
+        {
+            end = data.Length;
+            return null;
+        }
+
+        end = data.Length;
+        return HasNonSpace(data, start) ? "unexpected EOF" : "EOF";
+    }
+
+    private static bool HasNonSpace(ReadOnlySpan<byte> data, int start)
+    {
+        for (var i = start; i < data.Length; i++)
+        {
+            if (!IsSpace(data[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool EndOfInput()
@@ -192,6 +276,13 @@ public sealed class GoJsonSyntax
         {
             _state = SEndTop;
             _endTop = true;
+            if (_streamMode)
+            {
+                // The closing bracket that completes the top-level container is
+                // part of the value.
+                _valueComplete = true;
+                _valueEnd = _byteIndex + 1;
+            }
         }
         else
         {
@@ -304,6 +395,15 @@ public sealed class GoJsonSyntax
         {
             _state = SEndTop;
             _endTop = true;
+            if (_streamMode)
+            {
+                // The current byte revealed the end of a top-level scalar but is
+                // not part of it; the next Decode starts there.
+                _valueComplete = true;
+                _valueEnd = _byteIndex;
+                return OpEnd;
+            }
+
             return StateEndTop(c);
         }
 

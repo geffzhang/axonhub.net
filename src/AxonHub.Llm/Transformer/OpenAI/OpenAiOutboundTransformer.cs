@@ -158,6 +158,8 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IA
                 return BuildEmbeddingApiRequest(request);
             case RequestTypes.Moderation:
                 return BuildModerationApiRequest(request);
+            case RequestTypes.AlphaSearch:
+                return BuildAlphaSearchApiRequest(request);
             case RequestTypes.Image:
                 return BuildImageGenerationApiRequest(request);
             case null:
@@ -221,6 +223,15 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IA
         if (response is null)
         {
             throw new InvalidOperationException("http response is nil");
+        }
+
+        // Alpha Search owns its error conversion; the reference dispatches here
+        // before the generic status/empty-body checks so provider error details
+        // survive into the client response.
+        if (response.Request is not null
+            && string.Equals(response.Request.ApiFormat, ApiFormats.OpenAIAlphaSearch, StringComparison.Ordinal))
+        {
+            return TransformAlphaSearchResponse(response);
         }
 
         if (response.StatusCode >= 400)

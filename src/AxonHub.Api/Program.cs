@@ -11,6 +11,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Persistence;
 using Orleans.Hosting;
@@ -198,5 +199,25 @@ static Task HandleModerationsAsync(
 
 app.MapPost("/v1/embeddings", HandleEmbeddingsAsync);
 app.MapPost("/v1/moderations", HandleModerationsAsync);
+
+// Alpha search and decisions (routes.go:213-214): each endpoint owns an inbound
+// transformer over the shared chat handler, like EmbeddingHandlers and
+// ModerationHandlers above.
+static Task HandleAlphaSearchAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new AlphaSearchInboundTransformer()));
+
+static Task HandleDecisionsAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new DecisionsInboundTransformer()));
+
+app.MapPost("/v1/alpha/search", HandleAlphaSearchAsync);
+app.MapPost("/v1/decisions", HandleDecisionsAsync);
 
 app.Run();

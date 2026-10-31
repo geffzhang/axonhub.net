@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
@@ -9,13 +10,48 @@ using PipelineType = AxonHub.Llm.Pipeline.Pipeline;
 namespace AxonHub.Llm.Tests;
 
 /// <summary>
-/// Port of llm/pipeline/empty_response_test.go, chat/embedding/moderation
-/// subset. The reference cases for decisions / alpha-search / speech /
-/// transcription responses are deferred until those request types exist in the
-/// unified model; see porting/01-baseline.md.
+/// Port of llm/pipeline/empty_response_test.go, chat/embedding/moderation/
+/// alpha-search/decisions subset. The reference cases for speech /
+/// transcription / rerank / video responses are deferred until those request
+/// types exist in the unified model; see porting/01-baseline.md.
 /// </summary>
 public sealed class EmptyResponseTests
 {
+    // Port of TestHasResponseContent/decisions answers.
+    [Fact]
+    public void HasResponseContent_DecisionsAnswers()
+    {
+        using var answer = JsonDocument.Parse("""{"type":"refusal"}""");
+
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Decisions = new DecisionsResponse
+            {
+                Answers = [answer.RootElement.Clone()],
+            },
+        }));
+
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Decisions = new DecisionsResponse { Answers = [] },
+        }));
+    }
+
+    // Port of TestHasResponseContent/alpha search response.
+    [Fact]
+    public void HasResponseContent_AlphaSearchResponse()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            AlphaSearch = new AlphaSearchResponse { Body = Encoding.UTF8.GetBytes("""{"ok":true}""") },
+        }));
+
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            AlphaSearch = new AlphaSearchResponse { Body = [] },
+        }));
+    }
+
     // Port of TestHasResponseContent_ReasoningSignature.
     [Fact]
     public void HasResponseContent_ReasoningSignature()

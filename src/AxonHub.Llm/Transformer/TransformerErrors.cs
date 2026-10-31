@@ -44,4 +44,7 @@ public static class TransformerErrors
 
     public static TransformerException InvalidResponse(string detail)
         => new(TransformerErrorKind.InvalidResponse, "invalid response: " + detail);
+
+    public static TransformerException InvalidResponse(string detail, Exception inner)
+        => new(TransformerErrorKind.InvalidResponse, "invalid response: " + detail, inner);
 }

@@ -77,6 +77,16 @@ public sealed class LlmResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ModerationResponse? Moderation { get; set; }
 
+    /// <summary>Alpha search sub-response; the raw opaque body (llm/model.go:761).</summary>
+    [JsonPropertyName("alpha_search_response")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AlphaSearchResponse? AlphaSearch { get; set; }
+
+    /// <summary>Decisions sub-response; present when the response is a decisions response (llm/model.go:764).</summary>
+    [JsonPropertyName("decisions_response")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DecisionsResponse? Decisions { get; set; }
+
     [JsonIgnore]
     public StreamCompletionEvidence StreamCompletionEvidence { get; set; }
 
