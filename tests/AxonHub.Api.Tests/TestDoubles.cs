@@ -331,6 +331,23 @@ internal static class TestChannels
             Settings = settings,
         };
 
+    public static ChannelDescriptor Jina(
+        long id,
+        string model,
+        string? actualModel = null,
+        string apiKey = "sk-test",
+        string baseUrl = "http://upstream.test")
+        => new()
+        {
+            Id = id,
+            Name = "channel-" + id,
+            OrderingWeight = 0,
+            Type = "jina",
+            BaseUrl = baseUrl,
+            Credentials = "{\"apiKey\":\"" + apiKey + "\"}",
+            SupportedModels = "[\"" + (actualModel ?? model) + "\"]",
+        };
+
     public static HttpRequestData ChatRequest(string model, bool stream = false, int? n = null)
     {
         var streamField = stream ? ",\"stream\":true" : string.Empty;

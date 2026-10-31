@@ -10,6 +10,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
+using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
@@ -245,5 +246,29 @@ static Task HandleTranslationAsync(
 app.MapPost("/v1/audio/speech", HandleSpeechAsync);
 app.MapPost("/v1/audio/transcriptions", HandleTranscriptionAsync);
 app.MapPost("/v1/audio/translations", HandleTranslationAsync);
+
+// Jina rerank (routes.go:230, 239): the OpenAI-compatible alias and the
+// native /jina/v1 surface share one handler with the rerank inbound
+// transformer, like RerankHandlers in jina.go.
+static Task HandleRerankAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new JinaRerankInboundTransformer()));
+
+app.MapPost("/v1/rerank", HandleRerankAsync);
+app.MapPost("/jina/v1/rerank", HandleRerankAsync);
+
+// Jina embeddings (routes.go:238): the native /jina/v1 surface owns its
+// inbound transformer; /v1/embeddings stays the OpenAI surface above.
+static Task HandleJinaEmbeddingsAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new JinaEmbeddingInboundTransformer()));
+
+app.MapPost("/jina/v1/embeddings", HandleJinaEmbeddingsAsync);
 
 app.Run();

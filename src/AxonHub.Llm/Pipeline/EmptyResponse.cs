@@ -80,6 +80,11 @@ public static class ResponseContent
             return true;
         }
 
+        if (resp.Rerank is { Results.Count: > 0 })
+        {
+            return true;
+        }
+
         if (resp.Image is { Data.Count: > 0 })
         {
             return true;

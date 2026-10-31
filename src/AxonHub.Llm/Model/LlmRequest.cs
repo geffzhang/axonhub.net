@@ -204,6 +204,11 @@ public sealed class LlmRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TranslationRequest? Translation { get; set; }
 
+    /// <summary>Rerank sub-request; set when the request is a rerank request (llm/model.go:243).</summary>
+    [JsonPropertyName("rerank")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RerankRequest? Rerank { get; set; }
+
     /// <summary>Provider/API-format private sidecar data; never serialized (llm/model.go:307).</summary>
     [JsonIgnore]
     public ProviderExtensions? ProviderExtensions { get; set; }

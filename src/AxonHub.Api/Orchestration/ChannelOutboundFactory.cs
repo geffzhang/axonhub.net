@@ -4,6 +4,7 @@ using AxonHub.Llm;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 
@@ -15,8 +16,9 @@ namespace AxonHub.Api.Orchestration;
 /// <c>buildChannel</c> → the channel-type switch).
 /// </summary>
 /// <remarks>
-/// Only the <c>openai</c> and <c>anthropic</c> channel types are ported (the
-/// vertical slice); the other provider types are registered as a scope cut. Key
+/// Only the <c>openai</c>, <c>anthropic</c> and <c>jina</c> channel types are
+/// ported (the vertical slice); the other provider types are registered as a
+/// scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are chosen at random per attempt because the trace subsystem
 /// (and therefore trace-sticky rendezvous selection) is not ported yet (C013).
@@ -26,6 +28,8 @@ public static class ChannelOutboundFactory
     public const string OpenAiChannelType = "openai";
 
     public const string AnthropicChannelType = "anthropic";
+
+    public const string JinaChannelType = "jina";
 
     public static IOutboundTransformer Create(
         ChannelCandidate candidate,
@@ -71,6 +75,10 @@ public static class ChannelOutboundFactory
                 provider,
                 provider.KeyIndex),
             AnthropicChannelType => AnthropicOutboundTransformer.Create(
+                candidate.BaseUrl ?? string.Empty,
+                provider,
+                provider.KeyIndex),
+            JinaChannelType => JinaOutboundTransformer.Create(
                 candidate.BaseUrl ?? string.Empty,
                 provider,
                 provider.KeyIndex),

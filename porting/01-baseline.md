@@ -595,6 +595,42 @@ multipart（`file` + 文本字段）、JSON 与 SRT / verbose_json 响应透传�
 = 102 例。差异登记 C079 闭合；C010 的 speech / transcription 分支随之闭合，
 剩余 rerank / video 仍在缺口清单中。
 
+## 20. Jina Rerank / Embedding 客户端变换器与路由接线（88 例，2026-10-31）
+
+参照路线：`llm/transformer/jina/rerank_inbound.go`（195 行）、
+`embedding_inbound.go`（192 行）、`outbound.go`（437 行）、`model.go`、
+`usage_json.go` 与测试 `embedding_test.go`（655 行，8 个测试函数逐条移植；
+rerank 入站/出站在参照侧无独立单测，按源码行为锁闭），路由
+`internal/server/routes.go:230,238-239` 与 `internal/server/api/jina.go`。
+端口新增 `JinaRerankInboundTransformer`（TransformRequest 校验链：nil / 空
+body → 语法校验 → 根类型探测 → 解码 → model / query / documents 逐项校验；
+TransformResponse 只挂 Content-Type；TransformError 只特判 ResponseError，
+其余一律 500 `api_error` 信封——参照 chat.go → transformOrchestratorError
+全链路行为）、`JinaEmbeddingInboundTransformer`（含 Content-Type 默认与校验、
+`validateEmbeddingInput` 分支序、响应 Cache-Control 头、TransformError 委托
+rerank 入站；TransformStream 是 ErrInvalidRequest 包装而 rerank 是裸错误——
+参照如此）、`JinaOutboundTransformer`（requestType 分派 rerank / embedding /
+compact 拒绝 / 未知类型拒绝；`/rerank` 与 `/embeddings` URL、v1 规范化；响应按
+`Request.ApiFormat` 分派解码；usage 只取 token 计数不落 cost；TransformError
+解析 `{"error":{...}}` 信封、非 JSON 回退 GoHttpStatus 文案）、`JinaModels`
+（wire 模型：top_n / return_documents / usage / cost 的 omitempty、
+EmbeddingUsage cost 走 GoOptionalNumberConverter）、统一模型 `RerankRequest` /
+`RerankResponse` / `RerankResult` / `RerankDocument`；`Program.cs` 注册
+`POST /v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings`，
+`ChannelOutboundFactory` 增加 `jina` 通道类型分派。差异登记 C080。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| rerank 入站：全字段请求与可选字段缺省 null、nil / 空 body、model / query / documents 校验序、语法 / 数组根 / 字符串根 / null 根 / 字段类型（C080 的 STJ 文案）解码错误文案、响应精确字节（document 省略、空 results 数组、usage 无 cost）、usage cost 0.000005 往返、nil 响应 / nil rerank、TransformError 三支（nil / 普通异常 → 500 信封、ResponseError → 状态码 + 详情）、流式拒绝 | `tests/AxonHub.Llm.Tests/JinaRerankTransformerTests.cs` | 23 |
+| 出站：三档 baseURL 规范化 × rerank / embedding（6 理论例）、配置校验、ApiFormat、rerank 线路形状精确字节（含 top_n / return_documents 与省略）、nil 请求 / 缺 rerank / model / query / documents 纯文本校验、compact 与未知类型拒绝文案、响应解析（usage 无 cost）、nil Request 回退 rerank 解码（C080）、非法 JSON / 空 body / ≥400 jina 信封 / ≥400 非 JSON 回退状态文案、TransformError nil / 信封 / 非 JSON、流式拒绝 | `tests/AxonHub.Llm.Tests/JinaRerankTransformerTests.cs` | 29 |
+| embedding 出站：task 缺省 text-matching 与显式 task 精确字节、缺 embedding / model 文案、响应解析、零 usage 丢弃、非法 JSON | `tests/AxonHub.Llm.Tests/JinaRerankTransformerTests.cs` | 7 |
+| embedding 入站：字符串 / 数组输入、task 透传、缺 model / input、空字符串 / 空数组输入、nil / 空 body、Content-Type 拒绝、非法 JSON / 数组根解码文案、响应（Cache-Control、零 usage 仍输出、cost 往返）、nil 响应 / 缺 embedding、TransformError 委托 rerank、流式拒绝（InvalidRequest 包装） | `tests/AxonHub.Llm.Tests/JinaRerankTransformerTests.cs` | 20 |
+| 空响应探测：rerank results 有内容 / 空 | `tests/AxonHub.Llm.Tests/EmptyResponseTests.cs` | 2 |
+| 路由接线：空 body 400、校验错误与解码错误 → 500 api_error 信封（参照特有）、rerank 转发（上游 URL `/v1/rerank`、ApiFormat、Bearer 头、响应透传）、`/jina/v1/rerank` 同处理器、embedding 转发（URL `/embeddings`、task 默认 text-matching、usage 透传）、embedding 校验错误 500 | `tests/AxonHub.Api.Tests/RerankEndpointTests.cs` | 7 |
+
+合计 23 + 29 + 7 + 20 + 2 + 7 = 88 例。差异登记 C080；C010 的 rerank 分支随之
+闭合，非 chat 响应类型仅剩 video。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -602,8 +638,8 @@ multipart（`file` + 文本字段）、JSON 与 SRT / verbose_json 响应透传�
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
-| 非 chat 响应类型的空响应探测（rerank / video） | 已由第 16.1、17、18、19 节先后闭合图片、embedding / moderation、decisions / alpha-search 与 speech / transcription 分支；仅剩 rerank / video 尚未进入统一模型 | 中 | 随对应请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合） | 中 | 后续阶段 |
+| 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；仅剩 video 尚未进入统一模型 | 中 | 随 video 请求类型落地 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

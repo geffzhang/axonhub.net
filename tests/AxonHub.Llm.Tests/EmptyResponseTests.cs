@@ -126,6 +126,33 @@ public sealed class EmptyResponseTests
         }));
     }
 
+    // Port of TestHasResponseContent/rerank response with results.
+    [Fact]
+    public void HasResponseContent_RerankResults()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Rerank = new RerankResponse
+            {
+                Object = "list",
+                Results =
+                [
+                    new RerankResult { Index = 0, RelevanceScore = 0.9 },
+                ],
+            },
+        }));
+    }
+
+    // Port of TestHasResponseContent/empty rerank response.
+    [Fact]
+    public void HasResponseContent_EmptyRerankResponse()
+    {
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Rerank = new RerankResponse { Object = "list" },
+        }));
+    }
+
     // Port of TestHasResponseContent/moderation response with results.
     [Fact]
     public void HasResponseContent_ModerationResponseWithResults()
