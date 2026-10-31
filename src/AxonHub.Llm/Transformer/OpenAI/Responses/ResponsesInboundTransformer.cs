@@ -109,19 +109,17 @@ public sealed class ResponsesInboundTransformer : IInboundTransformer
         };
     }
 
-    /// <summary>
-    /// The reference's inbound stream transformer (inbound_stream.go) is not
-    /// ported in this slice; tracked as a real gap in the difference ledger.
-    /// </summary>
+    /// <summary>Port of TransformStream (inbound_stream.go:20-35).</summary>
     public IStream<StreamEvent> TransformStream(IStream<LlmResponse> stream)
-        => throw new NotSupportedException("responses streaming is not ported");
-
-    /// <summary>Not ported in this slice (see TransformStream).</summary>
-    public byte[] AggregateStreamChunks(IReadOnlyList<StreamEvent> chunks, out ResponseMeta meta)
     {
-        meta = new ResponseMeta();
-        throw new NotSupportedException("responses stream aggregation is not ported");
+        var mapped = new MapStream<LlmResponse, LlmResponse>(
+            stream, resp => ResponsesNamespace.MapResponseFunctionNames(resp, false));
+        return new ResponsesInboundStream(mapped);
     }
+
+    /// <summary>Port of AggregateStreamChunks (inbound_stream.go:1390-1396).</summary>
+    public byte[] AggregateStreamChunks(IReadOnlyList<StreamEvent> chunks, out ResponseMeta meta)
+        => ResponsesAggregate.AggregateStreamChunks(chunks, out meta);
 
     /// <summary>Port of TransformError: LLM error to the Responses API error envelope.</summary>
     public HttpResponseData TransformError(Exception? error)

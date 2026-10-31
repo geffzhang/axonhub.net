@@ -717,21 +717,6 @@ public sealed class ResponsesOutboundTransformerTests
     }
 
     [Fact]
-    public void RejectsStreamingAsNotPorted()
-    {
-        var transformer = ResponsesOutboundTransformer.Create("https://api.openai.com", "test-api-key");
-
-        // outbound_stream.go is out of scope for this slice (difference C063).
-        var streamError = Assert.Throws<NotSupportedException>(
-            () => transformer.TransformStream(null, null!));
-        Assert.Equal("responses streaming is not ported", streamError.Message);
-
-        var aggregateError = Assert.Throws<NotSupportedException>(
-            () => transformer.AggregateStreamChunks(null, [], out _));
-        Assert.Equal("responses stream aggregation is not ported", aggregateError.Message);
-    }
-
-    [Fact]
     public void TransformResponseRejectsNil()
     {
         var transformer = ResponsesOutboundTransformer.Create("https://api.openai.com", "test-api-key");

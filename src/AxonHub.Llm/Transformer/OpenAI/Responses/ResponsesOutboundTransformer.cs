@@ -715,28 +715,24 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
         };
     }
 
-    /// <summary>
-    /// The reference's inbound stream transformer (outbound_stream.go) is not
-    /// ported in this slice; tracked as a real gap in the difference ledger.
-    /// </summary>
+    /// <summary>Port of TransformStream (outbound_stream.go:20-31).</summary>
     public IStream<LlmResponse> TransformStream(
         HttpRequestData? request, IStream<StreamEvent> stream)
     {
         _ = request;
-        _ = stream;
-        throw new NotSupportedException("responses streaming is not ported");
+        var source = GoStreams.NoNil(new ResponsesOutboundStream(stream));
+        return new MapStream<LlmResponse, LlmResponse>(
+            source, resp => ResponsesNamespace.MapResponseFunctionNames(resp, true));
     }
 
-    /// <summary>Not ported in this slice (see <see cref="TransformStream"/>).</summary>
+    /// <summary>Port of AggregateStreamChunks (outbound_stream.go:169-187).</summary>
     public byte[] AggregateStreamChunks(
         HttpRequestData? request,
         IReadOnlyList<StreamEvent> chunks,
         out ResponseMeta meta)
     {
         _ = request;
-        _ = chunks;
-        meta = new ResponseMeta();
-        throw new NotSupportedException("responses stream aggregation is not ported");
+        return ResponsesAggregate.AggregateStreamChunks(chunks, out meta);
     }
 
     private static string BodyText(byte[]? body)

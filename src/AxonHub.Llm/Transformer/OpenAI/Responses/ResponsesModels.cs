@@ -18,6 +18,12 @@ internal static class ResponsesKeys
     /// <summary>Go: <c>responsesTerminalDetailsTransformerMetadataKey</c>.</summary>
     public const string TerminalDetailsTransformerMetadataKey = "openai_responses_terminal_details";
 
+    /// <summary>Go: <c>responseMetadataTransformerMetadataKey</c> (stream_event.go:8).</summary>
+    public const string ResponseMetadataTransformerMetadataKey = "openai_responses_raw_metadata_event";
+
+    /// <summary>Go: <c>responseHeadersTransformerMetadataKey</c> (stream_event.go:9).</summary>
+    public const string ResponseHeadersTransformerMetadataKey = "openai_responses_transport_headers";
+
     /// <summary>Header that forces Responses Lite behaviour on the inbound path (inbound.go).</summary>
     public const string ResponsesLiteHeader = "X-Openai-Internal-Codex-Responses-Lite";
 }

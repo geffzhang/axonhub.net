@@ -308,20 +308,6 @@ public sealed class ResponsesInboundTransformerTests
     }
 
     [Fact]
-    public void RejectsStreamingAsNotPorted()
-    {
-        // inbound_stream.go and the aggregation surface are out of scope for
-        // this slice (difference C063).
-        var streamError = Assert.Throws<NotSupportedException>(
-            () => Inbound.TransformStream(new LlmErrorAfterStream()));
-        Assert.Equal("responses streaming is not ported", streamError.Message);
-
-        var aggregateError = Assert.Throws<NotSupportedException>(
-            () => Inbound.AggregateStreamChunks([], out _));
-        Assert.Equal("responses stream aggregation is not ported", aggregateError.Message);
-    }
-
-    [Fact]
     public void TransformResponseRejectsNil()
     {
         var ex = Assert.Throws<InvalidOperationException>(() => Inbound.TransformResponse(null));
