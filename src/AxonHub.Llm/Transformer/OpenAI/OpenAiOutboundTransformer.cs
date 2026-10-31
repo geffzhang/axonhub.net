@@ -60,7 +60,7 @@ public interface IApiKeyProvenance
 }
 
 /// <summary>Port of llm/transformer/openai/outbound.go (chat path).</summary>
-public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
+public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IApiKeyProvenance, IVideoTaskOutbound
 {
     private readonly OpenAiOutboundConfig _config;
 
@@ -162,6 +162,8 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IA
                 return BuildAlphaSearchApiRequest(request);
             case RequestTypes.Image:
                 return BuildImageGenerationApiRequest(request);
+            case RequestTypes.Video:
+                return BuildVideoGenerationApiRequest(request);
             case RequestTypes.Speech:
                 return BuildSpeechRequest(request);
             case RequestTypes.Transcription:
@@ -263,6 +265,8 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IA
                     return TransformEmbeddingResponse(response);
                 case ApiFormats.OpenAIModeration:
                     return TransformModerationResponse(response);
+                case ApiFormats.OpenAIVideo:
+                    return TransformVideoResponse(response);
                 case ApiFormats.OpenAISpeech:
                     return TransformSpeechResponse(response);
                 case ApiFormats.OpenAITranscription:

@@ -55,9 +55,9 @@ public static class ResponseContent
 
     /// <summary>
     /// Port of <c>hasResponseContent</c> for the implemented response kinds
-    /// (chat, moderation, embedding, images, audio, alpha search and
-    /// decisions). The remaining non-chat branches (rerank, video, compact,
-    /// system one, completion) land together with those request types; see
+    /// (chat, moderation, embedding, rerank, image, video, audio, alpha search
+    /// and decisions). The remaining non-chat branches (compact, system one,
+    /// completion) land together with those request types; see
     /// porting/01-baseline.md.
     /// </summary>
     public static bool HasResponseContent(LlmResponse? resp)
@@ -86,6 +86,15 @@ public static class ResponseContent
         }
 
         if (resp.Image is { Data.Count: > 0 })
+        {
+            return true;
+        }
+
+        if (resp.Video is { } video
+            && (video.ID.Length > 0
+                || video.Status.Length > 0
+                || !string.IsNullOrEmpty(video.VideoURL)
+                || video.Error is not null))
         {
             return true;
         }

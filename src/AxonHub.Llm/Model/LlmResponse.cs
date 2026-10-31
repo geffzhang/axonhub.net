@@ -102,6 +102,11 @@ public sealed class LlmResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RerankResponse? Rerank { get; set; }
 
+    /// <summary>Video sub-response; present when the response is a video response (llm/model.go:733).</summary>
+    [JsonPropertyName("video")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public VideoResponse? Video { get; set; }
+
     /// <summary>SSE event from a streaming TTS provider (llm/model.go:748).</summary>
     [JsonPropertyName("speech_stream_event")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

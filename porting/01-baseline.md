@@ -631,6 +631,37 @@ EmbeddingUsage cost 走 GoOptionalNumberConverter）、统一模型 `RerankReque
 合计 23 + 29 + 7 + 20 + 2 + 7 = 88 例。差异登记 C080；C010 的 rerank 分支随之
 闭合，非 chat 响应类型仅剩 video。
 
+## 21. OpenAI Video 客户端变换器 Llm 层（57 例，2026-10-31）
+
+参照路线：`llm/transformer/openai/video_inbound.go`、`video_inbound_multipart.go`、
+`video_extensions.go`、`video_outbound.go`（343 行）与测试
+`video_inbound_test.go`（8 个测试函数）、`video_outbound_test.go`（3 个测试函数）。
+端口为 `OpenAiOutboundTransformer` 新增 partial `OpenAiOutboundVideo`
+（`BuildVideoGenerationApiRequest` / `TransformVideoResponse` /
+`BuildGetVideoTaskRequest` / `ParseGetVideoTaskResponse` /
+`BuildDeleteVideoTaskRequest` / `NormalizeVideoStatusOpenAI`，实现
+`IVideoTaskOutbound`）、`OpenAiVideoExtensions`（`ParseVideoJsonRequest` 的
+Go 解码链与 unknown 字段扫入 extra_body、multipart 扩展字段、
+`MergeVideoExtraBody`）、`OpenAiVideoInboundMultipart`（multipart 解析、
+4MB/20MB 上限、input_reference 快照）、统一模型 `VideoRequest` /
+`VideoResponse` / `VideoContent` / `VideoError` 与 wire 模型
+`OpenAiVideoModels`，`EmptyResponse` 补齐 video 分支；差异登记 C081。
+端点接线（routes + biz VideoService + 持久化）为下一节（Segment B）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 入站 JSON：全字段请求与可选字段缺省 null、extra_body 合并与 provider_hint 等 unknown 字段扫入、model / prompt 校验序、nil / 空 body / 默认 CT=JSON、非法 CT 文案、语法 / 数组根解码文案、extra_body 非对象拒绝 | `tests/AxonHub.Llm.Tests/OpenAiVideoTransformerTests.cs` | 10 |
+| 入站 multipart：模型与提示字段、input_reference 文件（data URL 前缀、嗅探 MIME、未类型短类型拒绝、4MB 上限、多文件拒绝）、内容合成（text + image_url first_frame）、扩展字段（execution_expires_after / content / return_last_frame / tools 类型校验、native 字段 JSON 校验、extra_body 合并与覆盖）、缺 boundary | `tests/AxonHub.Llm.Tests/OpenAiVideoTransformerTests.cs` | 14 |
+| 响应变换：status 映射（in_progress→running 线路回写、created_at、零 completed_at 省略）、usage 与 error 透传、nil video、流式拒绝 | `tests/AxonHub.Llm.Tests/OpenAiVideoTransformerTests.cs` | 6 |
+| 出站 create：线路形状精确字节（model / prompt / input_reference / seconds / size 与省略）、URL `/videos`、Bearer 与 metadata（model / video_prompt）、缺 video / model / prompt 文案、marshal 失败 | `tests/AxonHub.Llm.Tests/OpenAiVideoTransformerTests.cs` | 6 |
+| 出站响应：默认 model video-generation 与 metadata 回显、缺 id、provider error 400 信封、非法 JSON / 数组根文案、status 归一化表 7 例、ApiFormat 分派 | `tests/AxonHub.Llm.Tests/OpenAiVideoTransformerTests.cs` | 12 |
+| 出站 get / delete：URL 拼接与 Bearer、缺 providerTaskID 文案、get 响应解析（seconds 字符串、状态归一化、时间戳、usage、error、非法 JSON） | `tests/AxonHub.Llm.Tests/OpenAiVideoTransformerTests.cs` | 8 |
+| 空响应探测：video 分支（ID / Status / VideoURL / Error 任一非空即视为有内容） | `tests/AxonHub.Llm.Tests/EmptyResponseTests.cs` | 1 |
+
+合计 10 + 14 + 6 + 6 + 12 + 8 + 1 = 57 例（`OpenAiVideoTransformerTests` 50 个测试
+方法、1 个 7 行 Theory）。差异登记 C081；C010 的 video Llm 分支随之闭合，仅剩
+video 端点接线（routes + biz VideoService + 持久化，Segment B）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -638,8 +669,8 @@ EmbeddingUsage cost 走 GoOptionalNumberConverter）、统一模型 `RerankReque
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
-| 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；仅剩 video 尚未进入统一模型 | 中 | 随 video 请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video） | 中 | 后续阶段 |
+| 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081） | 中 | video 端点接线（routes + VideoService + 持久化，Segment B） |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合；仅剩 video 端点接线） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

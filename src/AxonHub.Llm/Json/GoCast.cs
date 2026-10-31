@@ -631,4 +631,88 @@ public static class GoCast
 
         return negative ? "-" + expanded : expanded;
     }
+
+    /// <summary>
+    /// Port of strconv.ParseBool: accepts exactly the Go table — 1, t, T,
+    /// TRUE, true, True and 0, f, F, FALSE, false, False. Anything else
+    /// (including surrounding whitespace) fails.
+    /// </summary>
+    public static bool TryParseBool(string s, out bool value)
+    {
+        switch (s)
+        {
+            case "1":
+            case "t":
+            case "T":
+            case "TRUE":
+            case "true":
+            case "True":
+                value = true;
+                return true;
+            case "0":
+            case "f":
+            case "F":
+            case "FALSE":
+            case "false":
+            case "False":
+                value = false;
+                return true;
+            default:
+                value = false;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Port of strconv.ParseInt(s, 10, 64): an optional sign followed by ASCII
+    /// digits only — no whitespace, no thousands separators, no underscores.
+    /// Fails when empty, when any byte is not a digit, or on int64 overflow.
+    /// </summary>
+    public static bool TryParseInt64(string s, out long value)
+    {
+        value = 0;
+
+        if (s.Length == 0)
+        {
+            return false;
+        }
+
+        var negative = false;
+        var i = 0;
+        switch (s[0])
+        {
+            case '+':
+                i = 1;
+                break;
+            case '-':
+                negative = true;
+                i = 1;
+                break;
+        }
+
+        if (i == s.Length)
+        {
+            return false;
+        }
+
+        var limit = negative ? 9223372036854775808UL : 9223372036854775807UL;
+        ulong acc = 0;
+        for (; i < s.Length; i++)
+        {
+            var c = s[i];
+            if (c is < '0' or > '9')
+            {
+                return false;
+            }
+
+            acc = (acc * 10) + (uint)(c - '0');
+            if (acc > limit)
+            {
+                return false;
+            }
+        }
+
+        value = negative ? unchecked(-(long)acc) : (long)acc;
+        return true;
+    }
 }

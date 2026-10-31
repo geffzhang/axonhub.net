@@ -39,6 +39,9 @@ public static class ApiFormats
     public const string OpenAIImageEdit = "openai/image_edit";
     public const string OpenAIImageVariation = "openai/image_variation";
     public const string OpenAISpeech = "openai/audio_speech";
+    public const string OpenAIVideo = "openai/video";
+    public const string SeedanceVideo = "seedance/video";
+    public const string ZenmuxVideo = "zenmux/video";
     public const string JinaRerank = "jina/rerank";
     public const string JinaEmbedding = "jina/embeddings";
     public const string OpenAITranscription = "openai/audio_transcriptions";

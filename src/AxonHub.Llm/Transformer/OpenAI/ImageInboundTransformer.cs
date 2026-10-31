@@ -686,7 +686,7 @@ public sealed class ImageInboundTransformer : IInboundTransformer
     private static string MultipartFileToDataUrl(ParsedMultipartFile file)
         => Xurl.BuildDataUrl(file.ContentType, Convert.ToBase64String(file.Data), isBase64: true);
 
-    private static bool IsAllowedImageType(string contentType)
+    internal static bool IsAllowedImageType(string contentType)
     {
         foreach (var allowed in AllowedImageTypes)
         {

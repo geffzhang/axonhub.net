@@ -174,6 +174,11 @@ public sealed class LlmRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ImageRequest? Image { get; set; }
 
+    /// <summary>Video sub-request; set when the request is a video request (llm/model.go:252).</summary>
+    [JsonPropertyName("video")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public VideoRequest? Video { get; set; }
+
     /// <summary>Moderation sub-request; set when the request is a moderation request (llm/model.go:270).</summary>
     [JsonPropertyName("moderation_request")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

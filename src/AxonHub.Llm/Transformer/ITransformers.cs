@@ -70,3 +70,20 @@ public interface ITransportRequestFinalizer
     /// <summary>Applies the final transport-specific request cleanup.</summary>
     HttpRequestData? FinalizeTransportRequest(HttpRequestData? request);
 }
+
+/// <summary>
+/// Port of transformer.VideoTaskOutbound (llm/transformer/interfaces.go:75-82):
+/// the optional extension for outbound transformers that support video task
+/// query/delete operations (async task model).
+/// </summary>
+public interface IVideoTaskOutbound
+{
+    /// <summary>Builds the provider GET request for one task.</summary>
+    HttpRequestData BuildGetVideoTaskRequest(string providerTaskId);
+
+    /// <summary>Parses the provider GET response into the unified response.</summary>
+    LlmResponse ParseGetVideoTaskResponse(HttpResponseData? httpResp);
+
+    /// <summary>Builds the provider DELETE request for one task.</summary>
+    HttpRequestData BuildDeleteVideoTaskRequest(string providerTaskId);
+}

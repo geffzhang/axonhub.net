@@ -10,10 +10,9 @@ using PipelineType = AxonHub.Llm.Pipeline.Pipeline;
 namespace AxonHub.Llm.Tests;
 
 /// <summary>
-/// Port of llm/pipeline/empty_response_test.go, chat/embedding/moderation/
-/// alpha-search/decisions subset. The reference cases for speech /
-/// transcription / rerank / video responses are deferred until those request
-/// types exist in the unified model; see porting/01-baseline.md.
+/// Port of llm/pipeline/empty_response_test.go. The reference cases for
+/// compact / system one / completion responses are deferred until those
+/// request types exist in the unified model; see porting/01-baseline.md.
 /// </summary>
 public sealed class EmptyResponseTests
 {
@@ -150,6 +149,33 @@ public sealed class EmptyResponseTests
         Assert.False(ResponseContent.HasResponseContent(new LlmResponse
         {
             Rerank = new RerankResponse { Object = "list" },
+        }));
+    }
+
+    // Port of TestHasResponseContent/video response: any of id, status,
+    // video_url or error counts as content.
+    [Fact]
+    public void HasResponseContent_VideoResponse()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Video = new VideoResponse { ID = "vid_1" },
+        }));
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Video = new VideoResponse { Status = "running" },
+        }));
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Video = new VideoResponse { VideoURL = "https://example.com/video.mp4" },
+        }));
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Video = new VideoResponse { Error = new VideoError { Message = "boom" } },
+        }));
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Video = new VideoResponse(),
         }));
     }
 
