@@ -426,7 +426,7 @@ fixture 取自参照 `testdata/`（16 个文件，`tests/AxonHub.Llm.Tests/testd
 | `ItemAction` 三态解码：裸字符串、web_search 对象、`action: null`（线路指针语义） | 同上 | 1 |
 
 合计 9 + 11 + 4 + 1 + 1 = 26 例。C059 闭合；客户端面向的 OpenAI Images 入站/出站变换器
-（`image_inbound.go` / `image_outbound.go`）仍为缺口，登记为 C069。
+（`image_inbound.go` / `image_outbound.go`）已由第 16 节补齐（C069 闭合）。
 
 ## 15. Responses WebSocket 传输（45 例，2026-10-31）
 
@@ -457,6 +457,28 @@ HTTP 清理与关闭，编排层由 `PersistentOutboundTransformer` 的对应方
 永远被清理与关闭逻辑跳过；`ReleaseInFlight` 改为“释放已持有的槽，已空闲时忽略
 `SemaphoreFullException`”，由复用、后台清理与 Close 三组用例锁定。
 
+## 16. OpenAI Images 客户端变换器（71 例，2026-10-31）
+
+参照路线：`llm/transformer/openai/image_inbound.go`、`image_outbound.go`、
+`image_inbound_test.go`、`image_outbound_test.go`、`image_edit_outbound_test.go`（共 69 个测试函数）
+与 `outbound.go` 的 image 分支。端口新增 `ImageInboundTransformer`（`Generation`/`Edit`/`Variation`
+三个工厂）与 `OpenAiOutboundImage`（`OpenAiOutboundTransformer` 的 partial：三个请求构造器与响应解码），
+并在 `TransformRequest` / `TransformResponse` 按 `RequestType=image` 与线路 `ApiFormat` 分派。
+共享基础设施新增 `GoMultipartReader` / `GoMultipartWriter`（Go `mime/multipart` 的读写子集：30 字节
+hex boundary、header 按名排序、`escapeQuotes`、`FormName`/`FileName` 与 `filepath.Base` 语义）、
+`GoMimeTypes.TryParseMediaType` 与 `GoHttpSniff.DetectContentType`；请求体校验复用
+`OpenAiRequestTypeCheck` 的 Go 字段级类型错误文案。测试通过 `GoMultipartWriter` 构造 multipart
+请求体，并以序列集合串行化可变上限（`MaxImageFileSize` / `MaxImageBodySize`）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 入站：生成 JSON（单图/多图/非法 `image` 字段/非 data URL/非 base64）、生成往返（`image` 以单条 data URL 回写）、编辑 multipart（mask、`image[]`、混合字段名、5 MiB 图片）、编辑 JSON（多图与 mask、prompt/图片/流式/非 data URL 校验、body 超限、数量上限、`images` 对象与 data URL 数组、`image` 优先与空数组回退、`images[i]:` 错误前缀、空数组无图）、响应还原为 `ImagesResponse` | `tests/AxonHub.Llm.Tests/OpenAiImageInboundTests.cs` | 36 |
+| 出站：路由（image 请求/纯文本）、生成请求字段与 `dall-e-*` 默认 `b64_json`、单/多图 data URL、无图省略字段、gpt-image 省略 response_format、编辑 multipart 与 JSONBody、变体、自定义 EndpointPath（3 行表）、响应解码（基础、usage/cached/output details、多图、模型元数据）、`extractFile` 四例、集成往返 | `tests/AxonHub.Llm.Tests/OpenAiImageOutboundTests.cs` | 33（30 个函数 + 3 行 Theory） |
+| 编辑线路形状：model 字段先于图片 part；JPEG 元数据在 JSONBody 与 multipart 头之间一致 | `tests/AxonHub.Llm.Tests/OpenAiImageEditOutboundTests.cs` | 2 |
+
+合计 36 + 33 + 2 = 71 例。C069 闭合；入站解码与 multipart 的跨语言边界登记为 C074，
+`/v1/images/*` 的 HTTP 路由接线登记为 C075（参照只注册 generations 与 edits，variations 路由被注释停用）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -465,7 +487,7 @@ HTTP 清理与关闭，编排层由 `PersistentOutboundTransformer` 的对应方
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072）。仍未移植：客户端 OpenAI Images 变换器（C069） | 中 | 后续阶段 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合；`/v1/images/*` 路由接线见 C075，参照本身停用 variations 路由） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

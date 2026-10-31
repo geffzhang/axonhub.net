@@ -24,6 +24,23 @@ public static class OpenAiRequestTypeCheck
     /// <see langword="null"/> when every field decodes.
     /// </summary>
     public static string? Validate(ReadOnlySpan<byte> utf8Json)
+        => ValidateAgainst(RequestSchema, utf8Json);
+
+    /// <summary>
+    /// Port of the type errors <c>json.Unmarshal</c> reports for
+    /// openai.ImageGenerationRequest (image_inbound.go:56-79).
+    /// </summary>
+    public static string? ValidateImageGeneration(ReadOnlySpan<byte> utf8Json)
+        => ValidateAgainst(ImageGenerationRequestSchema, utf8Json);
+
+    /// <summary>
+    /// Port of the type errors <c>json.Unmarshal</c> reports for
+    /// openai.ImageEditJSONRequest (image_inbound.go:361-378).
+    /// </summary>
+    public static string? ValidateImageEdit(ReadOnlySpan<byte> utf8Json)
+        => ValidateAgainst(ImageEditJsonRequestSchema, utf8Json);
+
+    private static string? ValidateAgainst(Schema schema, ReadOnlySpan<byte> utf8Json)
     {
         var sanitized = GoJsonUtf8.SanitizeStringLiterals(utf8Json);
         ReadOnlySpan<byte> data = sanitized is null ? utf8Json : sanitized;
@@ -41,7 +58,7 @@ public static class OpenAiRequestTypeCheck
                 return null;
             }
 
-            return new Check().CheckRoot(ref reader);
+            return new Check().CheckRoot(schema, ref reader);
         }
         catch (JsonException)
         {
@@ -56,9 +73,9 @@ public static class OpenAiRequestTypeCheck
     {
         private string? _firstError;
 
-        public string? CheckRoot(ref Utf8JsonReader reader)
+        public string? CheckRoot(Schema schema, ref Utf8JsonReader reader)
         {
-            var hard = CheckObject(RequestSchema, path: string.Empty, ref reader);
+            var hard = CheckObject(schema, path: string.Empty, ref reader);
             return hard ?? _firstError;
         }
 
@@ -778,4 +795,49 @@ public static class OpenAiRequestTypeCheck
         new GoField("response_format", StructOf(ResponseFormatSchema)),
         new GoField("verbosity", StringType),
         new GoField("thinking", StructOf(ThinkingSchema)));
+
+    /// <summary>Go: openai.ImageGenerationRequest (image_inbound.go:56-79).</summary>
+    private static readonly Schema ImageGenerationRequestSchema = new(
+        "ImageGenerationRequest",
+        new GoField("prompt", StringType),
+        new GoField("model", StringType),
+        new GoField("n", Int64Type),
+        new GoField("quality", StringType),
+        new GoField("response_format", StringType),
+        new GoField("size", StringType),
+        new GoField("style", StringType),
+        new GoField("user", StringType),
+        new GoField("background", StringType),
+        new GoField("output_format", StringType),
+        new GoField("output_compression", Int64Type),
+        new GoField("moderation", StringType),
+        new GoField("partial_images", Int64Type),
+        new GoField("stream", BoolType),
+        new GoField("image", RawType),
+        new GoField("subject_reference", RawType),
+        new GoField("aspect_ratio", StringType),
+        new GoField("width", Int64Type),
+        new GoField("height", Int64Type),
+        new GoField("seed", Int64Type),
+        new GoField("prompt_optimizer", BoolType));
+
+    /// <summary>Go: openai.ImageEditJSONRequest (image_inbound.go:361-378).</summary>
+    private static readonly Schema ImageEditJsonRequestSchema = new(
+        "ImageEditJSONRequest",
+        new GoField("prompt", StringType),
+        new GoField("model", StringType),
+        new GoField("image", RawType),
+        new GoField("images", RawType),
+        new GoField("mask", StringType),
+        new GoField("n", Int64Type),
+        new GoField("size", StringType),
+        new GoField("quality", StringType),
+        new GoField("response_format", StringType),
+        new GoField("user", StringType),
+        new GoField("background", StringType),
+        new GoField("output_format", StringType),
+        new GoField("output_compression", Int64Type),
+        new GoField("input_fidelity", StringType),
+        new GoField("partial_images", Int64Type),
+        new GoField("stream", BoolType));
 }

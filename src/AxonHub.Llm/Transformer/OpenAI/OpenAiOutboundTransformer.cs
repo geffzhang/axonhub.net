@@ -150,12 +150,19 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IA
             throw new InvalidOperationException("model is required");
         }
 
-        // Type-specific outbound paths (embedding, image, speech, ...) are out of
-        // scope for this slice; the chat path is the only one implemented.
-        if (request.RequestType is not (null or "" or RequestTypes.Chat))
+        // Type-specific outbound paths (embedding, speech, ...) are out of scope
+        // for this slice; images and chat are implemented.
+        switch (request.RequestType)
         {
-            throw TransformerErrors.InvalidRequest(
-                request.RequestType + " is not supported by this build of the OpenAI outbound transformer");
+            case RequestTypes.Image:
+                return BuildImageGenerationApiRequest(request);
+            case null:
+            case "":
+            case RequestTypes.Chat:
+                break;
+            default:
+                throw TransformerErrors.InvalidRequest(
+                    request.RequestType + " is not supported by this build of the OpenAI outbound transformer");
         }
 
         if (request.Messages is null || request.Messages.Count == 0)
@@ -220,6 +227,18 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IA
         if (response.Body is null || response.Body.Length == 0)
         {
             throw new InvalidOperationException("response body is empty");
+        }
+
+        // Route to specialized transformers based on request APIFormat.
+        if (response.Request is not null && response.Request.ApiFormat.Length > 0)
+        {
+            switch (response.Request.ApiFormat)
+            {
+                case ApiFormats.OpenAIImageGeneration:
+                case ApiFormats.OpenAIImageEdit:
+                case ApiFormats.OpenAIImageVariation:
+                    return TransformImageGenerationResponse(response);
+            }
         }
 
         // Go validates the whole document before decoding, so syntax errors are
