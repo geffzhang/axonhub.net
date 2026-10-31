@@ -497,6 +497,38 @@ hex boundary、header 按名排序、`escapeQuotes`、`FormName`/`FileName` 与 
 
 合计 8 例。C075 闭合；参照停用的 variations 路由在端口同样不注册。
 
+## 17. OpenAI Embeddings / Moderations 客户端变换器与路由接线（71 例，2026-10-31）
+
+参照路线：`llm/embedding.go`、`llm/moderation.go`、`llm/transformer/openai/embedding.go`、
+`embedding_inbound.go`、`moderation.go`、`moderation_inbound.go` 与
+`embedding_test.go`（10 个函数）、`moderation_test.go`（6 个函数），以及
+`internal/server/routes.go:211-212` 的两条路由与 `internal/server/api/openai.go` 的
+`CreateEmbedding` / `CreateModeration`。端口新增统一模型 `EmbeddingInput` /
+`EmbeddingRequest` / `EmbeddingResponse` / `EmbeddingData` / `Embedding` 与
+`ModerationInput` / `ModerationMultiModalPart` / `ModerationRequest` /
+`ModerationClassification` / `ModerationResponse`，两者均以自定义 `JsonConverter`
+复刻 Go 的 `MarshalJSON`/`UnmarshalJSON`：嵌入输入按 string → []string → []int64 →
+[][]int64 顺序解码（首个成功者生效，空值输出 `null`），审核输入按 string → []string →
+parts 顺序解码（零值先置位），审核分类的 map 按 Go 的键排序输出且
+`category_applied_input_types` 保留 omitempty。入站变换器保持 Go 的分支顺序与逐字文案：
+嵌入先校验 model 再校验 input；审核先校验 input（parts → string array → string），
+再把空 model 归一化为 `omni-moderation-latest`。出站侧
+`OpenAiOutboundEmbeddingModeration` 构造 `/embeddings` 与 `/moderations` 请求
+（`EndpointPath` 覆盖、`#` 自动 raw-URL、`##` 显式 raw-URL），并按线路 ApiFormat 解码
+上游响应。`Program.cs` 按 routes.go 注册 `POST /v1/embeddings` 与 `POST /v1/moderations`，
+两者都复用 chat 处理器、只替换入站变换器；`ResponseContent.HasResponseContent` 增加
+moderation 与 embedding 分支（检查顺序与 `empty_response.go` 一致）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 嵌入入站：字符串/数组/token ids/嵌套 token ids、缺 model、缺 input、空字符串、空数组、纯空白、nil 请求、空 body、非 JSON 类型、空嵌套数组、非法 JSON 的解码文案；嵌入出站：请求线路形状、nil 请求、缺 embedding 载荷；上游响应：正常/无 id/400/500/空 body/非法 JSON；入站响应：往返、usage cost、无 usage 的零值 usage、nil 响应；APIFormat、TransformError 三例、流式拒绝两例、URL 构造 5 行表、raw URL 3 行表、自定义 EndpointPath | `tests/AxonHub.Llm.Tests/OpenAiEmbeddingTransformerTests.cs` | 43 |
+| 审核入站：字符串/默认模型/字符串数组/多模态、空输入、空数组、缺 image url、非 JSON、空 body；入站响应往返；出站往返（URL、RequestType/ApiFormat、线路 body、上游解码）、自定义 EndpointPath、缺 moderation 载荷；`ModerationInput` 的 string/string array/parts 三种 JSON 形态 | `tests/AxonHub.Llm.Tests/OpenAiModerationTransformerTests.cs` | 16 |
+| 空响应探测：嵌入 data 计为内容、审核 results 计为内容、空审核响应不计为内容；pipeline 在开启检测时接受非流式嵌入与审核响应（各 1 次执行） | `tests/AxonHub.Llm.Tests/EmptyResponseTests.cs` | 5 |
+| 路由接线：空 body 400、嵌入透传与上游 `/v1/embeddings` 线路形状、缺 input 的 400 信封、空响应检测下嵌入响应计为内容、审核默认模型与往返、非法 input 的 400 信封、空响应检测下审核响应计为内容 | `tests/AxonHub.Api.Tests/EmbeddingModerationEndpointTests.cs` | 7 |
+
+合计 43 + 16 + 5 + 7 = 71 例。C076 闭合；C010 的 embedding/moderation 分支随之闭合，
+剩余非 chat 响应类型仍在缺口清单中。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -504,8 +536,8 @@ hex boundary、header 按名排序、`escapeQuotes`、`FormName`/`FileName` 与 
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
-| 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由） | 中 | 后续阶段 |
+| 非 chat 响应类型的空响应探测（speech / transcription / decisions / alpha-search / rerank / video） | 统一模型尚未包含这些请求类型；embedding / moderation 已由第 17 节闭合（5 例），图片由第 16.1 节闭合 | 中 | 随对应请求类型落地 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

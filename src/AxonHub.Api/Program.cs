@@ -179,4 +179,24 @@ static Task HandleImageEditAsync(
 app.MapPost("/v1/images/generations", HandleImageGenerationAsync);
 app.MapPost("/v1/images/edits", HandleImageEditAsync);
 
+// Embeddings and moderations (routes.go:211-212): OpenAI.CreateEmbedding and
+// OpenAI.CreateModeration delegate to the same chat handler with the dedicated
+// inbound transformer, exactly like the reference's handler structs.
+static Task HandleEmbeddingsAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new EmbeddingInboundTransformer()));
+
+static Task HandleModerationsAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new ModerationInboundTransformer()));
+
+app.MapPost("/v1/embeddings", HandleEmbeddingsAsync);
+app.MapPost("/v1/moderations", HandleModerationsAsync);
+
 app.Run();

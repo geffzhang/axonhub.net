@@ -45,6 +45,11 @@ public sealed class LlmResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ResponseError? Error { get; set; }
 
+    /// <summary>Embedding sub-response; present when the response is an embedding response (llm/model.go:721).</summary>
+    [JsonPropertyName("embedding")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EmbeddingResponse? Embedding { get; set; }
+
     [JsonPropertyName("request_type")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RequestType { get; set; }
@@ -66,6 +71,11 @@ public sealed class LlmResponse
     [JsonPropertyName("image")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ImageResponse? Image { get; set; }
+
+    /// <summary>Moderation sub-response; present when the response is a moderation response (llm/model.go:758).</summary>
+    [JsonPropertyName("moderation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModerationResponse? Moderation { get; set; }
 
     [JsonIgnore]
     public StreamCompletionEvidence StreamCompletionEvidence { get; set; }

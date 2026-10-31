@@ -55,9 +55,9 @@ public static class ResponseContent
 
     /// <summary>
     /// Port of <c>hasResponseContent</c> for the implemented response kinds
-    /// (chat and images). The remaining non-chat branches (moderation,
-    /// embedding, rerank, ...) land together with those request types; see
-    /// porting/01-baseline.md.
+    /// (chat, moderation, embedding and images). The remaining non-chat
+    /// branches (rerank, video, speech, ...) land together with those request
+    /// types; see porting/01-baseline.md.
     /// </summary>
     public static bool HasResponseContent(LlmResponse? resp)
     {
@@ -66,8 +66,19 @@ public static class ResponseContent
             return false;
         }
 
-        // empty_response.go checks resp.Image before the chat choices: a
-        // generated image list is content even though it carries no choices.
+        // empty_response.go's order: moderation, embedding, rerank, image,
+        // video, ... — the non-chat kinds carry no choices, so each of them is
+        // content when its result list is non-empty.
+        if (resp.Moderation is { Results.Count: > 0 })
+        {
+            return true;
+        }
+
+        if (resp.Embedding is { Data.Count: > 0 })
+        {
+            return true;
+        }
+
         if (resp.Image is { Data.Count: > 0 })
         {
             return true;

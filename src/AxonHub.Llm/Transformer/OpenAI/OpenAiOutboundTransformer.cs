@@ -150,10 +150,14 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IA
             throw new InvalidOperationException("model is required");
         }
 
-        // Type-specific outbound paths (embedding, speech, ...) are out of scope
-        // for this slice; images and chat are implemented.
+        // Type-specific outbound paths; the remaining request types (speech,
+        // transcription, ...) are out of scope for this slice.
         switch (request.RequestType)
         {
+            case RequestTypes.Embedding:
+                return BuildEmbeddingApiRequest(request);
+            case RequestTypes.Moderation:
+                return BuildModerationApiRequest(request);
             case RequestTypes.Image:
                 return BuildImageGenerationApiRequest(request);
             case null:
@@ -238,6 +242,10 @@ public sealed partial class OpenAiOutboundTransformer : IOutboundTransformer, IA
                 case ApiFormats.OpenAIImageEdit:
                 case ApiFormats.OpenAIImageVariation:
                     return TransformImageGenerationResponse(response);
+                case ApiFormats.OpenAIEmbedding:
+                    return TransformEmbeddingResponse(response);
+                case ApiFormats.OpenAIModeration:
+                    return TransformModerationResponse(response);
             }
         }
 

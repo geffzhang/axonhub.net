@@ -9,9 +9,9 @@ using PipelineType = AxonHub.Llm.Pipeline.Pipeline;
 namespace AxonHub.Llm.Tests;
 
 /// <summary>
-/// Port of llm/pipeline/empty_response_test.go, chat subset. The reference
-/// cases for decisions / alpha-search / speech / transcription / embedding /
-/// moderation responses are deferred until those request types exist in the
+/// Port of llm/pipeline/empty_response_test.go, chat/embedding/moderation
+/// subset. The reference cases for decisions / alpha-search / speech /
+/// transcription responses are deferred until those request types exist in the
 /// unified model; see porting/01-baseline.md.
 /// </summary>
 public sealed class EmptyResponseTests
@@ -65,6 +65,59 @@ public sealed class EmptyResponseTests
                     Message = new Message { ToolCalls = [new ToolCall { Id = "call_1" }] },
                 },
             ],
+        }));
+    }
+
+    // Port of TestHasResponseContent/embedding response data.
+    [Fact]
+    public void HasResponseContent_EmbeddingResponseData()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Embedding = new EmbeddingResponse
+            {
+                Object = "list",
+                Data =
+                [
+                    new EmbeddingData
+                    {
+                        Object = "embedding",
+                        Embedding = new Embedding { Values = [0.1, 0.2, 0.3] },
+                        Index = 0,
+                    },
+                ],
+            },
+        }));
+    }
+
+    // Port of TestHasResponseContent/moderation response with results.
+    [Fact]
+    public void HasResponseContent_ModerationResponseWithResults()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Moderation = new ModerationResponse
+            {
+                Results =
+                [
+                    new ModerationClassification
+                    {
+                        Flagged = false,
+                        Categories = new Dictionary<string, bool> { ["hate"] = false },
+                        CategoryScores = new Dictionary<string, double> { ["hate"] = 0.01 },
+                    },
+                ],
+            },
+        }));
+    }
+
+    // Port of TestHasResponseContent/empty moderation response.
+    [Fact]
+    public void HasResponseContent_EmptyModerationResponse()
+    {
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Moderation = new ModerationResponse(),
         }));
     }
 
@@ -264,6 +317,94 @@ public sealed class EmptyResponseTests
                         Message = new Message { ToolCalls = [new ToolCall { Id = "call_1" }] },
                     },
                 ],
+            },
+        };
+
+        var options = new PipelineOptions { EmptyResponseDetection = true };
+        var pipeline = new PipelineType(executor, new MockInbound(), outbound, options);
+
+        var res = pipeline.Process(new HttpRequestData(), CancellationToken.None);
+
+        Assert.NotNull(res);
+        Assert.Equal(1, execCalls);
+    }
+
+    // Port of TestPipeline_Process_NonStreamEmptyResponseDetection/accepts non-stream embedding response.
+    [Fact]
+    public void NonStreamEmptyResponseDetection_AcceptsEmbeddingResponse()
+    {
+        var execCalls = 0;
+        var executor = new MockExecutor
+        {
+            DoFn = (_, _) =>
+            {
+                execCalls++;
+                return new HttpResponseData();
+            },
+        };
+
+        var outbound = new MockOutbound
+        {
+            TransformResponseFn = _ => new LlmResponse
+            {
+                RequestType = RequestTypes.Embedding,
+                Embedding = new EmbeddingResponse
+                {
+                    Object = "list",
+                    Data =
+                    [
+                        new EmbeddingData
+                        {
+                            Object = "embedding",
+                            Embedding = new Embedding { Values = [0.1, 0.2, 0.3] },
+                            Index = 0,
+                        },
+                    ],
+                },
+            },
+        };
+
+        var options = new PipelineOptions { EmptyResponseDetection = true };
+        var pipeline = new PipelineType(executor, new MockInbound(), outbound, options);
+
+        var res = pipeline.Process(new HttpRequestData(), CancellationToken.None);
+
+        Assert.NotNull(res);
+        Assert.Equal(1, execCalls);
+    }
+
+    // Port of TestPipeline_Process_NonStreamEmptyResponseDetection/accepts non-stream moderation response.
+    [Fact]
+    public void NonStreamEmptyResponseDetection_AcceptsModerationResponse()
+    {
+        var execCalls = 0;
+        var executor = new MockExecutor
+        {
+            DoFn = (_, _) =>
+            {
+                execCalls++;
+                return new HttpResponseData();
+            },
+        };
+
+        var outbound = new MockOutbound
+        {
+            TransformResponseFn = _ => new LlmResponse
+            {
+                RequestType = RequestTypes.Moderation,
+                ApiFormat = ApiFormats.OpenAIModeration,
+                Moderation = new ModerationResponse
+                {
+                    Results =
+                    [
+                        new ModerationClassification
+                        {
+                            Flagged = false,
+                            Categories = new Dictionary<string, bool> { ["hate"] = false },
+                            CategoryScores = new Dictionary<string, double> { ["hate"] = 0.01 },
+                        },
+                    ],
+                },
             },
         };
 

@@ -138,6 +138,11 @@ public sealed class LlmRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? ExtraBody { get; set; }
 
+    /// <summary>Embedding sub-request; set when the request is an embedding request (llm/model.go:240).</summary>
+    [JsonPropertyName("embedding")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EmbeddingRequest? Embedding { get; set; }
+
     /// <summary>Raw inbound request; persisted alongside the unified request.</summary>
     [JsonPropertyName("raw_request")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -168,6 +173,11 @@ public sealed class LlmRequest
     [JsonPropertyName("image")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ImageRequest? Image { get; set; }
+
+    /// <summary>Moderation sub-request; set when the request is a moderation request (llm/model.go:270).</summary>
+    [JsonPropertyName("moderation_request")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModerationRequest? Moderation { get; set; }
 
     /// <summary>Provider/API-format private sidecar data; never serialized (llm/model.go:307).</summary>
     [JsonIgnore]

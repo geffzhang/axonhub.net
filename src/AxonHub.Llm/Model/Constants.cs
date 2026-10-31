@@ -31,6 +31,8 @@ public static class ApiFormats
     public const string OpenAICompletion = "openai/completions";
     public const string OpenAIResponse = "openai/responses";
     public const string OpenAIResponseCompact = "openai/responses/compact";
+    public const string OpenAIEmbedding = "openai/embeddings";
+    public const string OpenAIModeration = "openai/moderations";
     public const string OpenAIImageGeneration = "openai/image_generation";
     public const string OpenAIImageEdit = "openai/image_edit";
     public const string OpenAIImageVariation = "openai/image_variation";
