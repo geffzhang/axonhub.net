@@ -27,9 +27,17 @@ internal sealed class ScriptedExecutor : IExecutor
     public HttpResponseData Do(CancellationToken cancellationToken, HttpRequestData request)
     {
         Requests.Add(request);
-        return OnDo is { } handler
-            ? handler(Calls++, request, cancellationToken)
-            : throw new InvalidOperationException("OnDo is not configured");
+        if (OnDo is not { } handler)
+        {
+            throw new InvalidOperationException("OnDo is not configured");
+        }
+
+        var response = handler(Calls++, request, cancellationToken);
+
+        // HttpExecutor attaches the request it sent; response transformers read
+        // Request.ApiFormat to choose a protocol-specific decoder (images).
+        response.Request ??= request;
+        return response;
     }
 
     public IStream<StreamEvent> DoStream(CancellationToken cancellationToken, HttpRequestData request)

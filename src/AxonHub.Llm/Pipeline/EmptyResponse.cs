@@ -54,15 +54,23 @@ public static class ResponseContent
     }
 
     /// <summary>
-    /// Port of <c>hasResponseContent</c> for the chat subset. The non-chat
-    /// response branches (embedding, moderation, speech, ...) land together with
-    /// those request types; see porting/01-baseline.md.
+    /// Port of <c>hasResponseContent</c> for the implemented response kinds
+    /// (chat and images). The remaining non-chat branches (moderation,
+    /// embedding, rerank, ...) land together with those request types; see
+    /// porting/01-baseline.md.
     /// </summary>
     public static bool HasResponseContent(LlmResponse? resp)
     {
         if (resp is null || ReferenceEquals(resp, LlmResponse.DoneResponse) || resp.Object == "[DONE]")
         {
             return false;
+        }
+
+        // empty_response.go checks resp.Image before the chat choices: a
+        // generated image list is content even though it carries no choices.
+        if (resp.Image is { Data.Count: > 0 })
+        {
+            return true;
         }
 
         foreach (var choice in resp.Choices)

@@ -476,8 +476,26 @@ hex boundary、header 按名排序、`escapeQuotes`、`FormName`/`FileName` 与 
 | 出站：路由（image 请求/纯文本）、生成请求字段与 `dall-e-*` 默认 `b64_json`、单/多图 data URL、无图省略字段、gpt-image 省略 response_format、编辑 multipart 与 JSONBody、变体、自定义 EndpointPath（3 行表）、响应解码（基础、usage/cached/output details、多图、模型元数据）、`extractFile` 四例、集成往返 | `tests/AxonHub.Llm.Tests/OpenAiImageOutboundTests.cs` | 33（30 个函数 + 3 行 Theory） |
 | 编辑线路形状：model 字段先于图片 part；JPEG 元数据在 JSONBody 与 multipart 头之间一致 | `tests/AxonHub.Llm.Tests/OpenAiImageEditOutboundTests.cs` | 2 |
 
-合计 36 + 33 + 2 = 71 例。C069 闭合；入站解码与 multipart 的跨语言边界登记为 C074，
-`/v1/images/*` 的 HTTP 路由接线登记为 C075（参照只注册 generations 与 edits，variations 路由被注释停用）。
+合计 36 + 33 + 2 = 71 例。C069 闭合；入站解码与 multipart 的跨语言边界登记为 C074。
+
+## 16.1 `/v1/images/*` 路由接线（8 例，2026-10-31）
+
+参照 `internal/server/routes.go:215-216` 只注册 `POST /v1/images/generations` 与
+`POST /v1/images/edits`，variations 路由被注释停用（“DO NOT SUPPORT IMAGE VARIATION”）；
+`api.OpenAIHandlers.CreateImage` / `CreateImageEdit` 直接委托 `ChatCompletion`，只替换入站变换器
+（`openai.NewImageGenerationInboundTransformer` / `NewImageEditInboundTransformer`）。
+端口在 `Program.cs` 以 `orchestrator.WithInbound(ImageInboundTransformer.Generation()/Edit())`
+复刻同一路径：`HttpRequestReader` 原样透传 multipart body 与 Content-Type，错误信封由
+`OpenAiInboundTransformer.TransformError` 生成，响应由图片入站变换器序列化为
+`ImagesResponse`。同时补齐 `ResponseContent.HasResponseContent` 的 `resp.Image` 分支：
+`empty_response.go` 在 chat choices 之前检查图片数据，否则开启空响应检测时图片响应会被
+当作空响应重试（`GenerationCountsImageResponseAsContentWhenEmptyDetectionIsOn` 锁定）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 路由接线：空 body 400、生成 JSON 透传与上游 `/v1/images/generations` 线路形状、缺省模型回退 `dall-e-2`、空响应检测下的图片响应计为内容、编辑 multipart 透传（model 先于图片 part、文件名由嗅探类型生成）、缺图/缺 prompt/非 JSON 的 400 信封 | `tests/AxonHub.Api.Tests/ImageEndpointTests.cs` | 8 |
+
+合计 8 例。C075 闭合；参照停用的 variations 路由在端口同样不注册。
 
 ## 覆盖缺口
 
@@ -487,7 +505,7 @@ hex boundary、header 按名排序、`escapeQuotes`、`FormName`/`FileName` 与 
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合；`/v1/images/*` 路由接线见 C075，参照本身停用 variations 路由） | 中 | 后续阶段 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

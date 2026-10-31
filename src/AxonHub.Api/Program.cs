@@ -159,4 +159,24 @@ static Task HandleResponsesCompactAsync(
 app.MapPost("/v1/responses", HandleResponsesAsync);
 app.MapPost("/v1/responses/compact", HandleResponsesCompactAsync);
 
+// Images API (routes.go:215-216): CreateImage/CreateImageEdit delegate to the
+// shared chat handler with the images inbound transformer. Variations stays
+// unregistered, matching the reference's "DO NOT SUPPORT IMAGE VARIATION".
+static Task HandleImageGenerationAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(ImageInboundTransformer.Generation()));
+
+static Task HandleImageEditAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(ImageInboundTransformer.Edit()));
+
+app.MapPost("/v1/images/generations", HandleImageGenerationAsync);
+app.MapPost("/v1/images/edits", HandleImageEditAsync);
+
 app.Run();
