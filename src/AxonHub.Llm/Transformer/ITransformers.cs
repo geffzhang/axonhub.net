@@ -58,3 +58,15 @@ public interface IOutboundTransformer
     /// <summary>Aggregates provider stream chunks into a provider-shaped body.</summary>
     byte[] AggregateStreamChunks(HttpRequestData? request, IReadOnlyList<StreamEvent> chunks, out ResponseMeta meta);
 }
+
+/// <summary>
+/// Port of transformer.TransportRequestFinalizer
+/// (llm/transformer/interfaces.go:69-73): transport-specific cleanup applied
+/// after raw-request middlewares, so persistence and execution observe the same
+/// provider request.
+/// </summary>
+public interface ITransportRequestFinalizer
+{
+    /// <summary>Applies the final transport-specific request cleanup.</summary>
+    HttpRequestData? FinalizeTransportRequest(HttpRequestData? request);
+}

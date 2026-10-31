@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer.Shared;
 
@@ -36,8 +37,8 @@ public sealed class ResponsesOutboundConfig
 
     /// <summary>
     /// Upstream transport: empty and <c>http</c> use the HTTP/SSE transport;
-    /// <c>websocket</c> selects Responses WebSocket mode, which is not ported
-    /// (difference C061).
+    /// <c>websocket</c> selects Responses WebSocket mode
+    /// (<see cref="TransportWebSocket"/>).
     /// </summary>
     public string Transport { get; set; } = string.Empty;
 
@@ -56,6 +57,15 @@ public sealed class ResponsesOutboundConfig
     /// exactly as Go's <c>ok</c> flag distinguishes the two (difference C062).
     /// </summary>
     public Func<string?>? SessionIdProvider { get; set; }
+
+    /// <summary>
+    /// Port-only seam for <c>shared.GetSessionScope(ctx)</c>. The reference
+    /// reads the WebSocket pool scope from the request context; the port cannot
+    /// because it has no request-context seam, so the orchestrator supplies it
+    /// here and the transformer copies it onto the wire request (difference
+    /// C062). A null or blank value disables WebSocket connection pooling.
+    /// </summary>
+    public Func<string?>? SessionScopeProvider { get; set; }
 }
 
 /// <summary>
@@ -64,15 +74,26 @@ public sealed class ResponsesOutboundConfig
 /// compact_outbound.go).
 /// </summary>
 /// <remarks>
-/// The WebSocket transport executor is not ported (difference C061).
+/// Both transports are ported: HTTP attempts strip WebSocket-only request
+/// metadata (http_executor.go), while <c>websocket</c> attempts run through
+/// <see cref="WebSocketExecutor"/> (websocket_executor.go). Channel endpoint
+/// configuration in the port does not yet carry a transport choice and the
+/// request pipeline does not yet produce a trace session/scope, so the
+/// WebSocket transport and its connection pool stay dormant in production until
+/// those seams are wired (C072, C062).
 /// </remarks>
-public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
+public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKeyProvenance,
+    IChannelCustomizedExecutor, ITransportRequestFinalizer
 {
     public const string TransportHttp = "http";
 
     public const string TransportWebSocket = "websocket";
 
     private readonly ResponsesOutboundConfig _config;
+
+    private readonly object _executorMu = new();
+
+    private Dictionary<IExecutor, WebSocketExecutor>? _webSocketExecutors;
 
     /// <summary>The key the latest TransformRequest used; null until it runs.</summary>
     private string? _selectedApiKey;
@@ -152,10 +173,16 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
         var originalRequestType = request.RequestType;
         var isImageRequest = originalRequestType == RequestTypes.Image;
 
+        // The reference reads these from the request context inside the
+        // executor; the port captures them once per transform and carries them
+        // on the wire request (difference C062).
+        var sessionId = _config.SessionIdProvider?.Invoke();
+        var sessionScope = _config.SessionScopeProvider?.Invoke();
+
         switch (request.RequestType)
         {
             case RequestTypes.Compact:
-                return TransformCompactRequest(request);
+                return TransformCompactRequest(request, sessionId, sessionScope);
             case RequestTypes.Image:
                 request = ResponsesImageConvert.BuildImageToolRequest(request);
                 break;
@@ -279,7 +306,7 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
 
         if (string.IsNullOrEmpty(payload.PromptCacheKey))
         {
-            if (_config.SessionIdProvider?.Invoke() is { } sessionId)
+            if (sessionId is { } value)
             {
                 // A session may multiplex several concurrent conversations
                 // (e.g. Claude Code subagents); scope the cache key to the
@@ -287,10 +314,10 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
                 var anchor = ResponsesCacheAnchor.ConversationAnchor(request.Messages);
                 if (anchor.Length > 0)
                 {
-                    sessionId = sessionId + "-" + anchor;
+                    value = value + "-" + anchor;
                 }
 
-                payload.PromptCacheKey = sessionId;
+                payload.PromptCacheKey = value;
             }
         }
 
@@ -346,6 +373,8 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             TransformerMetadata = request.TransformerMetadata,
             SkipInboundQueryMerge = true,
             Metadata = null,
+            SessionId = sessionId,
+            SessionScope = sessionScope,
         };
 
         // Keep the image request type on the wire request so TransformResponse
@@ -566,7 +595,10 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
     }
 
     /// <summary>Port of transformCompactRequest.</summary>
-    private HttpRequestData TransformCompactRequest(LlmRequest request)
+    private HttpRequestData TransformCompactRequest(
+        LlmRequest request,
+        string? sessionId,
+        string? sessionScope)
     {
         if (request.Compact is null)
         {
@@ -621,6 +653,8 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             ApiFormat = ApiFormats.OpenAIResponseCompact,
             SkipInboundQueryMerge = true,
             Metadata = null,
+            SessionId = sessionId,
+            SessionScope = sessionScope,
         };
     }
 
@@ -783,6 +817,70 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
     {
         _ = request;
         return ResponsesAggregate.AggregateStreamChunks(chunks, out meta);
+    }
+
+    /// <summary>Port of OutboundTransformer.CustomizeExecutor.</summary>
+    /// <remarks>
+    /// Go guards the cache with <c>reflect.TypeOf(executor).Comparable()</c>;
+    /// every CLR object can key a dictionary, so the port keeps the cache for
+    /// every executor and relies on the default equality comparer — identity
+    /// for the port's executor classes, field equality for comparable value
+    /// types, matching Go's map-key rules.
+    /// </remarks>
+    public IExecutor CustomizeExecutor(IExecutor executor)
+    {
+        ArgumentNullException.ThrowIfNull(executor);
+
+        if (_config.Transport != TransportWebSocket)
+        {
+            return new HttpTransportExecutor(executor, FinalizeTransportRequest);
+        }
+
+        lock (_executorMu)
+        {
+            _webSocketExecutors ??= [];
+            if (_webSocketExecutors.TryGetValue(executor, out var cached))
+            {
+                return cached;
+            }
+
+            var webSocketExecutor = new WebSocketExecutor(executor);
+            _webSocketExecutors[executor] = webSocketExecutor;
+            return webSocketExecutor;
+        }
+    }
+
+    /// <summary>Port of OutboundTransformer.FinalizeTransportRequest.</summary>
+    public HttpRequestData? FinalizeTransportRequest(HttpRequestData? request)
+    {
+        if (_config.Transport == TransportWebSocket)
+        {
+            return request;
+        }
+
+        return ResponsesHttpTransport.PrepareHttpTransportRequest(
+            request,
+            stripPreviousResponseId: false);
+    }
+
+    /// <summary>
+    /// Port of OutboundTransformer.Stop: closes every cached WebSocket
+    /// executor. The port has no channel-teardown hook yet (C072), so nothing
+    /// calls this in production.
+    /// </summary>
+    public void Stop()
+    {
+        List<WebSocketExecutor> executors;
+        lock (_executorMu)
+        {
+            executors = _webSocketExecutors is null ? [] : [.. _webSocketExecutors.Values];
+            _webSocketExecutors = null;
+        }
+
+        foreach (var executor in executors)
+        {
+            executor.Close();
+        }
     }
 
     private static string BodyText(byte[]? body)

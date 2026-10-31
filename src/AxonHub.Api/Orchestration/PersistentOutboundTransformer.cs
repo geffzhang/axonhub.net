@@ -20,7 +20,8 @@ namespace AxonHub.Api.Orchestration;
 /// and <c>NextChannel</c> drive channel switches, and the pipeline enforces the
 /// two budgets and the inter-retry delay.
 /// </remarks>
-public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetryable, IChannelRetryable
+public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetryable,
+    IChannelRetryable, IChannelCustomizedExecutor, ITransportRequestFinalizer
 {
     private readonly ChannelCandidate[] _candidates;
     private readonly TimeProvider _timeProvider;
@@ -157,6 +158,35 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         IReadOnlyList<StreamEvent> chunks,
         out ResponseMeta meta)
         => Current.AggregateStreamChunks(request, chunks, out meta);
+
+    /// <summary>
+    /// Port of p.getCustomizedExecutor's final step (outbound.go:900-909):
+    /// the per-attempt provider transformer may replace the transport.
+    /// </summary>
+    public IExecutor CustomizeExecutor(IExecutor executor)
+    {
+        var current = _current;
+        return current is IChannelCustomizedExecutor custom
+            ? custom.CustomizeExecutor(executor)
+            : executor;
+    }
+
+    /// <summary>
+    /// Port of finalizeTransportRequest (outbound.go:912-925): applies the
+    /// current provider transformer's transport cleanup to the raw request.
+    /// </summary>
+    public HttpRequestData? FinalizeTransportRequest(HttpRequestData? request)
+    {
+        if (request is null)
+        {
+            return null;
+        }
+
+        var current = _current;
+        return current is ITransportRequestFinalizer finalizer
+            ? finalizer.FinalizeTransportRequest(request) ?? request
+            : request;
+    }
 
     /// <summary>Port of HasMoreChannels: is there a candidate after the current one?</summary>
     public bool HasMoreChannels() => _candidateIndex + 1 < _candidates.Length;

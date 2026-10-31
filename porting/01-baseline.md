@@ -23,6 +23,8 @@
 | `internal/server/biz/usage_cost_test.go`（9 个 Ent 集成用例：per-unit / tiered / volume / volume 首档 / 无价格 / 四个写缓存变体） | `tests/AxonHub.Api.Tests/{UsageCostServiceTests,UsageCostCalculatorTests,UsageCostInjectionTests}.cs` + `tests/AxonHub.Persistence.Tests/UsageLogStoreTests.cs` | 已改写（9/9 覆盖） | Ent 内嵌 SQLite 的整链路用例改写为分段锁定的行为测试：价格读取与未知模型/非法通道/损坏价格（Service 12 例）、金额与变体（Calculator 4 例）、响应注入与 usage 行落库（Injection 5 例）、5m/1h 列回环（UsageLogStoreTests）。参照断言的 `total_cost` / `cost_items` 形状 / reference id 与 5m/1h 列均由上述用例覆盖。 |
 | `internal/server/biz/channel_apikey_test.go`（30 个顶层测试：20 个 key 选择/哈希 + 1 个 context provider + 7 个 DeleteDisabledAPIKeys + 2 个 cleanup）与 `request_channel_api_key_index_test.go`（4 个测试函数，含 6 个索引子用例） | `tests/AxonHub.Api.Tests/{ChannelApiKeyProviderTests,ChannelApiKeyAuditTests}.cs`（16 + 7 例） | 选择/审计可执行用例全部覆盖；`AddKey_Stable` 顺延 | 逐条对照 20 个选择用例：单 key、无 trace 成员、全禁用回退、禁用 key 排除、同 trace 确定性（直接驱动 `RendezvousSelect`）、不同 trace、加 key ≤2/3 重映射、删 key 不影响未命中 trace、顺序无关、FNV-1a 向量。`AddKey_Stable` 依赖 provider 挂在通道上的 LRU，随 trace 子系统顺延（C013）。索引 4 个函数改写为 7 个端到端审计用例（多 key 位置、单 key 无索引、短 key 无后缀、禁用 key 仍计数、共享后缀按索引区分、OAuth 旧字段排除、每次重试各自审计）；7 个 DeleteDisabledAPIKeys 与 2 个 cleanup 属管理面，未移植（C014）。 |
 
+| `llm/transformer/openai/responses/websocket_executor_test.go`（32 个顶层测试函数，其中 3 个表驱动） + `http_executor_test.go`（3 个） | `tests/AxonHub.Llm.Tests/ResponsesWebSocketExecutorTests.cs`（32 个方法 / 37 个用例）+ `ResponsesHttpTransportExecutorTests.cs`（3 例）+ `tests/AxonHub.Api.Tests/TransportRequestFinalizerTests.cs`（5 例） | 37/37 + 3/3 已移植，接缝另锁 5 例 | 逐条对照：执行器缓存、response.create 发送、终态停止、取消优先级（读阻塞/已关闭/不覆盖终态）、顶层 error、官方错误状态与 body、failed/cancelled/incomplete 聚合、会话复用与不池化、显式 previous_response_id 四种对账、payload 恢复、assistant 后缀重连、复用连接提前关闭、组织头分池、失败/取消逐出、仅新输入、输入超限、非追加重连、提前关闭逐出、trace 头不影响池键、后台清理与 Close、事件规范化、URL 映射、握手头观察。参照用 `httptest` + gorilla upgrader；端口用 `ResponsesWebSocketTestServer`（loopback TcpListener + 手写 101 握手）。编排层 `CustomizeExecutor` / `finalizeTransportRequest` 在参照中位于 responses 包的 outbound.go，端口位于 `PersistentOutboundTransformer`，故 5 个接缝用例放在 Api.Tests。 |
+
 统计：pipeline 编排层共 38 个可执行用例（15 + 23），已移植 24 个、顺延 14 个（均为非 chat 响应类型，待对应请求类型落地后补测）。
 
 ## 2. 差分语料
@@ -358,7 +360,7 @@ panic）与 C058（流错误事件的 gjson 宽松解析 vs 严格 JSON）。
 `POST /v1/responses` 与 `POST /v1/responses/compact` 复用 `ChatCompletionEndpoint`，只通过
 `ChatCompletionOrchestrator.WithInbound` 替换入站变换（`Program.cs`）。本切片覆盖非流式路径；
 流式状态机与聚合器由第 13 节补齐（C063 已闭合），图片请求/响应由第 14 节补齐（C059 已闭合），
-WebSocket 传输仍登记为 C061。
+WebSocket 传输由第 15 节补齐（C061 已闭合；生产接线缺口见 C072）。
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
@@ -373,8 +375,8 @@ WebSocket 传输仍登记为 C061。
 
 合计 38 + 54 + 16 + 50 = 158 例（流式另见第 13 节的 86 例，图片路径另见第 14 节的 26 例）。
 本切片登记的差异为 C059（图片路径，已由第 14 节闭合）、C060（stream_id 探测的 gjson 宽松度）、
-C061（WebSocket 传输未移植，缺口）、
-C062（会话 ID 接缝）、C063（流式与聚合，已由第 13 节闭合）、C064（字段级解码文案）、
+C061（WebSocket 传输，已由第 15 节闭合）、C062（会话 ID/作用域接缝）、
+C063（流式与聚合，已由第 13 节闭合）、C064（字段级解码文案）、
 C065（strict required 顺序）、C066（工具 schema 数字词法）、C067（cost 之外的 double 仍用
 STJ 数字格式，缺口）与 C068（并行工具调用收尾顺序与元数据编码）。
 测试同时暴露并修复了 `ConvertToResponsesApiResponse` 的 `resp.Output` 未回写缺陷
@@ -398,8 +400,8 @@ fixture 取自参照 `testdata/`（16 个文件，`tests/AxonHub.Llm.Tests/testd
 | 聚合器：空/ nil 事件流拒绝、取消态规范化、9 行完成快照表（status/id/model/created_at/previous_response_id/error/incomplete_details/usage 与 ResponseMeta）、2 组 fixture、基础事件合成、注解保留与回退、previous_response_id、非法 JSON 与 `[DONE]` 跳过、多段推理摘要、推理文本、非法 content index（4 行）、图片生成调用 | `tests/AxonHub.Llm.Tests/ResponsesAggregatorTests.cs` | 28 |
 
 合计 24 + 34 + 28 = 86 例。C063 闭合；新增 C068（Go map 随机的并行工具收尾顺序改为插入序、
-元数据经 JSON 字符串/对象往返）。图片流式聚合已随 C059（第 14 节）闭合；WebSocket 传输仍随
-C061 保留；WebSocket 的 `error` 事件在流层可移植，已由出站表锁定。16 个 fixture 同时覆盖
+元数据经 JSON 字符串/对象往返）。图片流式聚合已随 C059（第 14 节）闭合；WebSocket 传输已由
+第 15 节补齐（C061）；WebSocket 的 `error` 事件在流层可移植，已由出站表锁定。16 个 fixture 同时覆盖
 `response.metadata`、`error` 与 `stop` 三个小型事件流。
 
 ## 14. Responses 图片请求/响应路径（26 例，2026-10-31）
@@ -426,6 +428,35 @@ C061 保留；WebSocket 的 `error` 事件在流层可移植，已由出站表�
 合计 9 + 11 + 4 + 1 + 1 = 26 例。C059 闭合；客户端面向的 OpenAI Images 入站/出站变换器
 （`image_inbound.go` / `image_outbound.go`）仍为缺口，登记为 C069。
 
+## 15. Responses WebSocket 传输（45 例，2026-10-31）
+
+参照路线：`llm/transformer/openai/responses/websocket_executor.go`、`websocket_executor_test.go`、
+`http_executor.go`、`http_executor_test.go`，以及 `internal/server/orchestrator/outbound.go:880-925`
+的 `CustomizeExecutor` / `finalizeTransportRequest` 接缝。端口由 `WebSocketExecutor`
+（执行器、连接池、续传对账、Do 聚合）、`WebSocketStream`、`PooledWebSocketConnection`、
+`WebSocketLease`、`ResponsesWebSocketClient`（手写 RFC 6455 握手）与 `HttpTransportExecutor`
+实现；`ResponsesOutboundTransformer.CustomizeExecutor/FinalizeTransportRequest/Stop` 提供传输选择、
+HTTP 清理与关闭，编排层由 `PersistentOutboundTransformer` 的对应方法委托。
+参照测试用 `httptest` + gorilla upgrader；端口用 `ResponsesWebSocketTestServer`
+（loopback `TcpListener` + 手写 101 握手 + 逐连接处理线程）替代，握手头、升级前的 HTTP 拒绝
+与连接关闭都可观察。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 执行器、握手与 URL：CustomizeExecutor 按内层执行器缓存单例；`response.create` 帧（删除 stream/background、beta 头、Go 的换行结尾）；http/https→ws/wss 映射与非法方案；握手响应头在成功与拒绝时都交给 `ObserveResponseHeaders` | `tests/AxonHub.Llm.Tests/ResponsesWebSocketExecutorTests.cs` | 4 |
+| 流生命周期与取消：终态后停止且无需 close 帧；读阻塞中取消、已关闭时取消、取消不覆盖终态；复用连接在事件前关闭报错；连接提前关闭逐出池 | 同上 | 6 |
+| 错误事件与聚合：顶层 `error` → 传输错误；官方 error 的状态码/body/头原样保留（3 行）；Do 聚合 failed、cancelled、incomplete 为 200（3 行）；事件规范化的嵌套 error 展平与已展平字段保留 | 同上 | 9 |
+| 连接池与续传对账：同会话复用、无会话不池化、显式 previous_response_id 的保持/重连/匹配（4 例）、payload 恢复、assistant 输出后缀重连、组织头分池、failed/cancelled 逐出（3 行）、仅发送新输入、输入超限不保留、非追加输入重连、trace 头不进入池键、后台清理与 Close 关闭空闲连接 | 同上 | 18 |
+| HTTP 传输包装：剥离 `responses_websockets` beta 元数据、保留 previous_response_id/stream/input、HTTP 路径原样透传、原始请求不被修改 | `tests/AxonHub.Llm.Tests/ResponsesHttpTransportExecutorTests.cs` | 3 |
+| 编排接缝：`CustomizeExecutor` 委托/透传、`FinalizeTransportRequest` 委托/透传、中间件调用编排层 | `tests/AxonHub.Api.Tests/TransportRequestFinalizerTests.cs` | 5 |
+
+合计 4 + 6 + 9 + 18 + 3 + 5 = 45 例。C061 闭合；拨号实现（C070）、JSON 往返（C071）、
+生产接线与 `Stop` 生命周期（C072）、URL 归一化（C073）分别登记。测试同时暴露并修复了
+连接池 in-flight 槽的释放缺陷：Go 的 `select { case <-pc.inFlight: default: }` 在语义上等价于
+“占有令牌时释放信号量”，端口此前写成“信号量空闲时先获取再释放”，净效果为零，导致池化连接
+永远被清理与关闭逻辑跳过；`ReleaseInFlight` 改为“释放已持有的槽，已空闲时忽略
+`SemaphoreFullException`”，由复用、后台清理与 Close 三组用例锁定。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -434,7 +465,7 @@ C061 保留；WebSocket 的 `error` 事件在流层可移植，已由出站表�
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（speech / transcription / embedding / moderation / decisions / alpha-search） | 统一模型尚未包含这些请求类型，参照侧对应 14 个用例顺延 | 中 | 随对应请求类型落地 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合）。仍未移植：WebSocket 传输（C061）、客户端 OpenAI Images 变换器（C069） | 中 | 后续阶段 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072）。仍未移植：客户端 OpenAI Images 变换器（C069） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

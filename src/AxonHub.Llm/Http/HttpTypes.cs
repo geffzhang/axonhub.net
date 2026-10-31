@@ -67,6 +67,25 @@ public sealed class HttpRequestData
     [JsonIgnore]
     public bool SkipInboundQueryMerge { get; set; }
 
+    /// <summary>
+    /// Port-only: the value <c>shared.GetSessionID(ctx)</c> returned for this
+    /// request, captured by the transformer that built it. The reference reads
+    /// the request context inside the executor; the port has no trace/context
+    /// subsystem (C013) and threads the value through the wire request instead
+    /// (difference C062).
+    /// </summary>
+    [JsonIgnore]
+    public string? SessionId { get; set; }
+
+    /// <summary>
+    /// Port-only: the value <c>shared.GetSessionScope(ctx)</c> returned for this
+    /// request. The reference requires the scope for WebSocket connection
+    /// pooling; the port captures it on the wire request because it has no
+    /// request context seam (difference C062).
+    /// </summary>
+    [JsonIgnore]
+    public string? SessionScope { get; set; }
+
     /// <summary>Observer invoked with the upstream response headers.</summary>
     [JsonIgnore]
     public Action<IReadOnlyDictionary<string, List<string>>>? OnResponseHeaders { get; set; }
@@ -75,6 +94,12 @@ public sealed class HttpRequestData
     {
         OnResponseHeaders?.Invoke(headers);
     }
+
+    /// <summary>
+    /// Field-wise copy without deep-cloning the mutable members (Go's
+    /// <c>cloned := *request</c> in PrepareHTTPTransportRequest).
+    /// </summary>
+    internal HttpRequestData ShallowClone() => (HttpRequestData)MemberwiseClone();
 }
 
 /// <summary>Port of httpclient.AuthConfig.</summary>

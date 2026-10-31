@@ -247,6 +247,11 @@ public sealed class ChatCompletionOrchestrator
         options.Middlewares.Add(new ChannelOverrideBodyMiddleware(outbound));
         options.Middlewares.Add(new ChannelOverrideHeaderMiddleware(outbound));
 
+        // Remove transport-incompatible fields after pass-through and
+        // overrides, so persistence and execution observe the same provider
+        // request (orchestrator.go's finalizeTransportRequest registration).
+        options.Middlewares.Add(new TransportRequestFinalizerMiddleware(outbound));
+
         // Registered after the metrics middleware so it runs first on the way
         // out, matching the reference order (persistRequestExecution is the last
         // outbound middleware).
