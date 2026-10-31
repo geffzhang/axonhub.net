@@ -13,6 +13,14 @@ public interface IRequestExecutionStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Newest first (biz/video.go loadTask: Order(ent.Desc(FieldID))), used by
+    /// the video task flow to find the latest provider task association.
+    /// </summary>
+    Task<IReadOnlyList<RequestExecutionRecord>> ListByRequestIdDescAsync(
+        long requestId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of UpdateRequestExecutionStatusWithMetrics: status, error details and
     /// metrics only. Response headers, body and external id captured earlier stay
     /// untouched, so a later status update cannot clear them.
@@ -90,6 +98,23 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
     {
         var sql = "SELECT " + Columns
             + " FROM \"request_executions\" WHERE \"request_id\" = @RequestId ORDER BY \"id\";";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<RequestExecutionRecord>(
+            new CommandDefinition(
+                sql,
+                new { RequestId = requestId },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.AsList();
+    }
+
+    public async Task<IReadOnlyList<RequestExecutionRecord>> ListByRequestIdDescAsync(
+        long requestId,
+        CancellationToken cancellationToken = default)
+    {
+        var sql = "SELECT " + Columns
+            + " FROM \"request_executions\" WHERE \"request_id\" = @RequestId ORDER BY \"id\" DESC;";
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
         var rows = await connection.QueryAsync<RequestExecutionRecord>(

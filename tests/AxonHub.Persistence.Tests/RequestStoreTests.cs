@@ -150,6 +150,68 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task GetByExternalIdAndProjectScopesTheLookup()
+    {
+        // biz/video.go GetTaskByExternalID looks the provider task id up within
+        // the API key's project only; the same id may exist in another project.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        var projectSeven = NewRequest();
+        projectSeven.ExternalId = "video-task";
+        projectSeven.ProjectId = 7;
+        await store.CreateAsync(projectSeven);
+
+        var projectNine = NewRequest();
+        projectNine.ExternalId = "video-task";
+        projectNine.ProjectId = 9;
+        await store.CreateAsync(projectNine);
+
+        var seven = await store.GetByExternalIdAndProjectAsync("video-task", 7);
+        Assert.NotNull(seven);
+        Assert.Equal(7L, seven.ProjectId);
+
+        var nine = await store.GetByExternalIdAndProjectAsync("video-task", 9);
+        Assert.NotNull(nine);
+        Assert.Equal(9L, nine.ProjectId);
+
+        Assert.Null(await store.GetByExternalIdAndProjectAsync("video-task", 8));
+        Assert.Null(await store.GetByExternalIdAndProjectAsync("other-task", 7));
+    }
+
+    [Fact]
+    public async Task UpdateStatusExternalIdAndResponseBodyRefreshesThePolledSnapshot()
+    {
+        // Port of UpdateRequestStatusExternalIDAndResponseBody: status and
+        // external id are always written, together with the provider snapshot.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        var id = await store.CreateAsync(NewRequest());
+        var changedAt = UpdatedAt.AddMinutes(5);
+
+        var updated = await store.UpdateStatusExternalIdAndResponseBodyAsync(
+            id,
+            "completed",
+            "video-task",
+            """{"id":"video-task","status":"succeeded"}""",
+            changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        Assert.Equal("completed", actual.Status);
+        Assert.Equal("video-task", actual.ExternalId);
+        RecordAssert.Json("""{"id":"video-task","status":"succeeded"}""", actual.ResponseBody);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
     public async Task UpdateChannelRecordsTheSelectedChannel()
     {
         await using var db = new TestDatabase(fixture);
@@ -183,6 +245,8 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
             12345, "failed", null, null, null, null, null, UpdatedAt));
         Assert.False(await store.UpdateResponseHeadersAsync(12345, "{}", UpdatedAt));
         Assert.False(await store.UpdateChannelAsync(12345, 1, UpdatedAt));
+        Assert.False(await store.UpdateStatusExternalIdAndResponseBodyAsync(
+            12345, "completed", "video-task", "{}", UpdatedAt));
         Assert.Null(await store.GetByIdAsync(12345));
     }
 

@@ -10,6 +10,28 @@ public interface IRequestStore
 
     Task<RequestRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Video task lookup (biz/video.go GetTaskByExternalID): the request row
+    /// carrying the provider task id within the API key's project.
+    /// </summary>
+    Task<RequestRecord?> GetByExternalIdAndProjectAsync(
+        string externalId,
+        long projectId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of UpdateRequestStatusExternalIDAndResponseBody (async video task
+    /// polling): status and external id are always written, the response body
+    /// snapshot under the default storage policy (C020).
+    /// </summary>
+    Task<bool> UpdateStatusExternalIdAndResponseBodyAsync(
+        long id,
+        string status,
+        string externalId,
+        string responseBody,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Port of UpdateRequestStatus: status only, leaving response data untouched.</summary>
     Task<bool> UpdateStatusAsync(
         long id,
@@ -85,6 +107,51 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
                 new { Id = id },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<RequestRecord?> GetByExternalIdAndProjectAsync(
+        string externalId,
+        long projectId,
+        CancellationToken cancellationToken = default)
+    {
+        // QuerySingleOrDefault mirrors ent's Only: the reference lookup expects
+        // at most one request row per provider task id within a project.
+        var sql = "SELECT " + Columns
+            + " FROM \"requests\" WHERE \"external_id\" = @ExternalId AND \"project_id\" = @ProjectId;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<RequestRecord>(
+            new CommandDefinition(
+                sql,
+                new { ExternalId = externalId, ProjectId = projectId },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<bool> UpdateStatusExternalIdAndResponseBodyAsync(
+        long id,
+        string status,
+        string externalId,
+        string responseBody,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var request = await db.Requests
+            .FirstOrDefaultAsync(request => request.Id == id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (request is null)
+        {
+            return false;
+        }
+
+        request.Status = status;
+        request.ExternalId = externalId;
+        request.ResponseBody = responseBody;
+        request.UpdatedAt = updatedAt;
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     public async Task<bool> UpdateStatusAsync(

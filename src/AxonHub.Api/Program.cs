@@ -102,6 +102,13 @@ builder.Services.AddScoped<ISystemStore, SystemStore>();
 builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
 builder.Services.AddScoped<IRetryPolicyProvider, SystemRetryPolicyService>();
 
+// The video task flow (biz/video.go) reads the request/execution/channel rows
+// and persists the polled snapshot through the same stores the write side uses.
+builder.Services.AddScoped<IChannelStore, ChannelStore>();
+builder.Services.AddScoped<IRequestStore, RequestStore>();
+builder.Services.AddScoped<IRequestExecutionStore, RequestExecutionStore>();
+builder.Services.AddScoped<VideoService>();
+
 // The orchestrator reads the retry policy through the scoped system store.
 builder.Services.AddScoped<ChatCompletionOrchestrator>();
 
@@ -180,6 +187,20 @@ static Task HandleImageEditAsync(
 
 app.MapPost("/v1/images/generations", HandleImageGenerationAsync);
 app.MapPost("/v1/images/edits", HandleImageEditAsync);
+
+// Video tasks (routes.go:217-219): creation reuses the shared chat handler with
+// the video inbound transformer; GET/DELETE run the biz.VideoService task
+// query/delete flow (api.OpenAIHandlers.GetVideo/DeleteVideo).
+static Task HandleVideoGenerationAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new VideoInboundTransformer()));
+
+app.MapPost("/v1/videos", HandleVideoGenerationAsync);
+app.MapGet("/v1/videos/{id}", VideoEndpoint.GetVideoAsync);
+app.MapDelete("/v1/videos/{id}", VideoEndpoint.DeleteVideoAsync);
 
 // Embeddings and moderations (routes.go:211-212): OpenAI.CreateEmbedding and
 // OpenAI.CreateModeration delegate to the same chat handler with the dedicated

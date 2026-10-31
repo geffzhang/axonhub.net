@@ -49,6 +49,30 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListByRequestIdDescOrdersNewestFirst()
+    {
+        // biz/video.go loadTask reads the executions newest-first to find the
+        // latest provider task association; the rows share created_at, so the
+        // surrogate id decides the order (ent Order(Desc(FieldID))).
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var firstId = await store.CreateAsync(NewExecution(101));
+        var secondId = await store.CreateAsync(NewExecution(101));
+        var thirdId = await store.CreateAsync(NewExecution(101));
+        await store.CreateAsync(NewExecution(202));
+
+        var executions = await store.ListByRequestIdDescAsync(101);
+
+        Assert.Equal(
+            new[] { thirdId, secondId, firstId },
+            executions.Select(execution => execution.Id).ToArray());
+        Assert.Empty(await store.ListByRequestIdDescAsync(999));
+    }
+
+    [Fact]
     public async Task UpdateResultWritesOutcomeAndKeepsHeadersAndChunks()
     {
         await using var db = new TestDatabase(fixture);

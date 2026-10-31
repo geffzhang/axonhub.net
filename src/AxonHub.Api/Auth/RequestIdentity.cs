@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Http;
+
 namespace AxonHub.Api.Auth;
 
 /// <summary>
@@ -15,4 +17,18 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     /// the slice's tests). The HTTP path always supplies the API key's project.
     /// </summary>
     public static RequestIdentity Default { get; } = new(1, null);
+
+    /// <summary>
+    /// Reads the identity published by <c>ApiKeyAuthMiddleware</c>; direct
+    /// calls (tests/internal handlers) fall back to <see cref="Default"/>.
+    /// </summary>
+    public static RequestIdentity FromHttpContext(HttpContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return context.Items.TryGetValue(HttpContextItemKey, out var item)
+            && item is RequestIdentity identity
+                ? identity
+                : Default;
+    }
 }

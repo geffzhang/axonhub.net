@@ -76,10 +76,7 @@ public static class ChatCompletionEndpoint
 
         // WithAPIKeyConfig publishes the authenticated identity on the request
         // context; direct calls (tests/internal handlers) fall back to Default.
-        var identity = context.Items.TryGetValue(RequestIdentity.HttpContextItemKey, out var item)
-            && item is RequestIdentity authenticated
-                ? authenticated
-                : RequestIdentity.Default;
+        var identity = RequestIdentity.FromHttpContext(context);
 
         ChatCompletionResult result;
         try
@@ -165,7 +162,7 @@ public static class ChatCompletionEndpoint
     }
 
     /// <summary>gin: <c>c.Data(resp.StatusCode, contentType, resp.Body)</c>.</summary>
-    private static async Task WriteResponseAsync(
+    internal static async Task WriteResponseAsync(
         HttpContext context,
         HttpResponseData response,
         CancellationToken cancellationToken)
@@ -193,7 +190,7 @@ public static class ChatCompletionEndpoint
     }
 
     /// <summary>api.JSONError: <c>{"error":{"type":statusText,"message":err}}</c>.</summary>
-    private static async Task WriteJsonErrorAsync(
+    internal static async Task WriteJsonErrorAsync(
         HttpContext context,
         int statusCode,
         string type,
