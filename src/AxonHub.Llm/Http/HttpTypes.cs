@@ -20,6 +20,16 @@ public sealed class HttpRequestData
     [JsonPropertyName("query")]
     public Dictionary<string, List<string>>? Query { get; set; }
 
+    /// <summary>
+    /// Port-only: ASP.NET route values of the inbound request. The reference
+    /// reads Go 1.22+ route values off the raw request
+    /// (<c>RawRequest.RawRequest.PathValue</c>); the port's
+    /// <see cref="HttpRequestMessage"/> has no route-value carrier, so
+    /// HttpRequestReader threads them here (difference C112).
+    /// </summary>
+    [JsonIgnore]
+    public Dictionary<string, string?>? RouteValues { get; set; }
+
     [JsonPropertyName("headers")]
     public Dictionary<string, List<string>>? Headers { get; set; }
 

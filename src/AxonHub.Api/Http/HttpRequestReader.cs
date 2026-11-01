@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text;
 using AxonHub.Llm.Http;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Primitives;
 using ZstdSharp;
 
@@ -53,6 +54,7 @@ public static class HttpRequestReader
             Url = BuildUrl(request),
             Path = request.PathBase + request.Path,
             Query = ToMultiMap(request.Query),
+            RouteValues = ToRouteValues(request.RouteValues),
             Headers = headers,
             ContentType = HttpClientUtils.HeaderGet(headers, "Content-Type"),
             Body = body,
@@ -65,6 +67,22 @@ public static class HttpRequestReader
 
     private static string BuildUrl(HttpRequest request)
         => request.Scheme + "://" + request.Host.ToUriComponent() + request.PathBase + request.Path + request.QueryString;
+
+    /// <summary>
+    /// Port-only: carries ASP.NET route values into the wire request so
+    /// transformers can read them the way the reference reads Go 1.22+ route
+    /// values off the raw request (difference C112).
+    /// </summary>
+    private static Dictionary<string, string?> ToRouteValues(RouteValueDictionary routeValues)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var (key, value) in routeValues)
+        {
+            result[key] = value?.ToString();
+        }
+
+        return result;
+    }
 
     /// <summary>Port of getClientIP.</summary>
     private static string ClientIp(Dictionary<string, List<string>> headers, HttpRequest request)

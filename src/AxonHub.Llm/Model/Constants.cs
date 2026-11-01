@@ -60,6 +60,9 @@ public static class ApiFormats
     public const string OpenAITranslation = "openai/audio_translations";
     public const string AnthropicMessage = "anthropic/messages";
     public const string GeminiContents = "gemini/contents";
+
+    /// <summary>llm.APIFormatGeminiEmbedding (llm/constants.go:62).</summary>
+    public const string GeminiEmbedding = "gemini/embeddings";
     public const string OllamaChat = "ollama/chat";
     public const string TypeSafeSystemOne = "typesafe/systemone";
 }
