@@ -12,7 +12,8 @@ namespace AxonHub.Llm.Transformer.Gemini;
 /// Port of gemini.OutboundTransformer (llm/transformer/gemini/outbound.go): the
 /// native Gemini/Vertex provider protocol. The embedding and image branches
 /// live in the GeminiOutboundEmbedding/GeminiOutboundImage partials; streaming
-/// (outbound_stream.go/aggregator.go) lands with the stream slice.
+/// (outbound_stream.go/aggregator.go) lives in the GeminiOutboundStream/
+/// GeminiAggregator files.
 /// </summary>
 public sealed partial class GeminiOutboundTransformer : IOutboundTransformer
 {
@@ -307,17 +308,6 @@ public sealed partial class GeminiOutboundTransformer : IOutboundTransformer
         _config.BaseUrl = baseUrl;
     }
 
-    /// <summary>Port of TransformStream (outbound_stream.go) — lands with the stream slice.</summary>
-    public IStream<LlmResponse> TransformStream(HttpRequestData? request, IStream<StreamEvent> stream)
-        => throw new InvalidOperationException("gemini streaming is deferred to the stream slice");
-
-    /// <summary>Port of AggregateStreamChunks (aggregator.go) — lands with the stream slice.</summary>
-    public byte[] AggregateStreamChunks(HttpRequestData? request, IReadOnlyList<StreamEvent> chunks, out ResponseMeta meta)
-    {
-        meta = new ResponseMeta();
-        throw new InvalidOperationException("gemini streaming is deferred to the stream slice");
-    }
-
     /// <summary>
     /// Port of clearFunctionIDsForVertexAI (outbound.go:318-330): clears the ID
     /// field from all FunctionCall and FunctionResponse parts in the request.
@@ -325,7 +315,7 @@ public sealed partial class GeminiOutboundTransformer : IOutboundTransformer
     /// function_response objects. Go sets the zero value ""; the port's
     /// string? + WhenWritingNull omits either way, so null keeps the wire shape.
     /// </summary>
-    private static void ClearFunctionIDsForVertexAI(GenerateContentRequest req)
+    internal static void ClearFunctionIDsForVertexAI(GenerateContentRequest req)
     {
         foreach (var content in req.Contents ?? [])
         {

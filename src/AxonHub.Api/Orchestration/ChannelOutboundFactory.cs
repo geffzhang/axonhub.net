@@ -14,6 +14,7 @@ using AxonHub.Llm.Transformer.Cline;
 using AxonHub.Llm.Transformer.DeepSeek;
 using AxonHub.Llm.Transformer.Doubao;
 using AxonHub.Llm.Transformer.Fireworks;
+using AxonHub.Llm.Transformer.Gemini;
 using AxonHub.Llm.Transformer.Gemini.OpenAI;
 using AxonHub.Llm.Transformer.Longcat;
 using AxonHub.Llm.Transformer.Minimax;
@@ -54,7 +55,8 @@ namespace AxonHub.Api.Orchestration;
 /// <c>moonshot_coding</c>, <c>modelscope</c>, <c>doubao</c>,
 /// <c>volcengine</c>, <c>doubao_anthropic</c>, <c>volcengine_anthropic</c>,
 /// <c>zenmux</c>, <c>zenmux_responses</c>, <c>zenmux_anthropic</c>,
-/// <c>zenmux_video</c>, <c>github_copilot</c> and <c>gemini_openai</c>
+/// <c>zenmux_video</c>, <c>github_copilot</c>, <c>gemini_openai</c>,
+/// <c>gemini</c>, <c>zenmux_gemini</c> and <c>gemini_vertex</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -151,11 +153,19 @@ public static class ChannelOutboundFactory
 
     public const string GeminiOpenAiChannelType = "gemini_openai";
 
+    public const string GeminiChannelType = "gemini";
+
+    public const string GeminiVertexChannelType = "gemini_vertex";
+
+    public const string ZenmuxGeminiChannelType = "zenmux_gemini";
+
     // channel_llm.go:56-58: the default base URLs applied when a ZenMux
     // channel has none stored (channel_llm.go:695-705).
     public const string ZenmuxOpenAiBaseUrl = "https://zenmux.ai/api/v1";
 
     public const string ZenmuxAnthropicBaseUrl = "https://zenmux.ai/api/anthropic";
+
+    public const string ZenmuxGeminiBaseUrl = "https://zenmux.ai/api/vertex-ai";
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
@@ -582,6 +592,26 @@ public static class ChannelOutboundFactory
             // channel_llm.go:1109-1118: Gemini's OpenAI-compatible endpoint;
             // the default endpoint set is chat only (channel_endpoint.go:253).
             GeminiOpenAiChannelType => CreateGeminiOpenAiOutbound(candidate, provider),
+            // channel_llm.go:1327-1335: gemini and zenmux_gemini share the
+            // native Gemini transformer; zenmux_gemini falls back to the
+            // ZenMux Vertex base URL when the channel stores none
+            // (channel_llm.go:695-705). The constructor cannot fail, so no
+            // error wrapping is needed.
+            GeminiChannelType or ZenmuxGeminiChannelType => new GeminiOutboundTransformer(new GeminiOutboundConfig
+            {
+                BaseUrl = candidate.Type == ZenmuxGeminiChannelType
+                    ? ZenmuxBaseUrl(candidate)
+                    : candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+            }),
+            // channel_llm.go:1336-1346: the gemini_vertex channel pins the
+            // Vertex platform (URL shape + function ID clearing).
+            GeminiVertexChannelType => new GeminiOutboundTransformer(new GeminiOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                PlatformType = GeminiConstants.PlatformVertex,
+            }),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
@@ -627,8 +657,7 @@ public static class ChannelOutboundFactory
 
     /// <summary>
     /// Port of the empty-base-URL defaulting in <c>buildChannelWithTransformer</c>
-    /// (channel_llm.go:695-705). Only the three ported ZenMux types carry a
-    /// default; zenmux_gemini's default is part of the deferred Gemini slice.
+    /// (channel_llm.go:695-705). Only the ported ZenMux types carry a default.
     /// </summary>
     private static string ZenmuxBaseUrl(ChannelCandidate candidate)
     {
@@ -638,9 +667,12 @@ public static class ChannelOutboundFactory
             return baseUrl;
         }
 
-        return candidate.Type == ZenmuxAnthropicChannelType
-            ? ZenmuxAnthropicBaseUrl
-            : ZenmuxOpenAiBaseUrl;
+        return candidate.Type switch
+        {
+            ZenmuxAnthropicChannelType => ZenmuxAnthropicBaseUrl,
+            ZenmuxGeminiChannelType => ZenmuxGeminiBaseUrl,
+            _ => ZenmuxOpenAiBaseUrl,
+        };
     }
 
     /// <summary>
