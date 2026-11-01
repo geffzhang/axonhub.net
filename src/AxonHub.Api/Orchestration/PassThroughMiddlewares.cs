@@ -13,11 +13,10 @@ namespace AxonHub.Api.Orchestration;
 /// that travels with such a body, and applies the User-Agent policy.
 /// </summary>
 /// <remarks>
-/// Response and stream pass-through (captureRawProviderResponse / Stream and
-/// the two applyPassThrough* response middlewares) is not ported yet (C091).
-/// Prompt-protection patching of the replayed body is likewise unported, so the
-/// merge degenerates to the model-patch-only form used when no mask rules can
-/// apply.
+/// Response and stream pass-through live in
+/// <c>PassThroughStreamMiddlewares.cs</c>. Prompt-protection patching of the
+/// replayed body is still unported (C091), so the merge degenerates to the
+/// model-patch-only form used when no mask rules can apply.
 /// </remarks>
 internal static class PassThrough
 {

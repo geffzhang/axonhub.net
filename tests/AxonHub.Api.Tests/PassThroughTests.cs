@@ -19,9 +19,9 @@ namespace AxonHub.Api.Tests;
 /// policy.
 /// </summary>
 /// <remarks>
-/// Response and stream pass-through are not ported yet (C091), as is
-/// prompt-protection patching of the replayed body; the corresponding reference
-/// tests have no counterpart here.
+/// The response and stream half lives in
+/// <see cref="PassThroughStreamTests"/>; prompt-protection patching of the
+/// replayed body is still unported (C091).
 /// </remarks>
 public sealed class PassThroughTests
 {

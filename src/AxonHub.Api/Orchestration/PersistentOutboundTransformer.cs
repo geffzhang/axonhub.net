@@ -96,6 +96,30 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     public bool PassThroughApplied { get; internal set; }
 
     /// <summary>
+    /// The raw provider response of the latest attempt (the reference's
+    /// <c>state.RawProviderResponse</c>), captured before the outbound
+    /// transformer decodes it so the response can be replayed verbatim.
+    /// </summary>
+    public HttpResponseData? RawProviderResponse { get; internal set; }
+
+    /// <summary>
+    /// The live fan-out state of the latest streaming attempt (the reference's
+    /// RawStreamCh / RawStreamBacklog / RawStreamErrRef / RawStreamCancel).
+    /// </summary>
+    internal PassThroughStreamState? PassThroughStream { get; set; }
+
+    /// <summary>
+    /// Port of resetPassThroughStreamState: unblock the previous attempt's
+    /// fan-out thread and clear its state before the next attempt starts.
+    /// </summary>
+    internal void ResetPassThroughStreamState()
+    {
+        var state = PassThroughStream;
+        PassThroughStream = null;
+        state?.Cancel();
+    }
+
+    /// <summary>
     /// The candidate serving the current attempt, or <see langword="null"/> before
     /// the first transform. Raw-request middlewares read the channel-level
     /// override settings from here.
@@ -229,6 +253,10 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     {
         _ = cancellationToken;
 
+        // outbound.go:823 — release the previous attempt's fan-out thread
+        // before switching candidates.
+        ResetPassThroughStreamState();
+
         _candidateIndex++;
         if (_candidateIndex >= _candidates.Length)
         {
@@ -293,6 +321,10 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
 
         // outbound.go:739 — a same-channel retry re-runs the pass-through check.
         PassThroughApplied = false;
+
+        // outbound.go:832 — an abandoned attempt's pending events must never
+        // reach the retried attempt's consumer.
+        ResetPassThroughStreamState();
 
         RecordSelection(_candidates[_candidateIndex]);
         return null;

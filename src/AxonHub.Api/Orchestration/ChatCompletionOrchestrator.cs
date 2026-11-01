@@ -272,6 +272,15 @@ public sealed class ChatCompletionOrchestrator
         // request (orchestrator.go's finalizeTransportRequest registration).
         options.Middlewares.Add(new TransportRequestFinalizerMiddleware(outbound));
 
+        // Response pass-through middlewares run before persistence so the raw
+        // provider response/stream is what the request row stores when
+        // pass-through is enabled (orchestrator.go:258-263).
+        options.Middlewares.Add(new PassThroughResponseMiddleware(outbound, passThroughSettings));
+        options.Middlewares.Add(new PassThroughStreamMiddleware(
+            outbound,
+            passThroughSettings,
+            cancellationToken));
+
         // Registered after the metrics middleware so it runs first on the way
         // out, matching the reference order (persistRequestExecution is the last
         // outbound middleware).
@@ -302,6 +311,15 @@ public sealed class ChatCompletionOrchestrator
             cancellationToken));
         options.Middlewares.Add(new RateLimitAdmissionMiddleware(outbound, _rateLimitTracker));
         options.Middlewares.Add(new RateLimitTrackingMiddleware(outbound, _rateLimitTracker, _timeProvider));
+
+        // Response pass-through capture middlewares must be last so they run
+        // first in reverse order, before any other outbound response/stream
+        // handler sees the provider payload (orchestrator.go:306-309).
+        options.Middlewares.Add(new CaptureRawProviderResponseMiddleware(outbound, passThroughSettings));
+        options.Middlewares.Add(new CaptureRawProviderStreamMiddleware(
+            outbound,
+            passThroughSettings,
+            cancellationToken));
 
         var pipeline = new Pipeline(_executor, _inbound, outbound, options);
 
