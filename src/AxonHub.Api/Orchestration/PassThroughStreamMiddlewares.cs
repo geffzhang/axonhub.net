@@ -16,7 +16,8 @@ namespace AxonHub.Api.Orchestration;
 /// is consumed once and fanned out to the pipeline (so LLM middlewares still
 /// run) and to the pass-through consumer. Events read before the consumer
 /// attaches are held in a bounded backlog; the pipeline pre-read can otherwise
-/// deadlock on the raw channel. Prompt protection is still unported (C091).
+/// deadlock on the raw channel. Prompt protection is applied by the earlier
+/// pass-through body middleware (C092).
 /// </remarks>
 [SuppressMessage(
     "Design",

@@ -1,6 +1,7 @@
 using AxonHub.Api.Auth;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Persistence;
+using AxonHub.Api.PromptProtection;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
@@ -35,6 +36,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IRequestChainRecorder? _requestChainRecorder;
     private readonly IUsageCostService? _usageCostService;
     private readonly IPassThroughSettingsProvider _passThroughSettings;
+    private readonly IPromptProtectionRuleProvider? _promptProtectionRules;
     private readonly ChannelRequestTracker _rateLimitTracker;
     private readonly ChannelLimiterManager _channelLimiterManager;
 
@@ -50,7 +52,8 @@ public sealed class ChatCompletionOrchestrator
         ChannelRequestTracker? rateLimitTracker = null,
         ChannelLimiterManager? channelLimiterManager = null,
         IUsageCostService? usageCostService = null,
-        IPassThroughSettingsProvider? passThroughSettings = null)
+        IPassThroughSettingsProvider? passThroughSettings = null,
+        IPromptProtectionRuleProvider? promptProtectionRules = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -68,6 +71,10 @@ public sealed class ChatCompletionOrchestrator
         _timeProvider = timeProvider;
         _requestChainRecorder = requestChainRecorder;
         _usageCostService = usageCostService;
+
+        // The reference always mounts protectPrompts; without a rule service
+        // the state holds no protector and the middleware is a no-op.
+        _promptProtectionRules = promptProtectionRules;
 
         // Without a system store the reference falls back to the channel-level
         // setting only; both flags off reproduces that.
@@ -108,7 +115,8 @@ public sealed class ChatCompletionOrchestrator
             _rateLimitTracker,
             _channelLimiterManager,
             _usageCostService,
-            _passThroughSettings);
+            _passThroughSettings,
+            _promptProtectionRules);
     }
 
     /// <summary>
@@ -236,6 +244,14 @@ public sealed class ChatCompletionOrchestrator
 
         var outbound = new PersistentOutboundTransformer(candidates, _timeProvider, _metrics);
 
+        // orchestrator.go mounts injectPrompts then protectPrompts as inbound
+        // middlewares; the reference reads the enabled rules from its live
+        // cache there. The port takes the snapshot before building the pipeline
+        // and ProtectPromptsMiddleware applies it inside the inbound phase, so
+        // no provider body is built from unprotected prompts.
+        var promptProtecter = await LoadPromptProtecterAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         var options = new PipelineOptions
         {
             MaxChannelRetries = retryPolicy.Enabled ? retryPolicy.MaxChannelRetries : 0,
@@ -249,6 +265,13 @@ public sealed class ChatCompletionOrchestrator
         // middleware and the persistent-stream counterpart so both mark the
         // same per-attempt record (PersistenceState.Perf in the reference).
         var performance = new ChannelPerformanceState();
+
+        // Inbound-phase middleware: registered first so it runs before the
+        // outbound chain, matching the reference's inbound/outbound split.
+        options.Middlewares.Add(new ProtectPromptsMiddleware(
+            outbound,
+            _inbound,
+            promptProtecter));
         options.Middlewares.Add(new ChannelMetricsMiddleware(
             outbound,
             _metrics,
@@ -339,6 +362,32 @@ public sealed class ChatCompletionOrchestrator
         return result.Stream
             ? new ChatCompletionResult { Stream = result.EventStream }
             : new ChatCompletionResult { Response = result.Response };
+    }
+
+    /// <summary>
+    /// Port of the rule load inside biz.PromptProtectionRuleService.ProtectWithResult:
+    /// a load failure is logged there and the request continues unprotected
+    /// (fail open), which an empty snapshot reproduces.
+    /// </summary>
+    private async Task<IPromptProtecter?> LoadPromptProtecterAsync(
+        CancellationToken cancellationToken)
+    {
+        if (_promptProtectionRules is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var rules = await _promptProtectionRules
+                .ListEnabledAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return new PromptProtectionRuleProtector(rules);
+        }
+        catch (Exception)
+        {
+            return new PromptProtectionRuleProtector([]);
+        }
     }
 }
 

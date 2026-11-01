@@ -1,3 +1,4 @@
+using AxonHub.Api.PromptProtection;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
@@ -107,6 +108,21 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// RawStreamCh / RawStreamBacklog / RawStreamErrRef / RawStreamCancel).
     /// </summary>
     internal PassThroughStreamState? PassThroughStream { get; set; }
+
+    /// <summary>
+    /// The rules that masked the unified request on the inbound pass
+    /// (the reference's <c>state.PromptProtectionMaskRules</c>). Set once per
+    /// request, not per attempt, so retries replay the same protected body.
+    /// </summary>
+    public IReadOnlyList<PromptProtectionRule> PromptProtectionMaskRules { get; internal set; } = [];
+
+    /// <summary>
+    /// Snapshot validating that a replayed provider body decodes to exactly the
+    /// protected prompts (the reference's
+    /// <c>state.PromptProtectionBodyCheck</c>). Null when no rule matched and no
+    /// legacy protector changed the prompt text.
+    /// </summary>
+    internal PromptProtectionBodyCheck? PromptProtectionBodyCheck { get; set; }
 
     /// <summary>
     /// Port of resetPassThroughStreamState: unblock the previous attempt's

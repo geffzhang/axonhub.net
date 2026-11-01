@@ -15,8 +15,9 @@ namespace AxonHub.Api.Orchestration;
 /// <remarks>
 /// Response and stream pass-through live in
 /// <c>PassThroughStreamMiddlewares.cs</c>. Prompt-protection patching of the
-/// replayed body is still unported (C091), so the merge degenerates to the
-/// model-patch-only form used when no mask rules can apply.
+/// replayed body lives in <see cref="PassThroughPromptProtection"/> and runs
+/// after the model patch, exactly like the reference's
+/// mergePassThroughRequestBodyWithPromptProtection.
 /// </remarks>
 internal static class PassThrough
 {
@@ -185,6 +186,38 @@ internal static class PassThrough
         return true;
     }
 
+    /// <summary>
+    /// Port of mergePassThroughRequestBodyWithPromptProtection: preserves the
+    /// original JSON body while applying model mapping and the matched
+    /// prompt-protection mask rules. A patch failure keeps the generated body.
+    /// </summary>
+    public static bool TryMergeRequestBodyWithPromptProtection(
+        byte[]? rawBody,
+        string? apiFormat,
+        string model,
+        IReadOnlyList<PromptProtection.PromptProtectionRule> rules,
+        out byte[] body,
+        out string? error)
+    {
+        if (!TryMergeRequestBody(rawBody, apiFormat, model, out body, out error))
+        {
+            return false;
+        }
+
+        if (error is not null || rules.Count == 0)
+        {
+            return true;
+        }
+
+        if (!PassThroughPromptProtection.TryPatch(body, apiFormat, rules, out var patched, out error))
+        {
+            return false;
+        }
+
+        body = patched;
+        return true;
+    }
+
     private static bool IsBlank(byte[] body)
     {
         foreach (var value in body)
@@ -248,14 +281,25 @@ internal sealed class PassThroughRequestBodyMiddleware(
             return request;
         }
 
-        if (!PassThrough.TryMergeRequestBody(
+        if (!PassThrough.TryMergeRequestBodyWithPromptProtection(
                 llmRequest.RawRequest.Body,
                 llmRequest.ApiFormat,
                 llmRequest.Model,
+                outbound.PromptProtectionMaskRules,
                 out var body,
                 out _))
         {
             // Keep the outbound body when the raw body cannot be patched.
+            return request;
+        }
+
+        // The replay is only trusted when the inbound mapping reads back
+        // exactly the prompts prompt protection produced. Partial native
+        // patches and regex semantics that span JSON values fall back to the
+        // generated (already-protected) body.
+        if (outbound.PromptProtectionBodyCheck is { } bodyCheck
+            && bodyCheck.Validate(body) is not null)
+        {
             return request;
         }
 

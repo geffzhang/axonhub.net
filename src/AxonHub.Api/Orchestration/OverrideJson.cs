@@ -464,6 +464,102 @@ internal readonly struct JsonLookup
 
     public bool IsArray => Node is OverrideJsonArray;
 
+    /// <summary>gjson.Result.Type == String.</summary>
+    public bool IsString => Node is OverrideJsonScalar { Kind: OverrideJsonKind.String };
+
+    /// <summary>gjson.Result.Type == JSON (an object or an array).</summary>
+    public bool IsJson => Node is OverrideJsonObject or OverrideJsonArray;
+
+    /// <summary>
+    /// gjson.Result.Type == Null: a missing path and an explicit JSON null are
+    /// indistinguishable through gjson's type check.
+    /// </summary>
+    public bool IsNull => Node is null or OverrideJsonScalar { Kind: OverrideJsonKind.Null };
+
+    /// <summary>gjson.Result.Int().</summary>
+    public long IntValue => Node switch
+    {
+        OverrideJsonScalar { Kind: OverrideJsonKind.True } => 1,
+        // gjson tries the float64 value first (safeInt), then the raw token.
+        OverrideJsonScalar { Kind: OverrideJsonKind.Number } scalar
+            => SafeInt(scalar.NumberValue, out var safe)
+                ? safe
+                : ParseIntPrefix(scalar.Text),
+        OverrideJsonScalar { Kind: OverrideJsonKind.String } scalar
+            => ParseIntPrefix(scalar.StringValue),
+        _ => 0,
+    };
+
+    /// <summary>Port of gjson.safeInt: the float64 must be an exact integer.</summary>
+    private static bool SafeInt(double value, out long result)
+    {
+        result = 0;
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            return false;
+        }
+
+        if (value < long.MinValue || value > long.MaxValue)
+        {
+            return false;
+        }
+
+        var truncated = (long)value;
+        if ((double)truncated != value)
+        {
+            return false;
+        }
+
+        result = truncated;
+        return true;
+    }
+
+    /// <summary>
+    /// Port of gjson.parseInt: an optional leading minus, then digits; parsing
+    /// stops at the first non-digit once at least one digit was read.
+    /// </summary>
+    private static long ParseIntPrefix(string text)
+    {
+        var index = 0;
+        var negative = false;
+        if (text.Length > 0 && text[0] == '-')
+        {
+            negative = true;
+            index = 1;
+        }
+
+        if (index == text.Length)
+        {
+            return 0;
+        }
+
+        long value = 0;
+        var digits = 0;
+        for (; index < text.Length; index++)
+        {
+            var c = text[index];
+            if (c is < '0' or > '9')
+            {
+                if (digits == 0)
+                {
+                    return 0;
+                }
+
+                break;
+            }
+
+            if (value > (long.MaxValue - (c - '0')) / 10)
+            {
+                return 0;
+            }
+
+            value = (value * 10) + (c - '0');
+            digits++;
+        }
+
+        return negative ? -value : value;
+    }
+
     /// <summary>gjson.Result.String().</summary>
     public string StringValue => Node switch
     {

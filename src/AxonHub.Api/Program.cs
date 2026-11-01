@@ -6,6 +6,7 @@ using AxonHub.Api.Http;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
+using AxonHub.Api.PromptProtection;
 using AxonHub.Api.Security;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
@@ -105,6 +106,11 @@ builder.Services.AddScoped<ISystemStore, SystemStore>();
 builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
 builder.Services.AddScoped<IRetryPolicyProvider, SystemRetryPolicyService>();
 builder.Services.AddScoped<IPassThroughSettingsProvider, SystemPassThroughSettingsService>();
+
+// Prompt protection (biz.PromptProtectionRuleService): the port reads enabled
+// rules per request instead of the reference's 30-second live cache (C092).
+builder.Services.AddScoped<IPromptProtectionRuleStore, PromptProtectionRuleStore>();
+builder.Services.AddScoped<IPromptProtectionRuleProvider, PromptProtectionRuleService>();
 
 // The models surface (biz.ModelService.ListEnabledModels) reads the
 // system_model_settings row through the same scoped system store.

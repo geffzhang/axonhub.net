@@ -816,8 +816,8 @@ headers → finalize transport）、`internal/objects/channel.go:214-226`
 （`PassThroughBodyPolicy`）以及 `internal/transformer/{decisions,typesafe}` 的两个
 `AllowPassThroughBody` 实现。参照测试 `pass_through_test.go`、
 `pass_through_budget_test.go` 与 `pass_through_codex_test.go` 逐条改写为端口测试；
-请求半程见本节，响应/流半程见第 27 节；提示词保护
-（`pass_through_prompt_protection.go` 与两个 `_test.go`）未移植，登记于 C091。
+请求半程见本节，响应/流半程见第 27 节，提示词保护
+（`pass_through_prompt_protection.go` 与两个 `_test.go`）见第 28 节。
 
 端口新增：`ChannelPassThroughSettings`（`settings` JSON 的 Go 语义解码：键大小写
 不敏感、重复键后者胜出、`null` / 非布尔类型视为继承、畸形 JSON 降级为两者均继承）、
@@ -858,7 +858,7 @@ sjson 的空文档语义单独处理：端口先按 Go `sjson` 的做法把空�
 （两个重试入口复位流状态）、`orchestrator.go:258-263,306-309`（apply 响应/流注册在
 `persistRequest` 之前；capture 响应/流最后注册，反向最先执行）以及
 `pass_through_test.go` / `pass_through_budget_test.go` 的响应半程用例。提示词保护
-（`pass_through_prompt_protection.go`）仍未移植，C091 继续记录为真实缺口。
+（`pass_through_prompt_protection.go`）见第 28 节。
 
 端口新增：`PassThroughStreamMiddlewares.cs` 的四个中间件与支撑类型
 `PassThroughStreamState`（原始通道、backlog、per-attempt 错误引用、取消委托）、
@@ -885,15 +885,68 @@ finally 中释放关联 CTS）。`PersistentOutboundTransformer` 增加
 
 合计 7 + 6 + 6 + 2 + 2 + 3 = 26 例：`AxonHub.Api.Tests` 由 775 增至 801，
 `AxonHub.Llm.Tests` 保持 1253，`AxonHub.Grains.Tests` 保持 88；合计 2142。C091
-更新为请求与响应/流半程均已接入，提示词保护与 codex 策略仍为缺口。
+更新为请求与响应/流半程均已接入，codex 策略仍为缺口（提示词保护见第 28 节）。
+
+## 28. pass-through 提示词保护（71 例，2026-11-01）
+
+参照路线：`internal/server/orchestrator/prompt_protection.go`（`protectPrompts` 入站中间件、
+`promptProtectionRejectedMessage`、`promptProtectionBodyCheck` 与 `promptProtectionTexts`）、
+`internal/server/biz/prompt_protection_request.go`（`ApplyPromptProtectionRules` 的
+Messages / Decisions / Compact 三路分派、作用域过滤、掩码与拒绝语义）、
+`biz/prompt_protection_rule.go`（`MatchPromptProtectionRule` / `ReplacePromptProtectionRule`
+与正则缓存）、`orchestrator/pass_through_prompt_protection.go`
+（`rawPromptTextFields` 的五种线路格式、`mergePassThroughRequestBodyWithPromptProtection`、
+Gemini `functionResponse.response` 的 `UseNumber` 递归掩码、body 回放校验）以及
+`prompt_protection_rule_test.go`、`prompt_protection_request_test.go`、
+`prompt_protection_test.go`、`pass_through_prompt_protection_test.go`、
+`pass_through_prompt_protection_payload_test.go` 的参照用例。
+
+端口新增：`PromptProtectionModels`（规则 / 设置 / 结果 / 作用域）、`PromptProtectionRegex`
+（进程级正则缓存，编译失败也缓存，匹配/替换异常视为不匹配）、`PromptProtectionJson`
+（gjson 语义的 `Exists` / `IsString` / `IsNull` / `ArrayLength` / `String`，`#` 仅数组长度）、
+`PromptProtectionRules.Apply`（Messages：标量内容整体替换或仅掩码 `text` 分片；
+Decisions：`input` 字符串与 `input_text` 分片；Compact：`instructions` 当 system、
+`input` 当消息且写回 `Input = view.Messages[inputOffset..]`；空作用域=全部角色、
+角色小写精确比较；拒绝返回 `MatchedRules` + `Rejected`）、`PromptProtectionRuleService` /
+`PromptProtectionRuleProtector`（`IPromptProtecter` 与 `IPromptProtectionResultProvider`
+双接缝，拒绝抛 `PromptProtectionRejectedException`）、`PromptProtectionTexts` /
+`PromptProtectionBodyCheck`（按入站映射回放原始 body 并比较提示词快照）、
+`ProtectPromptsMiddleware`（拒绝映射为 `ErrInvalidRequest` 的固定文案，其他失败保留原请求；
+记录 `PromptProtectionMaskRules`；legacy protector 以文本快照差异决定是否启用回放校验；
+Decisions 格式跳过校验）、`PassThroughPromptProtection`（按 APIFormat 分派的原始文本字段
+收集器、逗号分隔的 `Text` 分片类型、Anthropic `tool_result` 嵌套 content、Gemini
+role 归一与结构化 functionResponse、按 id 顺序的掩码规则；无字段命中即失败，回退生成的
+已保护 body）。`PassThroughRequestBodyMiddleware` 在 model 补丁后应用掩码，
+`PromptProtectionBodyCheck.Validate` 失败时同样回退生成 body；
+`ChatCompletionOrchestrator` 每请求从 `IPromptProtectionRuleProvider` 取规则快照，
+读取失败失败开放。顺带把 `ApiFormats.OpenAIResponseCompact` 修正为参照的
+`openai/responses_compact`（原端口误用 HTTP 路径 `/responses/compact`），使压缩请求的
+pass-through 补丁分派与 `request_executions.api_format` 与参照一致。规则读取无 30 秒
+live 缓存、管理面/预览缺失、.NET Regex 语义与 Gemini/Ollama 载荷级对照延后登记为 C092。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 统一规则应用：Messages 掩码/拒绝/作用域/多规则顺序/多内容分片/未命中、无 settings 跳过、空请求/空规则、非法正则恒不匹配；Decisions 字符串与分片；Compact 的 instructions/input 隔离与拒绝 | `tests/AxonHub.Api.Tests/PromptProtectionTests.cs` | 18 |
+| `ProtectPromptsMiddleware`：掩码、拒绝固定文案且不泄露规则、nil 结果保留原请求、legacy protector 启用回放校验、无变化不启用、Decisions 跳过校验、非拒绝异常保留原请求、无 protector 直通、RawRequest 保留 | `tests/AxonHub.Api.Tests/PromptProtectionTests.cs` | 11 |
+| 规则服务：记录映射、空/空白/`null` settings、非法 settings 失败、读失败失败、空快照、掩码应用、拒绝哨兵 | `tests/AxonHub.Api.Tests/PromptProtectionTests.cs` | 9 |
+| 原始 body 补丁：五种格式的文本路径、Responses Compact、未支持格式、Gemini functionResponse 的键/数字保真、Ollama chat 布局、规则未命中字段、缺失/对象 content 的 chat 布局、非法 JSON、model 补丁与规则合并 | `tests/AxonHub.Api.Tests/PassThroughPromptProtectionTests.cs` | 13 |
+| 真实编解码回放：OpenAI chat / Responses / Compact / Anthropic / Decisions 的 10 组参照载荷只发送受保护文本且保留额外字段、映射后 model 与 Content-Type；legacy protector 无法恢复明文；Compact 拒绝在构造上游 body 前阻断 | `tests/AxonHub.Api.Tests/PassThroughPromptProtectionTests.cs` | 13 |
+| body 校验：无入站映射、解码失败固定文案、快照一致通过、提示词不同拒绝 | `tests/AxonHub.Api.Tests/PassThroughPromptProtectionTests.cs` | 4 |
+| 编排端到端：掩码后的重放 body 到达传输层、拒绝请求不触达传输层、规则读取失败失败开放 | `tests/AxonHub.Api.Tests/PassThroughPromptProtectionTests.cs` | 3 |
+
+合计 18 + 11 + 9 + 13 + 13 + 4 + 3 = 71 例：`AxonHub.Api.Tests` 由 801 增至 872，
+`AxonHub.Llm.Tests` 保持 1253，`AxonHub.Grains.Tests` 保持 88；合计 2213。C092 登记
+规则每请求读库（无 30 秒 live 缓存与启动期 panic）、管理面/GraphQL/预览未移植、
+.NET Regex 与 regexp2 的语义差异、Gemini/Ollama 无编解码器导致载荷级对照延后，
+并关闭 C091 中的提示词保护缺口（codex 出站 `AllowPassThroughBody` 仍在 C091）。
 
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
-| TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求半程已由第 26 节闭合 | 低 | 完成（C087、C091） |
-| pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定；`pass_through_prompt_protection.go` 的 body 补丁/校验与 codex 出站 `AllowPassThroughBody` 未移植（C091） | 中 | 提示词保护切片（随 codex 策略） |
+| TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求与提示词保护半程已由第 26、28 节闭合 | 低 | 完成（C087、C091、C092） |
+| pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面/预览与 codex 出站 `AllowPassThroughBody` 未移植（C092、C091） | 中 | 管理面随 C013/C014，codex 策略随 codex 切片 |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |

@@ -30,7 +30,13 @@ public static class ApiFormats
     public const string OpenAIChatCompletion = "openai/chat_completions";
     public const string OpenAICompletion = "openai/completions";
     public const string OpenAIResponse = "openai/responses";
-    public const string OpenAIResponseCompact = "openai/responses/compact";
+
+    /// <summary>
+    /// llm.APIFormatOpenAIResponseCompact (llm/constants.go:45): the persisted
+    /// request format is <c>openai/responses_compact</c>, not the HTTP path
+    /// <c>/responses/compact</c>.
+    /// </summary>
+    public const string OpenAIResponseCompact = "openai/responses_compact";
     public const string OpenAIEmbedding = "openai/embeddings";
     public const string OpenAIModeration = "openai/moderations";
     public const string OpenAIAlphaSearch = "openai/alpha_search";
@@ -48,6 +54,7 @@ public static class ApiFormats
     public const string OpenAITranslation = "openai/audio_translations";
     public const string AnthropicMessage = "anthropic/messages";
     public const string GeminiContents = "gemini/contents";
+    public const string OllamaChat = "ollama/chat";
     public const string TypeSafeSystemOne = "typesafe/systemone";
 }
 

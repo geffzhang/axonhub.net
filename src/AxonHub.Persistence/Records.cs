@@ -313,6 +313,32 @@ public sealed class SystemRecord
     public string Value { get; set; } = string.Empty;
 }
 
+/// <summary>Row of the reference <c>prompt_protection_rules</c> table.</summary>
+public sealed class PromptProtectionRuleRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>Go regular expression (regexp2, .NET syntax).</summary>
+    public string Pattern { get; set; } = string.Empty;
+
+    /// <summary>enabled, disabled, or archived.</summary>
+    public string Status { get; set; } = "disabled";
+
+    /// <summary>objects.PromptProtectionSettings JSON; Ent stores it as jsonb.</summary>
+    public string Settings { get; set; } = "{}";
+}
+
 /// <summary>Row of the reference <c>usage_logs</c> table.</summary>
 public sealed class UsageLogRecord
 {

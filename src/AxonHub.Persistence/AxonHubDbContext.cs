@@ -40,6 +40,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<SystemRecord> Systems => Set<SystemRecord>();
 
+    public DbSet<PromptProtectionRuleRecord> PromptProtectionRules => Set<PromptProtectionRuleRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -70,6 +72,33 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureProject(modelBuilder.Entity<ProjectRecord>());
         ConfigureApiKey(modelBuilder.Entity<ApiKeyRecord>());
         ConfigureSystem(modelBuilder.Entity<SystemRecord>());
+        ConfigurePromptProtectionRule(modelBuilder.Entity<PromptProtectionRuleRecord>());
+    }
+
+    private static void ConfigurePromptProtectionRule(
+        EntityTypeBuilder<PromptProtectionRuleRecord> builder)
+    {
+        builder.ToTable("prompt_protection_rules");
+        builder.HasKey(rule => rule.Id);
+        builder.Property(rule => rule.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(rule => rule.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(rule => rule.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(rule => rule.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(rule => rule.Name).HasColumnName("name").HasColumnType("varchar").IsRequired();
+        builder.Property(rule => rule.Description)
+            .HasColumnName("description")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(rule => rule.Pattern).HasColumnName("pattern").HasColumnType("varchar").IsRequired();
+        builder.Property(rule => rule.Status).HasColumnName("status").HasColumnType("varchar").IsRequired();
+        builder.Property(rule => rule.Settings).HasColumnName("settings").HasColumnType("jsonb").IsRequired();
+
+        builder.HasIndex(rule => new { rule.Name, rule.DeletedAt })
+            .HasDatabaseName("prompt_protection_rules_by_name")
+            .IsUnique();
     }
 
     private static void ConfigureSystem(EntityTypeBuilder<SystemRecord> builder)

@@ -21,7 +21,7 @@ namespace AxonHub.Api.Tests;
 /// <remarks>
 /// The response and stream half lives in
 /// <see cref="PassThroughStreamTests"/>; prompt-protection patching of the
-/// replayed body is still unported (C091).
+/// replayed body lives in <see cref="PassThroughPromptProtectionTests"/>.
 /// </remarks>
 public sealed class PassThroughTests
 {

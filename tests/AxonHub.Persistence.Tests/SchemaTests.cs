@@ -15,7 +15,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
     private static readonly string[] ExpectedTables =
     [
         "api_keys", "channel_model_prices", "channels", "projects",
-        "request_executions", "requests", "systems", "usage_logs", "users",
+        "prompt_protection_rules", "request_executions", "requests", "systems",
+        "usage_logs", "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -44,6 +45,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
         [
             "id", "created_at", "updated_at", "deleted_at", "model_id", "price",
             "reference_id", "channel_id",
+        ],
+        ["prompt_protection_rules"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "name", "description",
+            "pattern", "status", "settings",
         ],
         ["channels"] =
         [
@@ -132,6 +138,13 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["timestamp with time zone"] = ["created_at", "updated_at"],
                 ["jsonb"] = ["price"],
                 ["character varying"] = ["model_id", "reference_id"],
+            },
+            ["prompt_protection_rules"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] = ["settings"],
+                ["character varying"] = ["name", "description", "pattern", "status"],
             },
             ["channels"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
@@ -228,6 +241,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["api_keys_by_project_id"] = ("api_keys", false, ["project_id"]),
             ["api_keys_by_key"] = ("api_keys", true, ["key"]),
             ["systems_key_key"] = ("systems", true, ["key"]),
+            ["prompt_protection_rules_by_name"] =
+                ("prompt_protection_rules", true, ["name", "deleted_at"]),
             ["requests_by_api_key_id_created_at"] = ("requests", false, ["api_key_id", "created_at"]),
             ["requests_by_project_id_created_at"] = ("requests", false, ["project_id", "created_at"]),
             ["requests_by_project_id_user_id_created_at"] =
