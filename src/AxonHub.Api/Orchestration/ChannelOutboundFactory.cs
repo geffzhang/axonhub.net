@@ -8,6 +8,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
+using AxonHub.Llm.Transformer.Cline;
 using AxonHub.Llm.Transformer.DeepSeek;
 using AxonHub.Llm.Transformer.Fireworks;
 using AxonHub.Llm.Transformer.Longcat;
@@ -20,6 +21,7 @@ using AxonHub.Llm.Transformer.Ollama;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.OpenCode;
 using AxonHub.Llm.Transformer.TypeSafe;
+using AxonHub.Llm.Transformer.Xai;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -32,8 +34,8 @@ namespace AxonHub.Api.Orchestration;
 /// Only the <c>openai</c>, <c>anthropic</c>, <c>claudecode</c>,
 /// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
 /// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>deepseek</c>, <c>fireworks</c>,
-/// <c>moonshot</c>, <c>longcat</c>, <c>ollama</c> and <c>ollama_anthropic</c>
-/// channel types are ported (the vertical slice); the
+/// <c>moonshot</c>, <c>longcat</c>, <c>cline</c>, <c>xai</c>, <c>ollama</c> and
+/// <c>ollama_anthropic</c> channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are picked by rendezvous hashing when the request carries a
@@ -66,6 +68,10 @@ public static class ChannelOutboundFactory
     public const string MoonshotChannelType = "moonshot";
 
     public const string LongcatChannelType = "longcat";
+
+    public const string ClineChannelType = "cline";
+
+    public const string XaiChannelType = "xai";
 
     public const string OllamaChannelType = "ollama";
 
@@ -212,9 +218,34 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
             }),
+            // channel_llm.go:741-751: OpenAI-compatible with the Cline
+            // {success,data,error,errors} envelope; the default endpoint set is
+            // chat only (channel_endpoint.go:238).
+            ClineChannelType => new ClineOutboundTransformer(new ClineOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
             // channel_llm.go:831-841: OpenAI-compatible with a custom request
             // path (chat only, json_schema downgraded to json_object).
             MoonshotChannelType => new MoonshotOutboundTransformer(new MoonshotOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:843-853: xAI is the OpenAI outbound with
+            // reasoning_content and an empty-delta stream filter. The channel
+            // also owns a peer responses endpoint (channel_endpoint.go:292-296),
+            // served by the Responses transformer (channel_llm.go:437-455).
+            XaiChannelType when request.ApiFormat is ApiFormats.OpenAIResponse
+                or ApiFormats.OpenAIResponseCompact
+                => ResponsesOutboundTransformer.Create(
+                    candidate.BaseUrl ?? string.Empty,
+                    provider,
+                    provider.KeyIndex),
+            XaiChannelType => new XaiOutboundTransformer(new XaiOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
                 ApiKeyProvider = provider,

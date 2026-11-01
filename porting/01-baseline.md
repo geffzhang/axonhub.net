@@ -1255,6 +1255,56 @@ OpenAI 出站形状；调用方变更语义与参照一致。已接受差异与�
 `AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
 合计 2733 增至 2743。差异条目新增 C099（已接受）。
 
+## 38. xAI / Cline OpenAI 兼容出站与通道接线（59 例，2026-11-01）
+
+参照路线：`llm/transformer/xai/outbound.go:16-19`（`DefaultBaseURL =
+"https://api.x.ai/v1"`）、`:52-74`（`validateConfig` 后以
+`openai.Config{PlatformType: PlatformOpenAI, ReasoningField:
+ReasoningFieldContent}` 构造内嵌出站，校验失败包
+`invalid xAI transformer configuration`，内层失败包
+`failed to create outbound transformer`）、`:77-91`（nil 配置、缺 provider、
+空 URL 就地把 `config.BaseURL` 改为默认值）、`:94-126`（nil 请求、model 必填、
+messages 非空；`grok-4` 清空 `reasoning_effort` 与 penalties/stop，`grok-3` /
+`grok-3-mini` 清空 penalties/stop，其余模型原样委托）、`:128-184`
+（`IsValidResponse` 的 done / choices / delta / 内容 / 分片 / 工具 / role /
+finish reason / refusal / reasoning_content 判定）、`:186-201`（TransformStream
+经 `streams.Filter` 过滤空事件）；`llm/transformer/cline/outbound.go:21-59`
+（配置与内嵌 OpenAI 出站，`ReasoningFieldReasoning`，`EndpointPath` 透传）、
+`:59-100`（chat 时加 `X-Client-Type: cline-cli`，再按统一消息索引把
+user/system/developer 的空内容改写为 `[{"type":"text","text":""}]`）、
+`:103-152`（响应信封 `{success,data,error,errors}`、状态码 ≥400 → 错误解析、
+success 为假 → 502）、`:154-174`（流事件：`[DONE]` 终止、流内错误事件、
+其余走响应转换）、`:176-184`（TransformError）、`:186-214`（带
+`clineChunkTransform` 的聚合）；`model.go:9-84`（Response / Choice / Message
+到 OpenAI 结构的转换，`reasoning_details` 文本拼接优先于 `reasoning`）、
+`error.go:14-160`（状态码归一 0→502、string/map/数组错误映射、
+message/type/code/param/request_id、缺省 `api_error` 与 HTTP 状态文本）；
+`internal/server/biz/channel_llm.go:741-751`、`:843-853` 与
+`channel_endpoint.go:238`、`:292-296` 的通道分支与默认端点。
+
+本次移植新增：
+`src/AxonHub.Llm/Transformer/Xai/XaiOutboundTransformer.cs`（构造校验、默认 URL
+就地变更、Grok 字段裁剪、`IsValidResponse` 与 `FilterStream`、其余委托）。
+`src/AxonHub.Llm/Transformer/Cline/ClineOutboundTransformer.cs`（配置、内嵌 OpenAI
+出站、`X-Client-Type`、空内容补丁、信封解包、流分块转换、错误与聚合）、
+`ClineModels.cs`（信封模型与到 OpenAI 结构的转换）、`ClineErrors.cs`（错误映射与
+流内错误事件解析），以及 `ChannelOutboundFactory` 的 `cline` / `xai` 分支：
+xAI 的 responses / responses_compact 入站落到 Responses 出站，其余落到 xAI chat
+出站；Cline 恒为 chat 出站。空内容补丁以 `JsonNode` 复现 sjson 的索引补齐与
+覆盖语义，参照的 `mergeSystemMessages` 索引错位被刻意保留。已接受差异与残余裁剪
+见 C100。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| xAI：默认 URL 与 config 就地变更、自定义 URL、Bearer、Grok 三类模型的字段裁剪、`IsValidResponse` 13 组判定、`TransformStream` 的空 delta 过滤与 `[DONE]`、nil / model / messages 校验、构造校验、key 溯源 | `tests/AxonHub.Llm.Tests/XaiOutboundTransformerTests.cs` | 27 |
+| Cline：`EndpointPath`、`cline-cli` 标识（3 组模型）、空内容归一的 8 条消息表、统一索引补丁（错位与 null 填充）、信封解包与裸 OpenAI body、502 错误与 errors 回退、HTTP 状态映射、空 / nil 响应、TransformError 三态、流内错误与 `[DONE]`、流转换、聚合的 reasoning 与 `[DONE]` / 错误块跳过、构造校验 | `tests/AxonHub.Llm.Tests/ClineOutboundTransformerTests.cs` | 24 |
+| `xai` 通道：chat 出站与 Bearer、缺省 base URL、responses / compact 分派、缺 key 拒绝 | `tests/AxonHub.Api.Tests/XaiAndClineChannelWiringTests.cs` | 5 |
+| `cline` 通道：`/chat/completions` 与 `X-Client-Type`、信封解包、缺 key 拒绝 | 同上 | 3 |
+
+`AxonHub.Llm.Tests` 由 1598 增至 1649，`AxonHub.Api.Tests` 由 983 增至 991，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 2743 增至 2802。差异条目新增 C100（已接受）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1275,5 +1325,5 @@ OpenAI 出站形状；调用方变更语义与参照一致。已接受差异与�
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Xai、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Cline、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、ollama(_anthropic)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099） | 中 | 按 provider 分组后续切片（优先 Xai / Cline 等 OpenAI 兼容族） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100） | 中 | 按 provider 分组后续切片（优先 Openrouter / Cerebras / Nanogpt 等 OpenAI 兼容族） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |
