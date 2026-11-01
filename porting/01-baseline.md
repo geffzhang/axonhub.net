@@ -1090,6 +1090,45 @@ EF 写，唯一索引冲突后按 `(thread_id, project_id)` 重读并 detach 失
 `AxonHub.Persistence.Tests` 保持 70，`AxonHub.Grains.Tests` 保持 92；四个项目合计 2479 增至 2487。
 C013 闭合（残余 apiKeyOverride 与 trace_sticky_mode 通道粘性）；C095 的 trace 粘性 key 项关闭。
 
+## 33. ClaudeCode / DeepSeek / OpenCode 出站与通道接线（154 例，2026-11-01）
+
+参照路线：`llm/transformer/anthropic/claudecode/outbound.go`（`TransformRequest` 的
+UA 捕获与清理、`proxy_` 前缀、系统消息注入、伪造 user id、13 个头与 `beta=true`，
+`TransformResponse` 的 `strip_tool_prefix` 条件剥离，`TransformStream` 的逐行去前缀与
+`AggregateStreamChunks` 只处理 `tool_use` 块）、`claudecode/utils.go` 与 `userid.go`
+（legacy / v2 两种用户 id，`BuildUserID` 的 SHA-256 设备 id 与 URL 命名空间的 UUID v5）、
+`llm/transformer/deepseek/outbound.go`（URL 归一、`/beta/completions` 分派、`json_schema`
+降级为 `json_object`、`thinking` 开关与 `reasoning_content` 填充）、
+`llm/transformer/opencode/{outbound,headers}.go`（模型路由、`WithSessionHeader` 的能力保留、
+`resolveSessionID` 的三级回退）、`internal/server/biz/channel_llm.go:225-260,915-995`
+（claudecode 的 OAuth / api-key 两路与 opencode 的三种通道类型）。参照测试：
+`claudecode` 包测试、`deepseek/outbound_test.go`、`opencode/outbound_test.go`。
+
+端口新增：`ClaudeCodeOutboundTransformer`（构造、`TransformRequest` / `TransformResponse` /
+`TransformStream` / `AggregateStreamChunks`、`toolPrefixStripperStream`、`RemoveBillingSystemMessages`）、
+`ClaudeCodeUserID`（解析 / 生成 / v5）、`DeepSeekOutboundTransformer`（chat 与 completion 两个子变换器）、
+`OpenCodeOutboundTransformer`（路由元数据、按 metadata 的响应 / 流分派）、`OpenCodeSessionHeader`
+（两种包裹形态）；`ChannelOutboundFactory` 增加 claudecode（OAuth → `ClaudeCodeTokenProvider` +
+`IsOfficial=true`；api-key → `ApiKeyTokenProvider` + `IsOfficial=false`）、`opencode_go` 与
+`opencode_go_anthropic` 分支。差异与残余缺口登记为 C096：会话值仍走 `RawRequest.SessionId`
+（C062）、OAuth provider 每次尝试新建（C094）、计费系统消息移除中间件无注册点、opencode
+用户端点与 `Stop` 转发未接线、claudecode 执行 key 审计列为空。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| `claudecode` 工具前缀与流处理：`stripToolPrefix`、`toolPrefixStripperStream`、`AggregateStreamChunks` 的 `tool_use` 过滤、计费系统消息移除 | `tests/AxonHub.Llm.Tests/ClaudeCodeUtilsTests.cs` | 55 |
+| `ClaudeCodeOutboundTransformer`：api-key / OAuth 两路的头与 URL、UA 透传、`proxy_` 前缀、系统消息与 user id 注入、`beta`、`strip_tool_prefix`、响应条件剥离、流式逐行去前缀、错误信封 | `tests/AxonHub.Llm.Tests/ClaudeCodeOutboundTransformerTests.cs` | 23 |
+| 用户 id：legacy 与 v2 解析、空 session、非法输入、空白、设备 id 与 UUID v5 的确定性、会话回退 | `tests/AxonHub.Llm.Tests/ClaudeCodeUserIDTests.cs` | 12（既有 5 例扩充至 12，其中生成 7 例） |
+| `DeepSeekOutboundTransformer`：URL 归一、response_format 降级、thinking 开关、reasoning_content 填充、completion 分派、错误与构造校验 | `tests/AxonHub.Llm.Tests/DeepSeekOutboundTransformerTests.cs` | 20 |
+| `OpenCodeOutboundTransformer` 与 `WithSessionHeader`：模型路由、会话头优先级与生成、两种包裹形态的能力保留、响应 / 流分派、错误与构造校验 | `tests/AxonHub.Llm.Tests/OpenCodeOutboundTransformerTests.cs` | 38 |
+| 通道接线：claudecode 的 api-key / OAuth 凭据与头、opencode 三类型的路由与会话头、缺凭据文案 | `tests/AxonHub.Api.Tests/ClaudeCodeAndOpenCodeChannelWiringTests.cs` | 11 |
+
+合计 154 例（Llm 143、Api 11）：`AxonHub.Llm.Tests` 由 1376 增至 1519，
+`AxonHub.Api.Tests` 由 949 增至 960，`AxonHub.Persistence.Tests` 保持 70，
+`AxonHub.Grains.Tests` 保持 92；四个项目合计 2487 增至 2641。C095 第 (7) 项
+（claudecode / opencode 出站生成）关闭；C096 登记计费中间件、端点表、`Stop` 转发、
+执行 key 审计与凭据文案的残余差异。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1109,5 +1148,5 @@ C013 闭合（残余 apiKeyOverride 与 trace_sticky_mode 通道粘性）；C095
 | usage 成本管理面：`channel_model_prices` 写入、reference-id 轮换、版本表与自动定价 | 参照的 `SaveChannelModelPrices` / `channel_model_price_versions` / GraphQL 管理面未移植；端口只有读取路径与基础表（C048） | 中 | 随通道管理面落地 |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
-| trace 子系统：查询 / GC、GraphQL、出站生成 | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；查询 / GC / GraphQL 与 claudecode / opencode 出站生成未移植（C095） | 中 | 随管理面 / 权限与通道切片落地 |
+| trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

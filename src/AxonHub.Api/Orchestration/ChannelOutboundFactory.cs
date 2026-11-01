@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using AxonHub.Abstractions;
 using AxonHub.Grains.Abstractions;
@@ -6,11 +7,13 @@ using AxonHub.Llm.OAuth;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
+using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
+using AxonHub.Llm.Transformer.OpenCode;
 using AxonHub.Llm.Transformer.TypeSafe;
 
 namespace AxonHub.Api.Orchestration;
@@ -21,9 +24,10 @@ namespace AxonHub.Api.Orchestration;
 /// <c>buildChannel</c> → the channel-type switch).
 /// </summary>
 /// <remarks>
-/// Only the <c>openai</c>, <c>anthropic</c>, <c>jina</c> and <c>typesafe</c>
-/// channel types are ported (the vertical slice); the other provider types are
-/// registered as a scope cut. Key
+/// Only the <c>openai</c>, <c>anthropic</c>, <c>claudecode</c>,
+/// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
+/// <c>typesafe</c>, <c>codex</c> and <c>fenno</c> channel types are ported (the
+/// vertical slice); the other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are picked by rendezvous hashing when the request carries a
 /// trace id and at random otherwise (C013).
@@ -41,6 +45,12 @@ public static class ChannelOutboundFactory
     public const string CodexChannelType = "codex";
 
     public const string FennoChannelType = "fenno";
+
+    public const string ClaudeCodeChannelType = "claudecode";
+
+    public const string OpenCodeGoChannelType = "opencode_go";
+
+    public const string OpenCodeGoAnthropicChannelType = "opencode_go_anthropic";
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
@@ -61,16 +71,19 @@ public static class ChannelOutboundFactory
             candidate.DisabledApiKeys,
             now);
 
-        var codexChannel = candidate.Type is CodexChannelType or FennoChannelType;
+        var oauthCapableChannel = candidate.Type is CodexChannelType
+            or FennoChannelType
+            or ClaudeCodeChannelType;
 
-        // channel_llm.go:662-665: codex channels accept OAuth credentials in
-        // place of api keys; every other channel type still needs a key.
-        var oauth = codexChannel && ChannelCredentials.IsOAuth(candidate.Credentials);
+        // channel_llm.go:662-665: codex and claudecode channels accept OAuth
+        // credentials in place of api keys; every other channel type still
+        // needs a key.
+        var oauth = oauthCapableChannel && ChannelCredentials.IsOAuth(candidate.Credentials);
 
         if (enabledKeys.Count == 0 && !oauth)
         {
             throw new InvalidOperationException(
-                codexChannel
+                oauthCapableChannel
                     ? "missing credentials: oauth or api key required for channel " + candidate.ChannelName
                     : "missing api key for channel " + candidate.ChannelName);
         }
@@ -128,6 +141,27 @@ public static class ChannelOutboundFactory
                 candidate.BaseUrl ?? string.Empty,
                 provider,
                 provider.KeyIndex),
+            // channel_llm.go:924-989: OAuth channels get a JSON-refreshing
+            // Claude token provider; plain key channels rotate through the
+            // per-attempt key provider.
+            ClaudeCodeChannelType => CreateClaudeCodeOutbound(
+                candidate,
+                provider,
+                tokenRefreshExecutor),
+            // channel_llm.go:1183-1194: one outbound dispatching by model family.
+            OpenCodeGoChannelType => new OpenCodeOutboundTransformer(new OpenCodeOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:1170-1181: the anthropic outbound plus OpenCode
+            // session affinity.
+            OpenCodeGoAnthropicChannelType => OpenCodeSessionHeader.WithSessionHeader(
+                AnthropicOutboundTransformer.Create(
+                    candidate.BaseUrl ?? string.Empty,
+                    provider,
+                    provider.KeyIndex))!,
             JinaChannelType => JinaOutboundTransformer.Create(
                 candidate.BaseUrl ?? string.Empty,
                 provider,
@@ -142,6 +176,70 @@ public static class ChannelOutboundFactory
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
+    }
+
+    /// <summary>Port of the claudecode branch of buildChannelWithTransformer.</summary>
+    private static ClaudeCodeOutboundTransformer CreateClaudeCodeOutbound(
+        ChannelCandidate candidate,
+        ChannelApiKeyProvider apiKeyProvider,
+        IExecutor? tokenRefreshExecutor)
+    {
+        var baseUrl = candidate.BaseUrl ?? string.Empty;
+        // strconv.Itoa(c.ID): the stable identity behind the deterministic
+        // fake user id.
+        var accountIdentity = candidate.ChannelId.ToString(CultureInfo.InvariantCulture);
+
+        if (!ChannelCredentials.IsOAuth(candidate.Credentials))
+        {
+            // Non-OAuth: use the API key provider for multi-key rotation.
+            return new ClaudeCodeOutboundTransformer(new ClaudeCodeParams
+            {
+                TokenProvider = new ApiKeyTokenProvider(_ => apiKeyProvider.Get()),
+                BaseUrl = baseUrl,
+                IsOfficial = false,
+                AccountIdentity = accountIdentity,
+            });
+        }
+
+        var credentials = ParseOAuthCredentials(candidate, "claudecode");
+
+        return new ClaudeCodeOutboundTransformer(new ClaudeCodeParams
+        {
+            TokenProvider = ClaudeCodeTokenProvider.Create(new TokenProviderParams
+            {
+                Credentials = credentials,
+                HttpClient = tokenRefreshExecutor,
+            }),
+            BaseUrl = baseUrl,
+            IsOfficial = true,
+            AccountIdentity = accountIdentity,
+        });
+    }
+
+    /// <summary>
+    /// Re-marshals the channel's typed <c>oauth</c> object (canonical field
+    /// order, empty fields omitted), falling back to parsing the legacy apiKey
+    /// string as OAuth JSON, then parses the credentials document.
+    /// </summary>
+    private static OAuthCredentials ParseOAuthCredentials(
+        ChannelCandidate candidate,
+        string channelType)
+    {
+        var oauthJson = ChannelCredentials.GetOAuthObjectJson(candidate.Credentials);
+        var credentialsJson = oauthJson is not null
+            ? OAuthCredentialsJson.ParseOAuthObject(oauthJson).ToJson()
+            : ChannelCredentials.GetLegacyApiKey(candidate.Credentials);
+
+        try
+        {
+            return OAuthCredentialsJson.ParseCredentialsJson(credentialsJson);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "failed to parse " + channelType + " oauth credentials: " + ex.Message,
+                ex);
+        }
     }
 
     /// <summary>Port of <c>buildCodexOutbound</c> (channel_llm.go:296-387).</summary>
@@ -189,25 +287,7 @@ public static class ChannelOutboundFactory
             return new ApiKeyTokenProvider(_ => apiKeyProvider.Get());
         }
 
-        // buildCodexOutbound re-marshals a typed `oauth` object (canonical field
-        // order, empty fields omitted) and falls back to parsing the legacy
-        // apiKey string as OAuth JSON.
-        var oauthJson = ChannelCredentials.GetOAuthObjectJson(candidate.Credentials);
-        var credentialsJson = oauthJson is not null
-            ? OAuthCredentialsJson.ParseOAuthObject(oauthJson).ToJson()
-            : ChannelCredentials.GetLegacyApiKey(candidate.Credentials);
-
-        OAuthCredentials credentials;
-        try
-        {
-            credentials = OAuthCredentialsJson.ParseCredentialsJson(credentialsJson);
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
-        {
-            throw new InvalidOperationException(
-                "failed to parse codex oauth credentials: " + ex.Message,
-                ex);
-        }
+        var credentials = ParseOAuthCredentials(candidate, "codex");
 
         return new TokenProvider(new TokenProviderParams
         {
