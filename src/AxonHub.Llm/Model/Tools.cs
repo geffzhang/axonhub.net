@@ -36,6 +36,62 @@ public sealed class Tool
     public Tool ShallowClone() => (Tool)MemberwiseClone();
 }
 
+/// <summary>
+/// Port of the Google-native tool helpers (llm/tools.go:241-268). Google
+/// native tools follow the <c>google_*</c> naming convention and are only
+/// supported by the native Gemini API formats, not by the OpenAI-compatible
+/// <c>gemini_openai</c> endpoint.
+/// </summary>
+public static class GoogleToolFilter
+{
+    /// <summary>Port of <c>llm.ContainsGoogleNativeTools</c>.</summary>
+    public static bool ContainsGoogleNativeTools(IEnumerable<Tool>? tools)
+    {
+        if (tools is null)
+        {
+            return false;
+        }
+
+        foreach (var tool in tools)
+        {
+            if (IsGoogleNativeTool(tool))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Port of <c>llm.IsGoogleNativeTool</c>: the <c>google_</c> prefix.</summary>
+    public static bool IsGoogleNativeTool(Tool tool)
+        => tool.Type.StartsWith("google_", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Port of <c>llm.FilterGoogleNativeTools</c>. The input list is returned
+    /// unchanged when it is null or empty; otherwise a freshly built list
+    /// without the Google-native tools is returned (which may be empty).
+    /// </summary>
+    public static List<Tool>? FilterGoogleNativeTools(List<Tool>? tools)
+    {
+        if (tools is null || tools.Count == 0)
+        {
+            return tools;
+        }
+
+        var filtered = new List<Tool>(tools.Count);
+        foreach (var tool in tools)
+        {
+            if (!IsGoogleNativeTool(tool))
+            {
+                filtered.Add(tool);
+            }
+        }
+
+        return filtered;
+    }
+}
+
 /// <summary>Port of llm.Function.</summary>
 public sealed class Function
 {

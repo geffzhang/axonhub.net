@@ -14,6 +14,7 @@ using AxonHub.Llm.Transformer.Cline;
 using AxonHub.Llm.Transformer.DeepSeek;
 using AxonHub.Llm.Transformer.Doubao;
 using AxonHub.Llm.Transformer.Fireworks;
+using AxonHub.Llm.Transformer.Gemini.OpenAI;
 using AxonHub.Llm.Transformer.Longcat;
 using AxonHub.Llm.Transformer.Minimax;
 using AxonHub.Llm.Transformer.Modelscope;
@@ -53,7 +54,7 @@ namespace AxonHub.Api.Orchestration;
 /// <c>moonshot_coding</c>, <c>modelscope</c>, <c>doubao</c>,
 /// <c>volcengine</c>, <c>doubao_anthropic</c>, <c>volcengine_anthropic</c>,
 /// <c>zenmux</c>, <c>zenmux_responses</c>, <c>zenmux_anthropic</c>,
-/// <c>zenmux_video</c> and <c>github_copilot</c>
+/// <c>zenmux_video</c>, <c>github_copilot</c> and <c>gemini_openai</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -147,6 +148,8 @@ public static class ChannelOutboundFactory
     public const string ZenmuxVideoChannelType = "zenmux_video";
 
     public const string GithubCopilotChannelType = "github_copilot";
+
+    public const string GeminiOpenAiChannelType = "gemini_openai";
 
     // channel_llm.go:56-58: the default base URLs applied when a ZenMux
     // channel has none stored (channel_llm.go:695-705).
@@ -576,6 +579,9 @@ public static class ChannelOutboundFactory
             // (channel_endpoint.go:322).
             GithubCopilotChannelType
                 => CreateGithubCopilotOutbound(candidate, tokenRefreshExecutor),
+            // channel_llm.go:1109-1118: Gemini's OpenAI-compatible endpoint;
+            // the default endpoint set is chat only (channel_endpoint.go:253).
+            GeminiOpenAiChannelType => CreateGeminiOpenAiOutbound(candidate, provider),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
@@ -653,6 +659,33 @@ public static class ChannelOutboundFactory
             ApiKeyProvider = apiKeyProvider,
             ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
         });
+
+    /// <summary>
+    /// Port of the gemini_openai branch of <c>buildChannelWithTransformer</c>
+    /// (channel_llm.go:1109-1118). The reference wraps the constructor error
+    /// with <c>failed to create outbound transformer</c>, including the
+    /// missing-base-URL validation.
+    /// </summary>
+    private static GeminiOpenAiOutboundTransformer CreateGeminiOpenAiOutbound(
+        ChannelCandidate candidate,
+        ChannelApiKeyProvider apiKeyProvider)
+    {
+        try
+        {
+            return new GeminiOpenAiOutboundTransformer(new GeminiOpenAiOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = apiKeyProvider,
+                ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+            });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "failed to create outbound transformer: " + ex.Message,
+                ex);
+        }
+    }
 
     /// <summary>Port of the claudecode branch of buildChannelWithTransformer.</summary>
     private static ClaudeCodeOutboundTransformer CreateClaudeCodeOutbound(
