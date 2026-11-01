@@ -1226,6 +1226,35 @@ Fireworks 的 `ReasoningFieldNone` 注释与代码冲突，以代码的 `Content
 `AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
 合计 2708 增至 2733。差异条目新增 C098（已接受）。
 
+## 37. Longcat 强制数组内容与通道接线（10 例，2026-11-01）
+
+参照路线：`llm/transformer/longcat/outbound.go:54-104`（以
+`openai.Config{ReasoningField: Content}` 构造内嵌出站，失败时包一层
+`failed to create longcat outbound transformer`；`TransformRequest` 先拒绝 nil
+请求，再把每条消息的零值内容就地补成 `""`，委托 OpenAI 出站后把请求体反序列化为
+`openai.Request`，再按 `longcat.Request` 重新序列化；`model.go:17-59` 的
+`longcat.Request` / `Message` 嵌入 OpenAI 类型并重新声明 `messages` / `content`，
+外层字段遮蔽内层字段，`MessageContent.MarshalJSON` 把字符串或空内容包成
+`[{"type":"text","text":...}]`，非空多分片数组原样输出；
+`internal/server/biz/channel_llm.go:1121-1131` 安装该出站）。
+
+本次移植新增：
+`src/AxonHub.Llm/Transformer/Longcat/LongcatOutboundTransformer.cs`（构造校验、
+调用方内容补空、OpenAI 出站委托，以及基于 `JsonNode` 的请求体重写：根
+`messages` 与每条消息的 `content` 移到末尾，字符串/空内容包装为单元素 text
+数组，多分片数组保持原样），以及 `ChannelOutboundFactory` 的 `longcat` 分支
+与类型说明。字段顺序按 Go 嵌入结构体的遮蔽规则复现，请求体其余字段沿用已锁定的
+OpenAI 出站形状；调用方变更语义与参照一致。已接受差异与残余裁剪见 C099。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Longcat：字符串/空串/null 内容强制数组、多分片保持、`messages` 与 `content` 末位键序、调用方内容变更、nil 请求、构造校验 | `tests/AxonHub.Llm.Tests/LongcatOutboundTransformerTests.cs` | 8 |
+| `longcat` 通道：默认 chat 端点与 Bearer、数组内容证明未落到普通 OpenAI 分支、缺 key 拒绝 | `tests/AxonHub.Api.Tests/LongcatChannelWiringTests.cs` | 2 |
+
+`AxonHub.Llm.Tests` 由 1590 增至 1598，`AxonHub.Api.Tests` 由 981 增至 983，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 2733 增至 2743。差异条目新增 C099（已接受）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1246,5 +1275,5 @@ Fireworks 的 `ReasoningFieldNone` 注释与代码冲突，以代码的 `Content
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Xai、Zai/Zhipu、Doubao/Volcengine、Longcat、Modelscope、Nanogpt、Openrouter、Cline、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、ollama(_anthropic)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098） | 中 | 按 provider 分组后续切片（优先 Xai / Longcat 等 OpenAI 兼容族） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Xai、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Cline、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、ollama(_anthropic)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099） | 中 | 按 provider 分组后续切片（优先 Xai / Cline 等 OpenAI 兼容族） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |
