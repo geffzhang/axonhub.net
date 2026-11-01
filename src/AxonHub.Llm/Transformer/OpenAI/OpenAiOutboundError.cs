@@ -39,7 +39,13 @@ public sealed partial class OpenAiOutboundTransformer
     /// Port of OutboundTransformer.TransformError. The provider error body is
     /// parsed leniently: any decode failure falls back to the HTTP status text.
     /// </summary>
-    public ResponseError TransformError(HttpClientError? error)
+    public ResponseError TransformError(HttpClientError? error) => TransformOpenAiError(error);
+
+    /// <summary>
+    /// Port of TransformOpenAIError (error.go:14-63), shared by every OpenAI
+    /// outbound transformer (the completion outbound calls it directly).
+    /// </summary>
+    internal static ResponseError TransformOpenAiError(HttpClientError? error)
     {
         if (error is null)
         {

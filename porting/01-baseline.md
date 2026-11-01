@@ -687,6 +687,39 @@ C010 的 video 端点接线随之闭合（doubao / zenmux 视频变换器仍为 
 合计 23 + 6 + 4 + 3 = 36 例：`AxonHub.Api.Tests` 由 586 增至 619，
 `AxonHub.Persistence.Tests` 由 56 增至 59。
 
+## 23. OpenAI 旧版 Completions 客户端变换器与路由接线（69 例，2026-11-01）
+
+参照路线：`llm/transformer/openai/completion.go`、`completion_inbound.go`（287 行）、
+`completion_outbound.go`（242 行）、`completion_aggregator.go`（108 行）与测试
+`completion_inbound_cost_test.go`（2 个测试函数）、`routes.go` 的
+`openaiGroup.POST("/completions")`、`internal/server/api/openai.go` 的
+`Completion` → `CompletionHandlers.ChatCompletion`（复用通用 chat handler）、
+`internal/server/biz/channel_llm.go:445-451`。端口新增统一模型
+`CompletionRequest` / `CompletionResponse` / `CompletionChoice`
+（`LlmRequest.Completion` / `LlmResponse.Completion`）、wire 模型
+`OpenAiCompletionModels`、`CompletionInboundTransformer`、
+`CompletionOutboundTransformer`（含 `##` RawURL 与 `#` 版本抑制、
+`TransformOpenAIError` 复用）、`CompletionAggregator`（Go 字段序与
+`"choices":null` 的专用 DTO）、`OpenAiRequestTypeCheck.ValidateCompletion`
+（Go 字段类型错误文案）、`ChannelOutboundFactory` 的 openai/completions 分支与
+`POST /v1/completions` 路由（复用 chat handler）。差异登记 C086。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 入站请求变换：全字段与父级公共字段复制、stop 字符串/数组、nil / 空 body / 默认 CT / 大小写 CT、model 与 prompt 校验序、JSON `null` 零值、语法错误与 Go 字段类型 / 数组根文案 | `tests/AxonHub.Llm.Tests/OpenAiCompletionTransformerTests.cs` | 13 |
+| 入站响应变换：usage 与 cost 透传（参照测试逐条移植）、缺 usage 仍输出零值 usage、空 choices 输出 `[]`、错误信封保留状态、nil / 缺数据文案 | `tests/AxonHub.Llm.Tests/OpenAiCompletionTransformerTests.cs` | 6 |
+| 入站流：`[DONE]`、仅 usage 分块（`"choices":[]`，参照测试）、Completion 与 Usage 皆无时过滤、NoNil 过滤、nil 文案 | `tests/AxonHub.Llm.Tests/OpenAiCompletionTransformerTests.cs` | 5 |
+| 入站错误映射：nil → 500 `unexpected_error`、InvalidModel 422、HTTP 错误状态原样透传（不做 chat 的 502 归一化）、InvalidRequest 400、ResponseError 状态与 detail、未知错误 500 | `tests/AxonHub.Llm.Tests/OpenAiCompletionTransformerTests.cs` | 6 |
+| 出站请求：线路字节精确（Go 字段序与 omitempty）、全字段复制、空 suffix / user 省略、URL 归一化表、`##` / `#` RawURL、自定义 EndpointPath、配置校验、nil / 缺 Completion / 缺 model 文案 | `tests/AxonHub.Llm.Tests/OpenAiCompletionTransformerTests.cs` | 17 |
+| 出站响应：字段映射、token 门槛决定 usage、JSON `null` 零结构、nil / 空 body、≥400 走 `TransformOpenAIError`（含非 JSON body）、非法 JSON 与数组根文案 | `tests/AxonHub.Llm.Tests/OpenAiCompletionTransformerTests.cs` | 9 |
+| 出站流：`[DONE]` → Done、空 data 过滤、分块解析、nil 事件 | `tests/AxonHub.Llm.Tests/OpenAiCompletionTransformerTests.cs` | 4 |
+| 聚合：空分块零值字节串、首 id / model / created 与文本拼接、finish_reason 缺省 `stop`（completed 预先计算）、仅 `[DONE]` 零值、跳过不可解码分块 | `tests/AxonHub.Llm.Tests/OpenAiCompletionTransformerTests.cs` | 5 |
+| API 路由胶水：`POST /v1/completions` 成功往返（上游 `/v1/completions` 线路形状、Bearer、200 渲染）、缺 prompt 400、空 body 400、非法 CT 400 | `tests/AxonHub.Api.Tests/CompletionsEndpointTests.cs` | 4 |
+
+合计 13 + 6 + 5 + 6 + 17 + 9 + 4 + 5 = 65 例 Llm，加端点 4 例共 69 例：
+`AxonHub.Llm.Tests` 由 1125 增至 1190，`AxonHub.Api.Tests` 由 619 增至 623。
+C086 记录通道能力表未建模导致的 completion 出站分派近似。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -695,7 +728,7 @@ C010 的 video 端点接线随之闭合（doubao / zenmux 视频变换器仍为 
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao / zenmux 视频变换器仍为 C010 裁剪） | 中 | 后续阶段 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao / zenmux 视频变换器仍为 C010 裁剪），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

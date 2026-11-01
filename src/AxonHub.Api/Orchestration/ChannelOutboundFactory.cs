@@ -70,6 +70,13 @@ public static class ChannelOutboundFactory
                     candidate.BaseUrl ?? string.Empty,
                     provider,
                     provider.KeyIndex),
+            // channel_llm.go:445: the legacy /completions outbound shares the
+            // openai channel's credentials but targets its own path.
+            OpenAiChannelType when request.ApiFormat == ApiFormats.OpenAICompletion
+                => CompletionOutboundTransformer.Create(
+                    candidate.BaseUrl ?? string.Empty,
+                    provider,
+                    provider.KeyIndex),
             OpenAiChannelType => OpenAiOutboundTransformer.Create(
                 candidate.BaseUrl ?? string.Empty,
                 provider,

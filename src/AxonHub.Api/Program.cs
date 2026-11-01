@@ -141,6 +141,18 @@ app.UseWhen(
 
 app.MapPost("/v1/chat/completions", ChatCompletionEndpoint.HandleAsync);
 
+// Legacy Completions API (routes.go: openaiGroup.POST("/completions")): the
+// reference's CompletionHandlers.ChatCompletion reuses the shared chat handler
+// with the completion inbound transformer.
+static Task HandleCompletionsAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new CompletionInboundTransformer()));
+
+app.MapPost("/v1/completions", HandleCompletionsAsync);
+
 // Anthropic Messages: both spellings the reference mounts in routes.go.
 static Task HandleAnthropicMessagesAsync(
     HttpContext context,

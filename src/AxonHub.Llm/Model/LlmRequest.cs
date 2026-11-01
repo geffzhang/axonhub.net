@@ -169,6 +169,11 @@ public sealed class LlmRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CompactRequest? Compact { get; set; }
 
+    /// <summary>Completion sub-request; set when the request is a legacy completion request (llm/model.go:258).</summary>
+    [JsonPropertyName("completion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CompletionRequest? Completion { get; set; }
+
     /// <summary>Image sub-request; set when the request is an image request (llm/model.go:249).</summary>
     [JsonPropertyName("image")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

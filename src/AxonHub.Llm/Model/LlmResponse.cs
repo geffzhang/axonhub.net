@@ -67,6 +67,11 @@ public sealed class LlmResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CompactResponse? Compact { get; set; }
 
+    /// <summary>Completion sub-response; present when the request was a legacy completion request (llm/model.go:739).</summary>
+    [JsonPropertyName("completion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CompletionResponse? Completion { get; set; }
+
     /// <summary>Image sub-response; present when the response is an image response (llm/model.go:730).</summary>
     [JsonPropertyName("image")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

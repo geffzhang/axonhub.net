@@ -63,6 +63,13 @@ public static class OpenAiRequestTypeCheck
     public static string? ValidateTranscriptionResponse(ReadOnlySpan<byte> utf8Json)
         => ValidateAgainst(TranscriptionResponseSchema, utf8Json);
 
+    /// <summary>
+    /// Port of the type errors <c>json.Unmarshal</c> reports for
+    /// openai.CompletionRequest (completion_inbound.go:37).
+    /// </summary>
+    public static string? ValidateCompletion(ReadOnlySpan<byte> utf8Json)
+        => ValidateAgainst(CompletionRequestSchema, utf8Json);
+
     private static string? ValidateAgainst(Schema schema, ReadOnlySpan<byte> utf8Json)
         => ValidateAgainst(schema, schema.GoName, utf8Json);
 
@@ -867,6 +874,28 @@ public static class OpenAiRequestTypeCheck
         new GoField("text", StringType),
         new GoField("language", StringType),
         new GoField("duration", DoubleType));
+
+    /// <summary>Go: openai.CompletionRequest (completion.go:5-23).</summary>
+    private static readonly Schema CompletionRequestSchema = new(
+        "CompletionRequest",
+        new GoField("model", StringType),
+        new GoField("prompt", StringType),
+        new GoField("suffix", StringType),
+        new GoField("max_tokens", Int64Type),
+        new GoField("temperature", DoubleType),
+        new GoField("top_p", DoubleType),
+        new GoField("n", Int64Type),
+        new GoField("stream", BoolType),
+        new GoField("stream_options", StructOf(StreamOptionsSchema)),
+        new GoField("logprobs", Int64Type),
+        new GoField("echo", BoolType),
+        new GoField("stop", StopType),
+        new GoField("presence_penalty", DoubleType),
+        new GoField("frequency_penalty", DoubleType),
+        new GoField("best_of", Int64Type),
+        new GoField("logit_bias", MapOf(Int64Type)),
+        new GoField("seed", Int64Type),
+        new GoField("user", StringType));
 
     /// <summary>Go: openai.ImageEditJSONRequest (image_inbound.go:361-378).</summary>
     private static readonly Schema ImageEditJsonRequestSchema = new(
