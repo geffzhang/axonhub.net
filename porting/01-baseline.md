@@ -1932,6 +1932,59 @@ TrimSuffix 语义）。
 inbound_convert.go）、流式、聚合器、embedding、image 与 vertex 接线按覆盖缺口表
 后续切片（含 `zenmux_gemini`）。
 
+## 50. Gemini 原生出站转换切片（outbound_convert.go 全量，150 例，2026-11-02）
+
+参照路线：`llm/transformer/gemini/outbound_convert.go`（829 行，12 个函数）——
+`convertLLMToGeminiRequest`（:19-23，委托 WithConfig(nil)）、
+`convertLLMToGeminiRequestWithConfig`（:24-322，MaxTokens/MaxCompletionTokens →
+maxOutputTokens、temperature/top_p/presence_penalty/frequency_penalty/seed/stop、
+extra_body thinking 配置优先、reasoning_effort → thinkingBudget 阶梯、response_format
+的 response_mime_type 与 responseJsonSchema、safetySettings 与 ImageConfig 提取、
+messages 批量转换、tools → functionDeclarations 的 hasStrictFunctionTool 门控）、
+`hasStrictFunctionTool`（:323-333）、
+`convertLLMMessageToGeminiContent`（:334-484，role 双向、text/thought、图片/视频/音频/
+文档 media part、tool call 的 id/name/args 与 tool call thought signature 回填、
+消息级 thought signature）、
+`convertLLMToolResultToGeminiContent`（:485-519，tool 消息 → user role +
+FunctionResponse、findToolNameByToolCallID 回填 name、VertexAI 的 response 全量路径）、
+`findToolNameByToolCallID`（:520-533）、`isPreviousContentToolResponse`（:534-548）、
+`convertGeminiToLLMResponse`（:549-556，委托 WithState(0)）、
+`deriveGeminiAnnotations`（:557-638，citationMetadata → UrlCitation、
+groundingMetadata → GroundingChunk/Support/Segment 注释）、
+`convertGeminiToLLMResponseWithState`（:639-688）与
+`convertGeminiCandidateToLLMChoiceWithState`（:689-819，text/thought part →
+content/reasoning、tool call 与 toolCallIndexOffset 全局编号、finish reason 映射、
+grounding 存入 TransformerMetadata、tool call thought signature 回填、
+`chatcmpl-`/`tc_` 前缀随机 UUID 生成）、
+`extractJSONSchema`（:820-829，{"schema": ...} 包装剥壳，解码失败或 schema 为
+null/缺失时原样返回原始值）。
+
+本次移植新增 `src/AxonHub.Llm/Transformer/Gemini/GeminiOutboundConvert.cs` 与
+`tests/AxonHub.Llm.Tests/GeminiOutboundConvertTests.cs`，并把
+`tests/AxonHub.Llm.Tests/testdata/gemini/` 的三个请求 fixture（llm-simple/
+llm-tools/llm-thinking）随切片迁入。同时修正第 49 节的两处模型问题：
+`ImageConfig.AspectRatio`/`ImageSize` 改回 Go 的非空 string + `WhenWritingDefault`
+（omitempty 语义），消除 TransformerMetadata 经 JSON 往返后 null 与 "" 的语义漂移；
+`MessageContentPart.VideoUrl` 的重复类型 `VideoUrl` 与忠实 `VideoURL` 统一为 Go
+单一的 `llm.VideoURL`（`URL`/`MIMEType` 字段命名）。已接受差异与残余裁剪见 C111。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 请求转换：basic 20、video 2、remote audio 1、response format 6、tools 12、multiple tool messages 1、edge cases 4、testdata 3、safety settings 4、image config 5 | `tests/AxonHub.Llm.Tests/GeminiOutboundConvertTests.cs` | 58 |
+| 消息与工具结果：message to content 8、tool message 6、VertexAI 1、extract parts 6、image url to part 4、message thought signature 5 | 同上 | 30 |
+| 响应转换：basic 6、thought signature 4、finish reasons 7、edge cases 4、citation 1、grounding 6+4+1、tool call thought signature 1 | 同上 | 34 |
+| 预算与角色：budget 6、effort→budget 5、with config 9、角色双向 4+4 | 同上 | 28 |
+
+`AxonHub.Llm.Tests` 由 2386 增至 2536，`AxonHub.Api.Tests` 保持 1097，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 3645 增至 3795。差异条目新增 C111（已接受）。
+
+出站变换器接线（outbound.go 的 TransformRequest/Response/Error、
+SetAPIKey/SetBaseURL 与 `ChannelOutboundFactory` 的 gemini 分支）、流式与聚合器
+（outbound_stream.go / aggregator.go）、embedding、image、vertex 接线与入站
+（inbound.go / inbound_convert.go，含 convertLLMToGeminiResponse 与 3 例
+response testdata）按覆盖缺口表后续切片（含 `zenmux_gemini`）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1952,5 +2005,5 @@ inbound_convert.go）、流式、聚合器、embedding、image 与 vertex 接线
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110） | 中 | 按 provider 分组后续切片（剩余：Gemini/Vertex 原生（出站/入站/流式/聚合/嵌入/图片/顶点接线，含 `zenmux_gemini`）、Antigravity、OpenaiResponses、Commandcode 等） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111） | 中 | 按 provider 分组后续切片（剩余：Gemini/Vertex 原生（出站接线/入站/流式/聚合/嵌入/图片/顶点接线，含 `zenmux_gemini`）、Antigravity、OpenaiResponses、Commandcode 等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

@@ -290,9 +290,9 @@ public static class OpenAiConvertToLlm
 
         if (p.VideoUrl is not null)
         {
-            part.VideoUrl = new VideoUrl
+            part.VideoUrl = new VideoURL
             {
-                Url = p.VideoUrl.Url,
+                URL = p.VideoUrl.Url,
             };
         }
 

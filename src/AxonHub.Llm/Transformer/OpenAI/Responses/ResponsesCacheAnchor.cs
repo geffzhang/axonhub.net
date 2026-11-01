@@ -84,7 +84,7 @@ internal static class ResponsesCacheAnchor
                 }
                 else if (part.VideoUrl is { } videoUrl)
                 {
-                    WriteUnit(videoUrl.Url);
+                    WriteUnit(videoUrl.URL);
                 }
                 else if (part.Document is { } document)
                 {

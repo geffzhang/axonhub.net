@@ -338,7 +338,7 @@ public static class OpenAiConvertFromLlm
         {
             part.VideoUrl = new OpenAiVideoUrl
             {
-                Url = p.VideoUrl.Url,
+                Url = p.VideoUrl.URL,
             };
         }
 

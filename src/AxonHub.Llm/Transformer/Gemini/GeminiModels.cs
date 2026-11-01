@@ -450,13 +450,13 @@ public sealed class ImageConfig
 {
     /// <summary>Aspect ratio of the generated images. Supported values are "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", and "21:9".</summary>
     [JsonPropertyName("aspectRatio")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? AspectRatio { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public string AspectRatio { get; set; } = string.Empty;
 
     /// <summary>Specifies the size of generated images. Supported values are `1K`, `2K`, `4K`.</summary>
     [JsonPropertyName("imageSize")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ImageSize { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public string ImageSize { get; set; } = string.Empty;
 }
 
 /// <summary>Port of gemini.ThinkingConfig (llm/transformer/gemini/model.go:296-305).</summary>

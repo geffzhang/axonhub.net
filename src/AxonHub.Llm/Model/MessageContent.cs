@@ -96,7 +96,7 @@ public sealed class MessageContentPart
 
     [JsonPropertyName("video_url")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public VideoUrl? VideoUrl { get; set; }
+    public VideoURL? VideoUrl { get; set; }
 
     [JsonPropertyName("document")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -131,16 +131,6 @@ public sealed class ImageUrl
     [JsonPropertyName("detail")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Detail { get; set; }
-}
-
-public sealed class VideoUrl
-{
-    [JsonPropertyName("url")]
-    public string Url { get; set; } = string.Empty;
-
-    [JsonPropertyName("mime_type")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? MimeType { get; set; }
 }
 
 public sealed class DocumentUrl
