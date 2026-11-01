@@ -1,17 +1,19 @@
 using System.Text.Json;
-using AxonHub.Abstractions;
 
-namespace AxonHub.Grains;
+namespace AxonHub.Abstractions;
 
 /// <summary>One request-model → upstream-model mapping exposed by a channel.</summary>
-internal sealed record ChannelModelEntry(string RequestModel, string ActualModel, string Source);
+public sealed record ChannelModelEntry(string RequestModel, string ActualModel, string Source);
 
 /// <summary>
 /// Faithful port of <c>biz.Channel.GetModelEntries</c>
 /// (internal/server/biz/channel_llm.go): direct supported models plus prefix,
 /// auto-trim and model-mapping aliases, then the hide/lowercase post-processing.
+/// Shared by the load balancer (channel selection) and the models API
+/// (<c>ModelService.ListEnabledModels</c> derives its model list from the same
+/// entries).
 /// </summary>
-internal static class ChannelModelEntries
+public static class ChannelModelEntries
 {
     private const string SourceDirect = "direct";
     private const string SourcePrefix = "prefix";
@@ -148,7 +150,10 @@ internal static class ChannelModelEntries
             return [];
         }
 
-        return JsonSerializer.Deserialize<string[]>(channel.SupportedModels, JsonOptions) ?? [];
+        // Go unmarshals a null element of a []string into "", so the reference
+        // sees an empty model ID rather than a missing one.
+        var models = JsonSerializer.Deserialize<string?[]>(channel.SupportedModels, JsonOptions) ?? [];
+        return [.. models.Select(static model => model ?? string.Empty)];
     }
 
     private static ChannelSettings? ParseSettings(ChannelDescriptor channel)

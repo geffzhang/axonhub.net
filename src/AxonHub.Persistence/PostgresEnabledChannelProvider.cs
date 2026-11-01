@@ -20,6 +20,8 @@ public sealed class PostgresEnabledChannelProvider(IAxonHubDbContextFactory dbFa
             Id = channel.Id,
             Name = channel.Name,
             OrderingWeight = channel.OrderingWeight,
+            // Npgsql reads timestamptz as a UTC DateTime.
+            CreatedAt = channel.CreatedAt,
             Type = channel.Type,
             BaseUrl = channel.BaseUrl,
             Credentials = channel.Credentials,

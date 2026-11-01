@@ -761,6 +761,46 @@ C087 记录 pass-through body 未移植、通道能力表未建模、`JsonElemen
 与字段级解码文案差异；`hasResponseContent` 的 compact / completion 分支由本节的
 空响应探测一并闭合。
 
+## 25. 模型清单与检索端点（55 例，2026-11-01）
+
+参照路线：`internal/server/api/openai.go:575-917`（`OpenAIModel` / `Modalities` /
+`Capabilities` / `Pricing`、`parseOpenAIModelInclude`、`convertModelFacadeToOpenAIModel`、
+`convertModelToOpenAIExtended`、三个 `writeOpenAI*Error`、`RetrieveModel`、`ListModels`）、
+`internal/server/api/anthropic.go:76-138`（`AnthropicModel` 与 `ListModels`）、
+`internal/server/biz/model.go:646-743`（`ModelService.ListEnabledModels`）、
+`internal/server/biz/system.go:1237-1291`、`system_default.go:91-99` 与
+`model_settings_inheritance.go:12-32`（`ModelSettingsOrDefault` / `normalizeSystemModelSettings`）、
+`internal/pkg/xregexp/match.go`、`internal/server/middleware/logging.go`（请求 ID 半）、
+`routes.go:209-210` 的 `GET /v1/models`、`GET /v1/models/*model` 与 `:250` 的
+`GET /anthropic/v1/models`。端口新增 `XRegexp`（`*` 通配、无元字符即序数精确比较、
+其余编译为 `^(?:…)$` 并保留前置 `(?i)` 修饰符、编译失败永久 false、进程级缓存）、
+`ModelSettings` 与 `SystemModelSettingsService`（`system_model_settings` 的 Go 语义解码：
+缺行 / 读失败 / JSON 错误回退默认值，字面 `null` 与 `{}` 保持零值）、`ModelFacade` 与
+`ModelService.ListEnabledModels`（按 `ChannelModelEntries` 的请求模型生成、
+`ModelBlacklistRegex` 只作用于通道派生 ID、跨通道去重）、`ModelsEndpoint`（手写 Go 字节：
+OpenAI 列表 `{"data":[…],"object":"list"}` 与检索对象、Anthropic 列表的
+`data/first_id/has_more/last_id/object` 与 `time.Time` 的 RFC3339Nano、
+`ResponseError` / `AnthropicError` 错误信封）、`RequestTracingMiddleware`
+（`ar-<uuid>`、`server.trace.request_header` 默认 `AH-Request-Id`、写入请求上下文供错误体回显）、
+`GoTime`（RFC3339Nano / Unix）、`ChannelDescriptor.CreatedAt` 与其持久化映射，并把
+`ChannelModelEntries` 从 `AxonHub.Grains` 提到 `AxonHub.Abstractions` 共用
+（顺带修正 `supported_models` 中 JSON `null` 元素按 Go 语义变为 `""`）。
+差异登记 C088–C090。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| `time.Time` 线路形态：整秒 / 毫秒 / 微秒的有效位、零值、Unspecified 视为 UTC、Unix 截断与零值 `-62135596800` | `tests/AxonHub.Llm.Tests/GoTimeTests.cs` | 7 |
+| xregexp：`*`、精确匹配及其大小写敏感、双向锚定与自带的 `^…$`、`(?i)` 修饰符保留、`(?:…)` 属主体、非法正则恒 false（含缓存）、空模式 | `tests/AxonHub.Api.Tests/XRegexpTests.cs` | 8 |
+| 系统模型设置：缺行 / 读失败 / 软删 / 畸形 JSON 回退默认值、缺成员保持 Go 零值、字面 `null`、`{}`、大小写不敏感键、未知成员忽略、`developer_settings` 归一化（trim、null 元素跳过、associations 原样） | `tests/AxonHub.Api.Tests/SystemModelSettingsServiceTests.cs` | 15 |
+| ListEnabledModels：facade 字段与排序、前缀 / 映射别名、跨通道去重取首通道、黑名单正则与无元字符精确匹配、`QueryAllChannelModels=false` 为空、`null` 支持模型变空 ID | `tests/AxonHub.Api.Tests/ModelServiceTests.cs` | 7 |
+| 线路形状：OpenAI 列表 / 空列表 / HTML 转义、尾斜杠 404、检索（含 `deepseek/chat`）、模型不存在与空 ID 文案、`request_id` 回显、500 信封；Anthropic 列表 / 空列表 / 500（`request_id` 空与回显） | `tests/AxonHub.Api.Tests/ModelsEndpointTests.cs` | 14 |
+| 请求 ID 中间件：`ar-{uuid}` 格式与响应头回显、处理管线可见同一 ID、自定义头名、每请求不同、无中间件时为空 | `tests/AxonHub.Api.Tests/RequestTracingMiddlewareTests.cs` | 4 |
+
+合计 7 + 8 + 15 + 7 + 14 + 4 = 55 例：`AxonHub.Llm.Tests` 由 1246 增至 1253，
+`AxonHub.Api.Tests` 由 632 增至 680。C088 记录 `models` 表与配置模型、`include`
+扩展字段、API Key profile 与 privacy 403 的裁剪（没有 `models` 行时两条实现的响应
+字节完全一致）；C089 记录 trace ID 链路未移植；C090 记录路由边界与顺序确定化。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -778,3 +818,4 @@ C087 记录 pass-through body 未移植、通道能力表未建模、`JsonElemen
 | usage 成本管理面：`channel_model_prices` 写入、reference-id 轮换、版本表与自动定价 | 参照的 `SaveChannelModelPrices` / `channel_model_price_versions` / GraphQL 管理面未移植；端口只有读取路径与基础表（C048） | 中 | 随通道管理面落地 |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / traces / prompts / roles 等） | 请求链路四表、鉴权三表与 `systems` 已落；其余表未移植 | 中 | 随对应功能落地 |
+| 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

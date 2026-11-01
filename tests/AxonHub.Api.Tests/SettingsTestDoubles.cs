@@ -1,3 +1,4 @@
+using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Security;
 using AxonHub.Persistence;
@@ -74,5 +75,19 @@ internal sealed class StaticRetryPolicyProvider(RetryPolicy policy) : IRetryPoli
         _ = cancellationToken;
         Calls++;
         return Task.FromResult(policy);
+    }
+}
+
+/// <summary>Fixed model settings for tests that do not exercise the settings row.</summary>
+internal sealed class StaticModelSettingsProvider(ModelSettings settings) : IModelSettingsProvider
+{
+    public int Calls { get; private set; }
+
+    public Task<ModelSettings> GetModelSettingsOrDefaultAsync(
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Task.FromResult(settings);
     }
 }

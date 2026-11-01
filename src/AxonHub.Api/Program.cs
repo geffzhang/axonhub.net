@@ -2,6 +2,8 @@ using AxonHub.Abstractions;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Endpoints;
+using AxonHub.Api.Http;
+using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.Security;
@@ -103,6 +105,19 @@ builder.Services.AddScoped<ISystemStore, SystemStore>();
 builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
 builder.Services.AddScoped<IRetryPolicyProvider, SystemRetryPolicyService>();
 
+// The models surface (biz.ModelService.ListEnabledModels) reads the
+// system_model_settings row through the same scoped system store.
+builder.Services.AddScoped<IModelSettingsProvider, SystemModelSettingsService>();
+builder.Services.AddScoped<ModelService>();
+
+// server.trace.request_header (conf.go:227 area); middleware.WithLoggingTracing
+// falls back to AH-Request-Id when the value is empty.
+var requestHeader = builder.Configuration["Server:Trace:RequestHeader"];
+builder.Services.AddSingleton(new RequestTracingOptions(
+    string.IsNullOrEmpty(requestHeader)
+        ? RequestTracingOptions.DefaultRequestHeader
+        : requestHeader));
+
 // The video task flow (biz/video.go) reads the request/execution/channel rows
 // and persists the polled snapshot through the same stores the write side uses.
 builder.Services.AddScoped<IChannelStore, ChannelStore>();
@@ -129,6 +144,10 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
+// Global request tracing (routes.go:63): every request gets an ar-<uuid> id
+// echoed in the configured response header and published for error bodies.
+app.UseMiddleware<RequestTracingMiddleware>();
+
 // The reference mounts WithIPBlocklist + WithAPIKeyConfig on its API group, in
 // that order. The slice applies both to every ported API surface: the openai,
 // jina, typesafe and anthropic groups all hang off the same apiGroup.
@@ -142,6 +161,12 @@ app.UseWhen(
         branch.UseMiddleware<IpBlocklistMiddleware>();
         branch.UseMiddleware<ApiKeyAuthMiddleware>();
     });
+
+// Models (routes.go:209-210 and :250): the OpenAI list/retrieve pair and the
+// Anthropic-compatible list, all over ModelService.ListEnabledModels.
+app.MapGet("/v1/models", ModelsEndpoint.ListOpenAiModelsAsync);
+app.MapGet("/v1/models/{*model}", ModelsEndpoint.RetrieveOpenAiModelAsync);
+app.MapGet("/anthropic/v1/models", ModelsEndpoint.ListAnthropicModelsAsync);
 
 app.MapPost("/v1/chat/completions", ChatCompletionEndpoint.HandleAsync);
 

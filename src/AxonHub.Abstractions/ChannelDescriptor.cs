@@ -14,6 +14,14 @@ public sealed record ChannelDescriptor
 
     public required long OrderingWeight { get; init; }
 
+    /// <summary>
+    /// Ent <c>created_at</c> (timestamptz). The models API exposes it as the
+    /// facade's <c>created</c> / <c>created_at</c>, exactly like
+    /// <c>biz.Channel.CreatedAt</c>. Values from PostgreSQL are UTC; an
+    /// <see cref="DateTimeKind.Unspecified"/> value is treated as UTC.
+    /// </summary>
+    public DateTime CreatedAt { get; init; }
+
     /// <summary>Ent channel type, e.g. <c>openai</c>.</summary>
     public string Type { get; init; } = string.Empty;
 
