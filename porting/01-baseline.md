@@ -1192,6 +1192,40 @@ NDJSON 取消以 `OperationCanceledException` 而非 `ctx.Err` 出现、`argumen
 合计 2704 增至 2708。无新增差异条目：出站行为已由第 33 节与 C096 锁定，接线只
 影响通道类型可用性，覆盖缺口表相应行同步更新。
 
+## 36. Fireworks / Moonshot OpenAI 兼容出站与通道接线（25 例，2026-11-01）
+
+参照路线：`llm/transformer/fireworks/outbound.go:35-58`（校验配置后取默认
+`https://api.fireworks.ai/inference/v1`、`strings.TrimSuffix(baseURL, "/")` 去一个
+尾部斜杠、`ReasoningFieldContent`，再原样返回 `openai.NewOutboundTransformerWithConfig`；
+`internal/server/biz/channel_llm.go:729-739` 安装该出站）。`llm/transformer/moonshot/outbound.go:42-118`
+（先用 `openai.Config{ReasoningField: Content}` 构造内嵌出站，失败时包一层
+`invalid Moonshot transformer configuration`；`TransformRequest` 只接受 chat，
+拒绝 compact 与其他类型，要求 messages 非空，`RequestFromLLM(Content)` 后把
+`json_schema` 降级为 `json_object` 并清空 `json_schema`，URL 为
+`NormalizeBaseURL(config.BaseURL, "v1") + "/chat/completions"`，Bearer 认证；
+响应 / 流 / 错误 / 聚合沿用嵌入的 OpenAI 出站；`channel_llm.go:831-841` 安装）。
+
+本次移植新增：
+`src/AxonHub.Llm/Transformer/Fireworks/FireworksOutboundTransformer.cs`（配置、默认
+URL、单斜杠裁剪、`Create` 返回 `OpenAiOutboundTransformer`）、
+`src/AxonHub.Llm/Transformer/Moonshot/MoonshotOutboundTransformer.cs`（chat-only
+请求路径、schema 降级、其余方法委托），以及 `ChannelOutboundFactory` 的
+`fireworks` / `moonshot` 分支和类型说明。Moonshot 请求路径**不复用** OpenAI 出站的
+model / document 校验与 tool-call extra content 清理，与参照的覆写范围一致；
+Fireworks 的 `ReasoningFieldNone` 注释与代码冲突，以代码的 `Content` 为准。
+已接受差异与残余裁剪见 C098。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Fireworks：空 URL 默认端点、尾部斜杠裁剪与版本归一、`reasoning` 回填 `reasoning_content`、Bearer/API 格式、构造校验 | `tests/AxonHub.Llm.Tests/FireworksOutboundTransformerTests.cs` | 7 |
+| Moonshot：`json_schema`→`json_object`（含 schema 清除）、URL 归一、请求形状、reasoning 回填、messages / 类型 / compact 拒绝、错误信封委托、构造校验 | `tests/AxonHub.Llm.Tests/MoonshotOutboundTransformerTests.cs` | 12 |
+| `fireworks` 通道：默认端点、reasoning 字段、缺 key 拒绝 | `tests/AxonHub.Api.Tests/FireworksChannelWiringTests.cs` | 3 |
+| `moonshot` 通道：URL 归一与 Bearer、schema 降级、缺 key 拒绝 | `tests/AxonHub.Api.Tests/MoonshotChannelWiringTests.cs` | 3 |
+
+`AxonHub.Llm.Tests` 由 1571 增至 1590，`AxonHub.Api.Tests` 由 975 增至 981，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 2708 增至 2733。差异条目新增 C098（已接受）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1212,5 +1246,5 @@ NDJSON 取消以 `OperationCanceledException` 而非 `ctx.Err` 出现、`argumen
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Fireworks、Moonshot、Xai、Zai/Zhipu、Doubao/Volcengine、Longcat、Modelscope、Nanogpt、Openrouter、Cline、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、ollama(_anthropic)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合 | 中 | 按 provider 分组后续切片（优先 Moonshot / Xai / Fireworks 等 OpenAI 兼容族） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Xai、Zai/Zhipu、Doubao/Volcengine、Longcat、Modelscope、Nanogpt、Openrouter、Cline、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、ollama(_anthropic)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098） | 中 | 按 provider 分组后续切片（优先 Xai / Longcat 等 OpenAI 兼容族） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

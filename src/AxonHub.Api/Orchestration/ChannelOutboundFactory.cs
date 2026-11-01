@@ -9,6 +9,8 @@ using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
 using AxonHub.Llm.Transformer.DeepSeek;
+using AxonHub.Llm.Transformer.Fireworks;
+using AxonHub.Llm.Transformer.Moonshot;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
@@ -28,9 +30,9 @@ namespace AxonHub.Api.Orchestration;
 /// <remarks>
 /// Only the <c>openai</c>, <c>anthropic</c>, <c>claudecode</c>,
 /// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
-/// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>deepseek</c>, <c>ollama</c>
-/// and <c>ollama_anthropic</c> channel types are ported (the vertical slice);
-/// the
+/// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>deepseek</c>, <c>fireworks</c>,
+/// <c>moonshot</c>, <c>ollama</c> and <c>ollama_anthropic</c> channel types are
+/// ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are picked by rendezvous hashing when the request carries a
@@ -57,6 +59,10 @@ public static class ChannelOutboundFactory
     public const string OpenCodeGoAnthropicChannelType = "opencode_go_anthropic";
 
     public const string DeepSeekChannelType = "deepseek";
+
+    public const string FireworksChannelType = "fireworks";
+
+    public const string MoonshotChannelType = "moonshot";
 
     public const string OllamaChannelType = "ollama";
 
@@ -190,6 +196,22 @@ public static class ChannelOutboundFactory
             // channel_llm.go:819-829: DeepSeek is OpenAI-compatible but owns the
             // /beta/completions route, json_schema downgrade and thinking field.
             DeepSeekChannelType => new DeepSeekOutboundTransformer(new DeepSeekOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:729-739: OpenAI-compatible; the provider package
+            // supplies the default inference base URL and reasoning_content.
+            FireworksChannelType => FireworksOutboundTransformer.Create(new FireworksOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:831-841: OpenAI-compatible with a custom request
+            // path (chat only, json_schema downgraded to json_object).
+            MoonshotChannelType => new MoonshotOutboundTransformer(new MoonshotOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
                 ApiKeyProvider = provider,
