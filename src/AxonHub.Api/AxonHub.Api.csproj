@@ -4,6 +4,7 @@
     <AssemblyName>AxonHub.Api</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="HotChocolate.AspNetCore" />
     <ProjectReference Include="..\AxonHub.Grains\AxonHub.Grains.csproj" />
     <ProjectReference Include="..\AxonHub.Llm\AxonHub.Llm.csproj" />
     <ProjectReference Include="..\AxonHub.Persistence\AxonHub.Persistence.csproj" />

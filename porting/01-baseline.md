@@ -1853,6 +1853,35 @@ Dockerfile。前端依赖的 GraphQL schema 与 REST 契约尚未由 Orleans 侧
 管理面切片以 `frontend/src/gql/` 的既有查询与变更为服务端契约，不回改前端。
 前端工具链不进入 `dotnet build` / `dotnet test` 门禁。
 
+## 48. 管理面 GraphQL 基础设施与 allScopes（HotChocolate 16.8.0-p.9，6 例，2026-11-01）
+
+参照路线：`internal/server/routes.go:161-168`（adminGraphqlGroup 挂
+WithAdminGraphqlAuth + WithProjectID 与请求超时，`POST /admin/graphql` 交给
+gqlgen handler）、`internal/server/gql/scopes.graphql:1-11`（ScopeInfo 三字段与
+`allScopes(level: String): [ScopeInfo!]!`）、`internal/server/gql/scopes.resolvers.go:15-42`
+（nil level 不过滤；非 nil 原样转 ScopeLevel 后过滤）、
+`internal/scopes/scopes.go:1-220`（19 个 slug、system/project 两级、声明顺序与
+AllScopes 的成员过滤）。
+
+本次移植新增 `src/AxonHub.Api/Scopes/ScopeCatalog.cs`（19 条静态目录与
+AllScopes）、`src/AxonHub.Api/GraphQL/AdminQuery.cs`（ScopeInfo 记录与
+allScopes 解析器）、`src/AxonHub.Api/GraphQL/GraphQLSetup.cs`（HotChocolate
+注册与内省请求拦截器）、`Program.cs` 的 `AddAxonHubGraphQL()` 与
+`MapGraphQL("/admin/graphql")`，以及 `Directory.Packages.props` 的
+HotChocolate.AspNetCore 16.8.0-p.9。前端契约
+（`frontend/src/gql/graphql.ts:36` 的 GRAPHQL_ENDPOINT）保持不变。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| POST /admin/graphql：19 条 scope 的顺序/描述/层级、system 全量、project 十条、未知层级空列表、null 层级不过滤、ScopeInfo 内省字段 | `tests/AxonHub.Api.Tests/AdminGraphQLEndpointTests.cs` | 6 |
+
+`AxonHub.Llm.Tests` 保持 2317，`AxonHub.Api.Tests` 由 1091 增至 1097，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 3570 增至 3576。差异条目新增 C109（已接受）。
+
+管理面鉴权（WithAdminGraphqlAuth / WithProjectID）与请求超时尚未移植，当前
+`/admin/graphql` 未鉴权；其余 SDL 成员按覆盖缺口表逐项移植。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1865,7 +1894,7 @@ Dockerfile。前端依赖的 GraphQL schema 与 REST 契约尚未由 Orleans 侧
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约），服务端 GraphQL 仍在 Orleans 侧另建，不复用 Ent / gqlgen；静态托管与 SPA fallback 未接入 | 中 | 管理面服务端切片，以现有前端的查询/变更为准 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），首个字段 `allScopes` 已闭合，鉴权 / 超时与其余 SDL 成员（me、channels、users、roles、pricing、traces、backups 等）未移植；静态托管与 SPA fallback 未接入 | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |

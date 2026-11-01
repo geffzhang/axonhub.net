@@ -2,6 +2,7 @@ using AxonHub.Abstractions;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Endpoints;
+using AxonHub.Api.GraphQL;
 using AxonHub.Api.Http;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
@@ -141,6 +142,12 @@ builder.Services.AddScoped<VideoService>();
 // The orchestrator reads the retry policy through the scoped system store.
 builder.Services.AddScoped<ChatCompletionOrchestrator>();
 
+// Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
+// (routes.go:163). The first slice exposes the static scope catalog; the
+// reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported
+// yet, so the endpoint is open until the admin auth slice lands (C014).
+builder.Services.AddAxonHubGraphQL();
+
 builder.Host.UseOrleans(silo =>
 {
     silo.UseLocalhostClustering();
@@ -156,6 +163,10 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+// The management GraphQL endpoint the frontend calls
+// (frontend/src/gql/graphql.ts:36).
+app.MapGraphQL("/admin/graphql");
 
 // Global request tracing (routes.go:63): every request gets an ar-<uuid> id
 // echoed in the configured response header and published for error bodies.

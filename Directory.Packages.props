@@ -3,6 +3,8 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <!-- 管理面 GraphQL：HotChocolate 16（前端固定 POST /admin/graphql） -->
+    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.8.0-p.9" />
     <!-- Actor 框架：NuGet 发布包，不引用 E:\GitHub\orleans 源码 -->
     <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.4.1" />
     <PackageVersion Include="Microsoft.Orleans.Server" Version="10.4.1" />
