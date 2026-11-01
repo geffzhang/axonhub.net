@@ -6,6 +6,7 @@ using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Transformer.Doubao;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Transformer.Zenmux;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.Tests;
@@ -244,6 +245,131 @@ public sealed class VideoServiceTests
         Assert.Equal("http://upstream.test/v3/contents/generations/tasks/task-1", request.Url);
         Assert.Equal(ApiFormats.SeedanceVideo, request.ApiFormat);
         Assert.Equal(RequestTypes.Video, request.RequestType);
+    }
+
+    [Fact]
+    public async Task LoadTaskUsesLatestZenmuxExecutionFormatAcrossRetries()
+    {
+        // video_test.go:153-164: the latest associated execution format wins
+        // while the public request format stays openai/video.
+        var harness = NewHarness();
+        harness.Channels.Add(OpenAiChannel(type: "zenmux"));
+        harness.Requests.Add(TaskRow());
+        harness.Executions.Add(requestId: 1, format: ApiFormats.OpenAIVideo, externalId: "openai-task");
+        harness.Executions.Add(requestId: 1, format: ApiFormats.ZenmuxVideo, externalId: "native-task");
+
+        var (task, outbound) = await harness.Service.LoadTaskAsync(1);
+
+        Assert.Equal(ApiFormats.OpenAIVideo, task.Format);
+        var zenmux = Assert.IsType<ZenmuxOutboundTransformer>(outbound);
+        var request = zenmux.BuildGetVideoTaskRequest(task.ExternalId!);
+        Assert.Equal("http://upstream.test/v1/videos/task-1", request.Url);
+        Assert.Equal(ApiFormats.ZenmuxVideo, request.ApiFormat);
+    }
+
+    [Fact]
+    public async Task LoadTaskSkipsNewerZenmuxExecutionWithoutProviderTaskId()
+    {
+        // video_test.go:166-176: the newest execution has no external id, so
+        // the previous native task association remains authoritative.
+        var harness = NewHarness();
+        harness.Channels.Add(OpenAiChannel(type: "zenmux"));
+        harness.Requests.Add(TaskRow());
+        harness.Executions.Add(requestId: 1, format: ApiFormats.ZenmuxVideo, externalId: "native-task");
+        harness.Executions.Add(requestId: 1, format: ApiFormats.OpenAIVideo, externalId: string.Empty);
+
+        var (_, outbound) = await harness.Service.LoadTaskAsync(1);
+
+        Assert.IsType<ZenmuxOutboundTransformer>(outbound);
+    }
+
+    [Fact]
+    public async Task LoadTaskUsesPersistedOpenAiVideoFormatOnZenmuxChannel()
+    {
+        // video_test.go:178-188: a persisted openai/video execution selects the
+        // shared OpenAI outbound even on a ZenMux channel.
+        var harness = NewHarness();
+        harness.Channels.Add(OpenAiChannel(type: "zenmux"));
+        harness.Requests.Add(TaskRow());
+        harness.Executions.Add(requestId: 1, format: ApiFormats.ZenmuxVideo, externalId: "old-native-task");
+        harness.Executions.Add(requestId: 1, format: ApiFormats.OpenAIVideo, externalId: "openai-task");
+
+        var (_, outbound) = await harness.Service.LoadTaskAsync(1);
+
+        var openai = Assert.IsType<OpenAiOutboundTransformer>(outbound);
+        var request = openai.BuildGetVideoTaskRequest("openai-task");
+        Assert.Equal("http://upstream.test/v1/videos/openai-task", request.Url);
+    }
+
+    [Fact]
+    public async Task LoadTaskRejectsAssociatedNonVideoExecutionFormatOnZenmuxChannel()
+    {
+        var harness = NewHarness();
+        harness.Channels.Add(OpenAiChannel(type: "zenmux"));
+        harness.Requests.Add(TaskRow());
+        harness.Executions.Add(requestId: 1, format: ApiFormats.OpenAIChatCompletion, externalId: "native-task");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.Service.LoadTaskAsync(1));
+
+        Assert.Equal(
+            "server internal error, please try again later: persisted execution format "
+            + "\"openai/chat_completions\" does not support video task operations",
+            error.Message);
+    }
+
+    [Fact]
+    public async Task LoadTaskFallsBackToOpenAiVideoOnZenmuxChannelWithoutPersistedFormat()
+    {
+        // video_test.go:201-224: ZenMux's legacy fallback is openai/video.
+        var harness = NewHarness();
+        harness.Channels.Add(OpenAiChannel(type: "zenmux"));
+        harness.Requests.Add(TaskRow());
+        harness.Executions.Add(requestId: 1, format: string.Empty, externalId: "legacy-task");
+
+        var (_, outbound) = await harness.Service.LoadTaskAsync(1);
+
+        Assert.IsType<OpenAiOutboundTransformer>(outbound);
+    }
+
+    [Fact]
+    public async Task DeleteTaskCancelsZenmuxTaskLocallyWithoutUpstreamDelete()
+    {
+        // video_test.go:226-246: ZenMux has no native delete, so the task is
+        // cancelled locally and no upstream request is issued.
+        var harness = NewHarness();
+        harness.Channels.Add(OpenAiChannel(type: "zenmux"));
+        harness.Requests.Add(TaskRow());
+        harness.Executions.Add(requestId: 1, format: ApiFormats.ZenmuxVideo, externalId: "task-1");
+
+        await harness.Service.DeleteTaskAsync(1);
+
+        Assert.Empty(harness.Executor.Requests);
+
+        var update = Assert.Single(harness.Requests.StatusUpdates);
+        Assert.Equal(1, update.Id);
+        Assert.Equal("canceled", update.Status);
+        Assert.Equal("canceled", harness.Requests.Rows[0].Status);
+    }
+
+    [Fact]
+    public async Task DeleteTaskReportsZenmuxLocalCancelFailure()
+    {
+        // biz/video.go:126-131: unlike the best-effort cancel after an upstream
+        // delete, the local ZenMux cancel is fatal.
+        var harness = NewHarness();
+        harness.Channels.Add(OpenAiChannel(type: "zenmux"));
+        harness.Requests.Add(TaskRow());
+        harness.Requests.ThrowOnStatusUpdate = true;
+        harness.Executions.Add(requestId: 1, format: ApiFormats.ZenmuxVideo, externalId: "task-1");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.Service.DeleteTaskAsync(1));
+
+        Assert.Equal(
+            "failed to cancel video task locally: status update failed",
+            error.Message);
+        Assert.Empty(harness.Executor.Requests);
     }
 
     [Fact]

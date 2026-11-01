@@ -1,9 +1,11 @@
 using AxonHub.Api.Auth;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
+using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.Zenmux;
 using AxonHub.Persistence;
 using JsonGoJson = AxonHub.Llm.Json.GoJson;
 
@@ -22,9 +24,10 @@ namespace AxonHub.Api.Orchestration;
 /// <c>ch.Outbounds[videoKey]</c>. The port reads the same rows through the
 /// stores and rebuilds the outbound from the channel's stored configuration
 /// through <see cref="ChannelOutboundFactory"/>; in this build the <c>openai</c>
-/// channel type carries the <c>openai/video</c> key and the <c>doubao</c> type
-/// the <c>seedance/video</c> key (the zenmux video transformer is the deferred
-/// scope cut, C010).
+/// and <c>zenmux</c> channel types carry the <c>openai/video</c> key, the
+/// <c>doubao</c> type the <c>seedance/video</c> key, and any ZenMux type the
+/// <c>zenmux/video</c> key. ZenMux has no native delete, so those tasks are
+/// cancelled locally without an upstream call (C082).
 /// </remarks>
 public sealed class VideoService(
     IRequestStore requestStore,
@@ -95,11 +98,33 @@ public sealed class VideoService(
     {
         var (task, outbound) = await LoadTaskAsync(requestId, cancellationToken).ConfigureAwait(false);
 
-        // The reference's zenmux ErrVideoTaskDeleteUnsupported branch falls
-        // back to a local cancel; the zenmux transformer is the deferred scope
-        // cut (C010), so every outbound in this build either builds a DELETE
-        // or throws.
-        var httpReq = outbound.BuildDeleteVideoTaskRequest(task.ExternalId!);
+        HttpRequestData httpReq;
+        try
+        {
+            httpReq = outbound.BuildDeleteVideoTaskRequest(task.ExternalId!);
+        }
+        catch (ZenmuxVideoTaskDeleteUnsupportedException)
+        {
+            // biz/video.go:113-119: ZenMux has no native delete, so the task
+            // is cancelled locally instead; a failed write is fatal here.
+            try
+            {
+                await requestStore.UpdateStatusAsync(
+                    requestId,
+                    StatusCanceled,
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to cancel video task locally: " + ex.Message,
+                    ex);
+            }
+
+            return;
+        }
+
         _ = executor.Do(cancellationToken, httpReq);
 
         // Best effort: mark canceled locally.
@@ -194,14 +219,24 @@ public sealed class VideoService(
         // The reference looks the format up in the channel's outbound map
         // (ch.Outbounds[videoKey], built from the default endpoint table in
         // channel_endpoint.go). The port has no endpoint records, so mirror the
-        // lookup explicitly: an openai channel maps openai/video and a doubao
-        // channel maps seedance/video to the outbound built for that channel
-        // type (channel_endpoint.go:271-275 vs openAICompatibleDefaultEndpoints).
+        // lookup explicitly: openai/zenmux channels map openai/video, doubao
+        // maps seedance/video (channel_endpoint.go:271-275 vs
+        // openAICompatibleDefaultEndpoints), and every ZenMux type maps
+        // zenmux/video (channel_endpoint.go:279-284). The reference only builds
+        // the latter for a channel that configured the endpoint; the slice
+        // cannot see endpoint records (C082).
+        var isZenmuxChannel = channel.Type is ChannelOutboundFactory.ZenmuxChannelType
+            or ChannelOutboundFactory.ZenmuxResponsesChannelType
+            or ChannelOutboundFactory.ZenmuxAnthropicChannelType
+            or ChannelOutboundFactory.ZenmuxVideoChannelType;
+
         IVideoTaskOutbound? outbound = null;
-        if ((channel.Type == ChannelOutboundFactory.OpenAiChannelType
+        if (((channel.Type == ChannelOutboundFactory.OpenAiChannelType
+                    || channel.Type == ChannelOutboundFactory.ZenmuxChannelType)
                 && videoKey == ApiFormats.OpenAIVideo)
             || (channel.Type == ChannelOutboundFactory.DoubaoChannelType
-                && videoKey == ApiFormats.SeedanceVideo))
+                && videoKey == ApiFormats.SeedanceVideo)
+            || (isZenmuxChannel && videoKey == ApiFormats.ZenmuxVideo))
         {
             var candidate = new ChannelCandidate
             {

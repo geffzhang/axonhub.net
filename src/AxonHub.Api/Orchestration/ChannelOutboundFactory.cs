@@ -30,6 +30,7 @@ using AxonHub.Llm.Transformer.OpenCode;
 using AxonHub.Llm.Transformer.TypeSafe;
 using AxonHub.Llm.Transformer.Xai;
 using AxonHub.Llm.Transformer.Zai;
+using AxonHub.Llm.Transformer.Zenmux;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -49,7 +50,9 @@ namespace AxonHub.Api.Orchestration;
 /// <c>minimax</c>, <c>minimax_anthropic</c>, <c>bailian</c>,
 /// <c>bailian_responses</c>, <c>bailian_anthropic</c>,
 /// <c>moonshot_coding</c>, <c>modelscope</c>, <c>doubao</c>,
-/// <c>volcengine</c>, <c>doubao_anthropic</c> and <c>volcengine_anthropic</c>
+/// <c>volcengine</c>, <c>doubao_anthropic</c>, <c>volcengine_anthropic</c>,
+/// <c>zenmux</c>, <c>zenmux_responses</c>, <c>zenmux_anthropic</c> and
+/// <c>zenmux_video</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -133,6 +136,20 @@ public static class ChannelOutboundFactory
     public const string DoubaoAnthropicChannelType = "doubao_anthropic";
 
     public const string VolcengineAnthropicChannelType = "volcengine_anthropic";
+
+    public const string ZenmuxChannelType = "zenmux";
+
+    public const string ZenmuxResponsesChannelType = "zenmux_responses";
+
+    public const string ZenmuxAnthropicChannelType = "zenmux_anthropic";
+
+    public const string ZenmuxVideoChannelType = "zenmux_video";
+
+    // channel_llm.go:56-58: the default base URLs applied when a ZenMux
+    // channel has none stored (channel_llm.go:695-705).
+    public const string ZenmuxOpenAiBaseUrl = "https://zenmux.ai/api/v1";
+
+    public const string ZenmuxAnthropicBaseUrl = "https://zenmux.ai/api/anthropic";
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
@@ -496,6 +513,47 @@ public static class ChannelOutboundFactory
                     ChannelApiKeyIndex = provider.KeyIndex,
                 }),
             VolcengineAnthropicChannelType => CreateDoubaoOutbound(candidate, provider),
+            // channel_llm.go:511-520: a zenmux/video endpoint is built for
+            // every ZenMux channel type, but only when the channel lists it
+            // (channel_endpoint.go). The slice has no endpoint records, so the
+            // persisted-format lookup reaches the native transformer directly
+            // (C082).
+            ZenmuxChannelType or ZenmuxResponsesChannelType
+                or ZenmuxAnthropicChannelType or ZenmuxVideoChannelType
+                when request.ApiFormat == ApiFormats.ZenmuxVideo
+                => CreateZenmuxOutbound(candidate, provider),
+            // channel_llm.go:1269-1279: a plain ZenMux channel's primary
+            // outbound is the shared OpenAI one; a responses-format request is
+            // served by the Responses outbound, like the openai channel type.
+            ZenmuxChannelType when request.ApiFormat
+                is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
+                => ResponsesOutboundTransformer.Create(
+                    ZenmuxBaseUrl(candidate),
+                    provider,
+                    provider.KeyIndex),
+            ZenmuxChannelType => OpenAiOutboundTransformer.Create(
+                ZenmuxBaseUrl(candidate),
+                provider,
+                provider.KeyIndex),
+            // channel_llm.go:789-799: zenmux_responses has exactly one
+            // endpoint, the responses API (channel_endpoint.go:279-281).
+            ZenmuxResponsesChannelType => ResponsesOutboundTransformer.Create(
+                ZenmuxBaseUrl(candidate),
+                provider,
+                provider.KeyIndex),
+            // channel_llm.go:898: zenmux_anthropic is the plain Anthropic
+            // direct platform on the ZenMux Anthropic base URL.
+            ZenmuxAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+            {
+                Type = AnthropicPlatformType.Direct,
+                BaseUrl = ZenmuxBaseUrl(candidate),
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:1293-1302: the zenmux_video channel's primary
+            // outbound is the native transformer, which also serves chat
+            // through its embedded OpenAI outbound.
+            ZenmuxVideoChannelType => CreateZenmuxOutbound(candidate, provider),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
@@ -535,6 +593,41 @@ public static class ChannelOutboundFactory
         => new(new DoubaoOutboundConfig
         {
             BaseUrl = candidate.BaseUrl ?? string.Empty,
+            ApiKeyProvider = apiKeyProvider,
+            ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+        });
+
+    /// <summary>
+    /// Port of the empty-base-URL defaulting in <c>buildChannelWithTransformer</c>
+    /// (channel_llm.go:695-705). Only the three ported ZenMux types carry a
+    /// default; zenmux_gemini's default is part of the deferred Gemini slice.
+    /// </summary>
+    private static string ZenmuxBaseUrl(ChannelCandidate candidate)
+    {
+        var baseUrl = candidate.BaseUrl ?? string.Empty;
+        if (baseUrl.Length != 0)
+        {
+            return baseUrl;
+        }
+
+        return candidate.Type == ZenmuxAnthropicChannelType
+            ? ZenmuxAnthropicBaseUrl
+            : ZenmuxOpenAiBaseUrl;
+    }
+
+    /// <summary>
+    /// Port of the ZenMux branches of <c>buildChannelWithTransformer</c>
+    /// (channel_llm.go:1293-1302) and the zenmux/video case of
+    /// <c>newProviderChatOutbound</c> (channel_llm.go:511-520). The endpoint
+    /// path defaults to /videos; the slice has no endpoint records, so a
+    /// custom path is not modelled yet (C082).
+    /// </summary>
+    private static ZenmuxOutboundTransformer CreateZenmuxOutbound(
+        ChannelCandidate candidate,
+        ChannelApiKeyProvider apiKeyProvider)
+        => new(new ZenmuxOutboundConfig
+        {
+            BaseUrl = ZenmuxBaseUrl(candidate),
             ApiKeyProvider = apiKeyProvider,
             ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
         });

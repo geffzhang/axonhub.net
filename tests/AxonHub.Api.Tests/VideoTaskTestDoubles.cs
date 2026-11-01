@@ -31,6 +31,12 @@ internal sealed class FakeRequestStore : IRequestStore
     /// <summary>Simulates a failed snapshot write (biz/video.go keeps the data).</summary>
     public bool ThrowOnSnapshot { get; set; }
 
+    /// <summary>
+    /// Simulates a failed status write; fatal for the ZenMux local-cancel path
+    /// (biz/video.go:126-131), ignored for the best-effort cancel.
+    /// </summary>
+    public bool ThrowOnStatusUpdate { get; set; }
+
     public RequestRecord Add(RequestRecord row)
     {
         if (row.Id == 0)
@@ -89,6 +95,11 @@ internal sealed class FakeRequestStore : IRequestStore
         DateTime updatedAt,
         CancellationToken cancellationToken = default)
     {
+        if (ThrowOnStatusUpdate)
+        {
+            throw new InvalidOperationException("status update failed");
+        }
+
         StatusUpdates.Add(new StatusWrite(id, status, updatedAt));
 
         var row = Rows.FirstOrDefault(row => row.Id == id);
