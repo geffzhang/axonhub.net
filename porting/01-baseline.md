@@ -935,7 +935,8 @@ live 缓存、管理面/预览缺失、.NET Regex 语义与 Gemini/Ollama 载荷
 | 编排端到端：掩码后的重放 body 到达传输层、拒绝请求不触达传输层、规则读取失败失败开放 | `tests/AxonHub.Api.Tests/PassThroughPromptProtectionTests.cs` | 3 |
 
 合计 18 + 11 + 9 + 13 + 13 + 4 + 3 = 71 例：`AxonHub.Api.Tests` 由 801 增至 872，
-`AxonHub.Llm.Tests` 保持 1253，`AxonHub.Grains.Tests` 保持 88；合计 2213。C092 登记
+`AxonHub.Llm.Tests` 保持 1253，`AxonHub.Grains.Tests` 保持 88；三个项目合计 2213
+（含 Docker 依赖的 `AxonHub.Persistence.Tests` 59 例则为 2272）。C092 登记
 规则每请求读库（无 30 秒 live 缓存与启动期 panic）、管理面/GraphQL/预览未移植、
 .NET Regex 与 regexp2 的语义差异、Gemini/Ollama 无编解码器导致载荷级对照延后，
 并关闭 C091 中的提示词保护缺口（codex 出站 `AllowPassThroughBody` 仍在 C091）。

@@ -21,15 +21,15 @@
 | `AxonHub.Persistence.Tests` | 59 | 59 | 0 | 0 | schema 快照 5 + EF 模型一致性 2 + EF/Dapper 共享事务 2 + 连接语义 2 + 九表仓储 48（projects / users / api_keys 各 4 例，systems 4 例，channel_model_prices 6 例，requests / request_executions 的 video 任务查询与轮询快照接缝 3 例） |
 | `AxonHub.Grains.Tests` | 88 | 88 | 0 | 0 | 通道选择：打分/窗口 5 + 健康与 topK 6（含 topK 截断与归一化 2）+ 别名解析 3 + 同分顺序/不计数 2 + 负载均衡策略 8（adaptive 中性总分/线性衰减 2、冷却边界 1、权重 tie-break 与未知回退 2、failover 1、circuit-breaker 1、策略切换 1）；限流与并发准入 64：ChannelLimiter 10 + ChannelLimiterManager 12 + ChannelRequestTracker 24 + RateLimitAwareScorer 18 |
 | `AxonHub.Api.Tests` | 872 | 872 | 0 | 0 | Responses WebSocket 编排接缝 5（CustomizeExecutor、finalizeTransportRequest 与中间件委托/透传）；HTTP 切片 86：orchestrator/重试/超时 17（含通道级重试配置 3、流式性能记录语义 2、策略 topK 1、负载均衡策略接线 1）+ 请求链路落库 5（含鉴权身份传播 1）+ SSE 写帧 9（含上游错误策略 2）+ 请求读取 12（含 zstd/压缩错误文案）+ 端点胶水 18（OpenAI 11 含上游错误策略 3，Anthropic Messages 两条路由 7）+ 期望流选择 2 + 通道重试谓词与 settings 解析 16 + 通道性能记录 7；API key 鉴权与 ClientIP 73：header 提取 14 + 鉴权器流程 13 + ClientIP/allowlist 与中间件文案 46；系统设置与 IP 黑名单 29：SecuritySettings 回退/归一化 15 + 黑名单放行/命中/受信代理 14；重试策略系统设置 49：回退/零值/类型错误 16 + 解析与重复键 7 + 归一化 26；上游错误策略 applier 29：非流改写/本地错误/quota 11 + 响应体字段 8 + 流式分类与策略读取次数 10 + 通道级请求改写 134：body/header 改写与设置解析 133（ChannelOverrideTests 87 + ChannelOverrideSettingsTests 47）+ 端到端落库 1；限流中间件 29：RPM 准入 5 + TPM/冷却追踪 13 + 队列错误 4 + 连接准入与让位 7；usage 成本 43：计算器 26 + 价格读取 12 + 注入与落库 5；多 key 选择与执行 key 审计 23：provider 16 + 审计 7 + OpenAI Images 端点接线 8（生成/编辑路由、multipart 透传与错误信封、空响应检测图片分支）+ OpenAI Embeddings/Moderations 端点接线 7（两条路由、嵌入/审核透传、缺省模型回退与错误信封、空响应检测）+ OpenAI Alpha Search/Decisions 端点接线 6（两条路由、原样透传与上游错误信封、空响应检测）+ OpenAI Audio 端点接线 58（speech 路由探测 15：nil/空 body/非 JSON/stream_format 判定表/解码错误文案；strconv.ParseFloat 保真表 36；二进制流写入器 7：首块 CT 与头、done/空块吞掉、headers 前分类错误信封、headers 后只记日志）+ Jina Rerank/Embedding 端点接线 7（`/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由、校验/解码错误 → 500 api_error 信封、rerank/embedding 转发与空响应检测）+ OpenAI Video 端点接线 33（biz/video_test.go 对照的服务层 23、GET/DELETE 胶水 6、POST /v1/videos 4）+ OpenAI 旧版 Completions 端点接线 4（`POST /v1/completions` 转发、completions 线路形状与 Bearer、缺 prompt 400、空 body 400、非 JSON CT 400）+ TypeSafe SystemOne 端点接线 9（`/v1/systemone` 与 `/typesafe/v1/systemone` 共用 handler、上游 `/v1/systemone` 线路形状与 Bearer、空响应探测保留 answers、空 answers 切换通道、429 换用下一通道 key、401 不重试、缺 model / state 的 500 `api_error`、空 body 400）+ 模型清单与检索 48（xregexp 8：`*`、精确匹配、双向锚定、`(?i)` 修饰符、非法正则恒 false 与缓存、空模式；系统模型设置 15：缺行 / 读失败 / 软删 / 畸形 JSON 回退、缺成员与字面 null 的零值、大小写不敏感键、`developer_settings` 归一化；`ListEnabledModels` 7：facade 字段、前缀 / 映射别名、跨通道去重、黑名单正则与精确匹配、`QueryAllChannelModels=false`、null 支持模型；端点 14：OpenAI 列表 / 空列表 / HTML 转义、尾斜杠 404、斜杠模型 ID、两种 not_found 文案、request_id 回显、500 信封、Anthropic 分页列表 / 空列表 / 500 的 request_id 空与回显；请求 ID 中间件 4）+ pass-through 通道重放 95（开关与流对齐 17、body 重放与 model 补丁 31、格式支持与策略 12、Codex 头 4、User-Agent 策略 8、通道 settings 解码 11、系统设置 provider 8、编排端到端 4）+ pass-through 响应/流重放 26（非流捕获与应用 7、原始流捕获 6、原始流应用 6、通道流取消语义 2、backlog 预算 2、真实 pipeline 集成 3）+ 提示词保护 71（规则应用 18、中间件 11、规则服务 9、原始补丁 13、真实编解码载荷 13、回放校验 4、编排端到端 3） |
-| **合计** | **2213** | **2213** | **0** | **0** | 不含 Docker 依赖的 `AxonHub.Persistence.Tests`（59 例，见下方说明） |
+| **合计** | **2272** | **2272** | **0** | **0** | 四个测试项目全部通过（含 PostgreSQL Testcontainers） |
 
 命令：`dotnet test AxonHub.slnx`（2026-11-01，Windows 11 / .NET SDK 10.0.401）。
 
-本轮验收运行时本机 Docker 未启动，`AxonHub.Persistence.Tests` 的 59 例因 Testcontainers
-无法拉起 `postgres:17-alpine` 而失败（环境性，与代码无关）；表中 56 例为最近一次 Docker 可用时的
-通过记录，本次新增的 3 例 video 任务接缝（external_id + project 作用域、轮询快照更新、desc 排序）
-已编译通过（0 警告 / 0 错误），待 Docker 可用的 CI 首次运行确认。持久化测试通过 Testcontainers 启动 `postgres:17-alpine`（需要本机 Docker），每个测试使用独立 schema；
-M2 时期的 SQLite 测试已全部替换为 PostgreSQL 对应项。
+本轮验收运行时本机 Docker（29.2.0）可用，`AxonHub.Persistence.Tests` 的 59 例
+全部通过；整解决方案并行运行的一次 testhost 崩溃为环境性抖动，单项目重跑 59/59 通过，
+表中数字取自该次重跑。持久化测试通过 Testcontainers 启动 `postgres:17-alpine`
+（需要本机 Docker），每个测试使用独立 schema；M2 时期的 SQLite 测试已全部替换为
+PostgreSQL 对应项。
 写侧 create/update 由 EF Core 10.0.14 执行，读侧 get/list 由 Dapper 2.1.89 执行；
 仓储注入 scoped `AxonHubDbContext`，写入加入调用方事务，读侧经同一连接/事务执行（`EfDapperInteropTests` 锁定）。
 EF 模型（而非 EF 迁移）由 `EfCoreModelTests` 与幂等 DDL 建出的库结构逐列/逐索引对齐，运行时不创建版本表。
