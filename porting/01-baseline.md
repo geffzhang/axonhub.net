@@ -1173,6 +1173,25 @@ NDJSON 取消以 `OperationCanceledException` 而非 `ctx.Err` 出现、`argumen
 `AxonHub.Grains.Tests` 保持 92；四个项目合计 2641 增至 2704。C097 登记本切片的
 已接受差异与残余缺口（能力表 / 端点表、apiKeyOverride、其余 provider 通道）。
 
+## 35. DeepSeek 通道接线（4 例，2026-11-01）
+
+参照路线：`internal/server/biz/channel_llm.go:819-829`（`channel.TypeDeepseek` 安装
+`deepseek.NewOutboundTransformerWithConfig`，传入 `BaseURL` 与
+`getAPIKeyProvider(ch)`；DeepSeek 没有无 key 部署模式，因此沿用缺 key 抛错）。
+第 33 节已移植出站本身（URL 归一、`/beta/completions` 分派、`json_schema` 降级、
+`thinking` / `reasoning_content`），本次只补 `ChannelOutboundFactory` 的
+`deepseek` 分支：`BaseUrl`、`ApiKeyProvider`、`ChannelApiKeyIndex` 按参照接线，
+并与 `openai` 通道的类型分派保持隔离。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| `deepseek` 通道：构建 DeepSeek 出站、`/v1/chat/completions` 与 Bearer、完成请求走 `/beta/completions`、缺 key 拒绝、`thinking` 信封 | `tests/AxonHub.Api.Tests/DeepSeekChannelWiringTests.cs` | 4 |
+
+`AxonHub.Api.Tests` 由 971 增至 975，`AxonHub.Llm.Tests` 保持 1571，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 2704 增至 2708。无新增差异条目：出站行为已由第 33 节与 C096 锁定，接线只
+影响通道类型可用性，覆盖缺口表相应行同步更新。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1193,5 +1212,5 @@ NDJSON 取消以 `OperationCanceledException` 而非 `ctx.Err` 出现、`argumen
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Fireworks、Moonshot、Xai、Zai/Zhipu、Doubao/Volcengine、Longcat、Modelscope、Nanogpt、Openrouter、Cline、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、ollama(_anthropic)，DeepSeek 出站已在 Llm 层移植但未接入工厂。`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type；Ollama 两种类型由第 34 节闭合（C097） | 中 | 按 provider 分组后续切片（优先 DeepSeek / Moonshot / Xai 等 OpenAI 兼容族） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Fireworks、Moonshot、Xai、Zai/Zhipu、Doubao/Volcengine、Longcat、Modelscope、Nanogpt、Openrouter、Cline、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、ollama(_anthropic)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合 | 中 | 按 provider 分组后续切片（优先 Moonshot / Xai / Fireworks 等 OpenAI 兼容族） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

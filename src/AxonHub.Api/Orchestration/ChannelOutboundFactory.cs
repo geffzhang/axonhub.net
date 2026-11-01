@@ -8,6 +8,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
+using AxonHub.Llm.Transformer.DeepSeek;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
@@ -27,8 +28,9 @@ namespace AxonHub.Api.Orchestration;
 /// <remarks>
 /// Only the <c>openai</c>, <c>anthropic</c>, <c>claudecode</c>,
 /// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
-/// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>ollama</c> and
-/// <c>ollama_anthropic</c> channel types are ported (the vertical slice); the
+/// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>deepseek</c>, <c>ollama</c>
+/// and <c>ollama_anthropic</c> channel types are ported (the vertical slice);
+/// the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are picked by rendezvous hashing when the request carries a
@@ -53,6 +55,8 @@ public static class ChannelOutboundFactory
     public const string OpenCodeGoChannelType = "opencode_go";
 
     public const string OpenCodeGoAnthropicChannelType = "opencode_go_anthropic";
+
+    public const string DeepSeekChannelType = "deepseek";
 
     public const string OllamaChannelType = "ollama";
 
@@ -183,6 +187,14 @@ public static class ChannelOutboundFactory
                 candidate.BaseUrl ?? string.Empty,
                 provider,
                 provider.KeyIndex),
+            // channel_llm.go:819-829: DeepSeek is OpenAI-compatible but owns the
+            // /beta/completions route, json_schema downgrade and thinking field.
+            DeepSeekChannelType => new DeepSeekOutboundTransformer(new DeepSeekOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
             // channel_llm.go:1392-1405: the provider is only installed when the
             // channel has enabled keys, so a keyless or fully-disabled channel
             // sends no Authorization header at all.
