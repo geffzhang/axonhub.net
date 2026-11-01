@@ -59,4 +59,13 @@ public sealed class ChannelCandidate
     /// <summary>Channel-level pass-through overrides (settings.passThrough*).</summary>
     [Id(12)]
     public ChannelPassThroughSettings PassThroughSettings { get; set; } = new();
+
+    /// <summary>
+    /// The channel's <c>default_test_model</c>, already resolved through its
+    /// model entries exactly like <c>biz.buildCodexOutbound</c> (trimmed, then
+    /// mapped by ChooseModel when the channel supports it). Codex channels use
+    /// it as the main model of the image-generation tool.
+    /// </summary>
+    [Id(13)]
+    public string DefaultTestModel { get; set; } = string.Empty;
 }

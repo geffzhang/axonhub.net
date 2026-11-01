@@ -941,13 +941,71 @@ live 缓存、管理面/预览缺失、.NET Regex 语义与 Gemini/Ollama 载荷
 .NET Regex 与 regexp2 的语义差异、Gemini/Ollama 无编解码器导致载荷级对照延后，
 并关闭 C091 中的提示词保护缺口（codex 出站 `AllowPassThroughBody` 仍在 C091）。
 
+## 29. Codex 出站、OAuth 凭据与通道接线（111 例，2026-11-01）
+
+参照路线：`llm/transformer/openai/codex/`（`outbound.go` 的 TransformRequest /
+TransformResponse / TransformStream / AggregateStreamChunks、`AllowPassThroughBody`
+的 token 上限拒绝、`CustomizeExecutor` / `FinalizeTransportRequest`、TurnMetadata 与
+Session/Thread/Window 头、工具与图片工具注入、Responses Lite 语义；`headers.go`、
+`models.go`、`alpha_search.go`、`token.go` 的 JWT 账号解析与 `DecodeAuthJson`、
+`utils.go`、`constants.go`）、`llm/oauth/`（`credentials.go` 的凭据形状与解析校验顺序、
+`token_provider.go` 的单飞刷新 / EnsureFresh / 自动刷新、`exchange_strategy.go`、
+`pkce.go`、`device_flow_provider.go`），以及 `internal/server/biz/channel_llm.go` 的
+`buildCodexOutbound` 与 `buildChannelWithOutbounds` 的 codex/fenno 分派。参照测试：
+`outbound_executor_test.go`、`codex_simulator_test.go`、`outbound_additional_tools_test.go`、
+`alpha_search_test.go`、`token_test.go`、`token_provider_test.go`、`channel_llm_fenno_test.go`
+与 `llm/oauth/*_test.go`。
+
+端口新增：`AxonHub.Llm/Transformer/OpenAI/Codex`（`CodexOutboundTransformer`、
+`CodexHeaders`、`CodexModels`、`CodexToken`、`CodexAlphaSearch`、`CodexUtils`、
+`CodexConstants`）、`AxonHub.Llm/OAuth`（`OAuthModels`、`OAuthCredentialsJson`、
+`TokenProvider`、`ExchangeStrategy`、`Pkce`、`DeviceFlowProvider`）、
+`AxonHub.Llm/Concurrency/SingleFlight`。`ChannelOutboundFactory` 增加 codex/fenno
+分派与 `CreateCodexOutbound` / `CreateCodexTokenProvider`：oauth 对象（优先）或旧版
+apiKey 内嵌 OAuth JSON 构造刷新型 `TokenProvider`，API key 通道构造
+`ApiKeyTokenProvider`，ws/wss base URL 推断 websocket transport，`default_test_model`
+作为图片主模型；缺凭据时 codex/fenno 报
+`missing credentials: oauth or api key required for channel <name>`。
+`ChannelPoolGrain` 按 `buildCodexOutbound` 的方式 Trim 并 `ChooseModel` 解析候选的
+`DefaultTestModel`（`lowercaseModelId` 小写查找，未支持保留 Trim 值）；
+`ChatCompletionOrchestrator` 把共享 executor 传给工厂作为令牌刷新通道；
+`PersistentOutboundTransformer` 补上 `SupportsCodexResponseHeaders` 接缝（当前
+transformer 为 codex 时恒真）。接线测试同时暴露并修复了
+`ChannelCredentials.HasNonEmptyAccessToken` 只识别 Go 字段名 `accesstoken` 的问题：
+Go 解码按字段名或 JSON tag 大小写不敏感匹配，`{"oauth":{"access_token":"..."}}`
+必须判定为 OAuth 凭据。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Codex 请求变换（模型/消息/identity 头、reasoning 默认、数组输入、工具与 additional tools 作用域、Responses Lite）、pass-through body 的 token 上限拒绝、图片生成/编辑工具、响应与流聚合、`CustomizeExecutor` 的非流聚合 / alpha-search 非流式 / WebSocket 绕过 / JSON 直通 / relay SSE 聚合 / WebSocket 错误事件、`FinalizeTransportRequest` 的 WebSocket beta 剥离与 continuation 字段保留 | `tests/AxonHub.Llm.Tests/CodexOutboundExecutorTests.cs` | 39 |
+| Codex 模拟器身份头：最小头、入站 identity 覆盖、现代 codex 头直通、非 codex 入站默认值、session id 的四种来源与 UUID 回退 | `tests/AxonHub.Llm.Tests/CodexSimulatorTests.cs` | 10 |
+| additional tools 作用域：官方 backend（含无 scheme）保留、三种中继域名形态移除 | `tests/AxonHub.Llm.Tests/CodexAdditionalToolsTests.cs` | 6 |
+| alpha search session id 优先级：header > body，body > context | `tests/AxonHub.Llm.Tests/CodexAlphaSearchTests.cs` | 3 |
+| `DecodeAuthJson`：JWT 账号信息解析与畸形输入 | `tests/AxonHub.Llm.Tests/CodexTokenTests.cs` | 1 |
+| codex token provider：未过期不回调、过期刷新后回调 | `tests/AxonHub.Llm.Tests/CodexTokenProviderTests.cs` | 2 |
+| OAuth 凭据文档：解析校验顺序（空文档 → access_token → refresh_token/expires_at 估算）、字段序与零值、token response 错误信封优先级、token 端点错误文案 | `tests/AxonHub.Llm.Tests/OAuthCredentialsJsonTests.cs` | 8 |
+| OAuth token provider：Get / EnsureFresh / 提前 3 分钟过期窗口 / OnRefreshed | `tests/AxonHub.Llm.Tests/OAuthTokenProviderTests.cs` | 4 |
+| 自动刷新：启停幂等、后台 Task 生命周期 | `tests/AxonHub.Llm.Tests/OAuthTokenProviderAutoRefreshTests.cs` | 2 |
+| 设备码流程：设备授权请求、轮询节奏、slow_down / authorization_pending / 拒绝与超时 | `tests/AxonHub.Llm.Tests/OAuthDeviceFlowProviderTests.cs` | 31 |
+| PKCE：verifier/challenge 生成与 S256 向量 | `tests/AxonHub.Llm.Tests/OAuthPkceTests.cs` | 5 |
+| 通道接线：codex/fenno 的 7 组 APIFormat 分派、fenno 不支持 alpha search、fenno 的 `/v1/responses` 与 bearer、API key/OAuth 两种 token provider、旧版 apiKey 内嵌 OAuth、oauth 对象优先、两种缺凭据文案、`SupportsCodexResponseHeaders` 只对 codex 为真、ws/wss 与 HTTP 的 transport 推断 | `tests/AxonHub.Api.Tests/CodexChannelWiringTests.cs` | 20 |
+| `default_test_model`：Trim、`ChooseModel` 映射、`lowercaseModelId`、未知模型保留 Trim 值 | `tests/AxonHub.Grains.Tests/ChannelSelectionTests.cs`（`DefaultTestModelIsTrimmedAndResolvedThroughModelEntries`） | 4 |
+
+合计 61 + 50 = 111 例（另 Api 20 例、Grains 4 例）：`AxonHub.Llm.Tests` 由 1253 增至
+1364，`AxonHub.Api.Tests` 由 872 增至 892，`AxonHub.Grains.Tests` 由 88 增至 92，
+`AxonHub.Persistence.Tests` 保持 59；四个项目合计 2407。C093 登记 OAuth 的时间解析、
+JSON 解码文案、日志与单飞原语差异；C094 登记 codex 的端点表、token provider 复用/
+持久化/自动刷新、代理感知 client、API 层 codex 响应头转发等真实缺口，并关闭 C091
+中的 codex `AllowPassThroughBody` 缺口。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求与提示词保护半程已由第 26、28 节闭合 | 低 | 完成（C087、C091、C092） |
-| pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面/预览与 codex 出站 `AllowPassThroughBody` 未移植（C092、C091） | 中 | 管理面随 C013/C014，codex 策略随 codex 切片 |
+| pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面/预览未移植（C092），codex 出站的 `AllowPassThroughBody` 策略由第 29 节的 61 例 codex 用例锁定（C091 缺口关闭，见 C094） | 中 | 管理面随 C013/C014 |
+| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点表未建模（图片/alpha-search 按通道类型与入站格式分派）、OAuth `TokenProvider` 每次尝试新建、刷新不写回数据库、无后台自动刷新、无按通道代理 client、API 层 codex 响应头未转发、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |

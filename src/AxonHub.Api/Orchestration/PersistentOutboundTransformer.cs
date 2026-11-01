@@ -47,7 +47,8 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         _candidates = candidates;
         _timeProvider = timeProvider;
         _metrics = metrics;
-        _factory = factory ?? ChannelOutboundFactory.Create;
+        _factory = factory ?? ((candidate, request, now) =>
+            ChannelOutboundFactory.Create(candidate, request, now));
     }
 
     /// <summary>The channel serving the current attempt, or 0 before the first transform.</summary>
@@ -231,6 +232,15 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         IReadOnlyList<StreamEvent> chunks,
         out ResponseMeta meta)
         => Current.AggregateStreamChunks(request, chunks, out meta);
+
+    /// <summary>
+    /// Port of SupportsCodexResponseHeaders (outbound.go:505-510): whether the
+    /// current provider transformer advertises the Codex response-header
+    /// contract. The API layer's header forwarding is a registered gap (C094).
+    /// </summary>
+    public bool SupportsCodexResponseHeaders()
+        => _current is ISupportsCodexResponseHeaders supports
+            && supports.SupportsCodexResponseHeaders();
 
     /// <summary>
     /// Port of p.getCustomizedExecutor's final step (outbound.go:900-909):

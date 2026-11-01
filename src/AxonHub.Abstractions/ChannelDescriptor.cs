@@ -42,4 +42,10 @@ public sealed record ChannelDescriptor
     /// Raw <c>settings</c> jsonb text, exactly as stored by the reference.
     /// </summary>
     public string? Settings { get; init; }
+
+    /// <summary>
+    /// Ent <c>default_test_model</c>. Codex channels use it as the main model of
+    /// the image-generation tool (biz.buildCodexOutbound).
+    /// </summary>
+    public string DefaultTestModel { get; init; } = string.Empty;
 }

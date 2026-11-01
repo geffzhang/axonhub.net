@@ -477,6 +477,50 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
         Assert.Equal(2502L, roundRobin[0].ChannelId);
     }
 
+    [Theory]
+    [InlineData(
+        "select-a",
+        """["gpt-6-sol","select-a"]""",
+        " main ",
+        """{"modelMappings":[{"from":"main","to":"gpt-6-sol"}]}""",
+        "gpt-6-sol")]
+    [InlineData(
+        "select-b",
+        """["gpt-6-sol","select-b"]""",
+        "MAIN",
+        """{"lowercaseModelId":true,"modelMappings":[{"from":"main","to":"gpt-6-sol"}]}""",
+        "gpt-6-sol")]
+    [InlineData("select-c", """["gpt-6-sol","select-c"]""", "  gpt-6-sol  ", null, "gpt-6-sol")]
+    [InlineData("select-d", """["gpt-6-sol","select-d"]""", "unknown-model", null, "unknown-model")]
+    public async Task DefaultTestModelIsTrimmedAndResolvedThroughModelEntries(
+        string model,
+        string supportedModels,
+        string defaultTestModel,
+        string? settings,
+        string want)
+    {
+        // Port of TestCodexChannel_ImageMainModelUsesDefaultTestModel's model
+        // resolution: buildCodexOutbound trims default_test_model and maps it
+        // through the channel's model entries (ChooseModel), keeping the trimmed
+        // value when the channel does not support it.
+        fixture.Channels.Set(new ChannelDescriptor
+        {
+            Id = 2601,
+            Name = "codex",
+            OrderingWeight = 100,
+            Type = "codex",
+            SupportedModels = supportedModels,
+            DefaultTestModel = defaultTestModel,
+            Settings = settings,
+        });
+
+        var result = await Pool(model).SelectAsync(
+            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
+
+        Assert.Single(result);
+        Assert.Equal(want, result[0].DefaultTestModel);
+    }
+
     private static ChannelDescriptor NewChannel(
         long id,
         string name,

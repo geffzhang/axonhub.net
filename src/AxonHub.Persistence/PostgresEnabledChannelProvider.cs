@@ -28,6 +28,7 @@ public sealed class PostgresEnabledChannelProvider(IAxonHubDbContextFactory dbFa
             DisabledApiKeys = channel.DisabledApiKeys,
             SupportedModels = channel.SupportedModels,
             Settings = channel.Settings,
+            DefaultTestModel = channel.DefaultTestModel,
         })];
     }
 }

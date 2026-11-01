@@ -242,7 +242,18 @@ public sealed class ChatCompletionOrchestrator
             throw TransformerErrors.InvalidModel(model);
         }
 
-        var outbound = new PersistentOutboundTransformer(candidates, _timeProvider, _metrics);
+        // Codex OAuth channels refresh their token through the shared executor;
+        // the reference uses the channel's proxy-aware HTTP client instead
+        // (proxy configuration is not ported, C094).
+        var outbound = new PersistentOutboundTransformer(
+            candidates,
+            _timeProvider,
+            _metrics,
+            (candidate, request, now) => ChannelOutboundFactory.Create(
+                candidate,
+                request,
+                now,
+                _executor));
 
         // orchestrator.go mounts injectPrompts then protectPrompts as inbound
         // middlewares; the reference reads the enabled rules from its live

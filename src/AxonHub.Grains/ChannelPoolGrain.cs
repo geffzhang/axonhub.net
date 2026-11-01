@@ -178,6 +178,7 @@ public sealed class ChannelPoolGrain(
                 OverrideSettings = ChannelOverrideSettings.Parse(candidate.Channel.Settings),
                 RateLimitSettings = candidate.RateLimit,
                 PassThroughSettings = ChannelPassThroughSettings.Parse(candidate.Channel.Settings),
+                DefaultTestModel = ResolveDefaultTestModel(candidate.Channel),
             };
         }
 
@@ -191,6 +192,22 @@ public sealed class ChannelPoolGrain(
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Port of the default-test-model resolution at the start of
+    /// buildCodexOutbound (channel_llm.go:304-317): trim, then map through the
+    /// channel's model entries; an unsupported model keeps its trimmed value.
+    /// </summary>
+    private static string ResolveDefaultTestModel(ChannelDescriptor channel)
+    {
+        var model = channel.DefaultTestModel.Trim();
+        if (model.Length == 0)
+        {
+            return model;
+        }
+
+        return ChannelModelEntries.ChooseModel(channel, model) ?? model;
     }
 
     private static LoadBalancerStrategy ResolveStrategy(string? strategy) => strategy switch

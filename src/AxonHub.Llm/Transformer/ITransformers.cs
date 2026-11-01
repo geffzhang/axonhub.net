@@ -82,6 +82,19 @@ public interface IPassThroughBodyPolicy
 }
 
 /// <summary>
+/// Optional marker recognising the official Codex response-header contract.
+/// The reference asserts it structurally inside
+/// <c>PersistentOutboundTransformer.SupportsCodexResponseHeaders</c>
+/// (internal/server/orchestrator/outbound.go:505-510); the port keeps the same
+/// structural assertion through this interface.
+/// </summary>
+public interface ISupportsCodexResponseHeaders
+{
+    /// <summary>Whether the transformer forwards Codex session/turn response headers.</summary>
+    bool SupportsCodexResponseHeaders();
+}
+
+/// <summary>
 /// Port of transformer.VideoTaskOutbound (llm/transformer/interfaces.go:75-82):
 /// the optional extension for outbound transformers that support video task
 /// query/delete operations (async task model).

@@ -118,6 +118,150 @@ public static class ChannelCredentials
         return keys;
     }
 
+    /// <summary>
+    /// Port of objects.ChannelCredentials.IsOAuth (internal/objects/channel.go:446-458):
+    /// an <c>oauth</c> object with a non-empty access token, or the legacy
+    /// <c>apiKey</c> field holding OAuth JSON.
+    /// </summary>
+    public static bool IsOAuth(string? credentialsJson)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return false;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(credentialsJson);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var legacyApiKey = string.Empty;
+            var oauthPresent = false;
+
+            foreach (var property in root.EnumerateObject())
+            {
+                switch (FoldAscii(property.Name))
+                {
+                    case "apikey":
+                        if (property.Value.ValueKind == JsonValueKind.String)
+                        {
+                            legacyApiKey = property.Value.GetString() ?? string.Empty;
+                        }
+
+                        break;
+                    case "oauth":
+                        oauthPresent = property.Value.ValueKind == JsonValueKind.Object
+                            && HasNonEmptyAccessToken(property.Value);
+                        break;
+                }
+            }
+
+            return oauthPresent
+                || (legacyApiKey.Length > 0 && LooksLikeOAuthJson(legacyApiKey));
+        }
+    }
+
+    /// <summary>
+    /// The raw <c>oauth</c> object of the credentials document, or null when the
+    /// document has none. This is the value <c>buildCodexOutbound</c> re-marshals
+    /// into OAuth credentials; a non-object value means Ent would have failed to
+    /// decode the channel, so it is treated as absent here (C013).
+    /// </summary>
+    public static string? GetOAuthObjectJson(string? credentialsJson)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return null;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(credentialsJson);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            string? oauthJson = null;
+            foreach (var property in root.EnumerateObject())
+            {
+                if (FoldAscii(property.Name) == "oauth")
+                {
+                    // Go's decoder lets the last duplicate key win.
+                    oauthJson = property.Value.ValueKind == JsonValueKind.Object
+                        ? property.Value.GetRawText()
+                        : null;
+                }
+            }
+
+            return oauthJson;
+        }
+    }
+
+    /// <summary>The legacy <c>apiKey</c> string of the credentials document (may hold OAuth JSON).</summary>
+    public static string GetLegacyApiKey(string? credentialsJson)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return string.Empty;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(credentialsJson);
+        }
+        catch (JsonException)
+        {
+            return string.Empty;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return string.Empty;
+            }
+
+            var apiKey = string.Empty;
+            foreach (var property in root.EnumerateObject())
+            {
+                if (FoldAscii(property.Name) == "apikey"
+                    && property.Value.ValueKind == JsonValueKind.String)
+                {
+                    // Go's decoder lets the last duplicate key win.
+                    apiKey = property.Value.GetString() ?? string.Empty;
+                }
+            }
+
+            return apiKey;
+        }
+    }
+
     private static List<string> ActiveDisabledKeys(string? disabledJson, DateTimeOffset now)
     {
         var disabled = new HashSet<string>(StringComparer.Ordinal);
@@ -220,7 +364,11 @@ public static class ChannelCredentials
     {
         foreach (var property in oauth.EnumerateObject())
         {
-            if (FoldAscii(property.Name) == "accesstoken"
+            // Go's decoder binds a key to either the struct field name or its
+            // JSON tag, case-insensitively: both "AccessToken" (folded to
+            // "accesstoken") and the tag "access_token" reach the field.
+            var name = FoldAscii(property.Name);
+            if ((name == "access_token" || name == "accesstoken")
                 && property.Value.ValueKind == JsonValueKind.String
                 && !string.IsNullOrEmpty(property.Value.GetString()))
             {

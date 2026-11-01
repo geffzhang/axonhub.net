@@ -33,6 +33,23 @@ public static class ChannelModelEntries
         PropertyNameCaseInsensitive = true,
     };
 
+    /// <summary>
+    /// Port of <c>biz.Channel.ChooseModel</c> (channel_llm.go:95-104): resolves a
+    /// request model to the upstream model this channel would send, or null when
+    /// the channel does not support it. LowercaseModelID lowercases the lookup
+    /// key, matching the lowercased entry keys <see cref="Build"/> produces.
+    /// </summary>
+    public static string? ChooseModel(ChannelDescriptor channel, string model)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(model);
+
+        var settings = ParseSettings(channel);
+        var key = settings?.LowercaseModelId == true ? model.ToLowerInvariant() : model;
+
+        return Build(channel).TryGetValue(key, out var entry) ? entry.ActualModel : null;
+    }
+
     public static Dictionary<string, ChannelModelEntry> Build(ChannelDescriptor channel)
     {
         var supportedModels = ParseSupportedModels(channel);
