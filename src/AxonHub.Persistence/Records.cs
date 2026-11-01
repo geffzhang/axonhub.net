@@ -222,8 +222,27 @@ public sealed class TraceRecord
     /// <summary>Project that owns the trace.</summary>
     public long ProjectId { get; set; }
 
-    /// <summary>Thread the trace belongs to; null until the thread middleware is ported.</summary>
+    /// <summary>Thread the trace belongs to; null when the request had no thread header.</summary>
     public long? ThreadId { get; set; }
+}
+
+/// <summary>Row of the reference <c>threads</c> table.</summary>
+public sealed class ThreadRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>Globally unique thread identifier supplied by the client.</summary>
+    public string ThreadId { get; set; } = string.Empty;
+
+    /// <summary>Record status: active (default), archived (hidden), retained (protected from GC).</summary>
+    public string Status { get; set; } = "active";
+
+    /// <summary>Project that owns the thread.</summary>
+    public long ProjectId { get; set; }
 }
 
 /// <summary>Row of the reference <c>projects</c> table.</summary>

@@ -127,6 +127,9 @@ builder.Services.AddSingleton(
 // middleware.WithTrace's persistence half (biz.TraceService.GetOrCreateTrace).
 builder.Services.AddScoped<ITraceStore, TraceStore>();
 
+// middleware.WithThread's persistence half (biz.ThreadService.GetOrCreateThread).
+builder.Services.AddScoped<IThreadStore, ThreadStore>();
+
 // The video task flow (biz/video.go) reads the request/execution/channel rows
 // and persists the polled snapshot through the same stores the write side uses.
 builder.Services.AddScoped<IChannelStore, ChannelStore>();
@@ -171,7 +174,7 @@ app.UseWhen(
         branch.UseMiddleware<ApiKeyAuthMiddleware>();
 
         // routes.go:185-192: WithThread then WithTrace, both after the API key.
-        // Only the trace half is ported; the thread middleware is a gap (C095).
+        branch.UseMiddleware<ThreadMiddleware>();
         branch.UseMiddleware<TraceMiddleware>();
     });
 

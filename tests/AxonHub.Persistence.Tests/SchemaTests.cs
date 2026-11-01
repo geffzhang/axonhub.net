@@ -16,7 +16,7 @@ public sealed class SchemaTests(PostgresFixture fixture)
     [
         "api_keys", "channel_model_prices", "channels", "projects",
         "prompt_protection_rules", "request_executions", "requests", "systems",
-        "traces", "usage_logs", "users",
+        "threads", "traces", "usage_logs", "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -40,6 +40,10 @@ public sealed class SchemaTests(PostgresFixture fixture)
         ["systems"] =
         [
             "id", "created_at", "updated_at", "deleted_at", "key", "value",
+        ],
+        ["threads"] =
+        [
+            "id", "created_at", "updated_at", "thread_id", "status", "project_id",
         ],
         ["traces"] =
         [
@@ -136,6 +140,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["bigint"] = ["id", "deleted_at"],
                 ["timestamp with time zone"] = ["created_at", "updated_at"],
                 ["character varying"] = ["key", "value"],
+            },
+            ["threads"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "project_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["character varying"] = ["thread_id", "status"],
             },
             ["traces"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
@@ -252,6 +262,9 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["api_keys_by_project_id"] = ("api_keys", false, ["project_id"]),
             ["api_keys_by_key"] = ("api_keys", true, ["key"]),
             ["systems_key_key"] = ("systems", true, ["key"]),
+            ["threads_by_project_id"] = ("threads", false, ["project_id"]),
+            ["threads_by_thread_id"] = ("threads", true, ["thread_id"]),
+            ["threads_by_project_id_status"] = ("threads", false, ["project_id", "status"]),
             ["traces_by_project_id"] = ("traces", false, ["project_id"]),
             ["traces_by_trace_id"] = ("traces", true, ["trace_id"]),
             ["traces_by_thread_id"] = ("traces", false, ["thread_id"]),

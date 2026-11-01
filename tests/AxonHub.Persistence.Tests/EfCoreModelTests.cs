@@ -43,7 +43,7 @@ public sealed class EfCoreModelTests(PostgresFixture fixture)
             Assert.Equal(dbColumns, efColumns);
         }
 
-        Assert.Equal(11, tables);
+        Assert.Equal(12, tables);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public sealed class EfCoreModelTests(PostgresFixture fixture)
             }
         }
 
-        Assert.Equal(30, indexes);
+        Assert.Equal(33, indexes);
     }
 
     private sealed class IndexRow

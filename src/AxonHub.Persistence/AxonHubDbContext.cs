@@ -44,6 +44,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<TraceRecord> Traces => Set<TraceRecord>();
 
+    public DbSet<ThreadRecord> Threads => Set<ThreadRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -76,6 +78,7 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureSystem(modelBuilder.Entity<SystemRecord>());
         ConfigurePromptProtectionRule(modelBuilder.Entity<PromptProtectionRuleRecord>());
         ConfigureTrace(modelBuilder.Entity<TraceRecord>());
+        ConfigureThread(modelBuilder.Entity<ThreadRecord>());
     }
 
     private static void ConfigureTrace(EntityTypeBuilder<TraceRecord> builder)
@@ -112,6 +115,40 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         builder.HasIndex(trace => trace.ThreadId).HasDatabaseName("traces_by_thread_id");
         builder.HasIndex(trace => new { trace.ProjectId, trace.Status })
             .HasDatabaseName("traces_by_project_id_status");
+    }
+
+    private static void ConfigureThread(EntityTypeBuilder<ThreadRecord> builder)
+    {
+        builder.ToTable("threads");
+        builder.HasKey(thread => thread.Id);
+        builder.Property(thread => thread.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(thread => thread.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(thread => thread.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(thread => thread.ThreadId)
+            .HasColumnName("thread_id")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(thread => thread.Status)
+            .HasColumnName("status")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(thread => thread.ProjectId)
+            .HasColumnName("project_id")
+            .IsRequired();
+
+        builder.HasIndex(thread => thread.ProjectId).HasDatabaseName("threads_by_project_id");
+        builder.HasIndex(thread => thread.ThreadId)
+            .HasDatabaseName("threads_by_thread_id")
+            .IsUnique();
+        builder.HasIndex(thread => new { thread.ProjectId, thread.Status })
+            .HasDatabaseName("threads_by_project_id_status");
     }
 
     private static void ConfigurePromptProtectionRule(

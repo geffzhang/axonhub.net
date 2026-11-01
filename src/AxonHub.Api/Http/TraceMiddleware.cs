@@ -19,8 +19,8 @@ namespace AxonHub.Api.Http;
 /// Trace persistence failures are non-blocking: the resolved id and response
 /// aliases stay visible, exactly like the reference's log-and-continue branch.
 /// The reference logs those failures with slog; the port has no logging seam
-/// (C095). The thread middleware that populates <see cref="ThreadContext"/> is
-/// not ported, so <c>thread_id</c> is only set when a caller publishes one.
+/// (C095). <see cref="ThreadMiddleware"/> runs first and publishes the thread id
+/// consumed here, so a request with the thread header stores <c>thread_id</c>.
 /// </remarks>
 public sealed class TraceMiddleware(RequestDelegate next, TracingOptions options)
 {
