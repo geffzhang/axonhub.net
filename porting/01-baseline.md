@@ -675,11 +675,11 @@ GET 复用 `VideoInboundTransformer` 渲染统一响应）、`POST /v1/videos` �
 `IRequestStore.GetByExternalIdAndProjectAsync` /
 `UpdateStatusExternalIdAndResponseBodyAsync` 与
 `IRequestExecutionStore.ListByRequestIdDescAsync`。差异登记 C082–C085；
-C010 的 video 端点接线随之闭合（doubao / zenmux 视频变换器仍为 C010 的既定裁剪）。
+C010 的 video 端点接线随之闭合（doubao 视频变换器由第 43 节闭合；zenmux 仍为 C010 的既定裁剪）。
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
-| 服务层（对照 `video_test.go` 的 7 个测试函数）：external_id + project 作用域查询（GET/DELETE 跨项目均 not found）、GET 任务并落轮询快照、最新执行格式优先、跳过无 provider 任务关联的执行、非 video 格式拒绝（错误文案逐字）、通道类型回退、doubao 回退在本实现不受支持（C082）、DELETE 上游删除 + 本地 canceled、缺 external_id / channel_id / 通道 / 请求、执行查询失败包装、快照写失败非致命、状态映射表 | `tests/AxonHub.Api.Tests/VideoServiceTests.cs` | 23 |
+| 服务层（对照 `video_test.go` 的 7 个测试函数）：external_id + project 作用域查询（GET/DELETE 跨项目均 not found）、GET 任务并落轮询快照、最新执行格式优先、跳过无 provider 任务关联的执行、非 video 格式拒绝（错误文案逐字）、通道类型回退、doubao 回退解析出 Seedance 出站（第 43 节，C105）、DELETE 上游删除 + 本地 canceled、缺 external_id / channel_id / 通道 / 请求、执行查询失败包装、快照写失败非致命、状态映射表 | `tests/AxonHub.Api.Tests/VideoServiceTests.cs` | 23 |
 | GET/DELETE 端点胶水：200 线路回写（status 归一化、秒数、进度、时间戳）、400 `invalid id`、500 错误信封（`ent: request not found`）、DELETE 204 与本地 canceled | `tests/AxonHub.Api.Tests/VideoTaskEndpointTests.cs` | 6 |
 | POST /v1/videos 路由：空 body 400、缺 model / prompt → 400 `invalid_request_error`（`invalid request: …` 文案）、成功创建（上游 `/videos` 线路形状、metadata 回显的 model/prompt、Bearer、200 渲染） | `tests/AxonHub.Api.Tests/VideoEndpointTests.cs` | 4 |
 | 持久化接缝：external_id + project 作用域查询（同 id 跨项目）、轮询快照更新、desc 排序（id 决定顺序）、缺行报告 | `tests/AxonHub.Persistence.Tests/RequestStoreTests.cs`、`RequestExecutionStoreTests.cs` | 3 |
@@ -1563,6 +1563,78 @@ URL 下载转 base64、data URL 嗅探）、`src/AxonHub.Llm/Transformer/Shared/
 `AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
 合计 3082 增至 3130。差异条目新增 C104（已接受）。
 
+## 43. Doubao / Volcengine 出站、Seedance 客户端面、通道接线与端点（108 例，2026-11-01）
+
+参照路线：`llm/transformer/doubao/outbound.go:23-31`（Config）、`:52-68`
+（旧构造：base URL / API key 为空文案）、`:70-115`（`NewOutboundTransformerWithConfig`：
+nil → `invalid Doubao transformer configuration: config is nil`；raw URL 的
+`##` 后缀与 EndpointPath 原样；默认 `NormalizeBaseURL(..., "v3")`；内嵌
+`openai.Config{PlatformOpenAI, ReasoningFieldContent}`，失败包 `failed to create
+Doubao outbound transformer`）、`:117-130`（Doubao Request / Thinking 扩展）、
+`:132-237`（TransformRequest：按 RequestType 分派 chat / embedding / image /
+video，compact 拒绝，其余 `<type> is not supported`；chat 委托内嵌 OpenAI 后
+删除 metadata，metadata.user_id 取 6–128 rune 写入 user_id（不足 6 省略、超过
+128 截断），metadata.request_id 缺省 `req_<unix>`，以 sjson 风格补丁追加到
+请求体末尾，顺序 user_id 再 request_id）、`:239-337`（buildImageGenerationAPIRequest：
+model/prompt/response_format `b64_json`/stream false，image 单图字符串或多图
+data URL 数组，n、size、quality `hd` → `guidance_scale` 7.5 / `standard` → 2.5、
+response_format 覆盖、user，POST `{base}/images/generations`，metadata model）、
+`:339-350`（图片嗅探未知回退 `image/png`）、`:352-360`（TransformResponse 按
+embedding / video / 默认委托分派）；`embedding.go:15-31`（多模态请求结构声明
+顺序 model/input/encoding_format/dimensions）、`:34-78`（字符串与字符串数组
+映射 text 项，POST `{base}/embeddings/multimodal`，Bearer）、`:81-104`（响应
+结构）、`:107-165`（响应映射：data 单元素 index 0、usage 仅在 prompt>0 或
+total>0、nil 响应与 HTTP≥400 分支、空 body 与 `failed to unmarshal embedding
+response:` 前缀）、`:169-188`（buildMultimodalInput）；`video_outbound.go:18-136`
+（Seedance create：Go map 排序请求体 model/content/duration 四舍五入/ratio/
+resolution/frames/seed/generate_audio/camera_fixed/watermark/draft/service_tier/
+execution_expires_after，POST `{base}/contents/generations/tasks`，metadata
+model）、`:138-182`（size → ratio/resolution 推断表与 parseSize）、`:184-203`
+（GET 任务）、`:205-295`（任务响应：status 小写去空格缺省 `queued`、
+succeeded/failed 的 updated_at 缺省当前秒、content.video_url、usage、duration
+取整、framespersecond、模型回退）、`:296-326`（DELETE 任务与
+llmReqModelOrFallback）；`video_inbound.go:34-50`（Seedance 客户端 create 结构）、
+`:52-113`（Content-Type 缺省 `application/json` 与子串校验、model/content 必填、
+duration 数字转字符串、Messages `[]`、Modalities `["video"]`、Stream false、
+RawRequest 原对象、RequestType video、ApiFormat seedance/video）、`:115-141`
+（客户端响应结构）、`:143-219`（create 仅 `{id}`；get 结构顺序 id/model/status/
+content/usage/created_at/updated_at/seed/resolution/ratio/duration/
+framespersecond/service_tier，updated_at 缺省当前秒，duration 取整，Headers
+Content-Type + Cache-Control）、`:221-232`（流式拒绝、错误委托 OpenAI 信封）；
+`internal/server/biz/channel_llm.go:598-604`（四类通道的 family chat 出站）、
+`:720-728`（doubao/volcengine 主出站）、`:1003-1015`（doubao_anthropic 主出站 =
+Anthropic `PlatformDoubao`；volcengine_anthropic = Direct）、
+`channel_endpoint.go:271-275`（doubao chat + seedance）、`:300-301`（volcengine
+chat、volcengine_anthropic messages）、`internal/ent/channel/channel.go:223-224`
+（类型常量）、`internal/server/biz/video.go:191`（doubao 任务缺省
+seedance/video）、`internal/server/api/doubao.go:42-160` 与
+`internal/server/routes.go:253-258`（`/doubao/v3` 的 create/get/delete；
+gin `c.Data` 只回写 Content-Type，转换器的 Cache-Control 不落到客户端）。
+
+本次移植补齐：`src/AxonHub.Llm/Transformer/Doubao/DoubaoOutboundImage.cs`
+（Doubao 专用图片请求构造：恒 `/images/generations`、guidance_scale 两档、
+b64_json、stream false、单图/多图 data URL、metadata model）、
+`DoubaoOutboundEmbedding.cs` 的 nil 响应守卫，
+`DoubaoOutboundTransformer.cs` 的 `GoStrings` 引用，以及测试侧替换
+`VideoServiceTests` 的 doubao 回退用例（断言解析出
+`DoubaoOutboundTransformer` 与 v3 任务 URL）。既有已实现对参照的
+`outbound.go` / `embedding.go` / `video_outbound.go` / `video_inbound.go`、
+`DoubaoVideoEndpoint`（`/doubao/v3` 三条路由）与 `ChannelOutboundFactory`
+四类通道分支。已接受差异与残余裁剪见 C105。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Doubao chat / 图片 / 构造：base URL 与 API key 文案、`##` raw URL、endpointPath、v3 归一、metadata 删除、user_id 的 6–128 rune 规则与截断、request_id 生成与追加顺序、图片排序请求体逐字节、guidance_scale 两档、单图/多图/未知字节嗅探、prompt 与 image 必填、chat 响应与错误委托 | `tests/AxonHub.Llm.Tests/DoubaoOutboundTransformerTests.cs` | 30 |
+| 多模态 embedding 与 Seedance 出站：字段序请求体、字符串数组映射、token 输入空 input、响应映射与 usage 条件、错误分支；create 排序字节与时长取整、size 推断表与不可映射文案、GET/DELETE 线形状、任务响应状态归一与缺省时间、create 仅 `{id}` | `tests/AxonHub.Llm.Tests/DoubaoEmbeddingAndVideoOutboundTests.cs` | 42 |
+| Seedance 客户端面：create 请求映射（duration 字符串化、Messages/Modalities/Stream/RawRequest）、Content-Type 三态、model/content 必填、解码与根类型文案、create 与 get 响应字节、updated_at 缺省、nil 与流式拒绝、OpenAI 错误信封 | `tests/AxonHub.Llm.Tests/DoubaoVideoInboundTransformerTests.cs` | 20 |
+| 通道接线：doubao/volcengine chat 与 Seedance 共用出站、doubao_anthropic 的 Anthropic Doubao 平台与 chat 回退、volcengine_anthropic 的 Direct 平台与 chat 回退、缺 key 文案 | `tests/AxonHub.Api.Tests/DoubaoChannelWiringTests.cs` | 11 |
+| `/doubao/v3` 端点胶水：GET 渲染 Seedance 任务字节、400 `invalid id`、500 错误信封、DELETE 204 与 v3 上游 URL；VideoService 的 doubao 回退解析 | `tests/AxonHub.Api.Tests/DoubaoVideoEndpointTests.cs`、`VideoServiceTests.cs` | 5 + 1 |
+
+`AxonHub.Llm.Tests` 由 1933 增至 2025，`AxonHub.Api.Tests` 由 1035 增至 1051，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 3130 增至 3238。差异条目新增 C105（已接受），C010 由已解决状态更新，
+C082 的 doubao 裁剪由本切片闭合。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1574,7 +1646,7 @@ URL 下载转 base64、data URL 嗅探）、`src/AxonHub.Llm/Transformer/Shared/
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao / zenmux 视频变换器仍为 C010 裁剪），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、zenmux 仍为 C010 裁剪），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
@@ -1583,5 +1655,5 @@ URL 下载转 base64、data URL 嗅探）、`src/AxonHub.Llm/Transformer/Shared/
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Doubao/Volcengine、Zenmux 系列、GithubCopilot、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104） | 中 | 按 provider 分组后续切片（剩余：Doubao/Volcengine、Zenmux、GithubCopilot、Gemini/Vertex、Antigravity、OpenaiResponses、Commandcode 等） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Zenmux 系列、GithubCopilot、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105） | 中 | 按 provider 分组后续切片（剩余：Zenmux、GithubCopilot、Gemini/Vertex、Antigravity、OpenaiResponses、Commandcode 等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

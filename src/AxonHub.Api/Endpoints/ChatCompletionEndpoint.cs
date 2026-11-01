@@ -32,11 +32,18 @@ public static class ChatCompletionEndpoint
     /// then hands the parsed request over via <paramref name="preReadRequest"/>
     /// and the chosen writer via <paramref name="streamWriter"/>.
     /// </summary>
+    /// <param name="nilResultIsInternalError">
+    /// api.DoubaoHandlers.CreateTask checks that the orchestrator produced a
+    /// response and answers 500 <c>biz.ErrInternal</c> when it did not; the
+    /// shared chat handler returns silently in that state. The Doubao route opts
+    /// into the reference's stricter check.
+    /// </param>
     public static async Task HandleAsync(
         HttpContext context,
         ChatCompletionOrchestrator orchestrator,
         HttpRequestData? preReadRequest = null,
-        StreamWriterDelegate? streamWriter = null)
+        StreamWriterDelegate? streamWriter = null,
+        bool nilResultIsInternalError = false)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(orchestrator);
@@ -132,6 +139,19 @@ public static class ChatCompletionEndpoint
                 stream.Dispose();
                 RecordResponseHeaders(context, orchestrator, requestId);
             }
+
+            return;
+        }
+
+        if (nilResultIsInternalError)
+        {
+            // api/doubao.go:92-95: result.ChatCompletion == nil → 500 ErrInternal.
+            await WriteJsonErrorAsync(
+                context,
+                500,
+                GoHttpStatus.Text(500),
+                "server internal error, please try again later",
+                cancellationToken);
         }
     }
 

@@ -13,6 +13,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
+using AxonHub.Llm.Transformer.Doubao;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
@@ -167,7 +168,8 @@ app.UseWhen(
     static context => context.Request.Path.StartsWithSegments("/v1")
         || context.Request.Path.StartsWithSegments("/anthropic/v1")
         || context.Request.Path.StartsWithSegments("/jina/v1")
-        || context.Request.Path.StartsWithSegments("/typesafe/v1"),
+        || context.Request.Path.StartsWithSegments("/typesafe/v1")
+        || context.Request.Path.StartsWithSegments("/doubao/v3"),
     static branch =>
     {
         branch.UseMiddleware<IpBlocklistMiddleware>();
@@ -258,6 +260,13 @@ static Task HandleVideoGenerationAsync(
 app.MapPost("/v1/videos", HandleVideoGenerationAsync);
 app.MapGet("/v1/videos/{id}", VideoEndpoint.GetVideoAsync);
 app.MapDelete("/v1/videos/{id}", VideoEndpoint.DeleteVideoAsync);
+
+// Doubao/Volcengine Seedance tasks (routes.go:253-258): creation reuses the
+// shared chat handler with the Doubao video inbound transformer; GET/DELETE run
+// the biz.VideoService flow through the same Seedance rendering.
+app.MapPost("/doubao/v3/contents/generations/tasks", DoubaoVideoEndpoint.CreateTaskAsync);
+app.MapGet("/doubao/v3/contents/generations/tasks/{id}", DoubaoVideoEndpoint.GetTaskAsync);
+app.MapDelete("/doubao/v3/contents/generations/tasks/{id}", DoubaoVideoEndpoint.DeleteTaskAsync);
 
 // Embeddings and moderations (routes.go:211-212): OpenAI.CreateEmbedding and
 // OpenAI.CreateModeration delegate to the same chat handler with the dedicated

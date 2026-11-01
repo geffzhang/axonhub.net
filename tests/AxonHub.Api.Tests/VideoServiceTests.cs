@@ -4,6 +4,7 @@ using AxonHub.Api.Auth;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Transformer.Doubao;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Persistence;
 
@@ -226,21 +227,23 @@ public sealed class VideoServiceTests
     }
 
     [Fact]
-    public async Task LoadTaskRejectsDoubaoFallbackInThisBuild()
+    public async Task LoadTaskResolvesDoubaoSeedanceOutboundWithoutPersistedFormat()
     {
-        // The reference falls back to seedance/video and resolves the doubao
-        // outbound; the doubao video transformer is the deferred scope cut
-        // (C010), so the port reports the unsupported-channel error instead.
+        // biz/video.go falls back to seedance/video for doubao channels and
+        // looks that key up in the doubao channel's outbound map
+        // (channel_endpoint.go:271-275), which carries the Doubao transformer.
         var harness = NewHarness();
         harness.Channels.Add(OpenAiChannel(type: "doubao"));
         harness.Requests.Add(TaskRow());
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => harness.Service.LoadTaskAsync(1));
+        var (_, outbound) = await harness.Service.LoadTaskAsync(1);
 
-        Assert.Equal(
-            "server internal error, please try again later: channel does not support video task operations",
-            error.Message);
+        var doubao = Assert.IsType<DoubaoOutboundTransformer>(outbound);
+        var request = doubao.BuildGetVideoTaskRequest("task-1");
+        Assert.Equal("GET", request.Method);
+        Assert.Equal("http://upstream.test/v3/contents/generations/tasks/task-1", request.Url);
+        Assert.Equal(ApiFormats.SeedanceVideo, request.ApiFormat);
+        Assert.Equal(RequestTypes.Video, request.RequestType);
     }
 
     [Fact]

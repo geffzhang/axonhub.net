@@ -12,6 +12,7 @@ using AxonHub.Llm.Transformer.Bailian;
 using AxonHub.Llm.Transformer.Cerebras;
 using AxonHub.Llm.Transformer.Cline;
 using AxonHub.Llm.Transformer.DeepSeek;
+using AxonHub.Llm.Transformer.Doubao;
 using AxonHub.Llm.Transformer.Fireworks;
 using AxonHub.Llm.Transformer.Longcat;
 using AxonHub.Llm.Transformer.Minimax;
@@ -47,7 +48,8 @@ namespace AxonHub.Api.Orchestration;
 /// <c>zhipu_anthropic</c>, <c>xiaomi</c>, <c>xiaomi_anthropic</c>,
 /// <c>minimax</c>, <c>minimax_anthropic</c>, <c>bailian</c>,
 /// <c>bailian_responses</c>, <c>bailian_anthropic</c>,
-/// <c>moonshot_coding</c> and <c>modelscope</c>
+/// <c>moonshot_coding</c>, <c>modelscope</c>, <c>doubao</c>,
+/// <c>volcengine</c>, <c>doubao_anthropic</c> and <c>volcengine_anthropic</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -123,6 +125,14 @@ public static class ChannelOutboundFactory
     public const string MoonshotCodingChannelType = "moonshot_coding";
 
     public const string ModelscopeChannelType = "modelscope";
+
+    public const string DoubaoChannelType = "doubao";
+
+    public const string VolcengineChannelType = "volcengine";
+
+    public const string DoubaoAnthropicChannelType = "doubao_anthropic";
+
+    public const string VolcengineAnthropicChannelType = "volcengine_anthropic";
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
@@ -457,6 +467,35 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
             }),
+            // channel_llm.go:720-728: doubao/volcengine install the Doubao
+            // outbound as the channel's primary transformer; every default
+            // endpoint (chat plus seedance/video, channel_endpoint.go:271-275)
+            // shares it.
+            DoubaoChannelType or VolcengineChannelType
+                => CreateDoubaoOutbound(candidate, provider),
+            // channel_llm.go:1003-1015: doubao_anthropic speaks Anthropic
+            // Messages through the Doubao platform; the family chat outbound
+            // serves the other endpoints (channel_llm.go:598-604).
+            DoubaoAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+                => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Doubao,
+                    BaseUrl = candidate.BaseUrl ?? string.Empty,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            DoubaoAnthropicChannelType => CreateDoubaoOutbound(candidate, provider),
+            // channel_llm.go:898: volcengine_anthropic uses the plain Anthropic
+            // direct platform for Messages.
+            VolcengineAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+                => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Direct,
+                    BaseUrl = candidate.BaseUrl ?? string.Empty,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            VolcengineAnthropicChannelType => CreateDoubaoOutbound(candidate, provider),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
@@ -482,6 +521,23 @@ public static class ChannelOutboundFactory
             SessionIdProvider = () => request.RawRequest?.SessionId,
         });
     }
+
+    /// <summary>
+    /// Port of the doubao/volcengine branch of <c>newProviderChatOutbound</c>
+    /// (channel_llm.go:598-604). The default chat endpoint passes an empty
+    /// endpoint path, so the transformer normalizes the base URL to the Ark v3
+    /// route. The reference hands the channel's proxy-aware HTTP client to the
+    /// transformer; the port has no per-channel proxy configuration yet (C105).
+    /// </summary>
+    private static DoubaoOutboundTransformer CreateDoubaoOutbound(
+        ChannelCandidate candidate,
+        ChannelApiKeyProvider apiKeyProvider)
+        => new(new DoubaoOutboundConfig
+        {
+            BaseUrl = candidate.BaseUrl ?? string.Empty,
+            ApiKeyProvider = apiKeyProvider,
+            ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+        });
 
     /// <summary>Port of the claudecode branch of buildChannelWithTransformer.</summary>
     private static ClaudeCodeOutboundTransformer CreateClaudeCodeOutbound(

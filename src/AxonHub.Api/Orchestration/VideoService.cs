@@ -21,9 +21,10 @@ namespace AxonHub.Api.Orchestration;
 /// the ent client on the request context and looks the outbound up in
 /// <c>ch.Outbounds[videoKey]</c>. The port reads the same rows through the
 /// stores and rebuilds the outbound from the channel's stored configuration
-/// through <see cref="ChannelOutboundFactory"/>; only the <c>openai</c> channel
-/// type carries the <c>openai/video</c> key in this build (the doubao/zenmux
-/// video transformers are the deferred scope cut, C010).
+/// through <see cref="ChannelOutboundFactory"/>; in this build the <c>openai</c>
+/// channel type carries the <c>openai/video</c> key and the <c>doubao</c> type
+/// the <c>seedance/video</c> key (the zenmux video transformer is the deferred
+/// scope cut, C010).
 /// </remarks>
 public sealed class VideoService(
     IRequestStore requestStore,
@@ -39,9 +40,6 @@ public sealed class VideoService(
     private const string StatusCanceled = "canceled";
 
     private const string InternalError = "server internal error, please try again later";
-
-    /// <summary>The doubao channel type uses the seedance/video format by default.</summary>
-    private const string DoubaoChannelType = "doubao";
 
     /// <summary>Port of GetTask: fetch the provider task, then persist the snapshot.</summary>
     public async Task<LlmResponse> GetTaskAsync(long requestId, CancellationToken cancellationToken = default)
@@ -182,7 +180,7 @@ public sealed class VideoService(
 
         if (videoKey.Length == 0)
         {
-            videoKey = channel.Type == DoubaoChannelType
+            videoKey = channel.Type == ChannelOutboundFactory.DoubaoChannelType
                 ? ApiFormats.SeedanceVideo
                 : ApiFormats.OpenAIVideo;
         }
@@ -194,12 +192,16 @@ public sealed class VideoService(
         }
 
         // The reference looks the format up in the channel's outbound map
-        // (ch.Outbounds[videoKey]). The port's factory builds one transformer
-        // per channel type, so mirror the map lookup explicitly: only openai
-        // channels carry the openai/video key in this build.
+        // (ch.Outbounds[videoKey], built from the default endpoint table in
+        // channel_endpoint.go). The port has no endpoint records, so mirror the
+        // lookup explicitly: an openai channel maps openai/video and a doubao
+        // channel maps seedance/video to the outbound built for that channel
+        // type (channel_endpoint.go:271-275 vs openAICompatibleDefaultEndpoints).
         IVideoTaskOutbound? outbound = null;
-        if (channel.Type == ChannelOutboundFactory.OpenAiChannelType
-            && videoKey == ApiFormats.OpenAIVideo)
+        if ((channel.Type == ChannelOutboundFactory.OpenAiChannelType
+                && videoKey == ApiFormats.OpenAIVideo)
+            || (channel.Type == ChannelOutboundFactory.DoubaoChannelType
+                && videoKey == ApiFormats.SeedanceVideo))
         {
             var candidate = new ChannelCandidate
             {
