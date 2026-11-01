@@ -407,8 +407,12 @@ public static class HttpRequestReader
     /// <summary>Sentinel so the decoders can wrap the cap with their own prefix.</summary>
     private sealed class RequestBodyTooLargeException() : InvalidOperationException("request body too large");
 
-    /// <summary>Canonicalizes header names like textproto.CanonicalMIMEHeaderKey.</summary>
-    private static Dictionary<string, List<string>> CanonicalizeHeaders(IHeaderDictionary headers)
+    /// <summary>
+    /// Canonicalizes header names like textproto.CanonicalMIMEHeaderKey. Trace
+    /// extraction needs the same shape the wire request carries, because the
+    /// OpenCode and Codex header readers look keys up by canonical name.
+    /// </summary>
+    public static Dictionary<string, List<string>> CanonicalizeHeaders(IHeaderDictionary headers)
     {
         var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (key, values) in headers)

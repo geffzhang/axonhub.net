@@ -136,6 +136,9 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             UserAgent = raw.UserAgent,
             ApiKeyId = _identity.ApiKeyId,
             ProjectId = _identity.ProjectId,
+            // persistRequest calls SetTraceID with contexts.GetTrace(ctx).ID, so
+            // the request joins the trace TraceMiddleware persisted.
+            TraceId = _identity.TraceId,
         });
 
         // The HTTP boundary uses the id to write the downstream response

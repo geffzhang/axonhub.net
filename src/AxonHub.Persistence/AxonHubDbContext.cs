@@ -42,6 +42,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<PromptProtectionRuleRecord> PromptProtectionRules => Set<PromptProtectionRuleRecord>();
 
+    public DbSet<TraceRecord> Traces => Set<TraceRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -73,6 +75,43 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureApiKey(modelBuilder.Entity<ApiKeyRecord>());
         ConfigureSystem(modelBuilder.Entity<SystemRecord>());
         ConfigurePromptProtectionRule(modelBuilder.Entity<PromptProtectionRuleRecord>());
+        ConfigureTrace(modelBuilder.Entity<TraceRecord>());
+    }
+
+    private static void ConfigureTrace(EntityTypeBuilder<TraceRecord> builder)
+    {
+        builder.ToTable("traces");
+        builder.HasKey(trace => trace.Id);
+        builder.Property(trace => trace.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(trace => trace.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(trace => trace.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(trace => trace.TraceId)
+            .HasColumnName("trace_id")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(trace => trace.Status)
+            .HasColumnName("status")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(trace => trace.ProjectId)
+            .HasColumnName("project_id")
+            .IsRequired();
+        builder.Property(trace => trace.ThreadId).HasColumnName("thread_id");
+
+        builder.HasIndex(trace => trace.ProjectId).HasDatabaseName("traces_by_project_id");
+        builder.HasIndex(trace => trace.TraceId)
+            .HasDatabaseName("traces_by_trace_id")
+            .IsUnique();
+        builder.HasIndex(trace => trace.ThreadId).HasDatabaseName("traces_by_thread_id");
+        builder.HasIndex(trace => new { trace.ProjectId, trace.Status })
+            .HasDatabaseName("traces_by_project_id_status");
     }
 
     private static void ConfigurePromptProtectionRule(

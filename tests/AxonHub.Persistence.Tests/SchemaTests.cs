@@ -16,7 +16,7 @@ public sealed class SchemaTests(PostgresFixture fixture)
     [
         "api_keys", "channel_model_prices", "channels", "projects",
         "prompt_protection_rules", "request_executions", "requests", "systems",
-        "usage_logs", "users",
+        "traces", "usage_logs", "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -40,6 +40,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
         ["systems"] =
         [
             "id", "created_at", "updated_at", "deleted_at", "key", "value",
+        ],
+        ["traces"] =
+        [
+            "id", "created_at", "updated_at", "trace_id", "status", "project_id",
+            "thread_id",
         ],
         ["channel_model_prices"] =
         [
@@ -131,6 +136,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["bigint"] = ["id", "deleted_at"],
                 ["timestamp with time zone"] = ["created_at", "updated_at"],
                 ["character varying"] = ["key", "value"],
+            },
+            ["traces"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "project_id", "thread_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["character varying"] = ["trace_id", "status"],
             },
             ["channel_model_prices"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
@@ -241,6 +252,10 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["api_keys_by_project_id"] = ("api_keys", false, ["project_id"]),
             ["api_keys_by_key"] = ("api_keys", true, ["key"]),
             ["systems_key_key"] = ("systems", true, ["key"]),
+            ["traces_by_project_id"] = ("traces", false, ["project_id"]),
+            ["traces_by_trace_id"] = ("traces", true, ["trace_id"]),
+            ["traces_by_thread_id"] = ("traces", false, ["thread_id"]),
+            ["traces_by_project_id_status"] = ("traces", false, ["project_id", "status"]),
             ["prompt_protection_rules_by_name"] =
                 ("prompt_protection_rules", true, ["name", "deleted_at"]),
             ["requests_by_api_key_id_created_at"] = ("requests", false, ["api_key_id", "created_at"]),

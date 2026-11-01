@@ -90,6 +90,9 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
         Assert.False(request.Stream);
         Assert.Equal(1L, request.ProjectId);
         Assert.Null(request.ApiKeyId);
+
+        // No TraceMiddleware ran, so the request row carries no trace id.
+        Assert.Null(request.TraceId);
         Assert.Equal("10.0.0.7", request.ClientIp);
         Assert.Equal("xunit", request.UserAgent);
         Assert.Equal("client-persist", BodyModel(request.RequestBody));
@@ -170,7 +173,7 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
         };
         var recorder = new RecordingRequestChainRecorder();
         var orchestrator = NewOrchestrator(executor, FastPolicy(), recorder);
-        var identity = new RequestIdentity(9, 77);
+        var identity = new RequestIdentity(9, 77) { TraceId = 4242L };
 
         var result = await orchestrator.ProcessAsync(
             ClientRequest("persist-identity"),
@@ -182,6 +185,10 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
         var request = Assert.Single(recorder.Requests);
         Assert.Equal(9L, request.ProjectId);
         Assert.Equal(77L, request.ApiKeyId);
+
+        // WithTrace publishes the trace row on the identity the persistence
+        // middleware reads (persistRequest's SetTraceID in the reference).
+        Assert.Equal(4242L, request.TraceId);
 
         var execution = Assert.Single(recorder.Executions);
         Assert.Equal(9L, execution.ProjectId);

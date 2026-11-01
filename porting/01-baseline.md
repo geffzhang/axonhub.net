@@ -998,6 +998,47 @@ JSON 解码文案、日志与单飞原语差异；C094 登记 codex 的端点表
 持久化/自动刷新、代理感知 client、API 层 codex 响应头转发等真实缺口，并关闭 C091
 中的 codex `AllowPassThroughBody` 缺口。
 
+## 30. trace 子系统基础（60 例，2026-11-01）
+
+参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、
+`AH-*` 头名回退）、`internal/server/middleware/logging.go`（`WithLoggingTracing` 的请求 ID
+与 trace ID 生成）、`internal/server/middleware/trace.go`（`WithTrace` 的全部提取与持久化
+分支）、`internal/server/biz/trace.go`（`GetOrCreateTrace`）、`internal/ent/schema/trace.go`
+与 `internal/ent/migrate/schema.go`（`traces` 表与四个索引）、`conf/conf.go:227-234`
+（三个客户端标记默认开启）、`internal/server/routes.go:63`、`:185-192`（中间件顺序）、
+`llm/transformer/opencode/headers.go`、`llm/transformer/openai/codex/headers.go` 的会话头
+读取、`llm/transformer/anthropic/claudecode/userid.go` 的解析半程。参照测试：
+`middleware/logging_test.go`、`middleware/trace_test.go`、`biz/trace_test.go`、
+`claudecode/userid_test.go`。
+
+端口新增：`TracingOptions`（`FromConfiguration` 绑定 `Server:Trace`，空头名回退
+`AH-Thread-Id` / `AH-Trace-Id` / `AH-Request-Id`，三个客户端标记默认 true）、
+`TraceMiddleware`（`GetTraceIdFromHeader`、`TryExtractTraceIdFromClaudeCodeRequestAsync`、
+`TryGetTraceIdFromBodyAsync`、`IsNonMessageEndpoint`）、`ITraceStore` / `TraceStore`
+（Dapper 读 + EF 写，唯一索引冲突后按 `(trace_id, project_id)` 重读）、`traces` 表的幂等
+DDL 与 EF 模型、`TraceContext` / `ThreadContext` 容器接缝、`RequestIdentity.TraceId`。
+接线：`ChatCompletionEndpoint` 把解析出的 trace id 写入 HTTP 请求的 `SessionId` 接缝
+（等价 `shared.WithSessionID`），codex 出站经 `RawRequest.SessionId` 写入 `Session-Id`；
+`RequestChainPersistenceMiddleware` 把 trace 行 id 写入 `requests.trace_id`；
+`Program` 在 `/v1` 族分支按参照顺序挂载 `WithTrace`（`WithThread` 未移植，见 C095）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| trace 配置与请求 ID：`ar-` / `at-` 生成、配置头名、trace 头优先、无中间件无请求 ID | `tests/AxonHub.Api.Tests/RequestTracingMiddlewareTests.cs` | 7 |
+| `TraceMiddleware`：Claude Code 元数据（legacy / v2 / 两条路径 / 仅 POST）、OpenCode 三头与优先级、Codex 三来源与优先级、trace 头与 extra 头、body 字段（扁平 / 嵌套 / 首个命中 / 畸形 JSON）、无 trace 源不落库、日志专用 id 不落库、身份 / 线程传递、trace 行与身份发布、会话发布、响应别名裁空白、同 trace 幂等、非消息端点、持久化失败 fail-open、body 读错误 400 信封、`IsNonMessageEndpoint` 7 例 | `tests/AxonHub.Api.Tests/TraceMiddlewareTests.cs` | 38 |
+| Claude Code 用户 id 解析：legacy、v2 JSON、空 session、非法输入、首尾空白 | `tests/AxonHub.Llm.Tests/ClaudeCodeUserIDTests.cs` | 5 |
+| OpenCode 会话头：当前头、`X-Session-Id`、affinity、优先级、空白回退、trim、缺失 | `tests/AxonHub.Llm.Tests/OpenCodeHeadersTests.cs` | 7 |
+| `TraceStore`：默认列与时间戳、thread 往返、幂等、跨项目唯一与约束后重读、失败后 context 可用、并发单行 | `tests/AxonHub.Persistence.Tests/TraceStoreTests.cs` | 6 |
+| `traces` schema 与 EF 模型：7 列、4 个索引（`trace_id` 唯一）、11 表 / 30 索引 | `tests/AxonHub.Persistence.Tests/SchemaTests.cs`、`EfCoreModelTests.cs` | —（既有用例扩充） |
+| wire 会话与请求行 trace id：codex 出站消费 `RawRequest.SessionId`；`RequestRecord.TraceId` 来自身份 | `tests/AxonHub.Api.Tests/CodexChannelWiringTests.cs`、`RequestChainPersistenceTests.cs` | 1（另 2 处断言） |
+
+合计 60 例（Llm 12、Api 42、Persistence 6）：`AxonHub.Llm.Tests` 由 1364 增至 1376，
+`AxonHub.Api.Tests` 由 892 增至 934，`AxonHub.Persistence.Tests` 由 59 增至 65，
+`AxonHub.Grains.Tests` 保持 92；四个项目合计 2407 增至 2467。C089（请求 ID 与 trace ID
+链路）闭合；C095 登记无日志与 operation name、gjson 数字归一化与路径语法、thread 中间件、
+trace 查询 / GC / GraphQL、trace 粘性 key、claudecode / opencode 出站生成等残余差异；
+C013 与 C062 的 cause 更新为「trace 子系统已落地、provider / Responses 出站接线仍缺」。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1013,8 +1054,9 @@ JSON 解码文案、日志与单飞原语差异；C094 登记 codex 的端点表
 | GraphQL / 前端 | Orleans 侧另建，不复用 Ent / GraphQL | 中 | 后续阶段 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
-| 持久化（channels / projects / users / api_keys / channel_model_prices / requests / request_executions / usage_logs / systems） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
+| 持久化（channels / projects / users / api_keys / channel_model_prices / requests / request_executions / usage_logs / systems / traces） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
 | usage 成本管理面：`channel_model_prices` 写入、reference-id 轮换、版本表与自动定价 | 参照的 `SaveChannelModelPrices` / `channel_model_price_versions` / GraphQL 管理面未移植；端口只有读取路径与基础表（C048） | 中 | 随通道管理面落地 |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
-| 其余 Ent 表（data_storages / traces / prompts / roles 等） | 请求链路四表、鉴权三表与 `systems` 已落；其余表未移植 | 中 | 随对应功能落地 |
+| 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems` 与 `traces`（第 30 节）已落；其余表未移植 | 中 | 随对应功能落地 |
+| trace 子系统：thread 中间件、查询 / GC、GraphQL、trace 粘性 key | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定；thread 中间件、查询 / GC / GraphQL、trace 粘性 key 与 claudecode / opencode 出站生成未移植（C095；粘性 key 见 C013） | 中 | 随管理面 / 权限与通道切片落地 |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

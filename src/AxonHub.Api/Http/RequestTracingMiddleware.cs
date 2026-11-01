@@ -3,41 +3,45 @@ using Microsoft.AspNetCore.Http;
 namespace AxonHub.Api.Http;
 
 /// <summary>
-/// Port of the request-id half of middleware.WithLoggingTracing
-/// (internal/server/middleware/logging.go). The middleware is global in the
-/// reference: it mints an <c>ar-&lt;uuid&gt;</c> id for every request, echoes it
-/// in the configured response header and publishes it on the request context so
-/// handlers can put it in error bodies.
+/// Port of middleware.WithLoggingTracing (internal/server/middleware/logging.go).
+/// The middleware is global in the reference: it resolves a trace id from the
+/// trace header (or mints an <c>at-&lt;uuid&gt;</c> one for log correlation),
+/// mints an <c>ar-&lt;uuid&gt;</c> request id for every request, echoes the
+/// request id in the configured response header and publishes both ids on the
+/// request context so handlers can put them in error bodies.
 /// </summary>
 /// <remarks>
-/// The trace-id half of the middleware (with its Claude Code, Codex and OpenCode
-/// header/body extraction and the tracing middleware that writes trace response
-/// headers) stays unported (C088).
+/// The generated trace id is only a logging correlation id. Persisted tracing
+/// is opted into by <see cref="TraceMiddleware"/> through an explicit source
+/// (header, client marker or configured body field), never by this fallback.
+/// The reference also publishes an operation name (<c>METHOD path</c>) for its
+/// logger; the port has no logging seam (C095).
 /// </remarks>
-public sealed class RequestTracingMiddleware(RequestDelegate next, RequestTracingOptions options)
+public sealed class RequestTracingMiddleware(RequestDelegate next, TracingOptions options)
 {
     public async Task InvokeAsync(HttpContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        var traceId = context.Request.Headers.TryGetValue(options.TraceHeaderName, out var values)
+            && values.Count > 0
+                ? values[0] ?? string.Empty
+                : string.Empty;
+        if (traceId.Length == 0)
+        {
+            traceId = TraceContext.GenerateTraceId();
+        }
+
         var requestId = RequestIds.Generate();
 
         // c.Header(requestHeader, requestID) — set before the handler runs, so
         // error responses carry it too.
-        context.Response.Headers[options.RequestHeader] = requestId;
+        context.Response.Headers[options.RequestHeaderName] = requestId;
         context.Items[RequestIds.HttpContextItemKey] = requestId;
+        TraceContext.SetTraceId(context, traceId);
 
         await next(context).ConfigureAwait(false);
     }
-}
-
-/// <summary>Port of the tracing.Config fields the request-id middleware reads.</summary>
-public sealed record RequestTracingOptions(string RequestHeader)
-{
-    /// <summary>middleware.WithLoggingTracing's fallback header name.</summary>
-    public const string DefaultRequestHeader = "AH-Request-Id";
-
-    public static RequestTracingOptions Default { get; } = new(DefaultRequestHeader);
 }
 
 /// <summary>The request id the reference keeps in <c>contexts</c>.</summary>

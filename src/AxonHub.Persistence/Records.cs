@@ -204,6 +204,28 @@ public sealed class RequestExecutionRecord
     public long RequestId { get; set; }
 }
 
+/// <summary>Row of the reference <c>traces</c> table.</summary>
+public sealed class TraceRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>Globally unique trace identifier configured by the client or a client marker.</summary>
+    public string TraceId { get; set; } = string.Empty;
+
+    /// <summary>Record status: active (default), archived (hidden), retained (protected from GC).</summary>
+    public string Status { get; set; } = "active";
+
+    /// <summary>Project that owns the trace.</summary>
+    public long ProjectId { get; set; }
+
+    /// <summary>Thread the trace belongs to; null until the thread middleware is ported.</summary>
+    public long? ThreadId { get; set; }
+}
+
 /// <summary>Row of the reference <c>projects</c> table.</summary>
 public sealed class ProjectRecord
 {

@@ -102,6 +102,33 @@ public sealed class CodexChannelWiringTests
     }
 
     [Fact]
+    public void CodexOutboundUsesTheWireRequestSessionId()
+    {
+        // ChatCompletionEndpoint copies the trace id published by TraceMiddleware
+        // onto the wire request's session seam; the codex outbound reads it back
+        // through SessionIdProvider (channel_llm.go's buildCodexOutbound wiring).
+        var raw = TestChannels.ChatRequest("gpt-5.4");
+        raw.SessionId = "trace-session";
+        var request = new LlmRequest
+        {
+            Model = "gpt-5.4",
+            ApiFormat = ApiFormats.OpenAIResponse,
+            Messages = [new Message { Role = "user", Content = new MessageContent { Content = "hi" } }],
+            RawRequest = raw,
+        };
+
+        var transformer = Create(Candidate(ChannelOutboundFactory.CodexChannelType), request);
+        var http = transformer.TransformRequest(request);
+
+        Assert.Equal(
+            "trace-session",
+            HttpClientUtils.HeaderGet(http.Headers, CodexHeaders.SessionHeaderHyphen));
+        Assert.Equal(
+            "trace-session",
+            HttpClientUtils.HeaderGet(http.Headers, CodexHeaders.ThreadIdHeader));
+    }
+
+    [Fact]
     public void CodexApiKeyChannelUsesTheApiKeyTokenProvider()
     {
         var transformer = Create(Candidate(ChannelOutboundFactory.CodexChannelType), Request(ApiFormats.OpenAIResponse));

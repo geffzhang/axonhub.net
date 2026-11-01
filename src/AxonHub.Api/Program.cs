@@ -117,13 +117,15 @@ builder.Services.AddScoped<IPromptProtectionRuleProvider, PromptProtectionRuleSe
 builder.Services.AddScoped<IModelSettingsProvider, SystemModelSettingsService>();
 builder.Services.AddScoped<ModelService>();
 
-// server.trace.request_header (conf.go:227 area); middleware.WithLoggingTracing
-// falls back to AH-Request-Id when the value is empty.
-var requestHeader = builder.Configuration["Server:Trace:RequestHeader"];
-builder.Services.AddSingleton(new RequestTracingOptions(
-    string.IsNullOrEmpty(requestHeader)
-        ? RequestTracingOptions.DefaultRequestHeader
-        : requestHeader));
+// server.trace (conf.go:227-234 area): one options instance feeds both
+// middleware.WithLoggingTracing and middleware.WithTrace. Empty header names
+// keep the reference's in-middleware fallbacks (AH-Thread-Id / AH-Trace-Id /
+// AH-Request-Id), and the three client-marker extractors default to enabled.
+builder.Services.AddSingleton(
+    TracingOptions.FromConfiguration(builder.Configuration.GetSection("Server:Trace")));
+
+// middleware.WithTrace's persistence half (biz.TraceService.GetOrCreateTrace).
+builder.Services.AddScoped<ITraceStore, TraceStore>();
 
 // The video task flow (biz/video.go) reads the request/execution/channel rows
 // and persists the polled snapshot through the same stores the write side uses.
@@ -167,6 +169,10 @@ app.UseWhen(
     {
         branch.UseMiddleware<IpBlocklistMiddleware>();
         branch.UseMiddleware<ApiKeyAuthMiddleware>();
+
+        // routes.go:185-192: WithThread then WithTrace, both after the API key.
+        // Only the trace half is ported; the thread middleware is a gap (C095).
+        branch.UseMiddleware<TraceMiddleware>();
     });
 
 // Models (routes.go:209-210 and :250): the OpenAI list/retrieve pair and the

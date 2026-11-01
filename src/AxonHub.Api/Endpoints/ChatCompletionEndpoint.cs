@@ -63,6 +63,13 @@ public static class ChatCompletionEndpoint
             }
         }
 
+        // middleware.WithTrace publishes the resolved trace id as the shared
+        // session id (shared.WithSessionID), which transformers read from the
+        // request context. The port threads it through the wire request's
+        // session seam instead (C062); the codex outbound's SessionIdProvider
+        // and the Responses prompt-cache fallback read it from there.
+        genericRequest.SessionId ??= TraceContext.GetSessionId(context);
+
         if (genericRequest.Body is null || genericRequest.Body.Length == 0)
         {
             await WriteJsonErrorAsync(context, 400, "Bad Request", "Request body is empty", cancellationToken);
