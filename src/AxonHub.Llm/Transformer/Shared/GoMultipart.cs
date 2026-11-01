@@ -364,7 +364,7 @@ public sealed class GoMultipartWriter
 /// lowercased media type plus quoted/unquoted parameters (no RFC 2231
 /// continuation decoding, which the reference never feeds).
 /// </summary>
-public static class GoMimeTypes
+public static partial class GoMimeTypes
 {
     /// <summary>
     /// Parses a Content-Type/Content-Disposition value. Returns false where Go
