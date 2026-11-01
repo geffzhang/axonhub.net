@@ -27,7 +27,8 @@ public sealed class DecisionsOutboundConfig
 /// (llm/transformer/openai/decisions/outbound.go): forwards the raw request body
 /// with only the routed model patched, and wraps the provider's raw answer body.
 /// </summary>
-public sealed class DecisionsOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
+public sealed class DecisionsOutboundTransformer
+    : IOutboundTransformer, IApiKeyProvenance, IPassThroughBodyPolicy
 {
     /// <summary>Go's encoding/json accepts nesting up to 10000 levels.</summary>
     private static readonly JsonDocumentOptions ParseOptions = new() { MaxDepth = 10_000 };
@@ -70,6 +71,14 @@ public sealed class DecisionsOutboundTransformer : IOutboundTransformer, IApiKey
         }
 
         _config = config;
+    }
+
+    /// <summary>Port of DecisionsOutboundTransformer.AllowPassThroughBody: always allows.</summary>
+    public bool AllowPassThroughBody(LlmRequest? llmRequest, HttpRequestData? providerRequest)
+    {
+        _ = llmRequest;
+        _ = providerRequest;
+        return true;
     }
 
     /// <summary>Port of NewOutboundTransformer(baseURL, apiKey).</summary>

@@ -31,6 +31,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     private int _candidateIndex;
     private IOutboundTransformer? _current;
     private bool _originalModelCaptured;
+    private bool _originalStreamCaptured;
 
     public PersistentOutboundTransformer(
         ChannelCandidate[] candidates,
@@ -71,6 +72,28 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// templates against it.
     /// </summary>
     public LlmRequest? CurrentLlmRequest { get; private set; }
+
+    /// <summary>
+    /// The client's stream intent before any candidate-specific forcing
+    /// (the reference's <c>state.OriginalRequestStream</c>). Pass-through
+    /// requires the inbound and outbound stream intents to agree.
+    /// </summary>
+    public bool? OriginalRequestStream { get; internal set; }
+
+    /// <summary>
+    /// The actual outbound provider request of the latest attempt
+    /// (the reference's <c>state.RawProviderRequest</c>), stored by the
+    /// pass-through body middleware before any enable check so the emitted API
+    /// format is known.
+    /// </summary>
+    public HttpRequestData? RawProviderRequest { get; internal set; }
+
+    /// <summary>
+    /// Whether the inbound body replaced the outbound provider body on this
+    /// attempt (request_executions.pass_through_applied). Reset by both retry
+    /// paths, exactly like <c>PrepareForRetry</c> / <c>NextChannel</c>.
+    /// </summary>
+    public bool PassThroughApplied { get; internal set; }
 
     /// <summary>
     /// The candidate serving the current attempt, or <see langword="null"/> before
@@ -130,6 +153,16 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         {
             OriginalModel = request.Model;
             _originalModelCaptured = true;
+        }
+
+        // The reference captures this in the inbound transformer
+        // (inbound.go:416), before the outbound transform can force provider
+        // streaming; capturing here, before the provider transform runs, sees
+        // the same client intent.
+        if (!_originalStreamCaptured)
+        {
+            OriginalRequestStream = request.Stream;
+            _originalStreamCaptured = true;
         }
 
         CurrentLlmRequest = request;
@@ -203,6 +236,10 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         }
 
         _current = null;
+
+        // outbound.go:825 — a switched channel decides pass-through afresh.
+        PassThroughApplied = false;
+
         RecordSelection(_candidates[_candidateIndex]);
 
         return null;
@@ -253,6 +290,9 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     public Exception? TryPrepareForRetry(CancellationToken cancellationToken)
     {
         _ = cancellationToken;
+
+        // outbound.go:739 — a same-channel retry re-runs the pass-through check.
+        PassThroughApplied = false;
 
         RecordSelection(_candidates[_candidateIndex]);
         return null;

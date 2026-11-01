@@ -177,6 +177,7 @@ public sealed class ChannelPoolGrain(
                 RetrySettings = ChannelRetrySettings.Parse(candidate.Channel.Settings),
                 OverrideSettings = ChannelOverrideSettings.Parse(candidate.Channel.Settings),
                 RateLimitSettings = candidate.RateLimit,
+                PassThroughSettings = ChannelPassThroughSettings.Parse(candidate.Channel.Settings),
             };
         }
 

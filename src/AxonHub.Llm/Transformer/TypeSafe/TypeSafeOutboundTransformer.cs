@@ -12,7 +12,8 @@ namespace AxonHub.Llm.Transformer.TypeSafe;
 /// Port of typesafe.OutboundTransformer (llm/transformer/typesafe/outbound.go):
 /// speaks the TypeSafe SystemOne decision protocol to an upstream.
 /// </summary>
-public sealed class TypeSafeOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
+public sealed class TypeSafeOutboundTransformer
+    : IOutboundTransformer, IApiKeyProvenance, IPassThroughBodyPolicy
 {
     private readonly TypeSafeOutboundConfig _config;
 
@@ -63,6 +64,16 @@ public sealed class TypeSafeOutboundTransformer : IOutboundTransformer, IApiKeyP
             ChannelApiKeyIndex = channelApiKeyIndex,
             EndpointPath = endpointPath,
         });
+
+    /// <summary>
+    /// Port of TypeSafeOutboundTransformer.AllowPassThroughBody: only SystemOne
+    /// requests may replay the raw body.
+    /// </summary>
+    public bool AllowPassThroughBody(LlmRequest? llmRequest, HttpRequestData? providerRequest)
+    {
+        _ = providerRequest;
+        return llmRequest is not null && llmRequest.RequestType == RequestTypes.SystemOne;
+    }
 
     /// <summary>Port of APIFormat.</summary>
     public string ApiFormat => ApiFormats.TypeSafeSystemOne;

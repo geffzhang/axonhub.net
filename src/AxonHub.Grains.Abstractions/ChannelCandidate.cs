@@ -55,4 +55,8 @@ public sealed class ChannelCandidate
     /// </summary>
     [Id(11)]
     public ChannelRateLimitSettings? RateLimitSettings { get; set; }
+
+    /// <summary>Channel-level pass-through overrides (settings.passThrough*).</summary>
+    [Id(12)]
+    public ChannelPassThroughSettings PassThroughSettings { get; set; } = new();
 }

@@ -72,6 +72,16 @@ public interface ITransportRequestFinalizer
 }
 
 /// <summary>
+/// Port of transformer.PassThroughBodyPolicy (llm/transformer/interfaces.go:65-68):
+/// lets outbound transformers veto raw body pass-through.
+/// </summary>
+public interface IPassThroughBodyPolicy
+{
+    /// <summary>Whether the raw inbound body may replace the transformed body.</summary>
+    bool AllowPassThroughBody(LlmRequest? llmRequest, HttpRequestData? providerRequest);
+}
+
+/// <summary>
 /// Port of transformer.VideoTaskOutbound (llm/transformer/interfaces.go:75-82):
 /// the optional extension for outbound transformers that support video task
 /// query/delete operations (async task model).

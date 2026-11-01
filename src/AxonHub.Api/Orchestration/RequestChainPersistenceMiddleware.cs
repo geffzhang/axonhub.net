@@ -195,6 +195,10 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             ChannelId = attempt.ChannelId,
             ChannelApiKeySuffix = ApiKeySuffix(_outbound.CurrentApiKey),
             ChannelApiKeyIndex = _outbound.CurrentApiKeyIndex,
+
+            // persistRequestExecution stores the pass-through flag the
+            // body middleware set for this attempt.
+            PassThroughApplied = _outbound.PassThroughApplied,
         });
 
         // The transport reports response headers before the first event. The

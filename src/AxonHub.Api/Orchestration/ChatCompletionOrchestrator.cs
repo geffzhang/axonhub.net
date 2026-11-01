@@ -34,6 +34,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly TimeProvider _timeProvider;
     private readonly IRequestChainRecorder? _requestChainRecorder;
     private readonly IUsageCostService? _usageCostService;
+    private readonly IPassThroughSettingsProvider _passThroughSettings;
     private readonly ChannelRequestTracker _rateLimitTracker;
     private readonly ChannelLimiterManager _channelLimiterManager;
 
@@ -48,7 +49,8 @@ public sealed class ChatCompletionOrchestrator
         IUpstreamErrorPolicyApplier? upstreamErrorPolicy = null,
         ChannelRequestTracker? rateLimitTracker = null,
         ChannelLimiterManager? channelLimiterManager = null,
-        IUsageCostService? usageCostService = null)
+        IUsageCostService? usageCostService = null,
+        IPassThroughSettingsProvider? passThroughSettings = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -66,6 +68,11 @@ public sealed class ChatCompletionOrchestrator
         _timeProvider = timeProvider;
         _requestChainRecorder = requestChainRecorder;
         _usageCostService = usageCostService;
+
+        // Without a system store the reference falls back to the channel-level
+        // setting only; both flags off reproduces that.
+        _passThroughSettings = passThroughSettings
+            ?? new StaticPassThroughSettingsProvider(PassThroughSettings.Disabled);
 
         // The reference's orchestrator and load balancer share one tracker and
         // one limiter manager per process. Production registers both as
@@ -100,7 +107,8 @@ public sealed class ChatCompletionOrchestrator
             _upstreamErrorPolicy,
             _rateLimitTracker,
             _channelLimiterManager,
-            _usageCostService);
+            _usageCostService,
+            _passThroughSettings);
     }
 
     /// <summary>
@@ -205,6 +213,13 @@ public sealed class ChatCompletionOrchestrator
             .ConfigureAwait(false);
         var topK = retryPolicy.Enabled ? 1 + retryPolicy.MaxChannelRetries : 1;
 
+        // The reference reads the pass-through flags lazily inside each
+        // middleware; the port's hooks are synchronous, so one snapshot per
+        // request serves all of them (C091).
+        var passThroughSettings = await _passThroughSettings
+            .GetAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         var candidates = await _grainFactory
             .GetGrain<IChannelPoolGrain>(model)
             .SelectAsync(
@@ -243,8 +258,13 @@ public sealed class ChatCompletionOrchestrator
         // Channel request rewriting runs after the outbound transform (so the
         // body it patches is the provider body) and before persistence (so the
         // stored request execution sees the rewritten body and headers), the
-        // same order as override.go's registration in orchestrator.go.
+        // same order as orchestrator.go: pass-through body first so overrides
+        // can still modify the replayed body, the User-Agent policy before the
+        // header overrides (which may still change the User-Agent).
+        options.Middlewares.Add(new PassThroughRequestBodyMiddleware(outbound, passThroughSettings));
+        options.Middlewares.Add(new PassThroughRequestHeadersMiddleware(outbound));
         options.Middlewares.Add(new ChannelOverrideBodyMiddleware(outbound));
+        options.Middlewares.Add(new UserAgentPassThroughMiddleware(outbound, passThroughSettings));
         options.Middlewares.Add(new ChannelOverrideHeaderMiddleware(outbound));
 
         // Remove transport-incompatible fields after pass-through and

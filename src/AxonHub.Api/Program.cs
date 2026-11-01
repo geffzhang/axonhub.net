@@ -104,6 +104,7 @@ builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
 builder.Services.AddScoped<ISystemStore, SystemStore>();
 builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
 builder.Services.AddScoped<IRetryPolicyProvider, SystemRetryPolicyService>();
+builder.Services.AddScoped<IPassThroughSettingsProvider, SystemPassThroughSettingsService>();
 
 // The models surface (biz.ModelService.ListEnabledModels) reads the
 // system_model_settings row through the same scoped system store.

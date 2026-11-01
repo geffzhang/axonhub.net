@@ -757,9 +757,9 @@ Cause 链、错误信封解析与原文回退）、`LlmRequest.SystemOne` / `Llm
 
 合计 8 + 15 + 8 + 9 + 8 + 6 + 2 = 56 例 Llm，加端点 9 例共 65 例：
 `AxonHub.Llm.Tests` 由 1190 增至 1246，`AxonHub.Api.Tests` 由 623 增至 632。
-C087 记录 pass-through body 未移植、通道能力表未建模、`JsonElement` 承载 `any`
-与字段级解码文案差异；`hasResponseContent` 的 compact / completion 分支由本节的
-空响应探测一并闭合。
+C087 记录通道能力表未建模、`JsonElement` 承载 `any` 与字段级解码文案差异（pass-through
+body 的请求半程已由第 26 节闭合，响应半程见 C091）；`hasResponseContent` 的
+compact / completion 分支由本节的空响应探测一并闭合。
 
 ## 25. 模型清单与检索端点（55 例，2026-11-01）
 
@@ -801,12 +801,62 @@ OpenAI 列表 `{"data":[…],"object":"list"}` 与检索对象、Anthropic 列�
 扩展字段、API Key profile 与 privacy 403 的裁剪（没有 `models` 行时两条实现的响应
 字节完全一致）；C089 记录 trace ID 链路未移植；C090 记录路由边界与顺序确定化。
 
+## 26. pass-through 通道重放（请求半程，95 例，2026-11-01）
+
+参照路线：`internal/server/orchestrator/pass_through.go`（`passThroughStreamAligned`、
+`isPassThroughEnabled`、`applyPassThroughRequestBody`、
+`mergePassThroughRequestBodyWithPromptProtection`、`passThroughBodySupported`、
+`passThroughBodyNeedsModelPatch`、`applyPassThroughRequestHeaders`、
+`applyUserAgentPassThrough`）、`orchestrator.go:260-310`（中间件注册顺序：
+pass-through body → pass-through headers → override body → user agent → override
+headers → finalize transport）、`internal/objects/channel.go:214-226`
+（`settings.passThroughUserAgent` / `settings.passThroughBody`）、
+`internal/server/biz/system.go:108,116`（`system_user_agent_pass_through` /
+`system_pass_through`）、`llm/transformer/interfaces.go:64-67`
+（`PassThroughBodyPolicy`）以及 `internal/transformer/{decisions,typesafe}` 的两个
+`AllowPassThroughBody` 实现。参照测试 `pass_through_test.go` 与
+`pass_through_codex_test.go` 的请求半程用例逐条改写为端口测试；提示词保护
+（`pass_through_prompt_protection.go` 与两个 `_test.go`）与响应/流半程
+（`captureRawProviderResponse/Stream`、`applyPassThroughResponse/Stream`、
+`passThroughStream`）未移植，登记于 C091。
+
+端口新增：`ChannelPassThroughSettings`（`settings` JSON 的 Go 语义解码：键大小写
+不敏感、重复键后者胜出、`null` / 非布尔类型视为继承、畸形 JSON 降级为两者均继承）、
+`ChannelCandidate.PassThroughSettings`（grain 候选快照携带通道级开关）、
+`SystemPassThroughSettingsService`（`system_pass_through` /
+`system_user_agent_pass_through` 两行，缺行、软删、非 `"true"` 值、读失败均为关；
+`IPassThroughSettingsProvider` 为测试保留静态实现）、`PersistentOutboundTransformer`
+的 `RawProviderRequest` / `OriginalRequestStream` / `PassThroughApplied` 状态
+（在 `NextChannel` 与 `PrepareForRetry` 复位，跟随 `request_executions.pass_through_applied`
+落库）、`PassThroughMiddlewares.cs`（三个中间件与 `PassThrough` 静态端口）、
+`IPassThroughBodyPolicy`（decisions 恒真、typesafe 仅 `RequestType=SystemOne`），
+以及 `ChatCompletionOrchestrator` 的每请求设置快照和参照顺序的中间件注册。
+sjson 的空文档语义单独处理：端口先按 Go `sjson` 的做法把空白 body 归一化为 `{}`
+再写 model（`MergeTreatsBlankBodyLikeSjson` 锁定）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 开关判定：通道级覆盖全局、通道 `false` 覆盖全局 `true`、通道缺省继承、缺 `RawProviderRequest` / 空 APIFormat / 格式不一致 / 强制流式均关闭；`passThroughStreamAligned` 的 Go 真值相等（nil 与 false 等价、8 组组合） | `tests/AxonHub.Api.Tests/PassThroughTests.cs` | 17 |
+| body 重放与 model 补丁：原始 body 复制、映射后 model 写回、10 种 JSON 路由格式、格式不一致保留出站 body、流参数变化跳过、非补丁格式保留原始 body、moderation / decisions / jina 补丁、空 model 不补丁、空白 body 视作 `{}` | `tests/AxonHub.Api.Tests/PassThroughTests.cs` | 31 |
+| 格式支持与策略：transcription / translation / image_variation / multipart image_edit / multipart video 拒绝，JSON image_edit 与 speech 允许；`AllowPassThroughBody` 拒绝与放行 | `tests/AxonHub.Api.Tests/PassThroughTests.cs` | 12 |
+| Codex 头：仅 responses 且 body 已重放时转发 8 个白名单头、非 responses / 未重放不转发、同名头先删后加不追加 | `tests/AxonHub.Api.Tests/PassThroughTests.cs` | 4 |
+| User-Agent 策略：通道 / 全局开关、客户端 UA 复制、关闭且出站为空写 `axonhub/1.0`、provider 自带 UA 保留、无候选不动 | `tests/AxonHub.Api.Tests/PassThroughTests.cs` | 8 |
+| 通道 settings 解码：显式值、显式 `false` 不算继承、键大小写与重复键、`null` / 错类型继承、6 种不可读 JSON 降级 | `tests/AxonHub.Api.Tests/PassThroughTests.cs` | 11 |
+| 系统设置 provider：缺行全关、`"true"` 开启、其余值关闭、读失败关闭、软删视作缺行 | `tests/AxonHub.Api.Tests/PassThroughTests.cs` | 8 |
+| 编排端到端（真实 pipeline + 假上游）：通道开启时重放客户端 body 且保留额外顶层字段、关闭时发送变换后 body、全局开关开启无覆盖通道、关闭时默认 UA | `tests/AxonHub.Api.Tests/PassThroughTests.cs` | 4 |
+
+合计 17 + 31 + 12 + 4 + 8 + 11 + 8 + 4 = 95 例：`AxonHub.Api.Tests` 由 680 增至
+775，`AxonHub.Llm.Tests` 保持 1253，`AxonHub.Grains.Tests` 保持 88。C091 记录请求
+半程已接入、响应/流半程与提示词保护未移植，并取代 C087 中 pass-through body 缺口
+的描述、修正 C014 中通道 settings 的 passThrough 开关未实现的表述。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
-| TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；pass-through body、通道能力表与字段级解码文案为 C087 登记的裁剪 | 低 | 完成（C087） |
+| TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求半程已由第 26 节闭合 | 低 | 完成（C087、C091） |
+| pass-through 响应/流重放与提示词保护 | 请求半程（开关判定、body 重放与 model 补丁、Content-Type 同步、Codex 头、UA 策略、通道/系统开关）已由第 26 节的 95 例锁定；响应/流半程（`captureRawProviderResponse/Stream`、`applyPassThroughResponse/Stream`、1024 事件/8 MiB 原始流回放缓冲）与 `pass_through_prompt_protection.go` 的补丁/校验未移植（C091） | 中 | 响应半程里程碑 |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
