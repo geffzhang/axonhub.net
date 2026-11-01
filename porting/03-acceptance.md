@@ -12,6 +12,9 @@
 - 附带验证：`TreatWarningsAsErrors=true`、`AnalysisLevel=latest-recommended`、`EnforceCodeStyleInBuild=true`。
   全局 `NoWarn` 仅豁免与参照实现命名/签名映射直接冲突的规则（CA1068 等），理由逐条写在
   `Directory.Build.props` 注释与对应源文件的 `[SuppressMessage]` 中。
+- 管理面前端：`frontend/` 为 `E:\GitHub\axonhub\frontend` 的原样副本（HEAD
+  `f272549f1342`，829 文件，`diff -r` 逐字节一致），沿用其 pnpm / Vite /
+  Playwright 工具链，不纳入本次 `dotnet build` / `dotnet test` 门禁，见 §47。
 
 ## 测试
 
