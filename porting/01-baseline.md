@@ -1709,6 +1709,90 @@ C106 与 C082。
 zenmux 视频变换器项关闭（`zenmux_gemini` 随 Gemini/Vertex 切片），C082 的
 zenmux 项闭合（delete-unsupported 本地取消已锁定）。
 
+## 45. GitHub Copilot 出站、令牌交换与通道接线（131 例，2026-11-01）
+
+参照路线：`llm/transformer/openai/copilot/outbound.go:26`（`^gpt-(\d+)`）、
+`:28-49`（常量与默认头：base URL `https://api.githubcopilot.com`、`/chat/completions`、
+`Editor-Version` / `Editor-Plugin-Version` / `User-Agent` / `Openai-Intent` /
+`Copilot-Integration-Id` / `X-Github-Api-Version` / `X-Vscode-User-Agent-Library-Version` /
+`Copilot-Vision-Request` / `X-Initiator`，以及 `vscode/1.95.0`、`copilot-chat/0.26.7`、
+`GitHubCopilotChat/0.26.7`、`conversation-edits`、`vscode-chat`、`2025-04-01`、
+`electron-fetch` 七个默认值）、`:69-95`（构造：nil provider 报 `token provider is
+required`、空 base URL 取默认、`TrimSuffix` 只裁一个尾部斜杠、内嵌 Responses 出站用
+空静态 key、失败包 `failed to create responses transformer: `）、`:97-99`（APIFormat
+恒 `openai/chat_completion`）、`:101-158`（TransformRequest：nil / model / messages
+三条校验；`usesResponsesAPI` 为真时走 Responses 路径；token 失败包 `failed to get
+copilot token: `；`RequestFromLLM(ReasoningFieldAll)`；marshal 失败包 `failed to
+marshal request: `；`base + /chat/completions`；Content-Type 与 Accept；七个小写化
+头；视觉头 `true`；`X-Initiator`；Bearer）、`:160-168`（SetCopilotHeaders）、
+`:170-177`（normalizeInitiator：TrimSpace + ToLower，仅 user/agent 有效）、
+`:180-206`（inferCopilotInitiator：空消息 → user；最后一条的 Attribution 优先；
+role != user → agent；最后一块 MultipleContent 为 tool_result → agent；否则 user）、
+`:208-221`（resolveCopilotInitiator：RawRequest 的 `X-Initiator` 仅当归一化后有效才
+覆盖）、`:223-243`（hasVisionContent：Content 的 data URL、part 的 image_url /
+ImageUrl / 文本中的 data URL）、`:245-247`（isImageDataURL 大小写敏感前缀
+`data:image/`）、`:249-322`（TransformResponse：nil 报 `http response is nil`；≥400
+的三种 body 文案 `(empty body)` / `(first 100 chars: %s, total length: %d)` /
+`(body: %s, length: %d)`；空 body 报 `response body is empty`；Responses 判定
+`output` 存在或 `object == "response"`；包装 `{"response": ...}` 用 `.Raw` 解包后
+重新判定；命中委托内嵌 Responses 出站；否则 OpenAI 解码并 `ToLLMResponse`，失败包
+`failed to unmarshal response: `）、`:324-408`（TransformStream：窥视首事件，`type`
+以 `response.` 开头即 Responses 流；非 Responses 流懒建 OpenAI 出站并委托，失败包
+`failed to create openai transformer: `；Responses 流经 Map：空 Data 原样、
+`[DONE]` 前缀原样、`convertCopilotStreamEvent` 返回 nil 即消费，再过滤空事件后委托
+Responses 出站）、`:413-524`（convertCopilotStreamEvent：`response.output_item.added`
+把 `item.call_id` 映射为自身并登记原 id、更新最近 call id、强制 `item.id = call_id`、
+缺 name 补 `function`；`response.function_call_arguments.delta` 与 `.done` 按映射或
+最近 call id 改写 `item_id`，done 另写 `call_id`；`response.output_item.done` 强制
+`item.id`；其余或解析失败原样返回）、`:527-565`（TransformError：nil → 500 +
+`Internal Server Error` + `api_error`；`error` / `errors` 任一有 message 即采用；
+否则状态文本 + `api_error`）、`:568-594`（AggregateStreamChunks：
+`isResponsesAPIStream` 命中四个 `"type":"response.*"` 字面量即走 Responses 聚合，
+否则 OpenAI 聚合）、`:597-632`（transformResponsesRequest：委托 Responses 请求、
+失败包 `failed to transform request for Responses API: `；Copilot token 覆盖
+Bearer；七个 Copilot 头 + 视觉头 + initiator）、`:636-657`（usesResponsesAPI：
+小写化；`grok-` 前缀恒真；`^gpt-(\d+)` 且 major ≥ 5 且非 `gpt-5-mini`）、
+`:659-701`（prependedStream 首事件透传）；`token_exchanger.go:21-25`（默认端点
+`https://api.github.com/copilot_internal/v2/token`、30s 超时、5m 提前过期缓冲）、
+`:80-150`（Exchange / ExchangeWithClient：空 token；client 回退；SHA-256 小写十六
+进制缓存键；缓存未过期直接返回；单飞 `key:ptr:endpoint`；`context.WithoutCancel`
+下交换；成功后写缓存）、`:152-159`（tokenCacheKey 与 exchangeSingleflightKey 的
+`%p`）、`:161-194`（exchange：GET + `Authorization: token <access>` + Accept JSON、
+30s 超时、非 2xx 文案、解析失败包 `failed to parse token response: `、空 token 与
+缺 expires_at 文案）；`token_provider.go:26-53`（设备流配置：GitHub device/token
+端点、`Iv1.b507a08c87ecfe98`、`read:user`）与 `:55-60`（委托 DeviceFlowProvider）；
+`internal/server/biz/channel_llm.go:666-668`（github_copilot 与 xai_subscription
+共用 OAuth 准入，文案 `missing oauth credentials for channel %s`）、`:1218-1275`
+（要求 `strings.TrimSpace(c.Credentials.APIKey)` 非空（`github_copilot channel %s
+has no credentials`）；typed OAuth 重新编码时省略 `IdToken`，失败包 `failed to
+encode github_copilot oauth credentials for channel %s: `；`ParseCredentialsJSON`
+失败包 `github_copilot channel %s has invalid credentials: `；`NewTokenProvider`
+失败包 `failed to create CopilotTokenProvider: `；`NewOutboundTransformer` 失败包
+`failed to create github_copilot outbound transformer: `；随后
+`setupAutoRefresh(5m/5m)`）、`internal/server/biz/channel_endpoint.go:322`（端点表
+只有 `openai/chat_completion`）、`internal/ent/channel/channel.go:257`（类型常量）。
+
+本次移植新增
+`src/AxonHub.Llm/Transformer/OpenAI/Copilot/CopilotOutboundTransformer.cs`（构造与
+base URL 归一、chat 与 Responses 两条请求路径、Copilot 头集合、initiator 推断与
+覆盖、视觉判定、响应解包与错误文案、流首事件判定、call-id 修复与聚合分派）、
+`CopilotTokenProvider.cs`（GitHub 设备流常量 + 令牌交换）、
+`CopilotTokenExchanger.cs`（缓存、单飞、交换与错误文案），以及
+`ChannelOutboundFactory` 的 `github_copilot` 分支与 OAuth 必经准入。已接受差异与
+残余裁剪见 C107。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 出站变换器：构造四条路径与单斜杠裁剪、模型路由表 19 行、chat 线请求头/认证/请求体、nil/model/messages/token 失败、自定义 base URL、Responses 路由三模型与失败包装、视觉头 5 行、initiator 转发 6 行 / 推断 12 行、data URL 12 行、视觉内容 15 行、响应成功与会话解包、nil/400/500/空 body/非法 JSON/百字符前缀、错误信封三态与状态文本回退、四类流事件修复与畸形透传、Responses 流判定四例、chat 聚合与流委托 | `tests/AxonHub.Llm.Tests/CopilotOutboundTransformerTests.cs` | 110 |
+| Copilot 令牌交换：请求形状（GET/端点/token 认证/Accept）、按 access token 缓存、5 分钟缓冲内重换、空 token、非 2xx、非法 JSON、空 token 响应、缺 expires_at、失败不入缓存 | `tests/AxonHub.Llm.Tests/CopilotTokenExchangerTests.cs` | 9 |
+| Copilot 令牌提供者：GitHub 设备流常量下的交换、缺凭据文案、凭据替换 | `tests/AxonHub.Llm.Tests/CopilotTokenProviderTests.cs` | 3 |
+| 通道接线：typed OAuth + 占位 apiKey 建出站并用通道执行器交换、OAuth 内嵌 apiKey、Responses 路由、自定义 base URL、无 OAuth 的早退文案、仅 typed OAuth 的 `has no credentials`、畸形 legacy OAuth 的 `invalid credentials`、畸形 typed `expires_at` 的编码错误、无执行器时的 `http client is nil` | `tests/AxonHub.Api.Tests/GithubCopilotChannelWiringTests.cs` | 9 |
+
+`AxonHub.Llm.Tests` 由 2087 增至 2209，`AxonHub.Api.Tests` 由 1076 增至 1085，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 3325 增至 3456。差异条目新增 C107（已接受），C010 的 github_copilot 分支
+闭合。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1729,5 +1813,5 @@ zenmux 项闭合（delete-unsupported 本地取消已锁定）。
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Zenmux 系列、GithubCopilot、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106） | 中 | 按 provider 分组后续切片（剩余：GithubCopilot、Gemini/Vertex（含 `zenmux_gemini`）、Antigravity、OpenaiResponses、Commandcode 等） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107） | 中 | 按 provider 分组后续切片（剩余：Gemini/Vertex（含 `zenmux_gemini`）、Antigravity、OpenaiResponses、Commandcode 等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

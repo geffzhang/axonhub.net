@@ -23,6 +23,7 @@ using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenRouter;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
+using AxonHub.Llm.Transformer.OpenAI.Copilot;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.Ollama;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
@@ -51,8 +52,8 @@ namespace AxonHub.Api.Orchestration;
 /// <c>bailian_responses</c>, <c>bailian_anthropic</c>,
 /// <c>moonshot_coding</c>, <c>modelscope</c>, <c>doubao</c>,
 /// <c>volcengine</c>, <c>doubao_anthropic</c>, <c>volcengine_anthropic</c>,
-/// <c>zenmux</c>, <c>zenmux_responses</c>, <c>zenmux_anthropic</c> and
-/// <c>zenmux_video</c>
+/// <c>zenmux</c>, <c>zenmux_responses</c>, <c>zenmux_anthropic</c>,
+/// <c>zenmux_video</c> and <c>github_copilot</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -145,6 +146,8 @@ public static class ChannelOutboundFactory
 
     public const string ZenmuxVideoChannelType = "zenmux_video";
 
+    public const string GithubCopilotChannelType = "github_copilot";
+
     // channel_llm.go:56-58: the default base URLs applied when a ZenMux
     // channel has none stored (channel_llm.go:695-705).
     public const string ZenmuxOpenAiBaseUrl = "https://zenmux.ai/api/v1";
@@ -177,7 +180,20 @@ public static class ChannelOutboundFactory
         // channel_llm.go:662-665: codex and claudecode channels accept OAuth
         // credentials in place of api keys; every other channel type still
         // needs a key.
-        var oauth = oauthCapableChannel && ChannelCredentials.IsOAuth(candidate.Credentials);
+        //
+        // channel_llm.go:670-674: github_copilot (like xai_subscription) is
+        // OAuth-only; an api key without an oauth object is rejected with its
+        // own message before the generic key check runs.
+        var oauthRequiredChannel = candidate.Type == GithubCopilotChannelType;
+
+        var isOAuth = ChannelCredentials.IsOAuth(candidate.Credentials);
+        if (oauthRequiredChannel && !isOAuth)
+        {
+            throw new InvalidOperationException(
+                "missing oauth credentials for channel " + candidate.ChannelName);
+        }
+
+        var oauth = (oauthCapableChannel || oauthRequiredChannel) && isOAuth;
 
         // channel_llm.go:677-680: Ollama runs locally without a key; a stored
         // key is optional and disabled keys still mean no auth.
@@ -554,6 +570,12 @@ public static class ChannelOutboundFactory
             // outbound is the native transformer, which also serves chat
             // through its embedded OpenAI outbound.
             ZenmuxVideoChannelType => CreateZenmuxOutbound(candidate, provider),
+            // channel_llm.go:1218-1276: github_copilot's transformer is
+            // OAuth-driven and routes GPT-5+/Grok models to the Responses API
+            // internally, so no ApiFormat branching is needed here
+            // (channel_endpoint.go:322).
+            GithubCopilotChannelType
+                => CreateGithubCopilotOutbound(candidate, tokenRefreshExecutor),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
@@ -692,6 +714,103 @@ public static class ChannelOutboundFactory
         {
             throw new InvalidOperationException(
                 "failed to parse " + channelType + " oauth credentials: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of the github_copilot branch of <c>buildChannelWithTransformer</c>
+    /// (channel_llm.go:1218-1276). The typed <c>oauth</c> object is re-marshalled
+    /// without <c>id_token</c>, parsed, and wrapped in the device-flow token
+    /// provider that mints Copilot tokens. The reference also registers the
+    /// provider's auto-refresh (channel_llm.go:1270-1275); the port's channel
+    /// grains do not run refresh loops yet (C094).
+    /// </summary>
+    private static CopilotOutboundTransformer CreateGithubCopilotOutbound(
+        ChannelCandidate candidate,
+        IExecutor? tokenRefreshExecutor)
+    {
+        if (!ChannelCredentials.IsOAuth(candidate.Credentials))
+        {
+            throw new InvalidOperationException(
+                "missing oauth credentials for channel " + candidate.ChannelName);
+        }
+
+        var credentialsJson = ChannelCredentials.GetLegacyApiKey(candidate.Credentials).Trim();
+        if (credentialsJson.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "github_copilot channel " + candidate.ChannelName + " has no credentials");
+        }
+
+        var oauthJson = ChannelCredentials.GetOAuthObjectJson(candidate.Credentials);
+        if (oauthJson is not null)
+        {
+            try
+            {
+                // Same shape as the reference's re-marshal: id_token is not
+                // part of the Copilot credential document.
+                var oauth = OAuthCredentialsJson.ParseOAuthObject(oauthJson);
+                credentialsJson = new OAuthCredentials
+                {
+                    AccessToken = oauth.AccessToken,
+                    RefreshToken = oauth.RefreshToken,
+                    ClientId = oauth.ClientId,
+                    ExpiresAt = oauth.ExpiresAt,
+                    TokenType = oauth.TokenType,
+                    Scopes = oauth.Scopes,
+                }.ToJson();
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to encode github_copilot oauth credentials for channel "
+                    + candidate.ChannelName + ": " + ex.Message,
+                    ex);
+            }
+        }
+
+        OAuthCredentials credentials;
+        try
+        {
+            credentials = OAuthCredentialsJson.ParseCredentialsJson(credentialsJson);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "github_copilot channel " + candidate.ChannelName
+                + " has invalid credentials: " + ex.Message,
+                ex);
+        }
+
+        CopilotTokenProvider tokenProvider;
+        try
+        {
+            tokenProvider = new CopilotTokenProvider(new CopilotTokenProviderParams
+            {
+                Credentials = credentials,
+                HttpClient = tokenRefreshExecutor,
+            });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "failed to create CopilotTokenProvider: " + ex.Message,
+                ex);
+        }
+
+        try
+        {
+            return new CopilotOutboundTransformer(new CopilotOutboundParams
+            {
+                TokenProvider = tokenProvider,
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+            });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "failed to create github_copilot outbound transformer: " + ex.Message,
                 ex);
         }
     }
