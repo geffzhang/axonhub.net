@@ -1375,6 +1375,82 @@ UTF-8 字节键序与浮点格式）、`:337-345`（`nanogpt_` + SHA-256（name+
 `AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
 合计 2802 增至 2908。差异条目新增 C101（已接受）。
 
+## 40. Zai / Zhipu / Xiaomi / MiniMax 出站与通道接线（122 例，2026-11-01）
+
+参照路线：`llm/transformer/zai/outbound.go:23-33`（Config：BaseURL /
+APIKeyProvider / Version / EndpointPath）、`:53-71`（旧构造与
+`NewOutboundTransformerWithConfig`：先以内嵌 `openai.Config{PlatformOpenAI,
+ReasoningFieldContent}` 构造，失败包
+`invalid Zai transformer configuration`；版本缺省 `v4`；`##` 后缀剥离为
+rawURL）、`:74-100`（URL 三分支：raw → `TrimRight("/")`；EndpointPath → 以空版本
+归一；否则以 Version 归一）、`:107-121`（`Request` 值嵌入 `openai.Request` 并在
+其后声明 `user_id` / `request_id` / `thinking`，`Thinking{type}`）、`:123-201`
+（GLM 版本正则 `(?i)(?:^|[/:])glm-([0-9]+)\.([0-9]+)`、≥5.2 原生
+reasoning_effort、glm-5.3 恒思考、低/高/最高归并与 resolve 阶梯）、`:209-330`
+（TransformRequest：nil / model / messages 校验，chat 与空类型直通、
+image 分派、compact 与非支持类型拒绝、json_schema 降级为 json_object、metadata
+取 user_id/request_id、rune 6-128 截断规则、request_id 回退
+`shared.GetSessionID`、ToolChoice 归为 `"auto"`、Metadata 置 nil、thinking 与
+reasoning_effort 赋值、`json.Marshal(zai.Request)`、Bearer 与 URL 三分支）、
+`:337-360`（TransformResponse：≥400 → `HTTP error <code>`、空 body、按请求
+APIFormat 分派图片、其余委托内嵌出站）；`llm/transformer/zai/image.go:22-52`
+（图片入口：nil Image / 非 image_generation APIFormat / 带输入图或 mask 的
+拒绝，写 `RequestType`、APIFormat 与 `TransformerMetadata["model"]`）、
+`:54-124`（`map[string]any` 请求体：prompt 必填、quality high→hd 与 low/空→
+standard、size 缺省 1024x1024、`watermark_enabled=false`、Image.User →
+user_id、`/images/generations`）、`:126-180`（响应：解码
+`ZAIImagesResponse`、model 读 `Request.Metadata["model"]`（注意与写入的
+TransformerMetadata 不同字段）缺省 `image-generation`、`zai-img-<uuid>`、
+`chat.completion`、逐图下载转 data URL 后 `strings.Cut("base64,")` 取 b64）、
+`:182-235`（下载：data URL 原样（长度 > 5）、`http.DefaultClient` GET、
+非 200 → `HTTP <code>`、Content-Type 缺省 image/png、StdEncoding base64）；
+`llm/transformer/minimax/outbound.go:21-26`（Config）、`:39-56`（构造校验：
+nil/空白 BaseURL → `base URL is required for MiniMax transformer`、缺 provider
+→ `API key provider is required`，内嵌 OpenAI 失败包
+`invalid MiniMax transformer configuration`，baseURL 以 v1 归一）、`:58-63`
+（image 分派，其余委托）、`:65-145`（图片请求：Image/prompt 校验、model 缺省
+规则（空或 dall-e-2 且未显式指定 → image-01）、subject_reference 解码再编码、
+aspect_ratio、size 的 `strings.Cut('x')` + `strconv.ParseInt` 与 512-2048、
+8 的倍数校验、显式 width/height 覆盖、seed/n/prompt_optimizer、
+response_format b64_json→base64/空→url、路径 `/v1/` 与 base 尾部 `/v1` 去重、
+Bearer、TransformerMetadata["model"]）、`:147-211`（响应：仅
+`RequestType == image` 走图片，否则委托；≥400 → `MiniMax image API returned
+HTTP <code>`；`base_resp.status_code` 非 0 → invalid response；created 为 0
+时取当前秒；model 读 TransformerMetadata 缺省 image-01；url 在前 base64 在后；
+空数据拒绝；id 缺省 `minimax-img-<created>`；`image.generation`）；
+`internal/server/biz/channel_llm.go:489-496`（minimax 图片端点）、`:575-597`
+（`newProviderChatOutbound`：zai/zhipu/zhipu_anthropic/zai_anthropic → zai
+Version v4；xiaomi/xiaomi_anthropic → v1）、`:600-625`（家族版本路由，Xiaomi
+恒用家族出站）、`:898-912`（xiaomi_anthropic / minimax_anthropic → Anthropic
+Direct）、`:1029-1053`（zhipu_anthropic → PlatformZhipu、zai_anthropic →
+PlatformZai）、`:1303-1317`（minimax 通道的家族出站）与
+`channel_endpoint.go:209-215`、`:280-281`、`:290-291`、`:304-305` 的默认端点
+集。
+
+本次移植新增：`src/AxonHub.Llm/Transformer/Zai/ZaiOutboundTransformer.cs`
+（构造与 URL 归一、TransformRequest 的完整阶梯、响应分派与委托，GLM 版本 /
+恒思考 / effort 归并 / resolve 的静态表）、`ZaiImage.cs`（同类的图片 partial：
+排序的 `map[string]any` 请求体、质量映射、响应与 data URL 下载；严格保留
+“写入 TransformerMetadata、读取 Metadata”的参照字段错位）、
+`src/AxonHub.Llm/Transformer/Minimax/MinimaxOutboundTransformer.cs`（构造校验、
+图片请求/响应、subject_reference 经 `GoAnyJson` 重新编码、chat 委托与
+SelectedApiKey 透传），以及 `ChannelOutboundFactory` 的 `zai` / `zhipu` /
+`xiaomi` / `zai_anthropic` / `zhipu_anthropic` / `xiaomi_anthropic` /
+`minimax` / `minimax_anthropic` 分支（chat 走 Zai v4/v1，anthropic/messages
+走对应平台，`SessionIdProvider` 接 `RawRequest.SessionId`）。已接受差异与残余
+裁剪见 C102。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Zai：5 种 URL 归一、请求校验（nil / model / messages / compact / 非支持类型）、user_id 与 request_id 提取与 metadata 剥离、session 回退、thinking 阶梯（非 GLM、glm-5.3 none→low、effort 剥离）、response_format 三态、4 种 URL 覆盖（coding plan / 版本追加 / endpoint path / `##`）、user_id 6-128 rune 规则（含代理对计数）、版本/恒思考/归并/resolve 四张表、聊天响应委托、响应错误、构造校验 | `tests/AxonHub.Llm.Tests/ZaiOutboundTransformerTests.cs` | 59 |
+| Zai 图片：排序请求体逐字节、quality 五态、size/user/watermark、Image/APIFormat/输入图/mask/prompt 拒绝、data URL 响应与 `zai-img-` ID、TransformerMetadata/Metadata 错位回退、解码与状态错误 | `tests/AxonHub.Llm.Tests/ZaiImageTests.cs` | 11 |
+| MiniMax：构造三条文案、model 缺省四态、response_format 三态、尺寸解析三态、六种非法尺寸（Go `%q` 文案）、5 种路径、九键排序请求体（含 subject_reference 重排）、Image/prompt 拒绝、业务错误 1008、url→base64 顺序、created/id 回退、HTTP 400 / 空数据 / 解码错误、chat 请求与响应委托 | `tests/AxonHub.Llm.Tests/MinimaxOutboundTransformerTests.cs` | 31 |
+| 通道接线：zai 家族 chat v4、xiaomi v1、四种 `*_anthropic` 的 anthropic/messages、session→request_id、minimax chat 与图片双路由、minimax_anthropic chat、八类缺 key 拒绝 | `tests/AxonHub.Api.Tests/ZaiMinimaxChannelWiringTests.cs` | 21 |
+
+`AxonHub.Llm.Tests` 由 1745 增至 1846，`AxonHub.Api.Tests` 由 1001 增至 1022，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 2908 增至 3030。差异条目新增 C102（已接受）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1395,5 +1471,5 @@ UTF-8 字节键序与浮点格式）、`:337-345`（`nanogpt_` + SHA-256（name+
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101） | 中 | 按 provider 分组后续切片（OpenAI 兼容族剩余：Zai/Zhipu、Modelscope、Minimax、Xiaomi、Bailian 等） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101，Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102） | 中 | 按 provider 分组后续切片（OpenAI 兼容族剩余：Modelscope、Bailian、Doubao/Volcengine、Zenmux 等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

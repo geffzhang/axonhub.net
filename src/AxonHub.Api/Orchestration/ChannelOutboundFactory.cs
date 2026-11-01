@@ -13,6 +13,7 @@ using AxonHub.Llm.Transformer.Cline;
 using AxonHub.Llm.Transformer.DeepSeek;
 using AxonHub.Llm.Transformer.Fireworks;
 using AxonHub.Llm.Transformer.Longcat;
+using AxonHub.Llm.Transformer.Minimax;
 using AxonHub.Llm.Transformer.Moonshot;
 using AxonHub.Llm.Transformer.Nanogpt;
 using AxonHub.Llm.Transformer.OpenAI;
@@ -25,6 +26,7 @@ using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.OpenCode;
 using AxonHub.Llm.Transformer.TypeSafe;
 using AxonHub.Llm.Transformer.Xai;
+using AxonHub.Llm.Transformer.Zai;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -38,8 +40,11 @@ namespace AxonHub.Api.Orchestration;
 /// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
 /// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>deepseek</c>, <c>fireworks</c>,
 /// <c>moonshot</c>, <c>longcat</c>, <c>cline</c>, <c>xai</c>, <c>openrouter</c>,
-/// <c>cerebras</c>, <c>nanogpt</c>, <c>nanogpt_responses</c>, <c>ollama</c> and
-/// <c>ollama_anthropic</c> channel types are ported (the vertical slice); the
+/// <c>cerebras</c>, <c>nanogpt</c>, <c>nanogpt_responses</c>, <c>ollama</c>,
+/// <c>ollama_anthropic</c>, <c>zai</c>, <c>zhipu</c>, <c>zai_anthropic</c>,
+/// <c>zhipu_anthropic</c>, <c>xiaomi</c>, <c>xiaomi_anthropic</c>,
+/// <c>minimax</c> and <c>minimax_anthropic</c> channel types are ported (the
+/// vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are picked by rendezvous hashing when the request carries a
@@ -88,6 +93,22 @@ public static class ChannelOutboundFactory
     public const string OllamaChannelType = "ollama";
 
     public const string OllamaAnthropicChannelType = "ollama_anthropic";
+
+    public const string ZaiChannelType = "zai";
+
+    public const string ZhipuChannelType = "zhipu";
+
+    public const string ZaiAnthropicChannelType = "zai_anthropic";
+
+    public const string ZhipuAnthropicChannelType = "zhipu_anthropic";
+
+    public const string XiaomiChannelType = "xiaomi";
+
+    public const string XiaomiAnthropicChannelType = "xiaomi_anthropic";
+
+    public const string MinimaxChannelType = "minimax";
+
+    public const string MinimaxAnthropicChannelType = "minimax_anthropic";
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
@@ -324,9 +345,90 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = enabledKeys.Count > 0 ? provider : null,
                 ChannelApiKeyIndex = enabledKeys.Count > 0 ? provider.KeyIndex : null,
             }),
+            // channel_llm.go:582-589: zai/zhipu chat runs through the Zai
+            // outbound (GLM thinking ladder, user_id rules) on the v4 route.
+            ZaiChannelType or ZhipuChannelType => CreateZaiOutbound(candidate, request, provider, "v4"),
+            // channel_llm.go:590-595: Xiaomi keeps the family request handling
+            // on its v1 route (providerChatEndpointUsesFamilyVersion).
+            XiaomiChannelType => CreateZaiOutbound(candidate, request, provider, "v1"),
+            // channel_llm.go:1029-1052: the *Anthropic channel types serve
+            // anthropic/messages through the anthropic outbound and, for a
+            // chat-format endpoint, the family chat outbound.
+            ZaiAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+                => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Zai,
+                    BaseUrl = candidate.BaseUrl ?? string.Empty,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            ZaiAnthropicChannelType => CreateZaiOutbound(candidate, request, provider, "v4"),
+            ZhipuAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+                => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Zhipu,
+                    BaseUrl = candidate.BaseUrl ?? string.Empty,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            ZhipuAnthropicChannelType => CreateZaiOutbound(candidate, request, provider, "v4"),
+            // channel_llm.go:898: xiaomi_anthropic and minimax_anthropic use the
+            // plain Anthropic direct platform.
+            XiaomiAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+                => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Direct,
+                    BaseUrl = candidate.BaseUrl ?? string.Empty,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            XiaomiAnthropicChannelType => CreateZaiOutbound(candidate, request, provider, "v1"),
+            // channel_llm.go:1303-1315: MiniMax dispatches images to its own
+            // /image_generation API and delegates chat to the OpenAI outbound.
+            MinimaxChannelType => new MinimaxOutboundTransformer(new MinimaxOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            MinimaxAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+                => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Direct,
+                    BaseUrl = candidate.BaseUrl ?? string.Empty,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            MinimaxAnthropicChannelType => new MinimaxOutboundTransformer(new MinimaxOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
+    }
+
+    /// <summary>
+    /// Port of the zai/xiaomi branch of <c>newProviderChatOutbound</c>
+    /// (channel_llm.go:575-597). The request_id fallback reads the shared
+    /// session id, which the endpoint threads onto the wire request (C062).
+    /// </summary>
+    private static ZaiOutboundTransformer CreateZaiOutbound(
+        ChannelCandidate candidate,
+        LlmRequest request,
+        ChannelApiKeyProvider apiKeyProvider,
+        string version)
+    {
+        return new ZaiOutboundTransformer(new ZaiOutboundConfig
+        {
+            BaseUrl = candidate.BaseUrl ?? string.Empty,
+            Version = version,
+            ApiKeyProvider = apiKeyProvider,
+            ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+            SessionIdProvider = () => request.RawRequest?.SessionId,
+        });
     }
 
     /// <summary>Port of the claudecode branch of buildChannelWithTransformer.</summary>
