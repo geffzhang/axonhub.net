@@ -1276,12 +1276,17 @@ internal static class RequestChainPayloads
     }
 
     /// <summary>
-    /// Port of modelname.FromEvent for the OpenAI chat format: the first event
-    /// that reports a valid model name. Binary audio chunks carry no metadata.
+    /// Port of modelname.FromEvent for the formats that report a top-level
+    /// <c>model</c>: OpenAI chat, legacy completions and Ollama chat. The first
+    /// event that carries a valid name wins. Binary audio chunks carry no
+    /// metadata.
     /// </summary>
     public static string EventModel(StreamEvent streamEvent, string apiFormat)
     {
-        if (apiFormat != ApiFormats.OpenAIChatCompletion || streamEvent.IsBinaryAudioChunk())
+        if (apiFormat is not (ApiFormats.OpenAIChatCompletion
+                or ApiFormats.OpenAICompletion
+                or ApiFormats.OllamaChat)
+            || streamEvent.IsBinaryAudioChunk())
         {
             return string.Empty;
         }
@@ -1290,9 +1295,10 @@ internal static class RequestChainPayloads
     }
 
     /// <summary>
-    /// Port of modelname.FromResponse's OpenAI chat path: the first reported
-    /// model in the provider response body (Cline's success/data envelope is
-    /// unwrapped), validated like jsonModel.
+    /// Port of modelname's top-level <c>model</c> path, shared by the OpenAI
+    /// chat / legacy completion and Ollama chat formats: the reported model in
+    /// the provider body (Cline's success/data envelope is unwrapped),
+    /// validated like jsonModel.
     /// </summary>
     public static string ReportedModel(byte[]? body)
     {

@@ -1129,6 +1129,50 @@ UA 捕获与清理、`proxy_` 前缀、系统消息注入、伪造 user id、13 
 （claudecode / opencode 出站生成）关闭；C096 登记计费中间件、端点表、`Stop` 转发、
 执行 key 审计与凭据文案的残余差异。
 
+## 34. Ollama 原生出站、NDJSON 流与两个通道类型（59 例，2026-11-01）
+
+参照路线：`llm/transformer/ollama/outbound.go`（`/api/chat` 报文、`stream` 恒显式、
+`options` 映射、`images` 的 data-URL 剥离、`tool_calls` 的 `map[string]any` 往返、
+`thinking` → `reasoning_content`、`ollama_error` 信封、`AggregateStreamChunks` 的
+末块工具调用与非零 usage 覆盖）、`llm/transformer/ollama/decoder.go`（注册
+`application/x-ndjson` 与 `; charset=utf-8` 变体，按 `\n` 分帧、去一个 `\r`、
+EOF 残余行原样发出、错误走 `Err`）、`llm/httpclient/client.go:408-426`
+（Content-Type 精确查表 → mime 解析 → 回退 SSE）、`internal/server/biz/channel_llm.go:677-680,1392-1428`
+（两种类型跳过缺 key 校验；只有存在启用 key 或 override 时才安装 provider）、
+`internal/server/biz/channel_endpoint.go:329-330`（`ollama/chat` 与
+`anthropic/message` 各一个默认端点）、`internal/server/orchestrator/pass_through_prompt_protection.go:312`
+（OllamaChat 与 OpenAI chat 同组）与 `candidates_stream_policy.go:81`
+（OllamaChat 属于可自动聚合族）。参照测试：`ollama/outbound_test.go`（8 例）、
+`internal/server/biz/channel_llm_ollama_test.go`（5 例，其中 apiKeyOverride 1 例属
+C013 残余）。
+
+端口新增：`OllamaOutboundTransformer`（Config、请求/响应线格式模型、
+`TransformRequest` / `TransformResponse` / `TransformStream` / `TransformStreamChunk` /
+`TransformError` / `AggregateStreamChunks`、`IApiKeyProvenance`）、`HttpNdjsonEventStream`
+（NDJSON 解码器，读错误与取消进入 `Err` 而非异常）、`HttpExecutor.DoStream` 的
+Content-Type 选择（二进制 → NDJSON → SSE）；`ChannelOutboundFactory` 增加 `ollama`
+（原生出站）与 `ollama_anthropic`（`AnthropicPlatformType.Ollama` + Bearer）两个分支，
+并把两种类型从缺 key 抛错中豁免：无启用 key 时不安装 provider，请求不带
+`Authorization`；被禁用但已存储的 key 也不会被重新使用。另把
+`RequestChainPersistenceMiddleware.EventModel` 的格式分派补齐为 OpenAI chat /
+legacy completion / Ollama chat（参照 `llm/modelname.FromEvent`），使流式响应的
+`upstream_model_id` 与参照一致（4 例）。差异与残余缺口登记为 C097：
+NDJSON 取消以 `OperationCanceledException` 而非 `ctx.Err` 出现、`arguments` 数字
+字面量保真（参照经 float64 重编码）、`arguments` 非对象报文的宽容度、STJ 与 Go 的
+解码文案差异、能力/端点表未建模、`modelname` 响应模型名提取与 apiKeyOverride 未移植。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| `OllamaOutboundTransformer`：请求线格式（字段顺序、`stream` 恒显式、`options`、`images` 省略与 data-URL 剥离、工具与 `tool_calls` 的 Go map 排序往返、缺省 `{}` schema）、URL 与 `EndpointPath`、可选 Bearer、响应 / 流 / 聚合、`ollama_error`、校验与构造 | `tests/AxonHub.Llm.Tests/OllamaOutboundTransformerTests.cs` | 42 |
+| NDJSON 解码器与传输选择：逐行、空行、CRLF、EOF 残余、无额外空事件、读错误、`application/x-ndjson` 及其 charset 变体的路由 | `tests/AxonHub.Llm.Tests/HttpNdjsonEventStreamTests.cs` | 10 |
+| 通道接线：`ollama` / `ollama_anthropic` 的类型分派、无 key 建站、禁用 key 不发送、Bearer、`/v1/messages` 归一与 `num_predict` 映射 | `tests/AxonHub.Api.Tests/OllamaChannelWiringTests.cs` | 7 |
+| 流式模型名分派：OllamaChat / OpenAICompletion 的顶层 `model`、其它格式为空、Cline 信封仅在 `success` 为真时解包 | `tests/AxonHub.Api.Tests/RequestChainModelNameTests.cs` | 4 |
+
+合计 63 例（Llm 52、Api 11）：`AxonHub.Llm.Tests` 由 1519 增至 1571，
+`AxonHub.Api.Tests` 由 960 增至 971，`AxonHub.Persistence.Tests` 保持 70，
+`AxonHub.Grains.Tests` 保持 92；四个项目合计 2641 增至 2704。C097 登记本切片的
+已接受差异与残余缺口（能力表 / 端点表、apiKeyOverride、其余 provider 通道）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1149,4 +1193,5 @@ UA 捕获与清理、`proxy_` 前缀、系统消息注入、伪造 user id、13 
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Fireworks、Moonshot、Xai、Zai/Zhipu、Doubao/Volcengine、Longcat、Modelscope、Nanogpt、Openrouter、Cline、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、ollama(_anthropic)，DeepSeek 出站已在 Llm 层移植但未接入工厂。`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type；Ollama 两种类型由第 34 节闭合（C097） | 中 | 按 provider 分组后续切片（优先 DeepSeek / Moonshot / Xai 等 OpenAI 兼容族） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

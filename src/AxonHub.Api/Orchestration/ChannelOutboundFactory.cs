@@ -12,6 +12,7 @@ using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
+using AxonHub.Llm.Transformer.Ollama;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.OpenCode;
 using AxonHub.Llm.Transformer.TypeSafe;
@@ -26,8 +27,9 @@ namespace AxonHub.Api.Orchestration;
 /// <remarks>
 /// Only the <c>openai</c>, <c>anthropic</c>, <c>claudecode</c>,
 /// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
-/// <c>typesafe</c>, <c>codex</c> and <c>fenno</c> channel types are ported (the
-/// vertical slice); the other provider types are registered as a scope cut. Key
+/// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>ollama</c> and
+/// <c>ollama_anthropic</c> channel types are ported (the vertical slice); the
+/// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are picked by rendezvous hashing when the request carries a
 /// trace id and at random otherwise (C013).
@@ -51,6 +53,10 @@ public static class ChannelOutboundFactory
     public const string OpenCodeGoChannelType = "opencode_go";
 
     public const string OpenCodeGoAnthropicChannelType = "opencode_go_anthropic";
+
+    public const string OllamaChannelType = "ollama";
+
+    public const string OllamaAnthropicChannelType = "ollama_anthropic";
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
@@ -80,7 +86,11 @@ public static class ChannelOutboundFactory
         // needs a key.
         var oauth = oauthCapableChannel && ChannelCredentials.IsOAuth(candidate.Credentials);
 
-        if (enabledKeys.Count == 0 && !oauth)
+        // channel_llm.go:677-680: Ollama runs locally without a key; a stored
+        // key is optional and disabled keys still mean no auth.
+        var keylessChannel = candidate.Type is OllamaChannelType or OllamaAnthropicChannelType;
+
+        if (enabledKeys.Count == 0 && !oauth && !keylessChannel)
         {
             throw new InvalidOperationException(
                 oauthCapableChannel
@@ -173,6 +183,24 @@ public static class ChannelOutboundFactory
                 candidate.BaseUrl ?? string.Empty,
                 provider,
                 provider.KeyIndex),
+            // channel_llm.go:1392-1405: the provider is only installed when the
+            // channel has enabled keys, so a keyless or fully-disabled channel
+            // sends no Authorization header at all.
+            OllamaChannelType => new OllamaOutboundTransformer(new OllamaOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = enabledKeys.Count > 0 ? provider : null,
+                ChannelApiKeyIndex = enabledKeys.Count > 0 ? provider.KeyIndex : null,
+            }),
+            // channel_llm.go:1406-1428: Anthropic Messages wire format against
+            // Ollama, with Bearer auth instead of x-api-key.
+            OllamaAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+            {
+                Type = AnthropicPlatformType.Ollama,
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = enabledKeys.Count > 0 ? provider : null,
+                ChannelApiKeyIndex = enabledKeys.Count > 0 ? provider.KeyIndex : null,
+            }),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };

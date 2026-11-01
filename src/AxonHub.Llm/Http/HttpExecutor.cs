@@ -145,7 +145,8 @@ public sealed class HttpExecutor : IExecutor
 
         // client.go:408-426 — decoder selection: the response Content-Type is
         // looked up case-sensitively, then as a parsed (lowercased) media type,
-        // then falls back to SSE.
+        // then falls back to SSE. The Ollama decoder registers
+        // application/x-ndjson (decoder.go:14-16).
         var contentType = HttpClientUtils.HeaderGet(headers, "Content-Type");
         if (contentType.Length == 0)
         {
@@ -156,7 +157,9 @@ public sealed class HttpExecutor : IExecutor
         var binaryContentType = SelectBinaryDecoderContentType(contentType);
         IStream<StreamEvent> stream = binaryContentType is not null
             ? new HttpBinaryEventStream(bodyStream, binaryContentType, cancellationToken, raw)
-            : new HttpSseEventStream(bodyStream, raw);
+            : IsNdjsonContentType(contentType)
+                ? new HttpNdjsonEventStream(bodyStream, raw)
+                : new HttpSseEventStream(bodyStream, raw);
 
         // Codex turn-state propagation: only the first event carries it.
         var firstEventHeaders = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -327,6 +330,20 @@ public sealed class HttpExecutor : IExecutor
 
         return null;
     }
+
+    /// <summary>
+    /// decoder.go:14-16: the Ollama package registers the NDJSON decoder under
+    /// these two exact keys; the lookup below also parses the media type.
+    /// </summary>
+    private const string NdjsonContentType = "application/x-ndjson";
+
+    private const string NdjsonCharsetContentType = "application/x-ndjson; charset=utf-8";
+
+    private static bool IsNdjsonContentType(string contentType)
+        => string.Equals(contentType, NdjsonContentType, StringComparison.Ordinal)
+            || string.Equals(contentType, NdjsonCharsetContentType, StringComparison.Ordinal)
+            || (GoMimeTypes.TryParseMediaType(contentType, out var mediaType, out _)
+                && string.Equals(mediaType, NdjsonContentType, StringComparison.Ordinal));
 
     /// <summary>Attaches headers only to the first event, like the reference map.</summary>
     private sealed class FirstEventHeadersStream(
