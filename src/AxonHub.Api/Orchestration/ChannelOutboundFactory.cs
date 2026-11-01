@@ -25,8 +25,8 @@ namespace AxonHub.Api.Orchestration;
 /// channel types are ported (the vertical slice); the other provider types are
 /// registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
-/// enabled keys are chosen at random per attempt because the trace subsystem
-/// (and therefore trace-sticky rendezvous selection) is not ported yet (C013).
+/// enabled keys are picked by rendezvous hashing when the request carries a
+/// trace id and at random otherwise (C013).
 /// </remarks>
 public static class ChannelOutboundFactory
 {
@@ -75,9 +75,14 @@ public static class ChannelOutboundFactory
                     : "missing api key for channel " + candidate.ChannelName);
         }
 
+        // WithTrace publishes the resolved trace id as the shared session id
+        // (shared.WithSessionID), which the endpoint threads onto the wire
+        // request; the reference provider reads it back from the request context
+        // with contexts.GetTrace. No trace id means the untraced random branch.
         var provider = new ChannelApiKeyProvider(
             enabledKeys,
-            ChannelCredentials.GetAllApiKeys(candidate.Credentials));
+            ChannelCredentials.GetAllApiKeys(candidate.Credentials),
+            request.RawRequest?.SessionId);
 
         // The reference keys each channel's outbounds by API format (the channel
         // endpoint map). The slice's candidates carry one base URL, so dispatch

@@ -73,8 +73,8 @@ public static class TraceContext
 
 /// <summary>
 /// Port of contexts.WithThread/GetThread for the thread id alone. The reference
-/// stores the loaded <c>ent.Thread</c>; the thread middleware itself is not
-/// ported yet, so the port publishes the id the trace row needs (C095).
+/// stores the loaded <c>ent.Thread</c>; nothing downstream reads more than the
+/// row id, so <see cref="ThreadMiddleware"/> publishes only that value.
 /// </summary>
 public static class ThreadContext
 {

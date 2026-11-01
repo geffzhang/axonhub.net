@@ -114,6 +114,49 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
     }
 
     [Fact]
+    public async Task TraceIdSelectsTheSameChannelApiKeyAcrossRequests()
+    {
+        // channel_apikey_provider.go: with several enabled keys and a trace in
+        // the context, TraceStickyKeyProvider picks by rendezvous hashing over
+        // "traceID|key". WithTrace publishes the trace id as the session id, so
+        // the wire request carries it to the outbound factory (C013).
+        fixture.Channels.Set(new AxonHub.Abstractions.ChannelDescriptor
+        {
+            Id = 4102,
+            Name = "sticky-key-channel",
+            OrderingWeight = 0,
+            Type = "openai",
+            BaseUrl = "http://upstream.test",
+            Credentials = "{\"apiKeys\":[\"sk-one\",\"sk-two\",\"sk-three\"]}",
+            SupportedModels = "[\"sticky-model\"]",
+        });
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("sticky-model", "ok"),
+        };
+        var orchestrator = NewOrchestrator(executor, new RecordingMetricsRecorder(), FastPolicy());
+
+        var first = TestChannels.ChatRequest("sticky-model");
+        first.SessionId = "trace-sticky-key";
+        await orchestrator.ProcessAsync(first);
+
+        var second = TestChannels.ChatRequest("sticky-model");
+        second.SessionId = "trace-sticky-key";
+        await orchestrator.ProcessAsync(second);
+
+        string[] keys = ["sk-one", "sk-two", "sk-three"];
+        var expected = ChannelApiKeyProvider.RendezvousSelect(keys, "trace-sticky-key");
+
+        Assert.Equal(2, executor.Requests.Count);
+        Assert.All(
+            executor.Requests,
+            request => Assert.Equal(
+                "Bearer " + expected,
+                HttpClientUtils.HeaderGet(request.Headers, "Authorization")));
+    }
+
+    [Fact]
     public async Task NonStreamGrainRecorderUpdatesChannelMetrics()
     {
         fixture.Channels.Set(TestChannels.OpenAi(4701, "grain-metrics-model"));

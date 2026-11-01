@@ -13,10 +13,11 @@ namespace AxonHub.Api.Orchestration;
 /// <remarks>
 /// One instance serves one attempt. The reference provider picks inside
 /// <c>Get</c> and the outbound transformer calls it exactly once per attempt, so
-/// picking in the constructor is observationally identical for the untraced
-/// path. The trace-seeded branch (and its 1024-entry LRU) is unreachable until
-/// the trace subsystem is ported; <see cref="RendezvousSelect"/> is public so
-/// the deterministic part is still covered by tests (C013).
+/// picking in the constructor is observationally identical: the enabled set and
+/// the trace id cannot change during an attempt. The reference's 1024-entry LRU
+/// only memoises rendezvous results for an unchanged enabled set (a channel
+/// rebuild creates a new provider and an empty cache), so it has no further
+/// observable effect (C013).
 /// </remarks>
 public sealed class ChannelApiKeyProvider : IApiKeyProvider
 {
@@ -25,9 +26,14 @@ public sealed class ChannelApiKeyProvider : IApiKeyProvider
     /// <summary>
     /// Selects from the enabled keys of one channel. <paramref name="allKeys"/>
     /// is the unfiltered list (<see cref="AxonHub.Abstractions.ChannelCredentials.GetAllApiKeys"/>),
-    /// used only to derive the execution audit index.
+    /// used only to derive the execution audit index. <paramref name="traceId"/>
+    /// is the resolved trace id (the reference's <c>contexts.GetTrace(ctx).TraceID</c>),
+    /// or null when the request was not traced.
     /// </summary>
-    public ChannelApiKeyProvider(IReadOnlyList<string> enabledKeys, IReadOnlyList<string> allKeys)
+    public ChannelApiKeyProvider(
+        IReadOnlyList<string> enabledKeys,
+        IReadOnlyList<string> allKeys,
+        string? traceId = null)
     {
         ArgumentNullException.ThrowIfNull(enabledKeys);
         ArgumentNullException.ThrowIfNull(allKeys);
@@ -42,6 +48,12 @@ public sealed class ChannelApiKeyProvider : IApiKeyProvider
         else if (enabledKeys.Count == 1)
         {
             _key = enabledKeys[0];
+        }
+        else if (!string.IsNullOrEmpty(traceId))
+        {
+            // The reference's TraceStickyKeyProvider branch: deterministic
+            // rendezvous selection so one trace keeps using one channel key.
+            _key = RendezvousSelect(enabledKeys, traceId);
         }
         else
         {

@@ -21,7 +21,7 @@
 | `internal/server/orchestrator/{channel_limiter,channel_limiter_manager,channel_request_tracker,lb_strategy_rate_limit,rate_limit_tracking,rate_limit_admission,channel_queue_error,connection_tracking}_test.go`（91 个顶层测试函数） | `tests/AxonHub.Grains.Tests/{ChannelLimiterTests,ChannelLimiterManagerTests,ChannelRequestTrackerTests,RateLimitAwareScorerTests}.cs`（64 例）+ `tests/AxonHub.Api.Tests/{RateLimitAdmissionTests,RateLimitTrackingTests,ChannelQueueErrorTests,ChannelLimiterMiddlewareTests}.cs`（5 + 10 + 4 + 7 个函数 / 29 个用例） | 90/91 已移植 | 逐条对照：硬信号量容量、FIFO 让位、有界队列拒绝、队列超时、取消与无槽泄漏；manager 的配置归一化/相等/重建/Forget/Snapshot；tracker 的自然分钟窗口、RPM 原子扣减、TPM 累加、冷却只延长与惰性清理；RateLimitAware 的四个子分与硬耗尽；API 中间件的 RPM 准入、TPM/冷却追踪、队列错误信封与连接让位顺序。未移植/合并：`TestNoopRateLimitTracking`（端口无 nil tracker 分支，C045）；`NoChannel` 与 `NilChannel` 在端口合并为“无候选”状态；`channel_limiter_metrics_test.go` 的 3 例随指标子系统顺延（C044）。另补 1 例冷却只延长的边界（`CooldownOnlyEverExtends`），tracker 共计 24 例。 |
 | `internal/server/biz/cost_calc_test.go`（13 个顶层测试函数） | `tests/AxonHub.Api.Tests/UsageCostCalculatorTests.cs`（26 例） | 13/13 已移植 | 逐条对照：缓存/写缓存 token 从 prompt 数量扣除、全缓存归零、schedule 的 daily time / 跨午夜 / weekdays / date range / priority / timezone / 未知时区回退 / 缺 `when` 恒匹配；另补 flat_fee、tiered 分段、volume 命中档、未知模式/缺失 payload、无 items 与未知 item code，以及 `usage_cost_test.go` 的 4 个写缓存变体用例（five_min / one_hour / 两者并存 / 无变体回退共享价）。 |
 | `internal/server/biz/usage_cost_test.go`（9 个 Ent 集成用例：per-unit / tiered / volume / volume 首档 / 无价格 / 四个写缓存变体） | `tests/AxonHub.Api.Tests/{UsageCostServiceTests,UsageCostCalculatorTests,UsageCostInjectionTests}.cs` + `tests/AxonHub.Persistence.Tests/UsageLogStoreTests.cs` | 已改写（9/9 覆盖） | Ent 内嵌 SQLite 的整链路用例改写为分段锁定的行为测试：价格读取与未知模型/非法通道/损坏价格（Service 12 例）、金额与变体（Calculator 4 例）、响应注入与 usage 行落库（Injection 5 例）、5m/1h 列回环（UsageLogStoreTests）。参照断言的 `total_cost` / `cost_items` 形状 / reference id 与 5m/1h 列均由上述用例覆盖。 |
-| `internal/server/biz/channel_apikey_test.go`（30 个顶层测试：20 个 key 选择/哈希 + 1 个 context provider + 7 个 DeleteDisabledAPIKeys + 2 个 cleanup）与 `request_channel_api_key_index_test.go`（4 个测试函数，含 6 个索引子用例） | `tests/AxonHub.Api.Tests/{ChannelApiKeyProviderTests,ChannelApiKeyAuditTests}.cs`（16 + 7 例） | 选择/审计可执行用例全部覆盖；`AddKey_Stable` 顺延 | 逐条对照 20 个选择用例：单 key、无 trace 成员、全禁用回退、禁用 key 排除、同 trace 确定性（直接驱动 `RendezvousSelect`）、不同 trace、加 key ≤2/3 重映射、删 key 不影响未命中 trace、顺序无关、FNV-1a 向量。`AddKey_Stable` 依赖 provider 挂在通道上的 LRU，随 trace 子系统顺延（C013）。索引 4 个函数改写为 7 个端到端审计用例（多 key 位置、单 key 无索引、短 key 无后缀、禁用 key 仍计数、共享后缀按索引区分、OAuth 旧字段排除、每次重试各自审计）；7 个 DeleteDisabledAPIKeys 与 2 个 cleanup 属管理面，未移植（C014）。 |
+| `internal/server/biz/channel_apikey_test.go`（30 个顶层测试：20 个 key 选择/哈希 + 1 个 context provider + 7 个 DeleteDisabledAPIKeys + 2 个 cleanup）与 `request_channel_api_key_index_test.go`（4 个测试函数，含 6 个索引子用例） | `tests/AxonHub.Api.Tests/{ChannelApiKeyProviderTests,ChannelApiKeyAuditTests}.cs`（23 + 7 例） | 选择/审计可执行用例全部覆盖；`AddKey_Stable` 由 rendezvous 稳定性覆盖 | 逐条对照 20 个选择用例：单 key、无 trace 成员、全禁用回退、禁用 key 排除、同 trace 确定性（直接驱动 `RendezvousSelect`）、不同 trace、加 key ≤2/3 重映射、删 key 不影响未命中 trace、顺序无关、FNV-1a 向量；trace 分支由第 32 节接入并按同 trace 稳定、不同 trace 分散锁定。`AddKey_Stable` 依赖的 LRU 在端口不保留（通道重建会新建 provider 与空缓存），加 key 的稳定性由 rendezvous 性质覆盖。索引 4 个函数改写为 7 个端到端审计用例（多 key 位置、单 key 无索引、短 key 无后缀、禁用 key 仍计数、共享后缀按索引区分、OAuth 旧字段排除、每次重试各自审计）；7 个 DeleteDisabledAPIKeys 与 2 个 cleanup 属管理面，未移植（C014）。 |
 
 | `llm/transformer/openai/responses/websocket_executor_test.go`（32 个顶层测试函数，其中 3 个表驱动） + `http_executor_test.go`（3 个） | `tests/AxonHub.Llm.Tests/ResponsesWebSocketExecutorTests.cs`（32 个方法 / 37 个用例）+ `ResponsesHttpTransportExecutorTests.cs`（3 例）+ `tests/AxonHub.Api.Tests/TransportRequestFinalizerTests.cs`（5 例） | 37/37 + 3/3 已移植，接缝另锁 5 例 | 逐条对照：执行器缓存、response.create 发送、终态停止、取消优先级（读阻塞/已关闭/不覆盖终态）、顶层 error、官方错误状态与 body、failed/cancelled/incomplete 聚合、会话复用与不池化、显式 previous_response_id 四种对账、payload 恢复、assistant 后缀重连、复用连接提前关闭、组织头分池、失败/取消逐出、仅新输入、输入超限、非追加重连、提前关闭逐出、trace 头不影响池键、后台清理与 Close、事件规范化、URL 映射、握手头观察。参照用 `httptest` + gorilla upgrader；端口用 `ResponsesWebSocketTestServer`（loopback TcpListener + 手写 101 握手）。编排层 `CustomizeExecutor` / `finalizeTransportRequest` 在参照中位于 responses 包的 outbound.go，端口位于 `PersistentOutboundTransformer`，故 5 个接缝用例放在 Api.Tests。 |
 
@@ -172,7 +172,7 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 说明：参照的 `internal/server/orchestrator/*_test.go` 与 `internal/server/api/*_test.go` 依赖 Ent、真实数据库与 gin，
 不能逐条直接移植；本切片用真实 Orleans `TestCluster` + 假通道快照 + 脚本化 `IExecutor` 复现同一调用链，
 断言参照测试同样关心的可观察结果（上游请求、重试次数、客户端错误体、SSE 字节）。
-这条链路的范围裁剪登记为 C014、C013–C021（多 key 随机分配与执行 key 审计已接入，C013 已收窄为 trace 粘性缺口，见 §8.6；成本计费已接入（C046–C049，见 §8.5；API key 鉴权已接入，C023；通道级请求改写已接入，见 §8.4；限流与并发准入已接入，C035，见 §7.1）；通道级重试配置（已解决，C016）、
+这条链路的范围裁剪登记为 C014、C013–C021（多 key 随机分配与执行 key 审计已接入，C013 已闭合（trace 粘性 key 见 §32）；成本计费已接入（C046–C049，见 §8.5；API key 鉴权已接入，C023；通道级请求改写已接入，见 §8.4；限流与并发准入已接入，C035，见 §7.1）；通道级重试配置（已解决，C016）、
 性能记录简化（计数语义已解决，C017；性能明细与自动禁用属后续里程碑）、同步 recorder 工作单元、
 流式归档与终态分类（已解决，C019）、response_chunks 与存储策略（C020）、
 响应头捕获差异（C021）；gzip/deflate/zstd 请求体解码已接入（C015，已解决，残余错误文案差异见登记）；
@@ -268,7 +268,7 @@ sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模�
 差异登记为 C046（decimal 精度）、C047（实时读库）、C048（管理面未移植）、C049
 （未命中价格的 `cost_items` 为 JSON null 的推断）。
 
-## 8.6 通道多 key 选择与执行 key 审计（23 例）
+## 8.6 通道多 key 选择与执行 key 审计（30 例）
 
 参照调用链：`getAPIKeyProvider` 在启用 key 多于一个时返回 `TraceStickyKeyProvider`（否则静态 provider）→
 出站变换调用 `Get()` 取 key → `CreateRequestExecution` 从实际发送的 key 写
@@ -278,12 +278,12 @@ sjson 低层失败时保留上一个 body（C041）；参照的复用覆盖模�
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
-| 选择算法：单 key 静态、无 trace 随机且仅限启用 key、全禁用回退首个 key、禁用 key 排除、rendezvous 同种子确定性、不同种子分布、加 key 至多重映射 2/3、删 key 不影响未命中 trace、key 顺序无关、FNV-1a 64 与参照向量一致 | `ChannelApiKeyProviderTests.cs` | 16 |
+| 选择算法：单 key 静态、无 trace 随机且仅限启用 key、全禁用回退首个 key、禁用 key 排除、rendezvous 同种子确定性、不同种子分布、加 key 至多重映射 2/3、删 key 不影响未命中 trace、key 顺序无关、FNV-1a 64 与参照向量一致；trace 分支的 7 例见第 32 节 | `ChannelApiKeyProviderTests.cs` | 23 |
 | 审计列：多 key 的后缀与 1-based 索引、单 key 无索引、≤4 rune 无后缀、禁用 key 不发送但仍参与索引、共享最后 4 字符时靠索引区分、OAuth 旧字段不计入 key 列表、每次重试（含跨通道）各自审计实际发送的 key | `ChannelApiKeyAuditTests.cs` | 7 |
 
-差异登记为 C013（trace 路径与 LRU 未移植；无 trace 路径已等价）、C014（凭据解码失败降级与管理面）。
+差异登记为 C013（第 32 节闭合 trace 路径；LRU 不保留的理由见该条）、C014（凭据解码失败降级与管理面）。
 `ChannelApiKeyProvider` 在构造时选择而非 `Get` 时选择：端口每次尝试新建 provider 且只调用一次 `Get`，
-与参照在无 trace 路径上的可观察行为相同；全禁用 fallback 位于工厂已拒绝的不可达分支。
+同一尝试内启用集合与 trace id 都不变，因此可观察结果相同；全禁用 fallback 位于工厂已拒绝的不可达分支。
 
 ## 9. 真实宿主启动冒烟（2026-10-30）
 
@@ -1036,9 +1036,9 @@ DDL 与 EF 模型、`TraceContext` / `ThreadContext` 容器接缝、`RequestIden
 `AxonHub.Api.Tests` 由 892 增至 934，`AxonHub.Persistence.Tests` 由 59 增至 65，
 `AxonHub.Grains.Tests` 保持 92；四个项目合计 2407 增至 2467。C089（请求 ID 与 trace ID
 链路）闭合；C095 登记无日志与 operation name、gjson 数字归一化与路径语法、
-trace 查询 / GC / GraphQL、trace 粘性 key、claudecode / opencode 出站生成等残余差异
-（thread 中间件由第 31 节关闭）；
-C013 与 C062 的 cause 更新为「trace 子系统已落地、provider / Responses 出站接线仍缺」。
+trace 查询 / GC / GraphQL、claudecode / opencode 出站生成等残余差异
+（thread 中间件由第 31 节、trace 粘性 key 由第 32 节关闭）；
+C013 与 C062 的 cause 更新为「trace 子系统已落地、provider / Responses 出站接线仍缺」（C013 由第 32 节闭合）。
 ## 31. thread 中间件与 threads 表（12 例，2026-11-01）
 
 参照路线：`internal/server/middleware/thread.go`（`WithThread` 读取配置头、按项目
@@ -1064,8 +1064,31 @@ EF 写，唯一索引冲突后按 `(thread_id, project_id)` 重读并 detach 失
 合计 12 例（Api 7、Persistence 5）：`AxonHub.Api.Tests` 由 934 增至 941，
 `AxonHub.Persistence.Tests` 由 65 增至 70，`AxonHub.Llm.Tests` 保持 1376，
 `AxonHub.Grains.Tests` 保持 92；四个项目合计 2467 增至 2479。C095 的 thread 中间件缺口
-关闭，残余为 trace 查询 / GC / GraphQL、trace 粘性 key、claudecode / opencode 出站生成与
-日志接缝。
+关闭，残余为 trace 查询 / GC / GraphQL、claudecode / opencode 出站生成与日志接缝
+（trace 粘性 key 由第 32 节关闭）。
+
+## 32. trace 粘性 API key 选择（8 例，2026-11-01）
+
+参照路线：`internal/server/biz/channel_apikey_provider.go`（`TraceStickyKeyProvider.Get`：启用集合为空
+回退 `Credentials.APIKeys[0]`、单 key 直取、有 trace 时 `rendezvousSelect` over `traceID|key` 并写入
+1024 项 LRU、无 trace 随机选择）、`channel_llm.go:169-184`（`getAPIKeyProvider` 的 trace 分支）、
+`middleware/trace.go:168-173`（`contexts.WithTrace` 与 `shared.WithSessionID`）。参照测试：
+`biz/channel_apikey_test.go` 的 20 个选择/哈希用例。
+
+端口新增：`ChannelApiKeyProvider` 增加 trace id 参数与 rendezvous 分支；`ChannelOutboundFactory`
+从 `request.RawRequest.SessionId` 取 trace id（`TraceMiddleware` 发布、`ChatCompletionEndpoint`
+写入的同一个值）。同一 trace 在重试与后续请求间固定同一 key，无 trace 仍随机，单 key 与全禁用
+回退不变；`channel_api_key_index` 仍按全量 key 计算。参照的 1024 项 LRU 不单独保留：它只记忆固定
+启用集合内的 rendezvous 结果，而通道重建会新建 provider 与空缓存，因此没有额外的可观察效果。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| trace 分支：rendezvous 结果、同 trace 跨次稳定、不同 trace 分散、单 key / 全禁用不受影响、审计索引、空 trace 随机 | `tests/AxonHub.Api.Tests/ChannelApiKeyProviderTests.cs` | 7（既有 16 例扩充至 23） |
+| 端到端接线：同一 trace 两次请求发送同一 Authorization key | `tests/AxonHub.Api.Tests/ChatCompletionOrchestratorTests.cs` | 1 |
+
+合计 8 例（Api 8）：`AxonHub.Api.Tests` 由 941 增至 949，`AxonHub.Llm.Tests` 保持 1376，
+`AxonHub.Persistence.Tests` 保持 70，`AxonHub.Grains.Tests` 保持 92；四个项目合计 2479 增至 2487。
+C013 闭合（残余 apiKeyOverride 与 trace_sticky_mode 通道粘性）；C095 的 trace 粘性 key 项关闭。
 
 ## 覆盖缺口
 
@@ -1086,5 +1109,5 @@ EF 写，唯一索引冲突后按 `(thread_id, project_id)` 重读并 detach 失
 | usage 成本管理面：`channel_model_prices` 写入、reference-id 轮换、版本表与自动定价 | 参照的 `SaveChannelModelPrices` / `channel_model_price_versions` / GraphQL 管理面未移植；端口只有读取路径与基础表（C048） | 中 | 随通道管理面落地 |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
-| trace 子系统：查询 / GC、GraphQL、trace 粘性 key | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定；查询 / GC / GraphQL、trace 粘性 key 与 claudecode / opencode 出站生成未移植（C095；粘性 key 见 C013） | 中 | 随管理面 / 权限与通道切片落地 |
+| trace 子系统：查询 / GC、GraphQL、出站生成 | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；查询 / GC / GraphQL 与 claudecode / opencode 出站生成未移植（C095） | 中 | 随管理面 / 权限与通道切片落地 |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

@@ -3,16 +3,17 @@ using AxonHub.Api.Orchestration;
 namespace AxonHub.Api.Tests;
 
 /// <summary>
-/// Port of internal/server/biz/channel_apikey_test.go for the reachable half of
-/// TraceStickyKeyProvider: untraced random selection, the all-disabled fallback,
-/// rendezvous hashing and the execution audit index. The trace-seeded branch
-/// (and its LRU, which makes an addition exactly stable) waits for the trace
-/// subsystem (C013); the deterministic selector it uses is covered here.
+/// Port of internal/server/biz/channel_apikey_test.go: untraced random
+/// selection, trace-seeded rendezvous selection, the all-disabled fallback,
+/// rendezvous hashing and the execution audit index.
 /// </summary>
 public sealed class ChannelApiKeyProviderTests
 {
-    private static ChannelApiKeyProvider Provider(string[] enabled, string[]? all = null)
-        => new(enabled, all ?? enabled);
+    private static ChannelApiKeyProvider Provider(
+        string[] enabled,
+        string[]? all = null,
+        string? traceId = null)
+        => new(enabled, all ?? enabled, traceId);
 
     [Fact]
     public void SingleEnabledKeyIsSelected()
@@ -65,6 +66,84 @@ public sealed class ChannelApiKeyProviderTests
             Assert.Contains(provider.Key, enabled);
             Assert.NotEqual("key-2", provider.Key);
             Assert.Equal(provider.Key == "key-1" ? 1 : 3, provider.KeyIndex);
+        }
+    }
+
+    [Fact]
+    public void TraceSelectionMatchesRendezvousOverTheEnabledKeys()
+    {
+        string[] enabled = ["key-1", "key-2", "key-3"];
+
+        var provider = Provider(enabled, traceId: "trace-abc-123");
+
+        Assert.Equal(
+            ChannelApiKeyProvider.RendezvousSelect(enabled, "trace-abc-123"),
+            provider.Key);
+    }
+
+    [Fact]
+    public void SameTraceSelectsTheSameKeyOnEveryAttempt()
+    {
+        string[] enabled = ["key-1", "key-2", "key-3", "key-4", "key-5"];
+
+        var selected = Provider(enabled, traceId: "trace-sticky").Key;
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            Assert.Equal(selected, Provider(enabled, traceId: "trace-sticky").Key);
+        }
+    }
+
+    [Fact]
+    public void DifferentTracesSpreadAcrossTheEnabledKeys()
+    {
+        string[] enabled = ["key-1", "key-2", "key-3", "key-4", "key-5"];
+
+        var selected = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < 100; index++)
+        {
+            selected.Add(Provider(enabled, traceId: "trace-" + index).Key);
+        }
+
+        Assert.True(selected.Count > 1, "different traces should select different keys");
+    }
+
+    [Fact]
+    public void ATraceIdDoesNotAffectASingleEnabledKey()
+    {
+        var provider = Provider(["only-key"], traceId: "trace-single");
+
+        Assert.Equal("only-key", provider.Key);
+    }
+
+    [Fact]
+    public void ATraceIdDoesNotOverrideTheAllDisabledFallback()
+    {
+        var provider = Provider([], ["key-1", "key-2"], traceId: "trace-disabled");
+
+        Assert.Equal("key-1", provider.Key);
+        Assert.Equal(1, provider.KeyIndex);
+    }
+
+    [Fact]
+    public void TraceSelectionKeepsTheAuditIndexOverTheFullList()
+    {
+        string[] all = ["key-1", "key-2", "key-3"];
+
+        var provider = Provider(["key-1", "key-3"], all, traceId: "trace-audit");
+
+        Assert.Equal(
+            Array.IndexOf(all, provider.Key) + 1,
+            provider.KeyIndex);
+    }
+
+    [Fact]
+    public void AnEmptyTraceIdUsesRandomSelection()
+    {
+        string[] enabled = ["key-1", "key-2", "key-3"];
+
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            Assert.Contains(Provider(enabled, traceId: string.Empty).Key, enabled);
         }
     }
 
