@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace AxonHub.Llm.Json;
@@ -18,9 +19,25 @@ internal static class RawJsonModelPatch
 {
     /// <summary>Replaces the top-level <c>model</c> string, or appends it.</summary>
     public static byte[] SetModel(ReadOnlySpan<byte> body, string model)
-    {
-        var quoted = GoJson.Marshal(model);
+        => RawJsonPatch.SetTopLevelRaw(body, "model"u8, GoJson.Marshal(model));
+}
 
+/// <summary>
+/// Port of <c>sjson.SetBytes</c> for a top-level key, byte-preserving like the
+/// reference library (the Bailian outbound uses it to add
+/// <c>enable_thinking</c>).
+/// </summary>
+internal static class RawJsonPatch
+{
+    /// <summary>
+    /// Replaces the first top-level <paramref name="keyName"/> value with the
+    /// raw <paramref name="valueJson"/> bytes, or appends the key when missing.
+    /// </summary>
+    public static byte[] SetTopLevelRaw(
+        ReadOnlySpan<byte> body,
+        ReadOnlySpan<byte> keyName,
+        ReadOnlySpan<byte> valueJson)
+    {
         int? valueStart = null;
         int? valueEnd = null;
         var objectEnd = -1;
@@ -40,7 +57,8 @@ internal static class RawJsonModelPatch
             {
                 case JsonTokenType.StartArray:
                     throw new InvalidOperationException(
-                        "cannot set array element for non-numeric key 'model'");
+                        "cannot set array element for non-numeric key '"
+                        + Encoding.UTF8.GetString(keyName) + "'");
                 case JsonTokenType.StartObject:
                     break;
                 default:
@@ -60,13 +78,13 @@ internal static class RawJsonModelPatch
                     throw new InvalidOperationException("json must be an object or array");
                 }
 
-                var isModelKey = reader.ValueTextEquals("model"u8);
+                var isTargetKey = reader.ValueTextEquals(keyName);
                 if (!reader.Read())
                 {
                     throw new InvalidOperationException("json must be an object or array");
                 }
 
-                if (isModelKey && valueStart is null)
+                if (isTargetKey && valueStart is null)
                 {
                     valueStart = checked((int)reader.TokenStartIndex);
                     reader.Skip();
@@ -89,10 +107,10 @@ internal static class RawJsonModelPatch
 
         if (valueStart is { } start && valueEnd is { } end)
         {
-            var result = new byte[body.Length - (end - start) + quoted.Length];
+            var result = new byte[body.Length - (end - start) + valueJson.Length];
             body[..start].CopyTo(result);
-            quoted.CopyTo(result, start);
-            body[end..].CopyTo(result.AsSpan(start + quoted.Length));
+            valueJson.CopyTo(result.AsSpan(start));
+            body[end..].CopyTo(result.AsSpan(start + valueJson.Length));
             return result;
         }
 
@@ -101,8 +119,14 @@ internal static class RawJsonModelPatch
             throw new InvalidOperationException("json must be an object or array");
         }
 
-        ReadOnlySpan<byte> keyBytes = "\"model\":"u8;
-        var extra = keyBytes.Length + quoted.Length + (hasProperties ? 1 : 0);
+        // sjson writes `"key":value` verbatim.
+        var keyJson = new byte[keyName.Length + 3];
+        keyJson[0] = (byte)'"';
+        keyName.CopyTo(keyJson.AsSpan(1));
+        keyJson[^2] = (byte)'"';
+        keyJson[^1] = (byte)':';
+
+        var extra = keyJson.Length + valueJson.Length + (hasProperties ? 1 : 0);
         var appended = new byte[body.Length + extra];
         var position = objectEnd;
 
@@ -112,10 +136,10 @@ internal static class RawJsonModelPatch
             appended[position++] = (byte)',';
         }
 
-        keyBytes.CopyTo(appended.AsSpan(position));
-        position += keyBytes.Length;
-        quoted.CopyTo(appended, position);
-        position += quoted.Length;
+        keyJson.CopyTo(appended, position);
+        position += keyJson.Length;
+        valueJson.CopyTo(appended.AsSpan(position));
+        position += valueJson.Length;
         body[objectEnd..].CopyTo(appended.AsSpan(position));
 
         return appended;

@@ -8,6 +8,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
+using AxonHub.Llm.Transformer.Bailian;
 using AxonHub.Llm.Transformer.Cerebras;
 using AxonHub.Llm.Transformer.Cline;
 using AxonHub.Llm.Transformer.DeepSeek;
@@ -43,8 +44,9 @@ namespace AxonHub.Api.Orchestration;
 /// <c>cerebras</c>, <c>nanogpt</c>, <c>nanogpt_responses</c>, <c>ollama</c>,
 /// <c>ollama_anthropic</c>, <c>zai</c>, <c>zhipu</c>, <c>zai_anthropic</c>,
 /// <c>zhipu_anthropic</c>, <c>xiaomi</c>, <c>xiaomi_anthropic</c>,
-/// <c>minimax</c> and <c>minimax_anthropic</c> channel types are ported (the
-/// vertical slice); the
+/// <c>minimax</c>, <c>minimax_anthropic</c>, <c>bailian</c>,
+/// <c>bailian_responses</c>, <c>bailian_anthropic</c> and <c>moonshot_coding</c>
+/// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are picked by rendezvous hashing when the request carries a
@@ -109,6 +111,14 @@ public static class ChannelOutboundFactory
     public const string MinimaxChannelType = "minimax";
 
     public const string MinimaxAnthropicChannelType = "minimax_anthropic";
+
+    public const string BailianChannelType = "bailian";
+
+    public const string BailianResponsesChannelType = "bailian_responses";
+
+    public const string BailianAnthropicChannelType = "bailian_anthropic";
+
+    public const string MoonshotCodingChannelType = "moonshot_coding";
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
@@ -405,6 +415,33 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
             }),
+            // channel_llm.go:1133-1143: DashScope's OpenAI-compatible outbound
+            // with the tool-call merge, enable_thinking mapping and stream
+            // filter; the default endpoint set is chat only
+            // (channel_endpoint.go:313).
+            BailianChannelType => new BailianOutboundTransformer(new BailianOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:1145-1155: the Bailian responses channel has
+            // exactly one endpoint (channel_endpoint.go:314), served by the
+            // shared Responses outbound.
+            BailianResponsesChannelType => ResponsesOutboundTransformer.Create(
+                candidate.BaseUrl ?? string.Empty,
+                provider,
+                provider.KeyIndex),
+            // channel_llm.go:1157-1167: bailian_anthropic and moonshot_coding
+            // share the plain Anthropic direct outbound.
+            BailianAnthropicChannelType or MoonshotCodingChannelType
+                => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Direct,
+                    BaseUrl = candidate.BaseUrl ?? string.Empty,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };

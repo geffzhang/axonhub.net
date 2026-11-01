@@ -1451,6 +1451,58 @@ SelectedApiKey 透传），以及 `ChannelOutboundFactory` 的 `zai` / `zhipu` /
 `AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
 合计 2908 增至 3030。差异条目新增 C102（已接受）。
 
+## 41. Bailian / Bailian-Responses / Bailian-Anthropic / Moonshot-Coding 出站与通道接线（52 例，2026-11-01）
+
+参照路线：`llm/transformer/bailian/outbound.go:19-22`（Config：BaseURL /
+APIKeyProvider）、`:33-40`（旧构造，静态 key）、`:43-61`
+（`NewOutboundTransformerWithConfig`：nil → `invalid Bailian transformer
+configuration: config is nil`；以内嵌 `openai.Config{PlatformOpenAI,
+ReasoningFieldContent}` 构造，失败包 `invalid Bailian transformer
+configuration`）、`:64-88`（TransformRequest：先 `mergeConsecutiveToolCallMessages`，
+`reasoning_effort == "none"` 时值拷贝并清空 effort，委托内嵌出站后
+`sjson.SetBytes(body, "enable_thinking", false)`，失败包
+`failed to set Bailian enable_thinking`）、`:90-135`（合并：连续 assistant +
+非空 tool_calls + 空 content，且 tool_call_id / name / refusal / message_index /
+tool_call_name / tool_call_is_error / reasoning_content / reasoning_signature /
+redacted_reasoning_content / cache_control 全空的相邻消息合并 tool_calls；仅在
+发生过合并时返回浅拷贝，调用方请求不变）、`:137-155`（可合并判定）、
+`:157-163`（空 content 判定：Content 无值且 MultipleContent 为空）、
+`:166-177`（TransformStream：内嵌流再包 `bailianStreamFilter`）；
+`llm/transformer/bailian/stream_filter.go:10-25`（toolCallKey{choiceIndex,
+callIndex} 与过滤器字段）、`:27-32`（构造）、`:34-71`（Next：pending 优先、
+nil 跳过、`llm.DoneResponse` 按指针透传、filter 后 pending 优先）、
+`:85-131`（filterResponse：首个 tool call 之前整条直通；之后抽出并缓存所有
+choice 的文本、记录最后文本 choice，finish 且缓存非空时合成文本 chunk 排在
+finish 之前）、`:133-154`（filterToolCalls：空参数跳过；`TrimSpace(arg) == "{}"`
+且该 (choice, call) 已累计非空时清空参数，否则累加）、`:156-187`
+（extractTextDelta：清空 Content、抽出并移除 text parts，保留其它 part）、
+`:189-212`（buildTextChunk：只复制 ID / Object / Created / Model /
+SystemFingerprint / ServiceTier，单 choice 带文本 delta）；
+`internal/ent/channel/channel.go:251-254`（四个类型常量）；
+`internal/server/biz/channel_llm.go:1133-1143`（bailian → Bailian 出站）、
+`:1145-1155`（bailian_responses → Responses 出站）、`:1157-1167`
+（bailian_anthropic 与 moonshot_coding → Anthropic Direct）与
+`channel_endpoint.go:313-316` 的默认端点集（chat / responses / messages）。
+
+本次移植新增：`src/AxonHub.Llm/Transformer/Bailian/BailianOutboundTransformer.cs`
+（构造包装、合并的浅拷贝语义、none 的浅拷贝与 `enable_thinking` 顶层字节补丁、
+其余方法委托内嵌 OpenAI 出站，以及内部 `BailianStreamFilter`：pending 队列、
+文本缓存、按 (choice, call) 的参数累计、Done 按引用透传、Go White_Space 的
+TrimSpace 表）、`src/AxonHub.Llm/Json/RawJsonModelPatch.cs` 泛化出的
+`RawJsonPatch.SetTopLevelRaw`（按顶层键替换或追加原始 JSON 值，替代 sjson
+单键设置）与 `ChannelOutboundFactory` 的 `bailian` / `bailian_responses` /
+`bailian_anthropic` / `moonshot_coding` 分支。已接受差异与残余裁剪见 C103。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Bailian：构造两条文案、reasoning_effort 12 态映射与调用方请求不变、OpenAI 入站 none、连续工具调用合并与 14 类阻止合并且各段独立合并、chat 线路形状（URL / Bearer / ApiFormat）、响应 / 错误委托、流过滤端到端 | `tests/AxonHub.Llm.Tests/BailianOutboundTransformerTests.cs` | 34 |
+| Bailian 流过滤：tool call 后文本缓存与 finish 前释放、重复 `{}` 参数、无 tool call 直通、多 choice 文本与非文本 part、最后 choice 索引、按 (choice, call) 累计、Done 引用透传、nil 跳过、未触碰响应引用透传 | `tests/AxonHub.Llm.Tests/BailianStreamFilterTests.cs` | 9 |
+| 通道接线：bailian chat 出站与 none→`enable_thinking=false`、bailian_responses 的 `/responses`、bailian_anthropic / moonshot_coding 的 `/messages`、四类缺 key 拒绝 | `tests/AxonHub.Api.Tests/BailianChannelWiringTests.cs` | 9 |
+
+`AxonHub.Llm.Tests` 由 1846 增至 1889，`AxonHub.Api.Tests` 由 1022 增至 1031，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 3030 增至 3082。差异条目新增 C103（已接受）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1471,5 +1523,5 @@ SelectedApiKey 透传），以及 `ChannelOutboundFactory` 的 `zai` / `zhipu` /
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101，Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102） | 中 | 按 provider 分组后续切片（OpenAI 兼容族剩余：Modelscope、Bailian、Doubao/Volcengine、Zenmux 等） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103） | 中 | 按 provider 分组后续切片（OpenAI 兼容族剩余：Modelscope、Doubao/Volcengine、Zenmux 等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |
