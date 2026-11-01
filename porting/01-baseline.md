@@ -1305,6 +1305,76 @@ xAI 的 responses / responses_compact 入站落到 Responses 出站，其余落�
 `AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
 合计 2743 增至 2802。差异条目新增 C100（已接受）。
 
+## 39. OpenRouter / Cerebras / NanoGPT OpenAI 兼容出站与通道接线（106 例，2026-11-01）
+
+参照路线：`llm/transformer/openrouter/outbound.go:51-71`（构造：内嵌
+`openai.Config{PlatformType: PlatformOpenAI, ReasoningField:
+ReasoningFieldReasoning}`，校验失败包
+`invalid OpenRouter transformer configuration`；`strings.TrimSuffix` 单尾部斜杠
+裁剪出独立 `BaseURL`，与内嵌出站的版本归一互不影响）、`:74-141`
+（`TransformRequest`：nil 拒绝、统一校验后按 `RequestType` 分派 chat / image /
+embedding / speech / transcription / translation，compact 以
+`compact is only supported by OpenAI Responses API` 拒绝，其余类型
+unsupported）、`:143-233`（图片请求：`/images` 路由、`input_references` 上限
+16、mask 拒绝、seed 透传、图片魔数嗅探与 data URL）、`:266-310`（聊天响应解码，
+包装前缀 `failed to unmarshal chat completion response`）、`:312-374`（图片
+响应：`ID = "img-"+Created`、`Object = "chat.completion"`、model 取自
+`TransformerMetadata["model"]`（缺省 `image-generation`）、逐图
+`buildImageDataURL`、首个可用媒体类型决定 `OutputFormat`、usage 转换）、
+`:403-426`（`buildImageDataURL` 与 `imageFormatFromMediaType`：`image/svg+xml`
+→ `svg`，其余裁 `image/` 前缀，未知 → 空串）、`:442-490`（流转换与分块）、
+`:495-546`（错误信封：`metadata.raw`（`cast.ToString`）> `message` >
+`http.StatusText(code)`，code 恒为字符串 `fmt.Sprintf("%d")`，nil 错误 → 500
++ `Internal Server Error`）；`model.go:64-140`（Response / Choice / Message 的
+字段遮蔽、`reasoning_details` 文本优先、生成图片并入 content parts、空分片置
+nil）；`llm/transformer/cerebras/outbound.go:35-96`（`DefaultBaseURL =
+"https://api.cerebras.ai/v1"`、nil 配置与缺 provider 文案、空 URL 回退、包装
+`invalid Cerebras transformer configuration`、`TransformRequest` 的 nil 拒绝与
+浅拷贝 `Store=nil`，其余方法全部继承 OpenRouter）；`llm/transformer/nanogpt/outbound.go:43-56`
+（内嵌 OpenAI 出站与构造包装）、`:62-110`（null 响应、状态 ≥400 的诊断
+`{"error": string}` > 原始 body > 裸状态码、chat 解码进 `NanogptResponse`、
+embedding / moderation / 图片 / 音频委托）、`:118-172`（流过滤 `[DONE]`、追加
+`DoneResponse`、流内错误事件、分块转换）、`:174-210`（带
+`nanoGPTChunkTransform` 的聚合）；`model.go:16-90`（reasoning →
+reasoning_content、XML 工具调用提取与剩余内容、全消费时零
+`MessageContent`、`ToOpenAIResponse` 恒安装非 nil choice 切片）；
+`xml_parser.go:46-67`（`MaybeHasXMLToolCalls` 的 100KB 上限）、`:69-214`
+（`ParseXMLToolCalls`：嵌套 → 工具调用 → 自闭合的候选收集、按起点稳定排序、
+未识别匹配推进 `lastEnd`、`strings.TrimSpace` 剩余内容）、`:216-255`
+（`normalizeXML`：unclosed → `</use_tool>` / `</Write_file>` 等补齐 →
+mismatch → 自闭合补空格）、`:257-281`（工具名：标签名归一与
+`name` 属性覆盖）、`:283-335`（参数：属性 + JSON 内容、Go `map[string]any` 的
+UTF-8 字节键序与浮点格式）、`:337-345`（`nanogpt_` + SHA-256（name+args）前
+16 位十六进制）；`internal/server/biz/channel_llm.go:753-799` 与
+`channel_endpoint.go:284-294`、`:324`、`:326-327` 的通道分支与默认端点。
+
+本次移植新增：
+`src/AxonHub.Llm/Transformer/OpenRouter/`（`OpenRouterOutboundTransformer.cs`
+的构造、chat / audio 委托、compact 拒绝与图片请求/响应、错误信封；
+`OpenRouterModels.cs` 的图片与聊天信封以及到统一/OpenAI 结构的转换，字段遮蔽
+与 `reasoning_details` 优先按参照保留）、`src/AxonHub.Llm/Transformer/Cerebras/`
+（默认 URL、构造校验、浅拷贝剥离 `store`、其余委托）、
+`src/AxonHub.Llm/Transformer/Nanogpt/`（`NanogptOutboundTransformer.cs` 的构造
+包装、状态诊断、非聊天委托与流过滤/聚合，`NanogptModels.cs` 的推理与 XML 工具
+调用消费，`NanogptXmlToolCalls.cs` 的归一化、正则抽取、确定性 ID 与 Go 风格
+序列化）、`src/AxonHub.Llm/Transformer/Shared/GjsonErrorProbe.cs`（错误信封的
+`metadata.raw` 探测），以及 `ChannelOutboundFactory` 的 `openrouter` /
+`cerebras` / `nanogpt` / `nanogpt_responses` 分支：前两者恒为 OpenRouter chat
+出站（音频等分支由出站自身按 `RequestType` 委托），后两者 chat 与 Responses
+出站。已接受差异与残余裁剪见 C101。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| OpenRouter：构造校验与包装前缀、单斜杠 BaseURL、chat 请求形状与 `reasoning` 字段、`input_references` 上限 / mask / seed / data URL、图片响应 `img-<created>` / `chat.completion` / model 元数据 / `OutputFormat`、错误信封（raw / message / status text / code 恒字符串 / nil → 500）、响应与消息的字段遮蔽、流与聚合、key 溯源 | `tests/AxonHub.Llm.Tests/OpenRouterOutboundTransformerTests.cs` | 39 |
+| nanoGPT：构造包装、status ≥400 三种诊断、chat 解码与 reasoning、非聊天委托、`[DONE]` 过滤与 `DoneResponse`、流内错误、聚合、零 `MessageContent`、`ToOpenAIResponse` 非 nil choices | `tests/AxonHub.Llm.Tests/NanogptOutboundTransformerTests.cs` | 16 |
+| nanoGPT XML 工具调用：maybe 判定、自闭合 / 简单内容 / JSON 内容 / 错配闭合 / 未闭合 / 嵌套 / 无空格 / 多调用 / 无调用 / 未识别标签、工具名覆盖表、确定性 ID、JSON 数字与键序、未闭合贪婪回溯 | `tests/AxonHub.Llm.Tests/NanogptXmlToolCallsTests.cs` | 33 |
+| Cerebras：nil 配置与缺 provider、默认 URL 回退、`store` 浅拷贝剥离（与 OpenRouter 对照）、nil 请求、OpenRouter chat 语义、key 索引溯源、响应与错误委托 | `tests/AxonHub.Llm.Tests/CerebrasOutboundTransformerTests.cs` | 8 |
+| `openrouter` 通道：chat 出站与 Bearer、speech 由出站委托（`/audio/speech`）；`cerebras`：缺省 URL 与自定义 URL、`store` 剥离；`nanogpt`：chat URL；`nanogpt_responses`：Responses 出站与 `/responses` URL；四类缺 key 拒绝 | `tests/AxonHub.Api.Tests/OpenRouterCerebrasNanogptChannelWiringTests.cs` | 10 |
+
+`AxonHub.Llm.Tests` 由 1649 增至 1745，`AxonHub.Api.Tests` 由 991 增至 1001，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 2802 增至 2908。差异条目新增 C101（已接受）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1325,5 +1395,5 @@ xAI 的 responses / responses_compact 入站落到 Responses 出站，其余落�
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100） | 中 | 按 provider 分组后续切片（优先 Openrouter / Cerebras / Nanogpt 等 OpenAI 兼容族） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101） | 中 | 按 provider 分组后续切片（OpenAI 兼容族剩余：Zai/Zhipu、Modelscope、Minimax、Xiaomi、Bailian 等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

@@ -8,12 +8,15 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
+using AxonHub.Llm.Transformer.Cerebras;
 using AxonHub.Llm.Transformer.Cline;
 using AxonHub.Llm.Transformer.DeepSeek;
 using AxonHub.Llm.Transformer.Fireworks;
 using AxonHub.Llm.Transformer.Longcat;
 using AxonHub.Llm.Transformer.Moonshot;
+using AxonHub.Llm.Transformer.Nanogpt;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Transformer.OpenRouter;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
@@ -34,7 +37,8 @@ namespace AxonHub.Api.Orchestration;
 /// Only the <c>openai</c>, <c>anthropic</c>, <c>claudecode</c>,
 /// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
 /// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>deepseek</c>, <c>fireworks</c>,
-/// <c>moonshot</c>, <c>longcat</c>, <c>cline</c>, <c>xai</c>, <c>ollama</c> and
+/// <c>moonshot</c>, <c>longcat</c>, <c>cline</c>, <c>xai</c>, <c>openrouter</c>,
+/// <c>cerebras</c>, <c>nanogpt</c>, <c>nanogpt_responses</c>, <c>ollama</c> and
 /// <c>ollama_anthropic</c> channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -72,6 +76,14 @@ public static class ChannelOutboundFactory
     public const string ClineChannelType = "cline";
 
     public const string XaiChannelType = "xai";
+
+    public const string OpenRouterChannelType = "openrouter";
+
+    public const string CerebrasChannelType = "cerebras";
+
+    public const string NanogptChannelType = "nanogpt";
+
+    public const string NanogptResponsesChannelType = "nanogpt_responses";
 
     public const string OllamaChannelType = "ollama";
 
@@ -227,6 +239,41 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
             }),
+            // channel_llm.go:753-763: OpenRouter is OpenAI-compatible with a
+            // top-level reasoning field and its own /images route; the default
+            // endpoint set is chat plus speech/transcription/translation
+            // (channel_endpoint.go:284-294).
+            OpenRouterChannelType => new OpenRouterOutboundTransformer(new OpenRouterOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:764-774: Cerebras wraps the OpenRouter outbound and
+            // strips the unsupported `store` field; the default endpoint set is
+            // chat only (channel_endpoint.go:324).
+            CerebrasChannelType => new CerebrasOutboundTransformer(new CerebrasOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:775-785: the OpenAI outbound plus top-level
+            // reasoning and XML tool-call extraction; the default endpoint set
+            // is the full OpenAI one (channel_endpoint.go:326).
+            NanogptChannelType => new NanogptOutboundTransformer(new NanogptOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:789-799: the nanoGPT responses channel has exactly
+            // one endpoint, the responses API, served by the shared Responses
+            // outbound (channel_endpoint.go:327).
+            NanogptResponsesChannelType => ResponsesOutboundTransformer.Create(
+                candidate.BaseUrl ?? string.Empty,
+                provider,
+                provider.KeyIndex),
             // channel_llm.go:831-841: OpenAI-compatible with a custom request
             // path (chat only, json_schema downgraded to json_object).
             MoonshotChannelType => new MoonshotOutboundTransformer(new MoonshotOutboundConfig
