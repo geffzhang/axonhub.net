@@ -14,6 +14,7 @@ using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
+using AxonHub.Llm.Transformer.TypeSafe;
 using AxonHub.Persistence;
 using Orleans.Hosting;
 
@@ -129,10 +130,13 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 // The reference mounts WithIPBlocklist + WithAPIKeyConfig on its API group, in
-// that order. The slice applies both to the ported /v1 surface.
+// that order. The slice applies both to every ported API surface: the openai,
+// jina, typesafe and anthropic groups all hang off the same apiGroup.
 app.UseWhen(
     static context => context.Request.Path.StartsWithSegments("/v1")
-        || context.Request.Path.StartsWithSegments("/anthropic/v1"),
+        || context.Request.Path.StartsWithSegments("/anthropic/v1")
+        || context.Request.Path.StartsWithSegments("/jina/v1")
+        || context.Request.Path.StartsWithSegments("/typesafe/v1"),
     static branch =>
     {
         branch.UseMiddleware<IpBlocklistMiddleware>();
@@ -303,5 +307,18 @@ static Task HandleJinaEmbeddingsAsync(
         orchestrator.WithInbound(new JinaEmbeddingInboundTransformer()));
 
 app.MapPost("/jina/v1/embeddings", HandleJinaEmbeddingsAsync);
+
+// TypeSafe SystemOne (routes.go:233 and 244): the OpenAI-compatible
+// /v1/systemone alias and the native /typesafe/v1 surface share one handler,
+// like api.TypeSafeHandlers.SystemOne over the shared chat handler.
+static Task HandleSystemOneAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator)
+    => ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(new SystemOneInboundTransformer()));
+
+app.MapPost("/v1/systemone", HandleSystemOneAsync);
+app.MapPost("/typesafe/v1/systemone", HandleSystemOneAsync);
 
 app.Run();

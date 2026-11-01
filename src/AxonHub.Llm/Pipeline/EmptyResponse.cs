@@ -55,10 +55,9 @@ public static class ResponseContent
 
     /// <summary>
     /// Port of <c>hasResponseContent</c> for the implemented response kinds
-    /// (chat, moderation, embedding, rerank, image, video, audio, alpha search
-    /// and decisions). The remaining non-chat branches (compact, system one,
-    /// completion) land together with those request types; see
-    /// porting/01-baseline.md.
+    /// (chat, moderation, embedding, rerank, image, video, compact, audio,
+    /// alpha search, system one, decisions and legacy completion); the branch
+    /// order follows the reference.
     /// </summary>
     public static bool HasResponseContent(LlmResponse? resp)
     {
@@ -95,6 +94,12 @@ public static class ResponseContent
                 || video.Status.Length > 0
                 || !string.IsNullOrEmpty(video.VideoURL)
                 || video.Error is not null))
+        {
+            return true;
+        }
+
+        // empty_response.go checks Compact right after Video.
+        if (resp.Compact is { Output.Count: > 0 })
         {
             return true;
         }
@@ -136,9 +141,26 @@ public static class ResponseContent
             return true;
         }
 
+        // Empty answers mean the decision model produced nothing; retry.
+        if (resp.SystemOne is { Answers.Count: > 0 })
+        {
+            return true;
+        }
+
         if (resp.Decisions is { Answers.Count: > 0 })
         {
             return true;
+        }
+
+        if (resp.Completion is { } completion)
+        {
+            foreach (var choice in completion.Choices)
+            {
+                if (choice is not null && choice.Text.Length > 0)
+                {
+                    return true;
+                }
+            }
         }
 
         foreach (var choice in resp.Choices)

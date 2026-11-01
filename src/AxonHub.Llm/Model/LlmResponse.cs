@@ -107,6 +107,11 @@ public sealed class LlmResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RerankResponse? Rerank { get; set; }
 
+    /// <summary>System One sub-response; present for a systemone response (llm/model.go:727).</summary>
+    [JsonPropertyName("systemone")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SystemOneResponse? SystemOne { get; set; }
+
     /// <summary>Video sub-response; present when the response is a video response (llm/model.go:733).</summary>
     [JsonPropertyName("video")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

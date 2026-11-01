@@ -48,6 +48,7 @@ public static class ApiFormats
     public const string OpenAITranslation = "openai/audio_translations";
     public const string AnthropicMessage = "anthropic/messages";
     public const string GeminiContents = "gemini/contents";
+    public const string TypeSafeSystemOne = "typesafe/systemone";
 }
 
 /// <summary>

@@ -348,6 +348,26 @@ internal static class TestChannels
             SupportedModels = "[\"" + (actualModel ?? model) + "\"]",
         };
 
+    /// <summary>
+    /// A <c>typesafe</c> channel (channel.TypeTypesafe): one SystemOne endpoint,
+    /// so ChannelOutboundFactory always builds the TypeSafe outbound for it.
+    /// </summary>
+    public static ChannelDescriptor TypeSafe(
+        long id,
+        string model,
+        string apiKey = "sk-typesafe-test-key",
+        string baseUrl = "https://api.typesafe.ai/v1")
+        => new()
+        {
+            Id = id,
+            Name = "channel-" + id,
+            OrderingWeight = 0,
+            Type = "typesafe",
+            BaseUrl = baseUrl,
+            Credentials = "{\"apiKey\":\"" + apiKey + "\"}",
+            SupportedModels = "[\"" + model + "\"]",
+        };
+
     public static HttpRequestData ChatRequest(string model, bool stream = false, int? n = null)
     {
         var streamField = stream ? ",\"stream\":true" : string.Empty;

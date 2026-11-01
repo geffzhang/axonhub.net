@@ -7,6 +7,7 @@ using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
+using AxonHub.Llm.Transformer.TypeSafe;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -16,9 +17,9 @@ namespace AxonHub.Api.Orchestration;
 /// <c>buildChannel</c> → the channel-type switch).
 /// </summary>
 /// <remarks>
-/// Only the <c>openai</c>, <c>anthropic</c> and <c>jina</c> channel types are
-/// ported (the vertical slice); the other provider types are registered as a
-/// scope cut. Key
+/// Only the <c>openai</c>, <c>anthropic</c>, <c>jina</c> and <c>typesafe</c>
+/// channel types are ported (the vertical slice); the other provider types are
+/// registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
 /// enabled keys are chosen at random per attempt because the trace subsystem
 /// (and therefore trace-sticky rendezvous selection) is not ported yet (C013).
@@ -30,6 +31,8 @@ public static class ChannelOutboundFactory
     public const string AnthropicChannelType = "anthropic";
 
     public const string JinaChannelType = "jina";
+
+    public const string TypeSafeChannelType = "typesafe";
 
     public static IOutboundTransformer Create(
         ChannelCandidate candidate,
@@ -86,6 +89,13 @@ public static class ChannelOutboundFactory
                 provider,
                 provider.KeyIndex),
             JinaChannelType => JinaOutboundTransformer.Create(
+                candidate.BaseUrl ?? string.Empty,
+                provider,
+                provider.KeyIndex),
+            // channel_endpoint.go:342: a typesafe channel has exactly one
+            // endpoint (typesafe/systemone) and channel_llm.go routes every
+            // request type through the same outbound.
+            TypeSafeChannelType => TypeSafeOutboundTransformer.Create(
                 candidate.BaseUrl ?? string.Empty,
                 provider,
                 provider.KeyIndex),

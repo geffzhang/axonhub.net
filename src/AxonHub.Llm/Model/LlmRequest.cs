@@ -219,6 +219,11 @@ public sealed class LlmRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RerankRequest? Rerank { get; set; }
 
+    /// <summary>System One sub-request; set for a systemone decision request (llm/model.go:246).</summary>
+    [JsonPropertyName("systemone")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SystemOneRequest? SystemOne { get; set; }
+
     /// <summary>Provider/API-format private sidecar data; never serialized (llm/model.go:307).</summary>
     [JsonIgnore]
     public ProviderExtensions? ProviderExtensions { get; set; }

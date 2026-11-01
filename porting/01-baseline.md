@@ -720,11 +720,53 @@ C010 的 video 端点接线随之闭合（doubao / zenmux 视频变换器仍为 
 `AxonHub.Llm.Tests` 由 1125 增至 1190，`AxonHub.Api.Tests` 由 619 增至 623。
 C086 记录通道能力表未建模导致的 completion 出站分派近似。
 
+## 24. TypeSafe SystemOne 客户端变换器与两条 `/systemone` 路由（65 例，2026-11-01）
+
+参照路线：`llm/systemone.go`（SystemOneRequest / Question / Answer / Response 与
+Answer 的自定义 UnmarshalJSON / MarshalJSON）、`llm/transformer/typesafe/model.go`、
+`inbound.go`（156 行）、`outbound.go`（223 行）、`llm/pipeline/empty_response.go:125`
+的 systemone / compact / completion 分支、`routes.go:233` 的
+`openaiGroup.POST("/systemone")` 与 `:244` 的 `typesafeGroup.POST("/systemone")`、
+`internal/server/api/typesafe.go` 的 `TypeSafeHandlers.SystemOne`（复用共享 chat
+handler，只替换入站变换器）、`internal/server/orchestrator/systemone_test.go`
+（4 个测试函数）与 `internal/server/orchestrator/pass_through.go`。端口新增统一模型
+`SystemOneRequest` / `SystemOneQuestion` / `SystemOneAnswer` / `SystemOneResponse`
+（`Model/SystemOne.cs`：Answer 的无损 Extra、字段名大小写不敏感匹配但只对精确小写名
+做删除、无 Extra 走结构序 / 有 Extra 走 map 序两种 marshal 形态、`GoAnyJson` 复刻
+Go `any` 的键排序/重复键/数字字面量语义、`SystemOneJson` 把 null map 值归零）、
+wire 模型 `TypeSafeModels`、入站 `SystemOneInboundTransformer`（Decoder 语义：
+EOF / unexpected EOF / 尾随数据忽略 / 根类型错误、stream 拒绝、model → state →
+questions 校验序、错误信封）、出站 `TypeSafeOutboundTransformer`（默认 BaseURL、
+v1 归一、EndpointPath、`typesafe/systemone` APIFormat、Bearer、`ResponseError`
+Cause 链、错误信封解析与原文回退）、`LlmRequest.SystemOne` / `LlmResponse.SystemOne`、
+`hasResponseContent` 的 systemone / compact / completion 分支、
+`ChannelOutboundFactory` 的 typesafe 分派与两条共用同一 handler 的路由。差异登记 C087。
+顺带修正：`/jina/v1` 组此前未进入 IP 黑名单 / API key 鉴权分支，本次与 `/typesafe/v1`
+一并接入（参照的所有原生组都挂在同一个带中间件的 apiGroup 下）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 统一模型：请求/响应解码与 marshal、Choice 线路形状、Answer 的 Extra 保真（未知字段、大小写变体同时置字段并保留原拼写）、无 Extra 的结构序、`any` 的键排序与 64 位整数/长小数字面量保真、Question 未知字段与 JSON null 零值、null map 值归零 | `tests/AxonHub.Llm.Tests/TypeSafeSystemOneTests.cs` | 8 |
+| 入站请求变换：合法请求保留 `9007199254740993` 字面量与 RequestType/ApiFormat/RawRequest、nil / 空 body / 空白（EOF）/ 截断（unexpected EOF）/ 尾随数据忽略 / 数组根（`typesafe.systemOneWireRequest`）/ 字段类型错误、`stream:true`、缺 model / state / questions、空 questions、JSON `null` body、`state:null` 视为缺失 | `tests/AxonHub.Llm.Tests/TypeSafeSystemOneTests.cs` | 15 |
+| 入站响应与错误：noul + usage 线路形状、无 usage 省略、nil 响应 / 缺 SystemOne、TransformError 的 nil（500 原文）、ResponseError 状态与 detail、通用错误的 Go `%q` 引号、流式拒绝 | `tests/AxonHub.Llm.Tests/TypeSafeSystemOneTests.cs` | 8 |
+| 出站请求：线路字节（model / state / questions，无 stream 成员）、BaseURL 版本归一、默认 BaseURL、EndpointPath 覆盖、nil 请求 / 缺 SystemOne / 缺 model、配置校验、ApiFormat | `tests/AxonHub.Llm.Tests/TypeSafeSystemOneTests.cs` | 9 |
+| 出站响应：model / answers / usage 映射（120 / 0 / 120）、数字精度（`0.95`、`9007199254740999` 与 answer 全字段重编码）、HTTP ≥400 → ResponseError、空 body、非法 JSON、根 null 零结构、数组根类型错误、`answers:null` 保持 null | `tests/AxonHub.Llm.Tests/TypeSafeSystemOneTests.cs` | 8 |
+| 出站错误与流：`{"error":{message,type,code}}` 解析与 `errors.As` Cause 链、nil → 500 `Internal Server Error` / `api_error`、非 JSON 原文、缺 message 回退原文、缺 code 省略、流式拒绝 | `tests/AxonHub.Llm.Tests/TypeSafeSystemOneTests.cs` | 6 |
+| 空响应探测：systemone 仅在有 answers 时计为内容、compact 与旧版 completion 分支 | `tests/AxonHub.Llm.Tests/TypeSafeSystemOneTests.cs` | 2 |
+| API 路由胶水：`POST /v1/systemone` 成功往返（上游 `/v1/systemone` 线路形状、state/questions、无 stream、Bearer、RequestType/ApiFormat）、`/typesafe/v1/systemone` 同一 handler、空响应探测保留非空 answers、空 answers 切换通道重试、429 换用下一通道 key、401 不重试、缺 model / 缺 state 的 500 `api_error` 文案、空 body 400 | `tests/AxonHub.Api.Tests/SystemOneEndpointTests.cs` | 9 |
+
+合计 8 + 15 + 8 + 9 + 8 + 6 + 2 = 56 例 Llm，加端点 9 例共 65 例：
+`AxonHub.Llm.Tests` 由 1190 增至 1246，`AxonHub.Api.Tests` 由 623 增至 632。
+C087 记录 pass-through body 未移植、通道能力表未建模、`JsonElement` 承载 `any`
+与字段级解码文案差异；`hasResponseContent` 的 compact / completion 分支由本节的
+空响应探测一并闭合。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
+| TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；pass-through body、通道能力表与字段级解码文案为 C087 登记的裁剪 | 低 | 完成（C087） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
