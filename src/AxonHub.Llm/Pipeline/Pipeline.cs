@@ -237,6 +237,10 @@ public sealed partial class Pipeline
     /// <summary>Port of pipeline.notStream.</summary>
     private HttpResponseData NotStream(CancellationToken cancellationToken, IExecutor executor, HttpRequestData request)
     {
+        // TransformResponse has no context parameter in the port; async task
+        // transformers read the caller's token off the wire request (C104).
+        request.RequestCancellationToken = cancellationToken;
+
         HttpResponseData httpResp;
         try
         {

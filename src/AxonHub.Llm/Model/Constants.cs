@@ -48,6 +48,12 @@ public static class ApiFormats
     public const string OpenAIVideo = "openai/video";
     public const string SeedanceVideo = "seedance/video";
     public const string ZenmuxVideo = "zenmux/video";
+
+    /// <summary>
+    /// llm.APIFormatModelScopeImage (llm/constants.go:78): the ModelScope-native
+    /// asynchronous image task protocol.
+    /// </summary>
+    public const string ModelScopeImage = "modelscope/image_generation";
     public const string JinaRerank = "jina/rerank";
     public const string JinaEmbedding = "jina/embeddings";
     public const string OpenAITranscription = "openai/audio_transcriptions";

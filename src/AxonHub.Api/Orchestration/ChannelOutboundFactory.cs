@@ -15,6 +15,7 @@ using AxonHub.Llm.Transformer.DeepSeek;
 using AxonHub.Llm.Transformer.Fireworks;
 using AxonHub.Llm.Transformer.Longcat;
 using AxonHub.Llm.Transformer.Minimax;
+using AxonHub.Llm.Transformer.Modelscope;
 using AxonHub.Llm.Transformer.Moonshot;
 using AxonHub.Llm.Transformer.Nanogpt;
 using AxonHub.Llm.Transformer.OpenAI;
@@ -45,7 +46,8 @@ namespace AxonHub.Api.Orchestration;
 /// <c>ollama_anthropic</c>, <c>zai</c>, <c>zhipu</c>, <c>zai_anthropic</c>,
 /// <c>zhipu_anthropic</c>, <c>xiaomi</c>, <c>xiaomi_anthropic</c>,
 /// <c>minimax</c>, <c>minimax_anthropic</c>, <c>bailian</c>,
-/// <c>bailian_responses</c>, <c>bailian_anthropic</c> and <c>moonshot_coding</c>
+/// <c>bailian_responses</c>, <c>bailian_anthropic</c>,
+/// <c>moonshot_coding</c> and <c>modelscope</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -119,6 +121,8 @@ public static class ChannelOutboundFactory
     public const string BailianAnthropicChannelType = "bailian_anthropic";
 
     public const string MoonshotCodingChannelType = "moonshot_coding";
+
+    public const string ModelscopeChannelType = "modelscope";
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
@@ -442,6 +446,17 @@ public static class ChannelOutboundFactory
                     ApiKeyProvider = provider,
                     ChannelApiKeyIndex = provider.KeyIndex,
                 }),
+            // channel_llm.go:1096-1108: chat plus the asynchronous image task
+            // protocol (channel_endpoint.go:309-312). The reference passes the
+            // channel's proxy-aware HTTP client; the port has no per-channel
+            // proxy configuration yet, so the transformer's default client is
+            // used (C104).
+            ModelscopeChannelType => new ModelscopeOutboundTransformer(new ModelscopeOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };

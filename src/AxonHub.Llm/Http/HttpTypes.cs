@@ -86,6 +86,16 @@ public sealed class HttpRequestData
     [JsonIgnore]
     public string? SessionScope { get; set; }
 
+    /// <summary>
+    /// Port-only: the cancellation token of the caller exchange that produced
+    /// this request. The reference passes <c>ctx</c> into
+    /// <c>TransformResponse</c>; the port's context-free transformer interface
+    /// carries the token on the wire request instead, so asynchronous task
+    /// polling and downloads stop when the caller gives up (difference C104).
+    /// </summary>
+    [JsonIgnore]
+    public CancellationToken RequestCancellationToken { get; set; }
+
     /// <summary>Observer invoked with the upstream response headers.</summary>
     [JsonIgnore]
     public Action<IReadOnlyDictionary<string, List<string>>>? OnResponseHeaders { get; set; }

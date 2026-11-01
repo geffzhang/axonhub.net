@@ -1503,6 +1503,66 @@ TrimSpace 表）、`src/AxonHub.Llm/Json/RawJsonModelPatch.cs` 泛化出的
 `AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
 合计 3030 增至 3082。差异条目新增 C103（已接受）。
 
+## 42. ModelScope 异步图片任务出站与通道接线（48 例，2026-11-01）
+
+参照路线：`llm/transformer/modelscope/outbound.go:16-21`（Config：BaseURL /
+APIKeyProvider / HttpClient）、`:23-33`（OutboundTransformer 内嵌 OpenAI 出站与
+BaseURL）、`:35-43`（旧构造，静态 key）、`:45-67`（`NewOutboundTransformerWithConfig`：
+nil → `invalid ModelScope transformer configuration: config is nil`；以内嵌
+`openai.Config{PlatformOpenAI, ReasoningFieldContent}` 构造，失败包 `invalid
+ModelScope transformer configuration`）、`:69-87`（TransformRequest：RequestType ==
+image → `buildImageRequest`，否则浅拷贝并清空 Metadata 后委托内嵌 OpenAI 出站）；
+`image.go:20-36`（路径、图片任务 metadata key、默认尺寸 2048x2048 与 2s / 15m /
+2m 三个超时）、`:38-52`（`imageSizeOrDefault`：空或 auto → 默认尺寸）、
+`:54-76`（imageResponse：created / data / task_id / task_status / output_images /
+message / errors）、`:78-157`（buildImageRequest：API format 仅
+`openai/image_generation` 与 `openai/image_edit`；prompt TrimSpace 非空；mask
+拒绝；输入图逐项要求 base64 data URL；请求体 map 排序 model/prompt/size 与可选
+image_url，单图字符串、多图数组；`POST {base}/images/generations`，
+`Accept: application/json`、`Content-Type: application/json`、
+`X-ModelScope-Async-Mode: true`、Bearer；ApiFormat
+`modelscope/image_generation`；metadata 写 model 与 api_key）、`:159-169`
+（TransformResponse 按 `Request.ApiFormat` 分派图片任务）、`:171-212`
+（transformImageResponse：任务成功后按 data > output_images > task_id 取结果，
+`imageResponseFromData` 的 id `modelscope-image-<created>`、object
+`chat.completion`、RequestType image、model 取 metadata 缺省
+`image-generation`、created 0 → 当前秒）、`:214-261`（waitImageTask：默认 2s
+轮询、15m 或调用方 deadline 预算，超时 `timed out`，取消优先）、`:263-314`
+（getImageTask：`GET {base}/tasks/{url.PathEscape(id)}`、
+`X-ModelScope-Task-Type: image_generation`、Bearer；SUCCEED / SUCCESS / FAILED
+三种状态拼写）、`:316-324`（metadata api_key 回退）、`:326-333`（任务 body
+解码）、`:335-388`（结果内联图片与 output_images 的转 base64）、`:390-424`
+（parseOutputImages：元素先解码 any，空串报错、null 跳过、非对象报类型错误；
+字符串或 `{url,b64_json}`；字段先精确后大小写不敏感匹配）、`:426-480`
+（downloadImageBase64：data URL 仅接受 base64，否则下载，非 200 →
+`failed to download ModelScope output image: HTTP %d`，2m 超时）、`:482-489`
+（DetectContentType 的图片子集，未知回退 `image/png`）、`:491-505`
+（`message` > `errors.message` > `unknown error`）；
+`internal/server/biz/channel_llm.go:1096-1108`（modelscope → ModelScope 出站）、
+`channel_endpoint.go:309-312`（chat 与图片端点分派）、
+`internal/ent/channel/channel.go:250`（类型常量）。
+
+本次移植新增：`src/AxonHub.Llm/Transformer/Modelscope/ModelscopeOutboundTransformer.cs`
+（nil 构造文案、内嵌 OpenAI 出站的包装、chat 浅拷贝与 Metadata 清空、
+Image 请求分派、图片响应分派与其余方法委托）、
+`src/AxonHub.Llm/Transformer/Modelscope/ModelscopeImage.cs`（图片请求构造与
+排序字段、任务轮询与调用方取消、状态与错误回退、output_images 两步解码、
+URL 下载转 base64、data URL 嗅探）、`src/AxonHub.Llm/Transformer/Shared/GoUrl.cs`
+（Go `url.PathEscape` 逐字节复刻）与 `src/AxonHub.Llm/Transformer/Shared/GoStrings.cs`
+（Go `strings.TrimSpace` 的 White_Space 表），`ApiFormats.ModelScopeImage`
+常量，`HttpRequestData.RequestCancellationToken` 调用方 token 接缝
+（`Pipeline.NotStream` 写入），以及 `ChannelOutboundFactory` 的 `modelscope`
+分支。已接受差异与残余裁剪见 C104。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| ModelScope 图片请求：排序请求体逐字节、size 四态、单图 / 多图 / 非 base64 / mask / prompt / ApiFormat 拒绝、三个头与 Bearer、任务 metadata；chat 委托与 Metadata 清空；响应委托与图片响应分派；内联 data / output_images 三种分支、失败文案、轮询状态拼写、PathEscape 任务 id、超时与取消、key 复用与构造校验 | `tests/AxonHub.Llm.Tests/ModelscopeOutboundTransformerTests.cs` | 44 |
+| 通道接线：chat 与图片双路径、图片保持原始 BaseURL、异步头与 ApiFormat、缺 key 拒绝 | `tests/AxonHub.Api.Tests/ModelscopeChannelWiringTests.cs` | 4 |
+
+`AxonHub.Llm.Tests` 由 1889 增至 1933，`AxonHub.Api.Tests` 由 1031 增至 1035，
+`AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
+合计 3082 增至 3130。差异条目新增 C104（已接受）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -1523,5 +1583,5 @@ TrimSpace 表）、`src/AxonHub.Llm/Json/RawJsonModelPatch.cs` 泛化出的
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、Bailian、Cerebras、Zai/Zhipu、Doubao/Volcengine、Modelscope、Nanogpt、Openrouter、Minimax、Xiaomi、Commandcode、Antigravity、GithubCopilot、Zenmux 系列、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103） | 中 | 按 provider 分组后续切片（OpenAI 兼容族剩余：Modelscope、Doubao/Volcengine、Zenmux 等） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、Doubao/Volcengine、Zenmux 系列、GithubCopilot、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104） | 中 | 按 provider 分组后续切片（剩余：Doubao/Volcengine、Zenmux、GithubCopilot、Gemini/Vertex、Antigravity、OpenaiResponses、Commandcode 等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |
