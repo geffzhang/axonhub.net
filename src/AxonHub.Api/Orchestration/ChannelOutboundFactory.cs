@@ -44,7 +44,7 @@ namespace AxonHub.Api.Orchestration;
 /// <c>buildChannel</c> → the channel-type switch).
 /// </summary>
 /// <remarks>
-/// Only the <c>openai</c>, <c>anthropic</c>, <c>claudecode</c>,
+/// Only the <c>openai</c>, <c>openai_responses</c>, <c>anthropic</c>, <c>claudecode</c>,
 /// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
 /// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>deepseek</c>, <c>fireworks</c>,
 /// <c>moonshot</c>, <c>longcat</c>, <c>cline</c>, <c>xai</c>, <c>openrouter</c>,
@@ -68,6 +68,8 @@ namespace AxonHub.Api.Orchestration;
 public static class ChannelOutboundFactory
 {
     public const string OpenAiChannelType = "openai";
+
+    public const string OpenaiResponsesChannelType = "openai_responses";
 
     public const string AnthropicChannelType = "anthropic";
 
@@ -490,6 +492,23 @@ public static class ChannelOutboundFactory
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:1313-1322: the openai_responses channel has exactly
+            // one default endpoint, the responses API (channel_endpoint.go:233),
+            // served by the shared Responses outbound whatever the inbound
+            // format. The transport comes from the base URL's ws/wss scheme:
+            // primaryEndpointTransport falls through to endpointTransport on
+            // the channel base URL (channel_llm.go:276-292). The slice has no
+            // endpoint records, so the scheme is the only source (C082). The
+            // constructor only fails on a missing key provider, which the key
+            // check above rules out, so the reference's error wrap is
+            // unreachable here too.
+            OpenaiResponsesChannelType => new ResponsesOutboundTransformer(new ResponsesOutboundConfig
+            {
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+                Transport = InferTransport(candidate.BaseUrl ?? string.Empty),
             }),
             // channel_llm.go:1133-1143: DashScope's OpenAI-compatible outbound
             // with the tool-call merge, enable_thinking mapping and stream
