@@ -1,5 +1,6 @@
 using AxonHub.Api.Management;
 using AxonHub.Api.Orchestration;
+using AxonHub.Persistence;
 
 namespace AxonHub.Api.GraphQL;
 
@@ -65,6 +66,47 @@ public static class ChannelInputMapping
             ClearRemark = input.ClearRemark is true,
             Endpoints = input.Endpoints?.Select(ToEndpoint).ToList(),
             ClearErrorMessage = input.ClearErrorMessage is true,
+        };
+    }
+
+    /// <summary>
+    /// Maps the GraphQL bulk ordering input to the store items
+    /// (channel_bulk.go:18-21). gqlgen decodes the IDs before the resolver runs,
+    /// so this is the reference's nil-vs-empty boundary for <c>channels</c>.
+    /// </summary>
+    public static IReadOnlyList<ChannelOrderingItem> ToCommand(BulkUpdateChannelOrderingInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        return input.Channels
+            .Select(static item => new ChannelOrderingItem(
+                GidValue.Parse(item.Id).Id,
+                item.OrderingWeight))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Maps the GraphQL bulk auto-disable input to the service command
+    /// (channel_bulk.go:235-240). The action keeps its wire spelling so the
+    /// service switch matches the reference's enum values.
+    /// </summary>
+    public static BulkUpdateAutoDisableCommand ToCommand(
+        BulkUpdateChannelAutoDisableInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        return new BulkUpdateAutoDisableCommand
+        {
+            ChannelIds = input.ChannelIDs
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            Action = input.Action switch
+            {
+                BulkAutoDisableActionValue.WriteRules => "write_rules",
+                BulkAutoDisableActionValue.Inherit => "inherit",
+                _ => "off",
+            },
+            Rules = input.Rules?.Select(ToAutoDisableRule).ToList(),
         };
     }
 

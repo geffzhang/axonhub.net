@@ -4,6 +4,7 @@ using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Security;
 using AxonHub.Api.Settings;
+using AxonHub.Persistence;
 
 namespace AxonHub.Api.GraphQL;
 
@@ -427,6 +428,65 @@ public sealed class AdminMutation
                 cancellationToken)
             .ConfigureAwait(false);
         return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkUpdateChannelOrdering
+    /// (axonhub.resolvers.go:390-402; biz channel_bulk.go:23-45). The resolver
+    /// adds the "failed to bulk update channel ordering" prefix.
+    /// </summary>
+    [GraphQLName("bulkUpdateChannelOrdering")]
+    public async Task<BulkUpdateChannelOrderingResult> BulkUpdateChannelOrderingAsync(
+        BulkUpdateChannelOrderingInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var items = ChannelInputMapping.ToCommand(input);
+
+        IReadOnlyList<ChannelRecord> updated;
+        try
+        {
+            updated = await channels.BulkUpdateOrderingAsync(items, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // fmt.Errorf("failed to bulk update channel ordering: %w", err)
+            throw new InvalidOperationException(
+                "failed to bulk update channel ordering: " + ex.Message,
+                ex);
+        }
+
+        return new BulkUpdateChannelOrderingResult
+        {
+            Success = true,
+            Updated = updated.Count,
+            Channels = updated.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkUpdateChannelAutoDisable
+    /// (axonhub.resolvers.go:404-415; biz channel_bulk.go:242-340). Unlike the
+    /// ordering resolver, the reference adds no error prefix here.
+    /// </summary>
+    [GraphQLName("bulkUpdateChannelAutoDisable")]
+    public async Task<BulkUpdateChannelAutoDisablePayload> BulkUpdateChannelAutoDisableAsync(
+        BulkUpdateChannelAutoDisableInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var updated = await channels.BulkUpdateAutoDisableAsync(
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new BulkUpdateChannelAutoDisablePayload
+        {
+            Success = true,
+            Updated = updated.Count,
+            Channels = updated.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
     }
 
     /// <summary>

@@ -107,6 +107,27 @@ public sealed class UpdateChannelCommand
 }
 
 /// <summary>
+/// Argument object for <see cref="ChannelLifecycleService.BulkUpdateAutoDisableAsync"/>:
+/// the biz.BulkUpdateChannelAutoDisableInput of channel_bulk.go:235-240. The
+/// action keeps its GraphQL wire value (<c>write_rules</c>/<c>inherit</c>/<c>off</c>)
+/// because the service reproduces the reference's string switch, including its
+/// unsupported-action branch.
+/// </summary>
+public sealed class BulkUpdateAutoDisableCommand
+{
+    public IReadOnlyList<long> ChannelIds { get; init; } = [];
+
+    public string Action { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Raw submitted rules; only <c>write_rules</c> reads them. They are
+    /// normalized by normalizeAutoDisableRules with allowDelete=true before
+    /// reaching the store.
+    /// </summary>
+    public IReadOnlyList<ApiKeyAutoDisableRuleDraft>? Rules { get; init; }
+}
+
+/// <summary>
 /// Port of objects.ChannelSettings (live channel.go:155-288) with Go's JSON
 /// tags, declaration order and <c>omitempty</c> behaviour. Nullable members are
 /// omitted by <c>ChannelWriteSerialization</c>; non-nullable members are always

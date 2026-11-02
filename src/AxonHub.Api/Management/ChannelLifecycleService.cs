@@ -1,8 +1,10 @@
 using System.Text.Json;
 using AxonHub.Api.GraphQL;
+using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Json;
 using AxonHub.Persistence;
+using GoJson = AxonHub.Llm.Json.GoJson;
 
 namespace AxonHub.Api.Management;
 
@@ -704,6 +706,110 @@ public sealed class ChannelLifecycleService(
         try
         {
             await channels.ManageTagsAsync(channelIds, newTags, tagsToRemove, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+        catch (ExpectedRowsMismatchException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of ChannelService.BulkUpdateChannelOrdering (channel_bulk.go:23-45).
+    /// The reference relies on the GraphQL Transactioner for atomicity; the
+    /// store runs the batch in one transaction. The resolver adds the
+    /// "failed to bulk update channel ordering" prefix.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelRecord>> BulkUpdateOrderingAsync(
+        IReadOnlyList<ChannelOrderingItem> items,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        try
+        {
+            return await channels.BulkUpdateOrderingAsync(items, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of ChannelService.BulkUpdateChannelAutoDisable
+    /// (channel_bulk.go:242-340): validates the action before the transaction,
+    /// normalizes write_rules with channel-level allowDelete, then delegates the
+    /// count check and the per-channel policy write to the store.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelRecord>> BulkUpdateAutoDisableAsync(
+        BulkUpdateAutoDisableCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (command.ChannelIds.Count == 0)
+        {
+            throw new CodedException(
+                CodedException.ValidationFailed,
+                "channel IDs are required");
+        }
+
+        string mode;
+        string? rulesJson = null;
+
+        switch (command.Action)
+        {
+            case "write_rules":
+                if (command.Rules is null || command.Rules.Count == 0)
+                {
+                    throw new CodedException(
+                        CodedException.ValidationFailed,
+                        "rules are required when writing auto-disable rules");
+                }
+
+                IReadOnlyList<AutoDisableRule> normalized;
+                try
+                {
+                    normalized = RetryPolicyCodec.NormalizeAutoDisableRules(
+                        command.Rules.Select(ChannelValidation.ToAutoDisableRule).ToList(),
+                        allowDelete: true);
+                }
+                catch (AutoDisableRuleValidationException ex)
+                {
+                    throw new CodedException(CodedException.ValidationFailed, ex.Message);
+                }
+
+                mode = "custom";
+                rulesJson = GoJson.MarshalToString(
+                    normalized.Select(ChannelValidation.ToDraft).ToList());
+                break;
+            case "inherit":
+                mode = "inherit";
+                break;
+            case "off":
+                mode = "off";
+                break;
+            default:
+                // Unreachable through the GraphQL enum, kept for parity with the
+                // reference switch (channel_bulk.go:274-275).
+                throw new CodedException(
+                    CodedException.ValidationFailed,
+                    "unsupported auto-disable action " + GoCast.GoQuote(command.Action));
+        }
+
+        try
+        {
+            return await channels.BulkUpdateAutoDisableAsync(
+                    command.ChannelIds,
+                    mode,
+                    rulesJson,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (StoreFailureException ex)

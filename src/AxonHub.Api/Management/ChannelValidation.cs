@@ -801,7 +801,8 @@ public static class ChannelValidation
         return null;
     }
 
-    private static AutoDisableRule ToAutoDisableRule(ApiKeyAutoDisableRuleDraft rule)
+    /// <summary>objects.APIKeyAutoDisableRule → domain rule for the normalizer.</summary>
+    public static AutoDisableRule ToAutoDisableRule(ApiKeyAutoDisableRuleDraft rule)
         => new(
             rule.StatusCodes,
             rule.KeywordPatterns,
@@ -811,7 +812,8 @@ public static class ChannelValidation
             rule.DisableUntilCron ?? string.Empty,
             rule.DisableUntilTimezone ?? string.Empty);
 
-    private static ApiKeyAutoDisableRuleDraft ToDraft(AutoDisableRule rule)
+    /// <summary>Normalized domain rule → objects.APIKeyAutoDisableRule wire shape.</summary>
+    public static ApiKeyAutoDisableRuleDraft ToDraft(AutoDisableRule rule)
         => new()
         {
             StatusCodes = rule.StatusCodes is { Count: > 0 } ? rule.StatusCodes : null,

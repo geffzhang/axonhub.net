@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
 using AxonHub.Grains.Abstractions;
@@ -503,6 +504,10 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public List<(long[] Ids, string[] AddTags, string[] RemoveTags)> TagCalls { get; } = [];
 
+    public List<(long Id, int OrderingWeight)[]> OrderingCalls { get; } = [];
+
+    public List<(long[] Ids, string Mode, string? RulesJson)> AutoDisableCalls { get; } = [];
+
     public List<ChannelRecord> CreatedChannels { get; } = [];
 
     public List<(long Id, ChannelUpdateRecord Update)> UpdateCalls { get; } = [];
@@ -529,6 +534,10 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
     public Exception? BulkDeleteFailure { get; set; }
 
     public Exception? ManageTagsFailure { get; set; }
+
+    public Exception? BulkOrderingFailure { get; set; }
+
+    public Exception? BulkAutoDisableFailure { get; set; }
 
     public void Seed(ChannelRecord record)
     {
@@ -765,6 +774,79 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         }
 
         return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<ChannelRecord>> BulkUpdateOrderingAsync(
+        IReadOnlyList<ChannelOrderingItem> items,
+        CancellationToken cancellationToken = default)
+    {
+        if (BulkOrderingFailure is not null)
+        {
+            throw BulkOrderingFailure;
+        }
+
+        OrderingCalls.Add(items.Select(static item => (item.Id, item.OrderingWeight)).ToArray());
+
+        var updated = new List<ChannelRecord>(items.Count);
+        foreach (var item in items)
+        {
+            var row = _rows.SingleOrDefault(candidate =>
+                candidate.Id == item.Id && candidate.DeletedAt == 0);
+            if (row is null)
+            {
+                throw new StoreFailureException(
+                    $"failed to update channel {item.Id}: ent: channel not found",
+                    new InvalidOperationException("ent: channel not found"));
+            }
+
+            row.OrderingWeight = item.OrderingWeight;
+            row.UpdatedAt = DateTime.UtcNow;
+            updated.Add(row);
+        }
+
+        return Task.FromResult<IReadOnlyList<ChannelRecord>>(updated);
+    }
+
+    public Task<IReadOnlyList<ChannelRecord>> BulkUpdateAutoDisableAsync(
+        IReadOnlyList<long> ids,
+        string mode,
+        string? rulesJson,
+        CancellationToken cancellationToken = default)
+    {
+        if (BulkAutoDisableFailure is not null)
+        {
+            throw BulkAutoDisableFailure;
+        }
+
+        AutoDisableCalls.Add((ids.ToArray(), mode, rulesJson));
+
+        var matches = _rows.Where(row => row.DeletedAt == 0 && ids.Contains(row.Id)).ToList();
+        if (matches.Count != ids.Count)
+        {
+            throw new ExpectedRowsMismatchException(ids.Count, matches.Count);
+        }
+
+        foreach (var row in matches)
+        {
+            var policies = string.IsNullOrWhiteSpace(row.Policies) || row.Policies == "null"
+                ? new JsonObject()
+                : JsonNode.Parse(row.Policies)!.AsObject();
+
+            policies["apiKeyAutoDisableMode"] = mode;
+            if (mode == "custom")
+            {
+                policies["apiKeyAutoDisableRules"] = JsonNode.Parse(rulesJson!);
+            }
+            else if (mode == "inherit")
+            {
+                policies.Remove("apiKeyAutoDisableRules");
+            }
+
+            row.Policies = policies.ToJsonString();
+            row.UpdatedAt = DateTime.UtcNow;
+        }
+
+        return Task.FromResult<IReadOnlyList<ChannelRecord>>(matches);
     }
 }
 

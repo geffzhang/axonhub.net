@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 
 namespace AxonHub.Persistence;
@@ -55,6 +56,12 @@ public sealed class ChannelUpdateRecord
     /// </summary>
     public DateTime? ExpectedUpdatedAt { get; init; }
 }
+
+/// <summary>
+/// Port of biz.ChannelOrderingItem (channel_bulk.go:18-21): one channel's new
+/// failover priority.
+/// </summary>
+public sealed record ChannelOrderingItem(long Id, int OrderingWeight);
 
 /// <summary>
 /// Write seam for the channel lifecycle mutations of biz.ChannelService and
@@ -168,6 +175,37 @@ public interface IChannelWriteStore
         IReadOnlyList<long> ids,
         IReadOnlyList<string> addTags,
         IReadOnlyList<string> removeTags,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of ChannelService.BulkUpdateChannelOrdering (channel_bulk.go:23-45):
+    /// sets each channel's ordering_weight and returns the saved entities. The
+    /// reference relies on the GraphQL Transactioner for atomicity; the store
+    /// runs the whole batch in one transaction.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// A row is missing or an update failed; the message already carries
+    /// "failed to update channel %d".
+    /// </exception>
+    Task<IReadOnlyList<ChannelRecord>> BulkUpdateOrderingAsync(
+        IReadOnlyList<ChannelOrderingItem> items,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of ChannelService.BulkUpdateChannelAutoDisable
+    /// (channel_bulk.go:263-340): verifies the live row count, then writes the
+    /// auto-disable mode (and, for <c>custom</c>, the pre-normalized rules
+    /// JSON) to every channel's policies. Stream and other policy fields stay.
+    /// </summary>
+    /// <exception cref="ExpectedRowsMismatchException">The id count differs from the live row count.</exception>
+    /// <exception cref="StoreFailureException">
+    /// A query or per-channel update failed; the message already carries the
+    /// reference prefix.
+    /// </exception>
+    Task<IReadOnlyList<ChannelRecord>> BulkUpdateAutoDisableAsync(
+        IReadOnlyList<long> ids,
+        string mode,
+        string? rulesJson,
         CancellationToken cancellationToken = default);
 }
 
@@ -656,6 +694,189 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    public async Task<IReadOnlyList<ChannelRecord>> BulkUpdateOrderingAsync(
+        IReadOnlyList<ChannelOrderingItem> items,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        var updatedChannels = new List<ChannelRecord>(items.Count);
+        if (items.Count == 0)
+        {
+            return updatedChannels;
+        }
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var item in items)
+        {
+            // UpdateOneID applies the SoftDeleteMixin predicate, so a missing or
+            // deleted row fails the whole batch.
+            ChannelRecord? channel;
+            try
+            {
+                channel = await db.Channels
+                    .SingleOrDefaultAsync(
+                        row => row.Id == item.Id && row.DeletedAt == 0,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    $"failed to update channel {item.Id}: {ex.Message}",
+                    ex);
+            }
+
+            if (channel is null)
+            {
+                throw new StoreFailureException(
+                    $"failed to update channel {item.Id}: ent: channel not found",
+                    new InvalidOperationException("ent: channel not found"));
+            }
+
+            channel.OrderingWeight = item.OrderingWeight;
+            channel.UpdatedAt = DateTime.UtcNow;
+
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    $"failed to update channel {item.Id}: {ex.Message}",
+                    ex);
+            }
+
+            updatedChannels.Add(channel);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return updatedChannels;
+    }
+
+    public async Task<IReadOnlyList<ChannelRecord>> BulkUpdateAutoDisableAsync(
+        IReadOnlyList<long> ids,
+        string mode,
+        string? rulesJson,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        ArgumentNullException.ThrowIfNull(mode);
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var idsArray = ids.ToArray();
+        List<ChannelRecord> channels;
+        try
+        {
+            channels = await db.Channels
+                .Where(row => idsArray.Contains(row.Id) && row.DeletedAt == 0)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException("failed to query channels: " + ex.Message, ex);
+        }
+
+        // The reference compares the loaded entity count to the id count;
+        // duplicates therefore fail even though they name one row.
+        if (channels.Count != ids.Count)
+        {
+            throw new ExpectedRowsMismatchException(ids.Count, channels.Count);
+        }
+
+        var parsed = new List<(ChannelRecord Channel, JsonObject Policies)>(channels.Count);
+        foreach (var channel in channels)
+        {
+            try
+            {
+                parsed.Add((channel, ParsePolicies(channel.Policies)));
+            }
+            catch (JsonException ex)
+            {
+                throw new StoreFailureException("failed to query channels: " + ex.Message, ex);
+            }
+        }
+
+        var custom = string.Equals(mode, "custom", StringComparison.Ordinal);
+        var inherit = string.Equals(mode, "inherit", StringComparison.Ordinal);
+        JsonNode? rules = null;
+        if (custom && rulesJson is not null)
+        {
+            try
+            {
+                rules = JsonNode.Parse(rulesJson);
+            }
+            catch (JsonException ex)
+            {
+                throw new StoreFailureException(
+                    "failed to update auto-disable policies: " + ex.Message,
+                    ex);
+            }
+        }
+
+        foreach (var (channel, policies) in parsed)
+        {
+            // SetPolicies re-marshals the whole struct: the mode is always
+            // written (non-empty), custom carries the normalized rules, inherit
+            // clears them, and off keeps the stored rules untouched.
+            policies["apiKeyAutoDisableMode"] = mode;
+            if (custom)
+            {
+                // A JsonNode owns a single parent; each channel gets its own
+                // copy of the shared normalized rules tree.
+                policies["apiKeyAutoDisableRules"] = rules?.DeepClone();
+            }
+            else if (inherit)
+            {
+                policies.Remove("apiKeyAutoDisableRules");
+            }
+
+            channel.Policies = policies.ToJsonString();
+            channel.UpdatedAt = DateTime.UtcNow;
+
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    $"failed to update auto-disable policies for channel "
+                    + $"{GoQuote(channel.Name)} ({channel.Id}): {ex.Message}",
+                    ex);
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return channels;
+    }
+
+    private static JsonObject ParsePolicies(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)
+            || string.Equals(raw, "null", StringComparison.Ordinal))
+        {
+            return new JsonObject();
+        }
+
+        if (JsonNode.Parse(raw) is not JsonObject policies)
+        {
+            throw new JsonException("json: cannot unmarshal into objects.ChannelPolicies");
+        }
+
+        return policies;
+    }
+
+    /// <summary>Go <c>%q</c> for the channel-name segment of the update error.</summary>
+    private static string GoQuote(string value) => JsonSerializer.Serialize(value);
 
     private static List<string> ParseTags(string? raw)
     {

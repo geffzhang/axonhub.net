@@ -1,6 +1,7 @@
 using HotChocolate.AspNetCore;
 using HotChocolate.Execution;
 using HotChocolate.Execution.Configuration;
+using HotChocolate.Types;
 
 namespace AxonHub.Api.GraphQL;
 
@@ -18,6 +19,12 @@ public static class GraphQLSetup
             .AddType<CursorType>()
             .AddType<GoTimeType>()
             .AddType<MapScalarType>()
+
+            // HotChocolate infers input-object names from the CLR type; the
+            // gqlgen SDL calls this one ChannelOrderingItem. Registering the
+            // descriptor explicitly fixes the wire name (axonhub.graphql:445).
+            .AddType(new InputObjectType<ChannelOrderingItemInput>(
+                descriptor => descriptor.Name("ChannelOrderingItem")))
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
 }

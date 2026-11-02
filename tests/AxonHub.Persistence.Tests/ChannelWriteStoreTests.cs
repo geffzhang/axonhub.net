@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 
 namespace AxonHub.Persistence.Tests;
@@ -647,6 +648,224 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         var failure = await Assert.ThrowsAsync<StoreFailureException>(
             () => store.UpdateAsync(bravo, new ChannelUpdateRecord { Name = "Alpha" }));
         Assert.StartsWith("failed to update channel: ", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BulkUpdateOrderingWritesEveryWeightAndReturnsTheSavedRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var alpha = await SeedChannelAsync(context, name: "Alpha", orderingWeight: 1);
+        var bravo = await SeedChannelAsync(context, name: "Bravo", orderingWeight: 2);
+
+        var updated = await store.BulkUpdateOrderingAsync(
+        [
+            new ChannelOrderingItem(alpha.Id, 100),
+            new ChannelOrderingItem(bravo.Id, 50),
+        ]);
+
+        // ent returns one saved entity per input, in input order.
+        Assert.Equal(2, updated.Count);
+        Assert.Equal(alpha.Id, updated[0].Id);
+        Assert.Equal(100, updated[0].OrderingWeight);
+        Assert.Equal(bravo.Id, updated[1].Id);
+        Assert.Equal(50, updated[1].OrderingWeight);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloadedAlpha = await verify.Channels.SingleAsync(row => row.Id == alpha.Id);
+        Assert.Equal(100, reloadedAlpha.OrderingWeight);
+        Assert.True(reloadedAlpha.UpdatedAt > UpdatedAt);
+
+        var reloadedBravo = await verify.Channels.SingleAsync(row => row.Id == bravo.Id);
+        Assert.Equal(50, reloadedBravo.OrderingWeight);
+        Assert.True(reloadedBravo.UpdatedAt > UpdatedAt);
+    }
+
+    [Fact]
+    public async Task BulkUpdateOrderingRollsBackTheBatchWhenARowIsMissing()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var alpha = await SeedChannelAsync(context, name: "Alpha", orderingWeight: 1);
+        var deleted = await SeedChannelAsync(
+            context,
+            name: "Gone",
+            deletedAt: 77,
+            orderingWeight: 9);
+
+        // UpdateOneID(...).Save reports a missing row, and the GraphQL
+        // Transactioner rolls back the updates that already ran.
+        var missing = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.BulkUpdateOrderingAsync(
+            [
+                new ChannelOrderingItem(alpha.Id, 100),
+                new ChannelOrderingItem(424242, 7),
+            ]));
+        Assert.Equal("failed to update channel 424242: ent: channel not found", missing.Message);
+
+        // The SoftDeleteMixin predicate hides deleted rows from UpdateOneID.
+        var hidden = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.BulkUpdateOrderingAsync([new ChannelOrderingItem(deleted.Id, 5)]));
+        Assert.Equal($"failed to update channel {deleted.Id}: ent: channel not found", hidden.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloadedAlpha = await verify.Channels.SingleAsync(row => row.Id == alpha.Id);
+        Assert.Equal(1, reloadedAlpha.OrderingWeight);
+        Assert.Equal(UpdatedAt, reloadedAlpha.UpdatedAt);
+
+        var reloadedDeleted = await verify.Channels.SingleAsync(row => row.Id == deleted.Id);
+        Assert.Equal(9, reloadedDeleted.OrderingWeight);
+        Assert.Equal(77, reloadedDeleted.DeletedAt);
+    }
+
+    [Fact]
+    public async Task BulkUpdateAutoDisableWriteRulesKeepsStreamAndWritesNormalizedRules()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            policies: """{"stream":"require","apiKeyAutoDisableMode":"off"}""");
+
+        var updated = await store.BulkUpdateAutoDisableAsync(
+            [channel.Id],
+            "custom",
+            """[{"statusCodes":[401],"times":2,"action":"permanent_disable"}]""");
+
+        var returned = Assert.Single(updated);
+        var returnedPolicies = ParsePolicyJson(returned.Policies);
+        Assert.Equal("require", returnedPolicies.GetProperty("stream").GetString());
+        Assert.Equal("custom", returnedPolicies.GetProperty("apiKeyAutoDisableMode").GetString());
+        var returnedRules = returnedPolicies.GetProperty("apiKeyAutoDisableRules");
+        Assert.Equal(401, returnedRules[0].GetProperty("statusCodes")[0].GetInt32());
+        Assert.Equal(2, returnedRules[0].GetProperty("times").GetInt32());
+        Assert.Equal("permanent_disable", returnedRules[0].GetProperty("action").GetString());
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        var stored = ParsePolicyJson(reloaded.Policies);
+        Assert.Equal("require", stored.GetProperty("stream").GetString());
+        Assert.Equal("custom", stored.GetProperty("apiKeyAutoDisableMode").GetString());
+        Assert.Equal(
+            "permanent_disable",
+            stored.GetProperty("apiKeyAutoDisableRules")[0].GetProperty("action").GetString());
+        Assert.True(reloaded.UpdatedAt > UpdatedAt);
+    }
+
+    [Fact]
+    public async Task BulkUpdateAutoDisableInheritClearsTheRulesButKeepsStream()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            policies:
+                """{"stream":"unlimited","apiKeyAutoDisableMode":"custom","apiKeyAutoDisableRules":[{"times":3,"action":"permanent_disable"}]}""");
+
+        await store.BulkUpdateAutoDisableAsync([channel.Id], "inherit", null);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        var stored = ParsePolicyJson(reloaded.Policies);
+        Assert.Equal("unlimited", stored.GetProperty("stream").GetString());
+        Assert.Equal("inherit", stored.GetProperty("apiKeyAutoDisableMode").GetString());
+        Assert.False(stored.TryGetProperty("apiKeyAutoDisableRules", out _));
+    }
+
+    [Fact]
+    public async Task BulkUpdateAutoDisableOffKeepsTheStoredRules()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            policies:
+                """{"stream":"unlimited","apiKeyAutoDisableMode":"custom","apiKeyAutoDisableRules":[{"statusCodes":[429],"times":3,"action":"permanent_disable"}]}""");
+
+        // off ignores the submitted rules: the store receives none and the
+        // channel keeps its own.
+        await store.BulkUpdateAutoDisableAsync([channel.Id], "off", null);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        var stored = ParsePolicyJson(reloaded.Policies);
+        Assert.Equal("off", stored.GetProperty("apiKeyAutoDisableMode").GetString());
+        var rules = stored.GetProperty("apiKeyAutoDisableRules");
+        Assert.Equal(429, rules[0].GetProperty("statusCodes")[0].GetInt32());
+        Assert.Equal(3, rules[0].GetProperty("times").GetInt32());
+    }
+
+    [Fact]
+    public async Task BulkUpdateAutoDisableTreatsNullPoliciesAsAnEmptyObject()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(context, policies: null);
+
+        await store.BulkUpdateAutoDisableAsync(
+            [channel.Id],
+            "custom",
+            """[{"times":1,"action":"permanent_disable"}]""");
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        var stored = ParsePolicyJson(reloaded.Policies);
+        Assert.Equal("custom", stored.GetProperty("apiKeyAutoDisableMode").GetString());
+        Assert.Equal(
+            1,
+            stored.GetProperty("apiKeyAutoDisableRules")[0].GetProperty("times").GetInt32());
+        Assert.False(stored.TryGetProperty("stream", out _));
+    }
+
+    [Fact]
+    public async Task BulkUpdateAutoDisableVerifiesTheExactIdCountBeforeWriting()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var alpha = await SeedChannelAsync(context, name: "Alpha");
+        var deleted = await SeedChannelAsync(context, name: "Gone", deletedAt: 77);
+
+        // Duplicates and soft-deleted ids both fail the live row-count check.
+        var duplicates = await Assert.ThrowsAsync<ExpectedRowsMismatchException>(
+            () => store.BulkUpdateAutoDisableAsync([alpha.Id, alpha.Id], "inherit", null));
+        Assert.Equal("expected to find 2 channels, but found 1", duplicates.Message);
+
+        var withDeleted = await Assert.ThrowsAsync<ExpectedRowsMismatchException>(
+            () => store.BulkUpdateAutoDisableAsync([alpha.Id, deleted.Id], "inherit", null));
+        Assert.Equal("expected to find 2 channels, but found 1", withDeleted.Message);
+
+        // The failed check leaves every row untouched.
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == alpha.Id);
+        Assert.Equal("""{"stream": "unlimited"}""", reloaded.Policies);
+        Assert.Equal(UpdatedAt, reloaded.UpdatedAt);
+    }
+
+    private static JsonElement ParsePolicyJson(string? json)
+    {
+        using var document = JsonDocument.Parse(json!);
+        return document.RootElement.Clone();
     }
 
     private static ChannelRecord CreateRecord(string name) => new()

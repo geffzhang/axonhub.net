@@ -3036,6 +3036,53 @@ C143（updateChannel 同样未调用 ensureChannelModelPrices）、C144（update
 live 校验器相对位置与冻结基线）、C145（更新同名的唯一索引冲突与前置检查窗口同族）。
 差异总数 145 增至 146（89 接受 / 23 缺口 / 34 已解决）。
 
+## 69. 管理面 channels 批量写入切片（bulkUpdateChannelOrdering / bulkUpdateChannelAutoDisable，20 例，2026-11-02）
+
+参照路线：`internal/server/gql/axonhub.resolvers.go:390-402`（BulkUpdateChannelOrdering
+resolver）、`:404-415`（BulkUpdateChannelAutoDisable resolver）、
+`internal/server/biz/channel_bulk.go:23-45`（排序逐项 `UpdateOneID(...).SetOrderingWeight(...).Save`）、
+`:242-340`（自动禁用的动作校验、`normalizeAutoDisableRules(..., true)`、事务内
+`IDIn` 查询与逐通道 `SetPolicies`）、`internal/server/gql/axonhub.graphql:445-477`
+（两个输入、`BulkAutoDisableAction` 枚举与两个返回类型）。
+
+本次新增 `ChannelOrderingItem` 记录与 `IChannelWriteStore.BulkUpdateOrderingAsync` /
+`BulkUpdateAutoDisableAsync`（`ChannelWriteStore.cs`）。排序在一个事务里逐项按
+`ID + 未软删` 读取活行，缺失时以 `failed to update channel {id}: ent: channel not
+found` 失败（对应 ent `UpdateOneID` 的 NotFound 文案），逐项写 `ordering_weight` 与
+`updated_at`，单项保存失败按 `failed to update channel {id}: %w` 包装，整批提交后
+返回更新行（参照在事务提交后重新加载）。自动禁用同样在一个事务内先按
+`IDIn(ids) AND 未软删` 查询，结果数不等于请求数时抛
+`expected to find %d channels, but found %d`（查询失败包
+`failed to query channels: %w`），随后逐个通道把存储的 policies 解析为 JSON 对象、
+写 `apiKeyAutoDisableMode`：`custom` 复制归一化后的规则、`inherit` 删除规则键、
+`off` 保留存储规则；单通道保存失败按
+`failed to update auto-disable policies for channel %q (%d): %w` 包装。
+
+`ChannelLifecycleService.BulkUpdateOrderingAsync` 只把存储错误转成
+`InvalidOperationException`，resolver 再加 `failed to bulk update channel ordering: `
+前缀；`BulkUpdateAutoDisableAsync` 在事务前完成参照的全部校验：空 ID 列表 →
+`channel IDs are required`（VALIDATION_FAILED）、`write_rules` 必须有非空规则列表
+（否则 `rules are required when writing auto-disable rules`），再经
+`NormalizeAutoDisableRules(..., allowDelete: true)` 归一化，非法规则转
+VALIDATION_FAILED；`inherit` / `off` 忽略提交的规则；未知动作保留参照的
+`unsupported auto-disable action %q` 分支（GraphQL 枚举下不可达，由服务级测试
+锁定）。自动禁用 resolver 与参照一样不加错误前缀，计数不匹配的文案原样返回。
+输入映射把 GID 解析为内部 ID，并把枚举映射回参照的线上字符串
+（`write_rules` / `inherit` / `off`）后再进入服务层的字符串 switch。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| /admin/graphql 端到端：排序逐项写入与返回顺序、缺失行的 resolver 前缀、空列表仍调用一次存储、write_rules 归一化（状态码排序去重、模式裁剪去空）、permanent_disable_delete、inherit 清规则并保留 stream、off 忽略输入并保留存储规则、空 ID / 缺规则 / 非法规则的写入前校验、服务级未知动作分支、计数不匹配无前缀、内省 | `tests/AxonHub.Api.Tests/AdminChannelBulkEndpointTests.cs` | 13 |
+| 存储：§68 的 21 例，另加排序全量写入与 `updated_at` 刷新、缺失 / 软删行回滚整批、write_rules 保留 stream 与归一化规则、inherit 清规则、off 保留规则、null policies、ID 计数先于写入（重复与软删） | `tests/AxonHub.Persistence.Tests/ChannelWriteStoreTests.cs` | 28 |
+
+`AxonHub.Api.Tests` 由 1376 增至 1389（+13），`AxonHub.Persistence.Tests` 由
+115 增至 122（+7），`AxonHub.Llm.Tests` 保持 3020，`AxonHub.Grains.Tests` 保持
+92；四个项目合计 4603 增至 4623，0 失败 0 跳过。
+
+差异：新增 C147（自动禁用写入直接编辑 policies JSON 对象，未知字段与显式空数组的
+保留边界）；更新 C014（批量排序与批量自动禁用已接入，其余通道写操作与管理员鉴权
+仍缺）。差异总数 146 增至 147（90 接受 / 23 缺口 / 34 已解决）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
