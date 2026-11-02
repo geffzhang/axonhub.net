@@ -3212,6 +3212,57 @@ OpenAI chat 出站。共享 pipeline 执行器替代按通道 proxy client、无
 不 panic）；更新 C014（端点自动检测已接入）。差异总数 149 增至 150（93 接受 / 23 缺口 /
 34 已解决）。
 
+## 73. 管理面 saveChannelModelPrices 定价写入切片（计划执行、版本表与校验，68 例，2026-11-02）
+
+参照路线：`internal/server/gql/price.resolvers.go:17-24`（SaveChannelModelPrices
+resolver，逐项解引用输入并原样转发错误）、`internal/server/biz/channel_price.go:374-508`
+（重复 model_id 检查、Validate 包装、按通道读取既有价格、事务内执行计划、通道
+`updated_at` 触碰、提交后刷新进程内价格缓存）、`:317-372`（`calculatePriceChanges`）、
+`:214-260`（`createChannelModelPrice` / `createChannelModelPriceVersion`）、
+`:534-544`（`generateReferenceID`）、`internal/objects/price.go`（`Validate` / `Equals`
+家族）、`internal/server/gql/price.graphql:22-151`（定价输出 / 输入类型与变更声明）与
+`internal/ent/schema/channel_model_price_versions.go`（active/archived 状态与
+effective 起止列）。
+
+本次新增 `ChannelModelPriceService`（`SaveAsync`：按输入顺序去重并校验，读取既有
+价格，组装 create/update/skip/delete 计划，调用存储事务；`SerializePrice` /
+`DeserializePrice` 经 `BillingJson` 与 shopspring 的带引号小数格式对齐；
+`GenerateReferenceId` 取 8 个 ASCII 字母）、`IChannelModelPriceStore.ApplyAsync`
+（单事务执行计划：create 写当前行与 active 版本；update 先归档 active 版本、再换
+新 reference id 更新当前行并写新 active 版本；skip 原样返回既有行；delete 先归档
+再软删当前行；最后强制触碰通道 `updated_at`，返回结果按计划序、删除项为 null），
+GraphQL 定价输出 / 输入类型与 `PriceMapping`（GID、`channelID` / `modelID` /
+`referenceID` 命名、GoTime 标量），以及 `AdminMutation.saveChannelModelPrices`
+（`channelId: ID!` 解析 GID 后转发）。校验失败仍以 `invalid model price: model_id=<id>: <err>`
+拒绝，重复输入为 `duplicate model price input: model_id=<id>`；既有价格读取失败为
+`failed to query existing channel model prices: <err>`（含不可解码的已存 JSON）；
+归档 / 创建 / 更新 / 软删与版本写入各自沿用参照前缀；缺失通道在提交前以
+`ent: channel not found` 失败并回滚整个计划。价格相等时跳过且不换 reference id；
+小数按值比较，未知定价模式只比较模式串；调度树、变体与条目顺序参与相等判定。
+`DateRange` 用严格 `yyyy-MM-dd` 解析，`dailyTime` 保留参照的字节算术与 `%q` 文案，
+`Local` 时区按 `time.LoadLocation` 的特例接受。落库 JSON 与参照一致：小数写成去掉
+尾零的带引号字符串，字段名与顺序、`promptWriteCacheVariants`、`schedule` 树按 Go
+结构序；读取时 jsonb 会重排空白与键序，测试按结构比较。缓存刷新在端口不存在（读取
+直接走数据库），HotChocolate `Decimal` 标量的数值文本、`DateOnly` 拒绝公元 0 年与
+软删谓词实现登记为 C151。自动定价任务与 `channelModelPrices` / versions 的读取边仍
+属 C048 的剩余缺口；createChannel / updateChannel 仍不调用 `ensureChannelModelPrices`
+（C143）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| /admin/graphql 端到端：create/update/skip/delete 计划顺序与结果顺序、空输入删除全部、重复 model_id、校验前缀、调度树校验、存储查询失败与不可解码价格、apply 失败透传、缺失通道、带 scale 与无 scale 小数相等、结构化差异触发 update 与新 reference id、Go 形状落库 JSON、返回价格树（末档 `upTo` 为 null）、畸形 GID、输入 / 输出 / 变更内省、服务层未知定价模式 | `tests/AxonHub.Api.Tests/AdminChannelModelPriceEndpointTests.cs` | 16 |
+| Validate 文案与 Equals 语义：nil / 空条目、四种定价模式、tiers、变体、schedule 时区 / overrides / dailyTime / weekdays / dateRange 全部包装层、dailyTime 字节算术与 `%q`、DateRange 严格解析、nil 与空数组等价、小数按值、缺省 vs 零、条目顺序、未知模式仅比模式串 | `tests/AxonHub.Api.Tests/ModelPriceValidationTests.cs` | 45 |
+| 持久层 ApplyAsync：create 写行与 active 版本并触碰通道、update 归档旧版本并新建 active 版本与 reference id、skip 不写、delete 软删并归档、混合计划按序写入并原序返回、缺失通道回滚全计划、缺失行的 update / delete 保留参照前缀 | `tests/AxonHub.Persistence.Tests/ChannelModelPriceStoreTests.cs`（7 个 Apply* 用例） | 7 |
+
+`AxonHub.Api.Tests` 由 1452 增至 1513（+61：端点 16 + 校验 45），
+`AxonHub.Persistence.Tests` 由 130 增至 137（+7），`AxonHub.Llm.Tests` 保持 3020，
+`AxonHub.Grains.Tests` 保持 92；四个项目合计 4694 增至 4762，0 失败 0 跳过。
+
+差异：新增 C151（定价写入的缓存刷新 / Decimal 线上文本 / DateOnly 年 0 / 软删实现）；
+更新 C048（写入面已闭合，剩自动定价与读取边）、C143（写入接缝已具备，create / update
+尚未接线）与 C014（定价写入已接入）。差异总数 150 增至 151（94 接受 / 23 缺口 /
+34 已解决）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -3224,11 +3275,11 @@ OpenAI chat 出站。共享 pipeline 执行器替代按通道 proxy client、无
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）与端点自动检测（§72：detectChannelEndpoints）已接入，但其余通道写操作（重复、批量创建、测试、定价、模型同步）、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，但其余通道写操作（重复、批量创建、测试、模型同步）、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），其余通道写操作未移植（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
-| usage 成本管理面：`channel_model_prices` 写入、reference-id 轮换、版本表与自动定价 | 参照的 `SaveChannelModelPrices` / `channel_model_price_versions` / GraphQL 管理面未移植；端口只有读取路径与基础表（C048） | 中 | 随通道管理面落地 |
+| usage 成本管理面：`channel_model_prices` 自动定价与读取边 | 写入面已由 §73 接入（`saveChannelModelPrices`、create/update/skip/delete 计划、reference id 轮换、`channel_model_price_versions` 版本行与 GraphQL 定价类型，68 例）；自动定价任务、ent 的 `channelModelPrices` / versions 读取边与进程内缓存刷新未移植（C048） | 低 | 随通道管理面与读取边切片落地 |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / invitations 等） | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；`invitations`、`data_storages`、`prompts` 等其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |

@@ -79,6 +79,39 @@ public sealed class ChannelModelPriceRecord
     public long ChannelId { get; set; }
 }
 
+/// <summary>
+/// Row of the reference <c>channel_model_price_versions</c> table
+/// (internal/ent/schema/channel_model_price_versions.go). The version history
+/// keeps the price that was active during a billing period; archiving stamps
+/// <see cref="EffectiveEndAt"/> while a new active row carries the new price.
+/// </summary>
+public sealed class ChannelModelPriceVersionRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    public long ChannelId { get; set; }
+
+    public string ModelId { get; set; } = string.Empty;
+
+    public long ChannelModelPriceId { get; set; }
+
+    /// <summary>objects.ModelPrice JSON; decimals are strings, as Go marshals them.</summary>
+    public string Price { get; set; } = "null";
+
+    /// <summary>Ent enum channelmodelpriceversion.Status: active / archived.</summary>
+    public string Status { get; set; } = "active";
+
+    public DateTime EffectiveStartAt { get; set; }
+
+    public DateTime? EffectiveEndAt { get; set; }
+
+    public string ReferenceId { get; set; } = string.Empty;
+}
+
 /// <summary>Row of the reference <c>requests</c> table.</summary>
 public sealed class RequestRecord
 {

@@ -175,6 +175,12 @@ builder.Services.AddScoped<ChannelLifecycleService>();
 // built from the channel type's primary outbound and generic peers.
 builder.Services.AddScoped<ChannelEndpointDetectService>();
 
+// Channel price writes (saveChannelModelPrices): the ordered action plan and
+// its active/archived version history run in one store transaction
+// (channel_price.go:374-508).
+builder.Services.AddScoped<IChannelModelPriceStore, ChannelModelPriceStore>();
+builder.Services.AddScoped<ChannelModelPriceService>();
+
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
 // (routes.go:163). The first slice exposes the static scope catalog; the
 // reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported

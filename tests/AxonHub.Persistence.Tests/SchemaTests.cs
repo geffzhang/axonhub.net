@@ -14,9 +14,10 @@ public sealed class SchemaTests(PostgresFixture fixture)
 {
     private static readonly string[] ExpectedTables =
     [
-        "api_keys", "channel_model_prices", "channels", "projects",
-        "prompt_protection_rules", "request_executions", "requests", "roles", "systems",
-        "threads", "traces", "usage_logs", "user_projects", "user_roles", "users",
+        "api_keys", "channel_model_price_versions", "channel_model_prices", "channels",
+        "projects", "prompt_protection_rules", "request_executions", "requests", "roles",
+        "systems", "threads", "traces", "usage_logs", "user_projects", "user_roles",
+        "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -54,6 +55,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
         [
             "id", "created_at", "updated_at", "deleted_at", "model_id", "price",
             "reference_id", "channel_id",
+        ],
+        ["channel_model_price_versions"] =
+        [
+            "id", "created_at", "updated_at", "channel_id", "model_id", "price",
+            "status", "effective_start_at", "effective_end_at", "reference_id",
+            "channel_model_price_id",
         ],
         ["prompt_protection_rules"] =
         [
@@ -174,6 +181,14 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["jsonb"] = ["price"],
                 ["character varying"] = ["model_id", "reference_id"],
             },
+            ["channel_model_price_versions"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "channel_id", "channel_model_price_id"],
+                ["timestamp with time zone"] =
+                    ["created_at", "updated_at", "effective_start_at", "effective_end_at"],
+                ["jsonb"] = ["price"],
+                ["character varying"] = ["model_id", "status", "reference_id"],
+            },
             ["prompt_protection_rules"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["bigint"] = ["id", "deleted_at"],
@@ -288,6 +303,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ("channel_model_prices", true, ["channel_id", "model_id", "deleted_at"]),
             ["channel_model_prices_reference_id_key"] =
                 ("channel_model_prices", true, ["reference_id"]),
+            ["channel_model_price_versions_reference_id_key"] =
+                ("channel_model_price_versions", true, ["reference_id"]),
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
             ["projects_by_name"] = ("projects", true, ["name", "deleted_at"]),
             ["user_email_deleted_at"] = ("users", true, ["email", "deleted_at"]),

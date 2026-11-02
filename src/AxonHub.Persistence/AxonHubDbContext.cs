@@ -26,6 +26,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<ChannelModelPriceRecord> ChannelModelPrices => Set<ChannelModelPriceRecord>();
 
+    public DbSet<ChannelModelPriceVersionRecord> ChannelModelPriceVersions => Set<ChannelModelPriceVersionRecord>();
+
     public DbSet<RequestRecord> Requests => Set<RequestRecord>();
 
     public DbSet<RequestExecutionRecord> RequestExecutions => Set<RequestExecutionRecord>();
@@ -75,6 +77,7 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
     {
         ConfigureChannel(modelBuilder.Entity<ChannelRecord>());
         ConfigureChannelModelPrice(modelBuilder.Entity<ChannelModelPriceRecord>());
+        ConfigureChannelModelPriceVersion(modelBuilder.Entity<ChannelModelPriceVersionRecord>());
         ConfigureRequest(modelBuilder.Entity<RequestRecord>());
         ConfigureRequestExecution(modelBuilder.Entity<RequestExecutionRecord>());
         ConfigureUsageLog(modelBuilder.Entity<UsageLogRecord>());
@@ -441,6 +444,41 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
             .IsUnique();
         builder.HasIndex(price => price.ReferenceId)
             .HasDatabaseName("channel_model_prices_reference_id_key")
+            .IsUnique();
+    }
+
+    private static void ConfigureChannelModelPriceVersion(
+        EntityTypeBuilder<ChannelModelPriceVersionRecord> builder)
+    {
+        builder.ToTable("channel_model_price_versions");
+        builder.HasKey(version => version.Id);
+        builder.Property(version => version.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(version => version.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(version => version.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(version => version.ChannelId).HasColumnName("channel_id").IsRequired();
+        builder.Property(version => version.ModelId).HasColumnName("model_id").HasColumnType("varchar").IsRequired();
+        builder.Property(version => version.ChannelModelPriceId)
+            .HasColumnName("channel_model_price_id")
+            .IsRequired();
+        builder.Property(version => version.Price).HasColumnName("price").HasColumnType("jsonb").IsRequired();
+        builder.Property(version => version.Status).HasColumnName("status").HasColumnType("varchar").IsRequired();
+        builder.Property(version => version.EffectiveStartAt)
+            .HasColumnName("effective_start_at")
+            .HasColumnType("timestamptz")
+            .IsRequired();
+        builder.Property(version => version.EffectiveEndAt)
+            .HasColumnName("effective_end_at")
+            .HasColumnType("timestamptz");
+        builder.Property(version => version.ReferenceId)
+            .HasColumnName("reference_id")
+            .HasColumnType("varchar")
+            .IsRequired();
+
+        builder.HasIndex(version => version.ReferenceId)
+            .HasDatabaseName("channel_model_price_versions_reference_id_key")
             .IsUnique();
     }
 

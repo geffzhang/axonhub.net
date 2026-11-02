@@ -509,6 +509,29 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.SaveChannelModelPrices
+    /// (price.resolvers.go:17-24; biz channel_price.go:374-508). The reference
+    /// resolver maps each (non-null) input and forwards the service error
+    /// unchanged; deletes are not part of the returned list.
+    /// </summary>
+    [GraphQLName("saveChannelModelPrices")]
+    public async Task<IReadOnlyList<ChannelModelPriceType>> SaveChannelModelPricesAsync(
+        [GraphQLType(typeof(NonNullType<IdType>))] string channelId,
+        IReadOnlyList<SaveChannelModelPriceInput> input,
+        [Service] ChannelModelPriceService prices,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelId);
+
+        var saved = await prices.SaveAsync(
+                new SaveChannelModelPricesCommand(gid.Id, PriceMapping.ToCommands(input)),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return saved.Select(PriceMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>
     /// Port of mutationResolver.DetectChannelEndpoints
     /// (axonhub.resolvers.go:199-201; biz channel_endpoint_detect.go:72-115).
     /// The reference resolver forwards the service error unchanged.
