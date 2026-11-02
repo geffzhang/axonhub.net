@@ -58,8 +58,13 @@ namespace AxonHub.Api.Orchestration;
 /// <c>volcengine</c>, <c>doubao_anthropic</c>, <c>volcengine_anthropic</c>,
 /// <c>zenmux</c>, <c>zenmux_responses</c>, <c>zenmux_anthropic</c>,
 /// <c>zenmux_video</c>, <c>github_copilot</c>, <c>gemini_openai</c>,
-/// <c>gemini</c>, <c>zenmux_gemini</c>, <c>gemini_vertex</c> and
-/// <c>antigravity</c>
+/// <c>gemini</c>, <c>zenmux_gemini</c>, <c>gemini_vertex</c>,
+/// <c>antigravity</c>, <c>atlascloud</c>, <c>vercel</c>, <c>deepinfra</c>,
+/// <c>qiniu</c>, <c>ppio</c>, <c>siliconflow</c>, <c>aihubmix</c>,
+/// <c>burncloud</c>, <c>github</c>, <c>evolink</c>, <c>groq</c>,
+/// <c>qiniu_anthropic</c>, <c>aihubmix_anthropic</c>, <c>evolink_anthropic</c>,
+/// <c>longcat_anthropic</c>, <c>moonshot_anthropic</c>, <c>deepseek_anthropic</c>,
+/// <c>anthropic_aws</c> and <c>xai_responses</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -169,6 +174,50 @@ public static class ChannelOutboundFactory
     public const string GeminiVertexChannelType = "gemini_vertex";
 
     public const string ZenmuxGeminiChannelType = "zenmux_gemini";
+
+    // channel_llm.go:1277-1280: OpenAI-compatible alias channels sharing the
+    // plain OpenAI outbound (PlatformOpenAI).
+    public const string AtlascloudChannelType = "atlascloud";
+
+    public const string VercelChannelType = "vercel";
+
+    public const string DeepinfraChannelType = "deepinfra";
+
+    public const string QiniuChannelType = "qiniu";
+
+    public const string PpioChannelType = "ppio";
+
+    public const string SiliconflowChannelType = "siliconflow";
+
+    public const string AihubmixChannelType = "aihubmix";
+
+    public const string BurncloudChannelType = "burncloud";
+
+    public const string GithubChannelType = "github";
+
+    public const string EvolinkChannelType = "evolink";
+
+    public const string GroqChannelType = "groq";
+
+    // channel_llm.go:898, 885, 990, 1016, 1056: Anthropic-format aliases
+    // (qiniu/aihubmix/evolink share the plain direct platform).
+    public const string QiniuAnthropicChannelType = "qiniu_anthropic";
+
+    public const string AihubmixAnthropicChannelType = "aihubmix_anthropic";
+
+    public const string EvolinkAnthropicChannelType = "evolink_anthropic";
+
+    public const string LongcatAnthropicChannelType = "longcat_anthropic";
+
+    public const string MoonshotAnthropicChannelType = "moonshot_anthropic";
+
+    public const string DeepseekAnthropicChannelType = "deepseek_anthropic";
+
+    public const string AnthropicAwsChannelType = "anthropic_aws";
+
+    // channel_llm.go:855-863: the xAI responses channel has exactly one
+    // endpoint, the responses API (channel_endpoint.go:296).
+    public const string XaiResponsesChannelType = "xai_responses";
 
     // channel_llm.go:56-58: the default base URLs applied when a ZenMux
     // channel has none stored (channel_llm.go:695-705).
@@ -341,6 +390,76 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
             }),
+            // channel_llm.go:855-863: the xAI responses channel has exactly
+            // one endpoint, the responses API (channel_endpoint.go:296),
+            // served by the shared Responses outbound.
+            XaiResponsesChannelType => ResponsesOutboundTransformer.Create(
+                candidate.BaseUrl ?? string.Empty,
+                provider,
+                provider.KeyIndex),
+            // channel_llm.go:885-893: longcat_anthropic speaks Anthropic
+            // Messages through the LongCat platform (Bearer auth).
+            LongcatAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+            {
+                Type = AnthropicPlatformType.LongCat,
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:898-909: qiniu/aihubmix/evolink anthropic variants
+            // share the plain Anthropic direct platform (X-API-Key).
+            QiniuAnthropicChannelType or AihubmixAnthropicChannelType or EvolinkAnthropicChannelType
+                => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Direct,
+                    BaseUrl = candidate.BaseUrl ?? string.Empty,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            // channel_llm.go:990-998: deepseek_anthropic uses the DeepSeek
+            // platform (output_config support, no adaptive thinking).
+            DeepseekAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+            {
+                Type = AnthropicPlatformType.DeepSeek,
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:1016-1024: moonshot_anthropic uses the Moonshot
+            // platform.
+            MoonshotAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+            {
+                Type = AnthropicPlatformType.Moonshot,
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:1056-1064: anthropic_aws speaks Anthropic Messages
+            // through the Bedrock platform (Bearer auth, /model/{model}/invoke
+            // wire envelope; the Vertex sibling stays a gap, C056).
+            AnthropicAwsChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+            {
+                Type = AnthropicPlatformType.Bedrock,
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
+            // channel_llm.go:1277-1280: the OpenAI-compatible alias channels
+            // share the plain OpenAI outbound (PlatformOpenAI). Their default
+            // endpoint sets — openAICompatibleDefaultEndpoints
+            // (channel_endpoint.go:189-197), qiniu's chat-only (:236) and
+            // groq's chat + audio (:333-337) — are all formats the OpenAI
+            // outbound serves internally, so no ApiFormat branching is needed;
+            // formats outside the set error in the reference's endpoint
+            // lookup (dispatch model difference C094).
+            AtlascloudChannelType or VercelChannelType or DeepinfraChannelType
+                or QiniuChannelType or PpioChannelType or SiliconflowChannelType
+                or AihubmixChannelType or BurncloudChannelType or GithubChannelType
+                or EvolinkChannelType or GroqChannelType
+                => OpenAiOutboundTransformer.Create(
+                    candidate.BaseUrl ?? string.Empty,
+                    provider,
+                    provider.KeyIndex),
             // channel_llm.go:924-989: OAuth channels get a JSON-refreshing
             // Claude token provider; plain key channels rotate through the
             // per-attempt key provider.
