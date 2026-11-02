@@ -9,6 +9,7 @@ using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.PromptProtection;
 using AxonHub.Api.Security;
+using AxonHub.Api.Static;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -182,11 +183,12 @@ app.UseMiddleware<RequestTracingMiddleware>();
 // that order. The slice applies both to every ported API surface: the openai,
 // jina, typesafe and anthropic groups all hang off the same apiGroup.
 app.UseWhen(
-    static context => context.Request.Path.StartsWithSegments("/v1")
-        || context.Request.Path.StartsWithSegments("/anthropic/v1")
-        || context.Request.Path.StartsWithSegments("/jina/v1")
-        || context.Request.Path.StartsWithSegments("/typesafe/v1")
-        || context.Request.Path.StartsWithSegments("/doubao/v3"),
+    static context => !IsStaticFallback(context)
+        && (context.Request.Path.StartsWithSegments("/v1")
+            || context.Request.Path.StartsWithSegments("/anthropic/v1")
+            || context.Request.Path.StartsWithSegments("/jina/v1")
+            || context.Request.Path.StartsWithSegments("/typesafe/v1")
+            || context.Request.Path.StartsWithSegments("/doubao/v3")),
     static branch =>
     {
         branch.UseMiddleware<IpBlocklistMiddleware>();
@@ -203,8 +205,9 @@ app.UseWhen(
 // thread/trace pair. WithTimeout/WithSource/WithResponseHeaders stay
 // unregistered like the rest of the port (C115).
 app.UseWhen(
-    static context => context.Request.Path.StartsWithSegments("/v1beta")
-        || context.Request.Path.StartsWithSegments("/gemini"),
+    static context => !IsStaticFallback(context)
+        && (context.Request.Path.StartsWithSegments("/v1beta")
+            || context.Request.Path.StartsWithSegments("/gemini")),
     static branch =>
     {
         branch.UseMiddleware<IpBlocklistMiddleware>();
@@ -412,5 +415,22 @@ app.MapPost("/v1beta/models/{**action}", GeminiEndpoint.GenerateContentAsync);
 app.MapGet("/v1beta/models", GeminiEndpoint.ListModelsAsync);
 app.MapPost("/gemini/{apiVersion}/models/{**action}", GeminiEndpoint.GenerateContentAsync);
 app.MapGet("/gemini/{apiVersion}/models", GeminiEndpoint.ListModelsAsync);
+
+// The reference attaches its API middlewares to gin groups, so a request that
+// misses every route reaches NoRoute without them (C116).
+static bool IsStaticFallback(HttpContext context)
+    => context.GetEndpoint()?.Metadata.GetMetadata<StaticFallbackMetadata>() is not null;
+
+// Unmatched routes (routes.go:59 registers internal/server/static's handler as
+// gin's NoRoute): /admin, /v1, ... answer with the JSON 404 envelope, static
+// asset paths serve from disk or stay 404, everything else is the SPA. The
+// reference embeds the built frontend with go:embed; the port serves
+// Server:Static:Root (default frontend/dist) instead (C129).
+var staticRoot = builder.Configuration["Server:Static:Root"];
+staticRoot = string.IsNullOrWhiteSpace(staticRoot)
+    ? System.IO.Path.Combine(app.Environment.ContentRootPath, "frontend", "dist")
+    : System.IO.Path.GetFullPath(staticRoot, app.Environment.ContentRootPath);
+app.MapFallback("{**path}", (RequestDelegate)new StaticHandler(staticRoot).HandleAsync)
+    .WithMetadata(StaticFallbackMetadata.Instance);
 
 app.Run();
