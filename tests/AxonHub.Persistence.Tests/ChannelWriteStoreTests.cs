@@ -380,6 +380,275 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         Assert.DoesNotContain("Broken", failure.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task GetForUpdateReturnsOnlyLiveRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var live = await SeedChannelAsync(context, name: "Alpha");
+        var deleted = await SeedChannelAsync(context, name: "Gone", deletedAt: 77);
+
+        var loaded = await store.GetForUpdateAsync(live.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal("Alpha", loaded.Name);
+        Assert.Equal("openai", loaded.Type);
+        Assert.Equal(UpdatedAt, loaded.UpdatedAt);
+
+        // The identity read applies the SoftDeleteMixin predicate.
+        Assert.Null(await store.GetForUpdateAsync(424242));
+        Assert.Null(await store.GetForUpdateAsync(deleted.Id));
+    }
+
+    [Fact]
+    public async Task NameExistsExcludesTheChannelItselfAndSoftDeletedRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var alpha = await SeedChannelAsync(context, name: "Alpha");
+        await SeedChannelAsync(context, name: "Bravo");
+        await SeedChannelAsync(context, name: "Recycled", deletedAt: 1234);
+
+        // Name(...) AND IDNEQ(id): the row being updated never collides with itself.
+        Assert.False(await store.NameExistsAsync(alpha.Id, "Alpha"));
+        Assert.True(await store.NameExistsAsync(alpha.Id, "Bravo"));
+        Assert.False(await store.NameExistsAsync(alpha.Id, "Recycled"));
+        Assert.False(await store.NameExistsAsync(alpha.Id, "Unused"));
+    }
+
+    [Fact]
+    public async Task UpdateWritesOnlyProvidedColumnsAndStampsUpdatedAt()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            name: "Alpha",
+            baseUrl: "https://api.example/v1",
+            supportedModels: """["a"]""",
+            settings: """{"extraModelPrefix":"p"}""",
+            credentials: """{"apiKey":"k"}""",
+            remark: "old",
+            autoSyncModelPattern: "gpt-*",
+            endpoints: """[{"api_format":"openai/chat_completions"}]""",
+            orderingWeight: 3,
+            defaultTestModel: "m",
+            errorMessage: "boom");
+
+        // The service loads the snapshot separately; jsonb normalizes the text
+        // on that read, so project the same way here.
+        var snapshot = await store.GetForUpdateAsync(channel.Id);
+        Assert.NotNull(snapshot);
+
+        var updated = await store.UpdateAsync(
+            snapshot,
+            new ChannelUpdateRecord
+            {
+                Name = "Renamed",
+                Remark = "new",
+                OrderingWeight = 7,
+                ClearErrorMessage = true,
+            });
+
+        Assert.NotNull(updated);
+        Assert.Equal(channel.Id, updated.Id);
+        Assert.Equal("Renamed", updated.Name);
+        Assert.Equal("new", updated.Remark);
+        Assert.Equal(7, updated.OrderingWeight);
+        Assert.Null(updated.ErrorMessage);
+        Assert.True(updated.UpdatedAt > UpdatedAt);
+
+        // Untouched columns keep the loaded snapshot.
+        Assert.Equal("openai", updated.Type);
+        Assert.Equal("https://api.example/v1", updated.BaseUrl);
+        Assert.Equal("m", updated.DefaultTestModel);
+        Assert.Equal("""["a"]""", updated.SupportedModels);
+        Assert.Equal("""{"extraModelPrefix": "p"}""", updated.Settings);
+        Assert.Equal("""{"apiKey": "k"}""", updated.Credentials);
+        Assert.Equal("gpt-*", updated.AutoSyncModelPattern);
+        Assert.Equal(0, updated.DeletedAt);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Equal("Renamed", reloaded.Name);
+        Assert.Equal("new", reloaded.Remark);
+        Assert.Equal(7, reloaded.OrderingWeight);
+        Assert.Null(reloaded.ErrorMessage);
+        Assert.True(reloaded.UpdatedAt > UpdatedAt);
+
+        // Not-set columns are literally unchanged in the row.
+        Assert.Equal("openai", reloaded.Type);
+        Assert.Equal("https://api.example/v1", reloaded.BaseUrl);
+        Assert.Equal("m", reloaded.DefaultTestModel);
+        Assert.Equal("""["a"]""", reloaded.SupportedModels);
+        Assert.Equal("""{"extraModelPrefix": "p"}""", reloaded.Settings);
+        Assert.Equal("""{"apiKey": "k"}""", reloaded.Credentials);
+        Assert.Equal("gpt-*", reloaded.AutoSyncModelPattern);
+        Assert.Equal(
+            """[{"api_format": "openai/chat_completions"}]""",
+            reloaded.Endpoints);
+    }
+
+    [Fact]
+    public async Task UpdateClearFlagsWriteNulls()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            name: "Alpha",
+            settings: """{"extraModelPrefix":"p"}""",
+            remark: "old",
+            autoSyncModelPattern: "gpt-*",
+            errorMessage: "boom");
+
+        var updated = await store.UpdateAsync(
+            channel,
+            new ChannelUpdateRecord
+            {
+                ClearRemark = true,
+                ClearAutoSyncModelPattern = true,
+                ClearErrorMessage = true,
+                SettingsJson = "null",
+            });
+
+        Assert.NotNull(updated);
+        Assert.Null(updated.Remark);
+        Assert.Null(updated.AutoSyncModelPattern);
+        Assert.Null(updated.ErrorMessage);
+
+        // ent's ClearField stores NULL; SetSettings(nil) stores JSON null.
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Null(reloaded.Remark);
+        Assert.Null(reloaded.AutoSyncModelPattern);
+        Assert.Null(reloaded.ErrorMessage);
+        Assert.Equal("null", reloaded.Settings);
+    }
+
+    [Fact]
+    public async Task UpdateHonoursTheExpectedVersionGuard()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(context, name: "Alpha");
+
+        // Identity updates match only while updated_at is the loaded value.
+        var stale = await store.UpdateAsync(
+            channel,
+            new ChannelUpdateRecord
+            {
+                Name = "Stale",
+                ExpectedUpdatedAt = UpdatedAt.AddMinutes(-1),
+            });
+        Assert.Null(stale);
+
+        await using (var verify = db.Factory.CreateDbContext())
+        {
+            var untouched = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+            Assert.Equal("Alpha", untouched.Name);
+            Assert.Equal(UpdatedAt, untouched.UpdatedAt);
+        }
+
+        var fresh = await store.UpdateAsync(
+            channel,
+            new ChannelUpdateRecord
+            {
+                Name = "Fresh",
+                ExpectedUpdatedAt = UpdatedAt,
+            });
+        Assert.NotNull(fresh);
+
+        await using (var verify = db.Factory.CreateDbContext())
+        {
+            var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+            Assert.Equal("Fresh", reloaded.Name);
+            Assert.True(reloaded.UpdatedAt > UpdatedAt);
+        }
+    }
+
+    [Fact]
+    public async Task UnguardedUpdateIgnoresAStaleLoadedVersion()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(context, name: "Alpha");
+
+        // A non-identity update bumps updated_at behind the loaded snapshot.
+        await store.UpdateStatusAsync(channel.Id, "enabled");
+
+        // Remark-only updates carry no version guard, like the reference.
+        var updated = await store.UpdateAsync(
+            channel,
+            new ChannelUpdateRecord { Remark = "new" });
+        Assert.NotNull(updated);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Equal("new", reloaded.Remark);
+        Assert.Equal("Alpha", reloaded.Name);
+        Assert.Equal("enabled", reloaded.Status);
+    }
+
+    [Fact]
+    public async Task UpdateReturnsNullForMissingAndSoftDeletedRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var deleted = await SeedChannelAsync(context, name: "Gone", deletedAt: 55);
+
+        Assert.Null(await store.UpdateAsync(
+            new ChannelRecord { Id = 424242 },
+            new ChannelUpdateRecord { Name = "Nobody" }));
+        Assert.Null(await store.UpdateAsync(
+            deleted,
+            new ChannelUpdateRecord { Name = "Resurrected" }));
+
+        await using var verify = db.Factory.CreateDbContext();
+        var untouched = await verify.Channels.SingleAsync(row => row.Id == deleted.Id);
+        Assert.Equal("Gone", untouched.Name);
+        Assert.Equal(55, untouched.DeletedAt);
+        Assert.Equal(UpdatedAt, untouched.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateWrapsAUniqueNameViolationWithTheReferencePrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        await SeedChannelAsync(context, name: "Alpha");
+        var bravo = await SeedChannelAsync(context, name: "Bravo");
+
+        // The service checks the live name first; the (name, deleted_at)
+        // unique index still guards the store against the create/update race.
+        var failure = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.UpdateAsync(bravo, new ChannelUpdateRecord { Name = "Alpha" }));
+        Assert.StartsWith("failed to update channel: ", failure.Message, StringComparison.Ordinal);
+    }
+
     private static ChannelRecord CreateRecord(string name) => new()
     {
         CreatedAt = CreatedAt,
@@ -407,21 +676,38 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         DateTime? autoDisabledAt = null,
         DateTime? autoDisableExpiresAt = null,
         string? tags = null,
-        long deletedAt = 0)
+        long deletedAt = 0,
+        string type = "openai",
+        string? baseUrl = null,
+        string credentials = "{}",
+        string supportedModels = "null",
+        string? settings = null,
+        string? policies = """{"stream":"unlimited"}""",
+        string? remark = null,
+        string autoSyncModelPattern = "",
+        string? endpoints = "[]",
+        long orderingWeight = 0,
+        string defaultTestModel = "")
     {
         var channel = new ChannelRecord
         {
             CreatedAt = CreatedAt,
             UpdatedAt = UpdatedAt,
             DeletedAt = deletedAt,
-            Type = "openai",
+            Type = type,
+            BaseUrl = baseUrl,
             Name = name,
             Status = status,
-            Credentials = "{}",
-            SupportedModels = "null",
-            AutoSyncModelPattern = "",
-            DefaultTestModel = "",
+            Credentials = credentials,
+            SupportedModels = supportedModels,
+            AutoSyncModelPattern = autoSyncModelPattern,
+            DefaultTestModel = defaultTestModel,
             Tags = tags,
+            Policies = policies,
+            Settings = settings,
+            OrderingWeight = orderingWeight,
+            Endpoints = endpoints,
+            Remark = remark,
             ErrorMessage = errorMessage,
             AutoDisabledAt = autoDisabledAt,
             AutoDisableExpiresAt = autoDisableExpiresAt,

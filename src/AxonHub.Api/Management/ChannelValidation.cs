@@ -91,7 +91,7 @@ public static class ChannelValidation
     public static bool IsCommandCodeChannelType(string channelType)
         => CommandCodeChannelTypes.Contains(channelType);
 
-    private static bool IsZenmuxChannelType(string channelType)
+    public static bool IsZenmuxChannelType(string channelType)
         => ZenmuxChannelTypes.Contains(channelType);
 
     /// <summary>
@@ -130,7 +130,7 @@ public static class ChannelValidation
     /// Port of clearCommandCodeQuotaSettings (channel.go:1389-1404): drops the
     /// Command Code block and the now-empty provider quota object.
     /// </summary>
-    private static void ClearCommandCodeQuotaSettings(ChannelSettingsDraft settings)
+    public static void ClearCommandCodeQuotaSettings(ChannelSettingsDraft settings)
     {
         if (settings.ProviderQuota is null)
         {
@@ -143,6 +143,14 @@ public static class ChannelValidation
             settings.ProviderQuota = null;
         }
     }
+
+    /// <summary>
+    /// Port of commandCodeQuotaCookieIsBlank (channel.go:1364-1369): the
+    /// explicit "clear the stored quota cookie" signal.
+    /// </summary>
+    public static bool CommandCodeQuotaCookieIsBlank(ChannelSettingsDraft? settings)
+        => settings?.ProviderQuota?.CommandCode is { } commandCode
+            && string.IsNullOrWhiteSpace(commandCode.AuthCookie);
 
     /// <summary>Port of validateCommandCodeBaseURL (channel_llm.go:690-697).</summary>
     public static string? ValidateCommandCodeBaseUrl(string rawUrl)
@@ -210,7 +218,8 @@ public static class ChannelValidation
     /// Only runs for a non-empty model list; mutates the draft when an override
     /// no longer names an exposed model.
     /// </summary>
-    public static void RemoveRemovedModelProtocolOverrides(
+    /// <returns>Whether an override was pruned (the reference's bool result).</returns>
+    public static bool RemoveRemovedModelProtocolOverrides(
         ChannelSettingsDraft settings,
         IReadOnlyList<string> supportedModels)
     {
@@ -218,7 +227,7 @@ public static class ChannelValidation
             || settings.ModelProtocols is null
             || settings.ModelProtocols.Count == 0)
         {
-            return;
+            return false;
         }
 
         // The reference probes biz.Channel.GetModelEntries, which is derived
@@ -250,7 +259,10 @@ public static class ChannelValidation
         if (kept.Count != settings.ModelProtocols.Count)
         {
             settings.ModelProtocols = kept;
+            return true;
         }
+
+        return false;
     }
 
     /// <summary>Port of ValidateBodyOverrideOperations (channel_override.go:181-238).</summary>

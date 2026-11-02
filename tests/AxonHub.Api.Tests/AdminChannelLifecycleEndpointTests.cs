@@ -505,6 +505,19 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public List<ChannelRecord> CreatedChannels { get; } = [];
 
+    public List<(long Id, ChannelUpdateRecord Update)> UpdateCalls { get; } = [];
+
+    public List<(long Id, string Name)> NameChecks { get; } = [];
+
+    /// <summary>Simulates a concurrent writer invalidating the version guard.</summary>
+    public bool UpdateConflict { get; set; }
+
+    public Exception? GetForUpdateFailure { get; set; }
+
+    public Exception? NameCheckFailure { get; set; }
+
+    public Exception? UpdateFailure { get; set; }
+
     public Exception? CreateFailure { get; set; }
 
     public Exception? StatusFailure { get; set; }
@@ -521,6 +534,86 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
     {
         record.Id = _nextId++;
         _rows.Add(record);
+    }
+
+    public Task<ChannelRecord?> GetForUpdateAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        if (GetForUpdateFailure is not null)
+        {
+            throw GetForUpdateFailure;
+        }
+
+        return Task.FromResult(
+            _rows.SingleOrDefault(row => row.Id == id && row.DeletedAt == 0));
+    }
+
+    public Task<bool> NameExistsAsync(
+        long id,
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        if (NameCheckFailure is not null)
+        {
+            throw NameCheckFailure;
+        }
+
+        NameChecks.Add((id, name));
+        return Task.FromResult(
+            _rows.Any(row => row.DeletedAt == 0 && row.Id != id && row.Name == name));
+    }
+
+    public Task<ChannelRecord?> UpdateAsync(
+        ChannelRecord snapshot,
+        ChannelUpdateRecord update,
+        CancellationToken cancellationToken = default)
+    {
+        if (UpdateFailure is not null)
+        {
+            throw UpdateFailure;
+        }
+
+        if (UpdateConflict)
+        {
+            return Task.FromResult<ChannelRecord?>(null);
+        }
+
+        var row = _rows.SingleOrDefault(candidate =>
+            candidate.Id == snapshot.Id && candidate.DeletedAt == 0);
+        if (row is null
+            || (update.ExpectedUpdatedAt is { } expected && row.UpdatedAt != expected))
+        {
+            return Task.FromResult<ChannelRecord?>(null);
+        }
+
+        UpdateCalls.Add((snapshot.Id, update));
+
+        row.Type = update.Type ?? row.Type;
+        row.BaseUrl = update.BaseUrl ?? row.BaseUrl;
+        row.Name = update.Name ?? row.Name;
+        row.DefaultTestModel = update.DefaultTestModel ?? row.DefaultTestModel;
+        row.OrderingWeight = update.OrderingWeight ?? row.OrderingWeight;
+        row.AutoSyncSupportedModels =
+            update.AutoSyncSupportedModels ?? row.AutoSyncSupportedModels;
+        row.SupportedModels = update.SupportedModelsJson ?? row.SupportedModels;
+        row.ManualModels = update.ManualModelsJson ?? row.ManualModels;
+        row.Tags = update.TagsJson ?? row.Tags;
+        row.Settings = update.SettingsJson ?? row.Settings;
+        row.Policies = update.PoliciesJson ?? row.Policies;
+        row.Credentials = update.CredentialsJson ?? row.Credentials;
+        row.Remark = update.ClearRemark ? null : update.Remark ?? row.Remark;
+        row.AutoSyncModelPattern = update.ClearAutoSyncModelPattern
+            ? null
+            : update.AutoSyncModelPattern ?? row.AutoSyncModelPattern;
+        row.Endpoints = update.EndpointsJson ?? row.Endpoints;
+        if (update.ClearErrorMessage)
+        {
+            row.ErrorMessage = null;
+        }
+
+        row.UpdatedAt = DateTime.UtcNow;
+        return Task.FromResult<ChannelRecord?>(row);
     }
 
     public Task<ChannelRecord?> CreateAsync(

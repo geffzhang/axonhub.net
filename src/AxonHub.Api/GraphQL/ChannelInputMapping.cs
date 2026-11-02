@@ -35,6 +35,39 @@ public static class ChannelInputMapping
         };
     }
 
+    /// <summary>
+    /// Maps the GraphQL <c>UpdateChannelInput</c> to the write command
+    /// (ent.graphql:6185-6237). Unlike create, every scalar stays nullable so
+    /// null keeps meaning "leave untouched"; an explicit empty list remains an
+    /// empty list, matching gqlgen's nil-vs-empty slice handling.
+    /// </summary>
+    public static UpdateChannelCommand ToCommand(UpdateChannelInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        return new UpdateChannelCommand
+        {
+            Type = input.Type is null ? null : ChannelMapping.ToWire(input.Type.Value),
+            BaseUrl = input.BaseUrl,
+            Name = input.Name,
+            Credentials = input.Credentials is null ? null : ToCredentials(input.Credentials),
+            SupportedModels = input.SupportedModels?.ToList(),
+            ManualModels = input.ManualModels?.ToList(),
+            AutoSyncSupportedModels = input.AutoSyncSupportedModels,
+            AutoSyncModelPattern = input.AutoSyncModelPattern,
+            ClearAutoSyncModelPattern = input.ClearAutoSyncModelPattern is true,
+            Tags = input.Tags?.ToList(),
+            DefaultTestModel = input.DefaultTestModel,
+            Policies = ToPolicies(input.Policies),
+            Settings = ToSettings(input.Settings),
+            OrderingWeight = input.OrderingWeight,
+            Remark = input.Remark,
+            ClearRemark = input.ClearRemark is true,
+            Endpoints = input.Endpoints?.Select(ToEndpoint).ToList(),
+            ClearErrorMessage = input.ClearErrorMessage is true,
+        };
+    }
+
     private static ChannelCredentialsDraft ToCredentials(ChannelCredentialsInput input)
         => new()
         {

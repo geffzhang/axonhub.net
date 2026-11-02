@@ -4,6 +4,59 @@ using Microsoft.EntityFrameworkCore;
 namespace AxonHub.Persistence;
 
 /// <summary>
+/// Port of the ent.UpdateChannelInputBuilder used by
+/// ChannelService.UpdateChannel (channel.go:849-1203). A null JSON column means
+/// "not set" (ent's SetX only runs for a non-nil input), while the clear flags
+/// are applied after the corresponding set, mirroring the reference's builder
+/// order. JSON strings are serialized by the caller so this layer stays free of
+/// Go wire-format knowledge.
+/// </summary>
+public sealed class ChannelUpdateRecord
+{
+    public string? Type { get; init; }
+
+    public string? BaseUrl { get; init; }
+
+    public string? Name { get; init; }
+
+    public string? DefaultTestModel { get; init; }
+
+    public int? OrderingWeight { get; init; }
+
+    public bool? AutoSyncSupportedModels { get; init; }
+
+    public string? SupportedModelsJson { get; init; }
+
+    public string? ManualModelsJson { get; init; }
+
+    public string? TagsJson { get; init; }
+
+    public string? SettingsJson { get; init; }
+
+    public string? PoliciesJson { get; init; }
+
+    public string? CredentialsJson { get; init; }
+
+    public string? Remark { get; init; }
+
+    public bool ClearRemark { get; init; }
+
+    public string? AutoSyncModelPattern { get; init; }
+
+    public bool ClearAutoSyncModelPattern { get; init; }
+
+    public string? EndpointsJson { get; init; }
+
+    public bool ClearErrorMessage { get; init; }
+
+    /// <summary>
+    /// Set for identity/endpoint/Command Code changes: the update only matches
+    /// while updated_at still equals the value loaded before validation.
+    /// </summary>
+    public DateTime? ExpectedUpdatedAt { get; init; }
+}
+
+/// <summary>
 /// Write seam for the channel lifecycle mutations of biz.ChannelService and
 /// biz.ChannelService bulk helpers (channel.go:1205-1290,
 /// channel_bulk.go:163-462). Each method owns the reference's checks and its
@@ -11,6 +64,41 @@ namespace AxonHub.Persistence;
 /// </summary>
 public interface IChannelWriteStore
 {
+    /// <summary>
+    /// Row snapshot for ChannelService.UpdateChannel's identity read. Returns
+    /// null when no live row exists.
+    /// </summary>
+    Task<ChannelRecord?> GetForUpdateAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of the update name check: <c>Name(...) AND IDNEQ(id)</c> over the
+    /// soft-delete predicate. The caller raises the coded duplicate error.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The query failed; the message carries "failed to check channel name".
+    /// </exception>
+    Task<bool> NameExistsAsync(
+        long id,
+        string name,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of the UpdateChannel builder + Save: applies only the provided
+    /// columns, stamps updated_at and honours the loaded-version guard. Returns
+    /// null when the row vanished or the guard no longer matches (both surface
+    /// as ent's not-found -> "channel was updated concurrently"). The snapshot
+    /// supplies the identity and the untouched columns of the returned row.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The read/update failed; the message already carries "failed to update channel".
+    /// </exception>
+    Task<ChannelRecord?> UpdateAsync(
+        ChannelRecord snapshot,
+        ChannelUpdateRecord update,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Port of the create half of ChannelService.CreateChannel: checks the live
     /// name (soft-delete predicate), then inserts the row. Returns null when a
@@ -90,6 +178,172 @@ public interface IChannelWriteStore
 /// </summary>
 public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
 {
+    public async Task<ChannelRecord?> GetForUpdateAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await db.Channels
+                .AsNoTracking()
+                .SingleOrDefaultAsync(row => row.Id == id && row.DeletedAt == 0, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to load channel provider identity: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task<bool> NameExistsAsync(
+        long id,
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Channel.Query().Where(channel.Name(...), channel.IDNEQ(id)).First:
+            // the SoftDeleteMixin predicate only considers live rows.
+            return await db.Channels
+                .AnyAsync(row => row.Name == name && row.Id != id && row.DeletedAt == 0, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException("failed to check channel name: " + ex.Message, ex);
+        }
+    }
+
+    public async Task<ChannelRecord?> UpdateAsync(
+        ChannelRecord snapshot,
+        ChannelUpdateRecord update,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(update);
+
+        var query = db.Channels.Where(row => row.Id == snapshot.Id && row.DeletedAt == 0);
+        if (update.ExpectedUpdatedAt is { } expectedUpdatedAt)
+        {
+            // ent's builder uses Where(UpdatedAtEQ(...)) only for identity,
+            // endpoint and Command Code settings changes (channel.go:1074-1076).
+            query = query.Where(row => row.UpdatedAt == expectedUpdatedAt);
+        }
+
+        // Every column is assigned either the caller's value or itself, so the
+        // single UPDATE only changes provided fields while the version guard
+        // stays in the same statement (ent mut.Save).
+        bool? autoSync = update.AutoSyncSupportedModels;
+        long? orderingWeight = update.OrderingWeight;
+        var setRemark = update.ClearRemark || update.Remark is not null;
+        var remark = update.ClearRemark ? null : update.Remark;
+        var setAutoSyncModelPattern =
+            update.ClearAutoSyncModelPattern || update.AutoSyncModelPattern is not null;
+        var autoSyncModelPattern = update.ClearAutoSyncModelPattern
+            ? null
+            : update.AutoSyncModelPattern;
+        var now = DateTime.UtcNow;
+
+        int affected;
+        try
+        {
+            affected = await query
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(row => row.Type, row => update.Type ?? row.Type)
+                        .SetProperty(row => row.BaseUrl, row => update.BaseUrl ?? row.BaseUrl)
+                        .SetProperty(row => row.Name, row => update.Name ?? row.Name)
+                        .SetProperty(
+                            row => row.DefaultTestModel,
+                            row => update.DefaultTestModel ?? row.DefaultTestModel)
+                        .SetProperty(
+                            row => row.OrderingWeight,
+                            row => orderingWeight ?? row.OrderingWeight)
+                        .SetProperty(
+                            row => row.AutoSyncSupportedModels,
+                            row => autoSync ?? row.AutoSyncSupportedModels)
+                        .SetProperty(
+                            row => row.SupportedModels,
+                            row => update.SupportedModelsJson ?? row.SupportedModels)
+                        .SetProperty(
+                            row => row.ManualModels,
+                            row => update.ManualModelsJson ?? row.ManualModels)
+                        .SetProperty(row => row.Tags, row => update.TagsJson ?? row.Tags)
+                        .SetProperty(row => row.Settings, row => update.SettingsJson ?? row.Settings)
+                        .SetProperty(row => row.Policies, row => update.PoliciesJson ?? row.Policies)
+                        .SetProperty(
+                            row => row.Credentials,
+                            row => update.CredentialsJson ?? row.Credentials)
+                        .SetProperty(row => row.Remark, row => setRemark ? remark : row.Remark)
+                        .SetProperty(
+                            row => row.AutoSyncModelPattern,
+                            row => setAutoSyncModelPattern
+                                ? autoSyncModelPattern
+                                : row.AutoSyncModelPattern)
+                        .SetProperty(
+                            row => row.Endpoints,
+                            row => update.EndpointsJson ?? row.Endpoints)
+                        .SetProperty(
+                            row => row.ErrorMessage,
+                            row => update.ClearErrorMessage ? (string?)null : row.ErrorMessage)
+                        .SetProperty(row => row.UpdatedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException("failed to update channel: " + ex.Message, ex);
+        }
+
+        if (affected == 0)
+        {
+            // The row vanished or the loaded updated_at no longer matches; ent
+            // reports both as not found.
+            return null;
+        }
+
+        // ent returns the saved entity. The port projects the loaded snapshot
+        // instead of reloading; concurrent edits of untouched columns are
+        // therefore not reflected in this response (C146).
+        return Project(snapshot, update, now);
+    }
+
+    private static ChannelRecord Project(
+        ChannelRecord row,
+        ChannelUpdateRecord update,
+        DateTime now)
+        => new()
+        {
+            Id = row.Id,
+            CreatedAt = row.CreatedAt,
+            UpdatedAt = now,
+            DeletedAt = row.DeletedAt,
+            Type = update.Type ?? row.Type,
+            BaseUrl = update.BaseUrl ?? row.BaseUrl,
+            Name = update.Name ?? row.Name,
+            Status = row.Status,
+            Credentials = update.CredentialsJson ?? row.Credentials,
+            DisabledApiKeys = row.DisabledApiKeys,
+            SupportedModels = update.SupportedModelsJson ?? row.SupportedModels,
+            ManualModels = update.ManualModelsJson ?? row.ManualModels,
+            AutoSyncSupportedModels = update.AutoSyncSupportedModels ?? row.AutoSyncSupportedModels,
+            AutoSyncModelPattern = update.ClearAutoSyncModelPattern
+                ? null
+                : update.AutoSyncModelPattern ?? row.AutoSyncModelPattern,
+            Tags = update.TagsJson ?? row.Tags,
+            DefaultTestModel = update.DefaultTestModel ?? row.DefaultTestModel,
+            Policies = update.PoliciesJson ?? row.Policies,
+            Settings = update.SettingsJson ?? row.Settings,
+            OrderingWeight = update.OrderingWeight ?? row.OrderingWeight,
+            ErrorMessage = update.ClearErrorMessage ? null : row.ErrorMessage,
+            AutoDisabledAt = row.AutoDisabledAt,
+            AutoDisableExpiresAt = row.AutoDisableExpiresAt,
+            Remark = update.ClearRemark ? null : update.Remark ?? row.Remark,
+            Endpoints = update.EndpointsJson ?? row.Endpoints,
+        };
+
     public async Task<ChannelRecord?> CreateAsync(
         ChannelRecord channel,
         CancellationToken cancellationToken = default)

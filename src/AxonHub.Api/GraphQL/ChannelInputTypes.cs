@@ -42,6 +42,76 @@ public sealed class CreateChannelInput
     public IReadOnlyList<ChannelEndpointInput>? Endpoints { get; set; }
 }
 
+/// <summary>
+/// Port of <c>UpdateChannelInput</c> (ent.graphql:6185-6237). Fields the write
+/// service never reads (status, clearBaseURL, clear/append
+/// models/tags/policies/settings/endpoints, errorMessage) are still declared so
+/// the introspected schema matches the reference.
+/// </summary>
+public sealed class UpdateChannelInput
+{
+    public ChannelTypeValue? Type { get; set; }
+
+    [GraphQLName("baseURL")]
+    public string? BaseUrl { get; set; }
+
+    public bool? ClearBaseURL { get; set; }
+
+    public string? Name { get; set; }
+
+    public ChannelStatusValue? Status { get; set; }
+
+    public ChannelCredentialsInput? Credentials { get; set; }
+
+    public IReadOnlyList<string>? SupportedModels { get; set; }
+
+    public IReadOnlyList<string>? AppendSupportedModels { get; set; }
+
+    public IReadOnlyList<string>? ManualModels { get; set; }
+
+    public IReadOnlyList<string>? AppendManualModels { get; set; }
+
+    public bool? ClearManualModels { get; set; }
+
+    public bool? AutoSyncSupportedModels { get; set; }
+
+    public string? AutoSyncModelPattern { get; set; }
+
+    public bool? ClearAutoSyncModelPattern { get; set; }
+
+    public IReadOnlyList<string>? Tags { get; set; }
+
+    public IReadOnlyList<string>? AppendTags { get; set; }
+
+    public bool? ClearTags { get; set; }
+
+    public string? DefaultTestModel { get; set; }
+
+    public ChannelPoliciesInput? Policies { get; set; }
+
+    public bool? ClearPolicies { get; set; }
+
+    public ChannelSettingsInput? Settings { get; set; }
+
+    public bool? ClearSettings { get; set; }
+
+    public int? OrderingWeight { get; set; }
+
+    public string? ErrorMessage { get; set; }
+
+    public bool? ClearErrorMessage { get; set; }
+
+    public string? Remark { get; set; }
+
+    public bool? ClearRemark { get; set; }
+
+    public IReadOnlyList<ChannelEndpointInput>? Endpoints { get; set; }
+
+    public IReadOnlyList<ChannelEndpointInput>? AppendEndpoints { get; set; }
+
+    public bool? ClearEndpoints { get; set; }
+}
+
 /// <summary>Port of <c>ChannelPoliciesInput</c> (axonhub.graphql:269-273).</summary>
 public sealed class ChannelPoliciesInput
 {

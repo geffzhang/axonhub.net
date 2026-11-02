@@ -52,6 +52,61 @@ public sealed class CreateChannelCommand
 }
 
 /// <summary>
+/// Argument object for <see cref="ChannelLifecycleService.UpdateAsync"/>: the
+/// ent.UpdateChannelInput of biz.ChannelService.UpdateChannel
+/// (channel.go:849-1203). Every nullable member mirrors a Go pointer input, so
+/// null means "leave the column untouched"; list members keep nil distinct from
+/// an explicit empty slice. Fields the service never writes (status,
+/// clearBaseURL, clear/append model/tag/policy/settings/endpoint, errorMessage)
+/// are deliberately absent.
+/// </summary>
+public sealed class UpdateChannelCommand
+{
+    public string? Type { get; init; }
+
+    /// <summary>Mutated by the xai_subscription rule (channel.go:896-909).</summary>
+    public string? BaseUrl { get; set; }
+
+    public string? Name { get; init; }
+
+    /// <summary>Mutated by ValidateVertexApiKeys' zenmux key preservation.</summary>
+    public ChannelCredentialsDraft? Credentials { get; init; }
+
+    public IReadOnlyList<string>? SupportedModels { get; init; }
+
+    public IReadOnlyList<string>? ManualModels { get; init; }
+
+    public bool? AutoSyncSupportedModels { get; init; }
+
+    public string? AutoSyncModelPattern { get; init; }
+
+    public bool ClearAutoSyncModelPattern { get; init; }
+
+    public IReadOnlyList<string>? Tags { get; init; }
+
+    public string? DefaultTestModel { get; init; }
+
+    /// <summary>Mutated by NormalizeAPIKeyAutoDisableRules (channel.go:731-757).</summary>
+    public ChannelPoliciesDraft? Policies { get; init; }
+
+    /// <summary>
+    /// Mutated by the command-code cookie normalization, the stored-settings
+    /// sync and the settings validators. An assigned value is always written.
+    /// </summary>
+    public ChannelSettingsDraft? Settings { get; set; }
+
+    public int? OrderingWeight { get; init; }
+
+    public string? Remark { get; init; }
+
+    public bool ClearRemark { get; init; }
+
+    public IReadOnlyList<ChannelEndpointDraft>? Endpoints { get; set; }
+
+    public bool ClearErrorMessage { get; init; }
+}
+
+/// <summary>
 /// Port of objects.ChannelSettings (live channel.go:155-288) with Go's JSON
 /// tags, declaration order and <c>omitempty</c> behaviour. Nullable members are
 /// omitted by <c>ChannelWriteSerialization</c>; non-nullable members are always

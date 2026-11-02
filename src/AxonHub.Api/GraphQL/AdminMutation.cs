@@ -447,6 +447,28 @@ public sealed class AdminMutation
         return ChannelMapping.ToGraphQL(channel);
     }
 
+    /// <summary>
+    /// Port of mutationResolver.UpdateChannel
+    /// (axonhub.resolvers.go:188-190; biz channel.go:849-1203).
+    /// </summary>
+    [GraphQLName("updateChannel")]
+    public async Task<ChannelType> UpdateChannelAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateChannelInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var channel = await channels.UpdateAsync(
+                gid.Id,
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
     private static List<long> ParseGids(IReadOnlyList<string> ids)
     {
         var result = new List<long>(ids.Count);

@@ -2986,6 +2986,56 @@ orderingWeight 0，createdAt / updatedAt 同一时刻。settings 与 credentials
 冲突文案）；更新 C014（createChannel 已接入，updateChannel 等仍缺）与 C139（写侧
 消费 live 字段）。差异总数 142 增至 145（88 接受 / 23 缺口 / 34 已解决）。
 
+## 68. 管理面 channels updateChannel 写入切片（部分列更新、乐观守卫与 live 校验器，24 例，2026-11-02）
+
+参照路线：`internal/server/gql/axonhub.resolvers.go:188-190`（UpdateChannel resolver）、
+`internal/server/biz/channel.go:849-1203`（身份快照、命令码 / xai 归一化、名称唯一、
+设置同步与校验、端点 / 协议校验、事务内的部分列 builder 与 `UpdatedAtEQ` 守卫、
+`ensureChannelModelPrices`）、`:1300-1404`（命令码 cookie 归一化 / 清空 / 空白判定）、
+`internal/server/biz/channel_endpoint.go`（端点与模型协议校验）、
+`internal/server/biz/channel_override.go`（覆盖操作校验）、
+`internal/server/biz/channel_rate_limit.go`（限流参数校验）、
+`internal/server/gql/ent.graphql:6185-6237`（UpdateChannelInput）与
+`internal/server/gql/axonhub.graphql`（live settings / credentials 输入）。
+
+本次新增 `ChannelUpdateRecord` 与 `IChannelWriteStore.GetForUpdateAsync` /
+`NameExistsAsync` / `UpdateAsync`（`ChannelWriteStore.cs`）：快照读取沿用
+SoftDeleteMixin 谓词（`failed to load channel provider identity: %w`）；同名检查为
+`Name(...) AND IDNEQ(id)` 且只命中活行（`failed to check channel name: %w`）；
+更新用单条 `ExecuteUpdateAsync` 把每列设为「调用方提供的值，否则保持自身」，
+`remark` / `auto_sync_model_pattern` / `error_message` 的清空标志写 NULL，
+`updated_at` 同时刷新；提供 `ExpectedUpdatedAt` 时在同一语句追加
+`updated_at = 载入值`，0 行即 `channel was updated concurrently; retry the operation`，
+其它失败包成 `failed to update channel: %w`。`ChannelLifecycleService.UpdateAsync`
+串起参照顺序：身份快照 → effectiveType → guard（仅 Type / BaseURL / Endpoints /
+命令码 settings 变更）→ 命令码空 cookie 清空、规范化与 live 的
+`ValidateMaxSingleChannelRetries` → auto-disable 归一化 → xai_subscription 强制
+官方 BaseURL 并清空端点（Type 缺省时按存储类型判定）→ 命令码 BaseURL HTTPS 校验 →
+活行同名检查与 `DUPLICATE_NAME` → supportedModels 的协议覆盖裁剪（无输入 settings
+时载入存储值，仅在确有裁剪时回写）→ body / header / rateLimit / live
+responseTimeout / retryable 校验 → 模型协议校验 → 端点校验 → 类型离开命令码且未带
+settings 时清理孤立 quota → 凭据解析、zenmux `managementApiKey` 保留与顶点密钥校验 →
+保存。输入中参照服务不读取的字段（status、clearBaseURL、clearManualModels、
+clearTags、clearPolicies、clearSettings、clearEndpoints、各 append* 与 errorMessage）
+只保留在 SDL 中；ent 的 `ClearRemark` / `ClearAutoSyncModelPattern` /
+`ClearErrorMessage` 均写 NULL，类型变更清理后的 settings 以 JSON `null` 落库。
+返回值为「快照 + 已应用列」的投影，而非 ent 的已保存实体，见 C146。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| /admin/graphql 端到端：仅写提供的列并忽略 status / clearSettings / errorMessage、三个清空标志写 NULL、同名 DUPLICATE_NAME 与 extensions、软删名复用、xai 类型强制与存储 xai 类型的基址强制、命令码 cookie 规范化、空 cookie 清空但保留 ollama、类型切换清理孤立 quota、zenmux managementApiKey 保留、supportedModels 协议裁剪、live 重试上限先于设置校验、顶点密钥校验、并发守卫文案、身份读取失败文案、内省 | `tests/AxonHub.Api.Tests/AdminChannelUpdateEndpointTests.cs` | 16 |
+| 存储：§67 的 13 例，另加快照只返回活行、同名检查排除自身与软删行、部分列写入并刷新 updated_at、清空标志写 NULL 与 jsonb null、版本守卫命中 / 失配、无守卫更新忽略旧版本、缺失 / 软删行返回 null、唯一索引冲突前缀 | `tests/AxonHub.Persistence.Tests/ChannelWriteStoreTests.cs` | 21 |
+
+`AxonHub.Api.Tests` 由 1360 增至 1376（+16），`AxonHub.Persistence.Tests` 由
+107 增至 115（+8），`AxonHub.Llm.Tests` 保持 3020，`AxonHub.Grains.Tests` 保持
+92；四个项目合计 4579 增至 4603，0 失败 0 跳过。
+
+差异：新增 C146（单次快照读取与投影返回）；更新 C014（updateChannel 已接入，其余
+通道写操作与管理员鉴权仍缺）、C139（写侧 updateChannel 同步消费 live 字段）、
+C143（updateChannel 同样未调用 ensureChannelModelPrices）、C144（updateChannel 的
+live 校验器相对位置与冻结基线）、C145（更新同名的唯一索引冲突与前置检查窗口同族）。
+差异总数 145 增至 146（89 接受 / 23 缺口 / 34 已解决）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -2998,8 +3048,8 @@ orderingWeight 0，createdAt / updatedAt 同一时刻。settings 与 credentials
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）已接入，但 updateChannel 及其余通道写操作、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
-| 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 尚未移植，非法配置仍按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）已接入，但其余通道写操作、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），其余通道写操作未移植（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
 | usage 成本管理面：`channel_model_prices` 写入、reference-id 轮换、版本表与自动定价 | 参照的 `SaveChannelModelPrices` / `channel_model_price_versions` / GraphQL 管理面未移植；端口只有读取路径与基础表（C048） | 中 | 随通道管理面落地 |
