@@ -2773,6 +2773,101 @@ C014 补记为「users / roles 管理面已移植，权限校验器（CanEditUse
 / CanGrantScopes / CanEditRole / CanDeleteUser）与管理员 GraphQL 鉴权仍未
 接入」。差异总数 133 增至 138（83 接受 / 21 缺口 / 34 已解决）。
 
+## 65. 管理面 channels 读取切片（entgql channels / queryChannels、聚合查询与前端契约扩展，22 例，2026-11-02）
+
+参照路线：`internal/server/gql/ent.resolvers.go:372-381`（`channels` 的 entgql
+连接查询）、`:67-105`（Channel 的 id / policies / settings /
+providerQuotaStatus 字段解析器）、`internal/server/gql/axonhub.resolvers.go:35-47`
+（defaultEndpoints）、`:49-56`（allModelEntries）、`:58-79`（credentials，含
+`ScopeWriteChannels` 门禁）、`:81-93`（disabledAPIKeys）、`:95-115`
+（liveLimiterStats）、`:824-881`（allChannelSummarys 非项目分支）、
+`:883-910`（allChannelTags）、`:912-942`（countChannelsByType）、
+`:944-957`（queryChannels）、`internal/server/biz/channel_query.go:1-121`
+（QueryChannels / queryChannelsWithModelFilter / buildConnectionInMemory）、
+`internal/server/biz/channel_endpoint.go:189-260`（按通道类型的默认端点表）、
+`internal/server/gql/ent.graphql:407-543,547-560,564-573,946-955,959-966,
+1261-1265,1269-1344,1349-1576`（Channel / ChannelConnection / ChannelEdge /
+ChannelOrder / ChannelOrderField / ChannelStatus / ChannelType /
+ChannelWhereInput）、`internal/server/gql/axonhub.graphql:60-65,85-89,99-104,
+196-215,217-222,263-267,309-330,669-672,809-826,1054-1101`（TransformOptions /
+ProxyType / ChannelEndpoint / ChannelSettings / ChannelQuotaRoutingMode /
+ChannelPolicies / ChannelRateLimit / ChannelCredentials / DisabledAPIKey /
+ChannelTypeCount / ChannelLimiterStats / QueryChannelInput /
+CountChannelsByTypeInput）。
+
+本次新增 `src/AxonHub.Api/GraphQL/ChannelTypes.cs`（10 个枚举、4 个输入对象、
+33 个输出类型与 `Map` 标量）、`GraphQL/ChannelMapping.cs`（域 ↔ GraphQL
+映射、默认端点表、settings / credentials / policies / 限额统计解析）、
+`Management/ChannelQueryService.cs`（5 个顶层查询）、
+`Persistence/Stores/ChannelAdminStore.cs`（Dapper 读取，含键集分页与四条聚合
+SQL）；在 `AdminQuery.cs` 增加 `channels` / `queryChannels` /
+`allChannelSummarys` / `allChannelTags` / `countChannelsByType`，
+`GraphQLSetup.cs` 注册 `Map` 标量，`Program.cs` 注册 `IChannelAdminStore` 与
+`ChannelQueryService`。`CursorCodec` 的载荷增加 `ValueKind` 以承载
+string / int 排序值（C134），`ListCursor.Value` 改为 `object?`；
+`ConnectionSql.AppendCursor` 在游标不带排序值时退回仅按 id 比较；
+`llm` 模块的 `ApiFormats` 补 `openai/responses-ws`（codex 默认端点）。
+
+查询语义：`channels` 先走 entgql 的 `validateFirstLast`（两者同时给报
+``Passing both `first` and `last` to paginate a connection is not supported.``），
+`CREATED_AT` 重映射为 id 顺序并保留方向，`UPDATED_AT` / `TYPE` / `NAME` /
+`STATUS` / `ORDERING_WEIGHT` 分别按 `updated_at` / `type` / `name` / `status` /
+`ordering_weight` 做键集游标；非 id 字段追加同方向的 id 次序（entgql
+`applyOrder`），`last` 时方向反转并在取回后倒序。`totalCount` 是游标过滤前的
+命中数；`first+1` / `last+1` 溢出置 `hasNextPage` / `hasPreviousPage`，
+`before` / `after` 本身也分别置 `hasNextPage` / `hasPreviousPage`；`first` /
+`last` 为 0 时不查行、只保留计数推导的 PageInfo。`queryChannels` 先重映射
+orderBy 与 where，`hasTag` 非空时按 `sqljson.ValueContains("tags", tag)` 过滤
+（PostgreSQL 为 `tags @> '<json>'`）；`model` 为空时走上面的 Paginate，否则
+拉取全部命中行、按 `ChannelModelEntries.Build` 的键集合做精确模型匹配，并
+`buildConnectionInMemory`：Edges 恒非 null、PageInfo 两个标志恒 false、
+StartCursor / EndCursor 取首尾边、TotalCount = 命中数，分页参数与其校验被
+完全忽略（`first` + `last` 同时给也不报错）。`allChannelSummarys` 只取
+enabled / disabled（`includeArchived` 时加 archived），按
+`ordering_weight DESC` 排序；`allChannelTags` 取所有非 archived 行的 tags
+列，按行序摊平后保留首次出现；`countChannelsByType` 在 `statusIn` 非空时按
+它过滤、否则排除 archived，按 type 分组计数。五条查询都带软删谓词
+`deleted_at = 0`，聚合失败分别返回 `failed to query channels: %w` 与
+`failed to query channel type counts: %w`。
+
+线路形状：`Channel` 的 `id` 输出 `gid://axonhub/Channel/<id>`，`createdAt` /
+`updatedAt` 按 RFC3339Nano（UTC、小数秒去尾零），`supportedModels` 是普通
+字符串（缺省 `"null"`，与 ent 列一致），`manualModels` / `tags` 是可空列表
+（列为 null 时输出 null），`policies` 恒为对象且 `stream` 缺省 `unlimited`，
+`settings` 在列为 null / `"null"` 时为 null，`transformOptions`、`rateLimit`、
+`responseTimeout`、`providerQuota` 在 settings 非空时按字段生成；枚举按
+`[GraphQLName]` 固定为参照拼写，未知存储值在输出时抛
+`Enum "ChannelType" cannot represent value: "..."`（HotChocolate 的枚举
+marshaler 语义）。`ProxyType` 在 SDL 中拼写为 DISABLED / ENVIRONMENT / URL，
+但参照的 external 类型按原始小写字符串 marshaling，端口按前端实际读取的
+小写值建模（C139）。`credentials` 复刻 OAuth / antigravity 规则（OAuth 或
+类型为 antigravity 时只回 apiKey 原样、apiKeys 为 null；否则 apiKeys = 旧
+apiKey + apiKeys 数组 + vertexApiKeys[i].apiKey，存在 vertex key 时丢弃全部
+扁平字符串，`vertexApiKeys` 仅 gemini_vertex 回填，空数组输出 null）；
+`disabledAPIKeys` 的零值时间按 `0001-01-01T00:00:00Z` 输出；`liveLimiterStats`
+只在该通道配置了 positive `maxConcurrent` 时返回统计（无配置或无管理器返回
+null）；`defaultEndpoints` 按 `biz.DefaultEndpointsForChannelType` 的表输出
+（含前端实时契约的 cloudflare：chat_completions + embeddings；codex：
+responses、responses-ws、alpha_search、image_generation、image_edit）；
+`allModelEntries` 按请求模型名稳定排序；`providerQuotaStatus` 当前恒为
+null（C139）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| /admin/graphql 端到端：channels 连接形状与 CREATED_AT 重映射、string / int 键集游标、first / last 校验、queryChannels 的 where 与 hasTag、模型分支忽略分页、四个聚合查询、Policies / settings / credentials / disabledAPIKeys / limiter 统计 / defaultEndpoints / allModelEntries、providerQuotaStatus 与未知枚举、损坏 JSON 列降级、错误前缀、内省枚举 | `tests/AxonHub.Api.Tests/AdminChannelsEndpointTests.cs` | 18 |
+| channels 存储：statusIn / nameContainsFold / errorMessageIsNil / hasTag 过滤、键集分页与 last 倒序、ListAll 仅在给定 orderBy 时排序、摘要过滤与权重排序、tag 行与类型计数 | `tests/AxonHub.Persistence.Tests/ChannelAdminStoreTests.cs` | 4 |
+
+`AxonHub.Api.Tests` 由 1314 增至 1332（+18），`AxonHub.Persistence.Tests` 由
+90 增至 94（+4），`AxonHub.Llm.Tests` 保持 3020，`AxonHub.Grains.Tests` 保持
+92；四个项目合计 4516 增至 4538，0 失败 0 跳过。
+
+差异：新增 C139（Channel 读取侧按管理面前端实时契约扩展，provider quota
+子系统未移植，`providerQuotaStatus` 恒为 null）、C140（并列顺序补 id / type
+升序）、C141（通道 JSON 列解码失败降级为空）；补记 C134（游标载荷新增
+ValueKind 以承载 string / int 排序值）、C135（ChannelWhereInput 一并纳入前端
+契约子集）、C014（channels 读取面已移植，写操作与管理员鉴权仍未接入）。差异
+总数 138 增至 141（85 接受 / 22 缺口 / 34 已解决）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

@@ -1015,7 +1015,7 @@ internal static class FakePagination
         List<T> filtered,
         bool sortByValue,
         Func<T, long> id,
-        Func<T, DateTime> value,
+        Func<T, object?> value,
         SortDirection direction,
         ListCursor? after,
         ListCursor? before,
@@ -1070,7 +1070,7 @@ internal static class FakePagination
         return new Result<T>(items, hasNextPage, hasPreviousPage, totalCount);
     }
 
-    private static DateTime? KeyValue<T>(T row, bool sortByValue, Func<T, DateTime> value)
+    private static object? KeyValue<T>(T row, bool sortByValue, Func<T, object?> value)
         => sortByValue ? value(row) : null;
 
     private static bool After<T>(
@@ -1079,7 +1079,7 @@ internal static class FakePagination
         SortDirection direction,
         bool sortByValue,
         Func<T, long> id,
-        Func<T, DateTime> value)
+        Func<T, object?> value)
     {
         var comparison = Compare(row, cursor, sortByValue, id, value);
         return direction == SortDirection.Asc ? comparison > 0 : comparison < 0;
@@ -1091,7 +1091,7 @@ internal static class FakePagination
         SortDirection direction,
         bool sortByValue,
         Func<T, long> id,
-        Func<T, DateTime> value)
+        Func<T, object?> value)
     {
         var comparison = Compare(row, cursor, sortByValue, id, value);
         return direction == SortDirection.Asc ? comparison < 0 : comparison > 0;
@@ -1102,11 +1102,11 @@ internal static class FakePagination
         ListCursor cursor,
         bool sortByValue,
         Func<T, long> id,
-        Func<T, DateTime> value)
+        Func<T, object?> value)
     {
         if (sortByValue)
         {
-            var byValue = Nullable.Compare<DateTime>(value(row), cursor.Value);
+            var byValue = CompareValues(value(row), cursor.Value);
             if (byValue != 0)
             {
                 return byValue;
@@ -1115,4 +1115,16 @@ internal static class FakePagination
 
         return id(row).CompareTo(cursor.Id);
     }
+
+    private static int CompareValues(object? left, object? right) => (left, right) switch
+    {
+        (null, null) => 0,
+        (null, _) => -1,
+        (_, null) => 1,
+        (DateTime first, DateTime second) => first.CompareTo(second),
+        (string first, string second) => string.CompareOrdinal(first, second),
+        (long first, long second) => first.CompareTo(second),
+        _ => throw new InvalidOperationException(
+            "unsupported cursor value comparison"),
+    };
 }

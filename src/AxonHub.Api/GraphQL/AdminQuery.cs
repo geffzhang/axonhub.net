@@ -153,4 +153,65 @@ public sealed class AdminQuery
 
         return ManagementMapping.BuildConnection(page, sortField);
     }
+
+    /// <summary>Port of queryResolver.Channels (ent.resolvers.go:372-381).</summary>
+    [GraphQLName("channels")]
+    public Task<ChannelConnectionType> ChannelsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ChannelOrder? orderBy,
+        ChannelWhereInput? where,
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+    {
+        var sortField = ChannelMapping.ToSortField(orderBy);
+
+        return channels.ChannelsAsync(
+            new ChannelListQuery
+            {
+                Where = ChannelMapping.ToFilter(where),
+                SortField = sortField,
+                Direction = ChannelMapping.ToSortDirection(orderBy),
+                Ordered = orderBy is not null,
+                After = ManagementMapping.ToListCursor(after),
+                Before = ManagementMapping.ToListCursor(before),
+                First = first,
+                Last = last,
+            },
+            sortField,
+            cancellationToken);
+    }
+
+    /// <summary>Port of queryResolver.QueryChannels (axonhub.resolvers.go:977-983).</summary>
+    [GraphQLName("queryChannels")]
+    public Task<ChannelConnectionType> QueryChannelsAsync(
+        QueryChannelInput input,
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => channels.QueryChannelsAsync(input, cancellationToken);
+
+    /// <summary>Port of queryResolver.AllChannelSummarys (non-project branch).</summary>
+    [GraphQLName("allChannelSummarys")]
+    public Task<IReadOnlyList<ChannelType>> AllChannelSummarysAsync(
+        bool? includeArchived,
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => channels.AllChannelSummarysAsync(includeArchived == true, cancellationToken);
+
+    /// <summary>Port of queryResolver.AllChannelTags.</summary>
+    [GraphQLName("allChannelTags")]
+    public Task<IReadOnlyList<string>> AllChannelTagsAsync(
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => channels.AllChannelTagsAsync(cancellationToken);
+
+    /// <summary>Port of queryResolver.CountChannelsByType.</summary>
+    [GraphQLName("countChannelsByType")]
+    public Task<IReadOnlyList<ChannelTypeCountType>> CountChannelsByTypeAsync(
+        CountChannelsByTypeInput input,
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => channels.CountChannelsByTypeAsync(input, cancellationToken);
 }

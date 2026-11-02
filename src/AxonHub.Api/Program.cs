@@ -161,6 +161,10 @@ builder.Services.AddScoped<IRoleStore, RoleStore>();
 builder.Services.AddScoped<UserManagementService>();
 builder.Services.AddScoped<RoleManagementService>();
 
+// Channel management reads (entgql channels / queryChannels / aggregates).
+builder.Services.AddScoped<IChannelAdminStore, ChannelAdminStore>();
+builder.Services.AddScoped<ChannelQueryService>();
+
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
 // (routes.go:163). The first slice exposes the static scope catalog; the
 // reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported

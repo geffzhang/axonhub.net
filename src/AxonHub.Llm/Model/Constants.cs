@@ -31,6 +31,9 @@ public static class ApiFormats
     public const string OpenAICompletion = "openai/completions";
     public const string OpenAIResponse = "openai/responses";
 
+    /// <summary>llm.APIFormatOpenAIResponseWebSocket (llm/constants.go:43).</summary>
+    public const string OpenAIResponseWebSocket = "openai/responses-ws";
+
     /// <summary>
     /// llm.APIFormatOpenAIResponseCompact (llm/constants.go:45): the persisted
     /// request format is <c>openai/responses_compact</c>, not the HTTP path

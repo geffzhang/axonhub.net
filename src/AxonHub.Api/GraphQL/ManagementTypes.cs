@@ -524,7 +524,7 @@ public static class ManagementMapping
                 Node = ToGraphQL(node),
                 Cursor = new CursorValue(
                     node.Id,
-                    sortField == UserSortField.UpdatedAt ? node.UpdatedAt : null),
+                    sortField == UserSortField.UpdatedAt ? node.UpdatedAt : (object?)null),
             })
             .ToList();
 
@@ -549,7 +549,7 @@ public static class ManagementMapping
                 Node = ToGraphQL(node),
                 Cursor = new CursorValue(
                     node.Id,
-                    sortField == RoleSortField.UpdatedAt ? node.UpdatedAt : null),
+                    sortField == RoleSortField.UpdatedAt ? node.UpdatedAt : (object?)null),
             })
             .ToList();
 

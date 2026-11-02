@@ -71,7 +71,10 @@ internal static class ConnectionSql
 
         var op = direction == SortDirection.Asc ? ">" : "<";
 
-        if (valueColumn is null)
+        // entgql's CursorsPredicate falls back to the id column alone when the
+        // cursor carries no ordering value (a cursor issued for another order
+        // field, or an unresolved legacy cursor).
+        if (valueColumn is null || cursor.Value is null)
         {
             var id = args.Add(cursor.Id);
             sql.Append(" AND ").Append(alias).Append(".\"").Append(idColumn).Append("\" ")

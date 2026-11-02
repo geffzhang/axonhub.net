@@ -17,6 +17,7 @@ public static class GraphQLSetup
             .AddMutationType<AdminMutation>()
             .AddType<CursorType>()
             .AddType<GoTimeType>()
+            .AddType<MapScalarType>()
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
 }

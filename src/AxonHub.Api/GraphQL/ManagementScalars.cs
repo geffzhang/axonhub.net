@@ -74,8 +74,12 @@ public readonly record struct GidValue(string Type, long Id)
     }
 }
 
-/// <summary>The reference ent.Cursor value carried by the Cursor scalar.</summary>
-public readonly record struct CursorValue(long Id, DateTime? Value);
+/// <summary>
+/// The reference ent.Cursor value carried by the Cursor scalar. The value is a
+/// <see cref="DateTime"/> for time order fields, a <see cref="string"/> for
+/// text order fields and a <see cref="long"/> for integer order fields.
+/// </summary>
+public readonly record struct CursorValue(long Id, object? Value);
 
 /// <summary>
 /// Port of gqlgen's Cursor marshaler (internal/server/gql/cursor.go). The
@@ -85,13 +89,17 @@ public readonly record struct CursorValue(long Id, DateTime? Value);
 /// </summary>
 public static class CursorCodec
 {
-    public sealed record Payload(long Id, string? Value);
+    /// <summary>
+    /// JSON payload of the Cursor scalar. <c>ValueKind</c> is null on cursors
+    /// issued before the channels slice; those payloads only ever carried a
+    /// time value, so they decode as such (C134).
+    /// </summary>
+    public sealed record Payload(long Id, string? Value, string? ValueKind = null);
 
     public static string Encode(CursorValue cursor)
     {
-        var payload = new Payload(
-            cursor.Id,
-            cursor.Value?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+        var (value, kind) = EncodeValue(cursor.Value);
+        var payload = new Payload(cursor.Id, value, kind);
         return Convert.ToBase64String(
                 JsonSerializer.SerializeToUtf8Bytes(payload),
                 Base64FormattingOptions.None)
@@ -117,19 +125,58 @@ public static class CursorCodec
                 throw new InvalidOperationException("cannot decode cursor: empty payload");
             }
 
-            var value = payload.Value is null
-                ? (DateTime?)null
-                : DateTime.Parse(
-                    payload.Value,
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.RoundtripKind).ToUniversalTime();
-
-            return new CursorValue(payload.Id, value);
+            return new CursorValue(payload.Id, DecodeValue(payload));
         }
         catch (Exception ex) when (ex is FormatException or JsonException)
         {
             throw new InvalidOperationException("cannot decode cursor: " + ex.Message, ex);
         }
+    }
+
+    private static (string? Value, string? Kind) EncodeValue(object? value) => value switch
+    {
+        null => (null, null),
+        DateTime time => (
+            time.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            "time"),
+        string text => (text, "string"),
+        long number => (number.ToString(CultureInfo.InvariantCulture), "int"),
+        _ => throw new InvalidOperationException(
+            "cannot encode cursor: unsupported value type " + value.GetType().FullName),
+    };
+
+    private static object? DecodeValue(Payload payload) => payload.ValueKind switch
+    {
+        // Missing ValueKind is the payload written before the channels slice.
+        null or "time" => ParseTime(payload.Value),
+        "string" => payload.Value,
+        "int" => ParseInteger(payload.Value),
+        _ => throw new InvalidOperationException(
+            "cannot decode cursor: unknown value kind " + payload.ValueKind),
+    };
+
+    private static DateTime? ParseTime(string? text)
+        => text is null
+            ? null
+            : DateTime.Parse(
+                text,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind).ToUniversalTime();
+
+    private static long? ParseInteger(string? text)
+    {
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+        {
+            throw new InvalidOperationException(
+                "cannot decode cursor: invalid integer value " + text);
+        }
+
+        return value;
     }
 }
 
