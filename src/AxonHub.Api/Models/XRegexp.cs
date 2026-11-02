@@ -44,6 +44,23 @@ public static class XRegexp
         return regex is not null && regex.IsMatch(value);
     }
 
+    /// <summary>
+    /// Port of xregexp.ValidateRegex: an empty pattern is valid, and a pattern
+    /// that failed to compile reports the raw pattern unquoted.
+    /// </summary>
+    public static string? ValidateRegex(string pattern)
+    {
+        ArgumentNullException.ThrowIfNull(pattern);
+
+        if (pattern.Length == 0)
+        {
+            return null;
+        }
+
+        var regex = Cache.GetOrAdd(pattern, static cached => Compile(cached));
+        return regex is null ? "invalid regex pattern: " + pattern : null;
+    }
+
     private static Regex? Compile(string pattern)
     {
         try

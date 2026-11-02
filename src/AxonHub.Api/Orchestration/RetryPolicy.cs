@@ -20,7 +20,13 @@ public sealed record RetryPolicy
     public const string UpstreamErrorModeHidden = "hidden";
     public const string UpstreamErrorModeCustom = "custom";
 
+    public const string AutoDisableActionTemporary = "temporary_disable";
+
+    public const string AutoDisableActionUntilCron = "disable_until_cron";
+
     public const string AutoDisableActionPermanent = "permanent_disable";
+
+    public const string AutoDisableActionPermanentDelete = "permanent_disable_delete";
 
     /// <summary>Port of biz.defaultRetryPolicy (internal/server/biz/system_default.go:79-89).</summary>
     public static RetryPolicy Default { get; } = new();
@@ -68,10 +74,14 @@ public sealed record RetryPolicy
 /// <summary>Port of biz.AutoDisableChannel.</summary>
 public sealed record AutoDisableChannel(bool Enabled, IReadOnlyList<AutoDisableRule> Rules);
 
-/// <summary>Port of objects.APIKeyAutoDisableRule as stored in the retry policy.</summary>
+/// <summary>
+/// Port of objects.APIKeyAutoDisableRule as stored in the retry policy. The two
+/// match lists are nullable because Go keeps "absent/null" (<c>nil</c>) distinct
+/// from an empty list on the GraphQL surface.
+/// </summary>
 public sealed record AutoDisableRule(
-    IReadOnlyList<int> StatusCodes,
-    IReadOnlyList<string> KeywordPatterns,
+    IReadOnlyList<int>? StatusCodes,
+    IReadOnlyList<string>? KeywordPatterns,
     int Times,
     string Action,
     int? DisableDurationMinutes,

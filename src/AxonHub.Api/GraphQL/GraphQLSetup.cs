@@ -14,6 +14,8 @@ public static class GraphQLSetup
     public static IRequestExecutorBuilder AddAxonHubGraphQL(this IServiceCollection services)
         => services.AddGraphQLServer()
             .AddQueryType<AdminQuery>()
+            .AddMutationType<AdminMutation>()
+            .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
 }
 

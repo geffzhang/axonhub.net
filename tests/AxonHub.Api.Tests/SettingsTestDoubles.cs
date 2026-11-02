@@ -14,6 +14,8 @@ internal sealed class FakeSystemStore : ISystemStore
 
     public Exception? GetFailure { get; set; }
 
+    public Exception? SetFailure { get; set; }
+
     public Task<long> CreateAsync(SystemRecord system, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
@@ -37,6 +39,29 @@ internal sealed class FakeSystemStore : ISystemStore
         }
 
         return Task.FromResult(Rows.SingleOrDefault(row => row.Key == key && row.DeletedAt == 0));
+    }
+
+    /// <summary>ent's OnConflict(key).UpdateNewValues(), including resurrecting a soft-deleted row.</summary>
+    public Task SetAsync(string key, string value, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        if (SetFailure is not null)
+        {
+            return Task.FromException(SetFailure);
+        }
+
+        var existing = Rows.SingleOrDefault(row => row.Key == key);
+        if (existing is null)
+        {
+            Rows.Add(new SystemRecord { Id = _nextId++, Key = key, Value = value });
+        }
+        else
+        {
+            existing.Value = value;
+            existing.DeletedAt = 0;
+        }
+
+        return Task.CompletedTask;
     }
 
     public SystemRecord Add(string key, string value, Action<SystemRecord>? configure = null)

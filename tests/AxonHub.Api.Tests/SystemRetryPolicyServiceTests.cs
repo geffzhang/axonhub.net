@@ -154,7 +154,6 @@ public sealed class SystemRetryPolicyServiceTests
               "stream_first_event_timeout_seconds": null,
               "non_stream_response_timeout_seconds": null,
               "load_balancer_strategy": null,
-              "trace_sticky_mode": null,
               "empty_response_detection": null,
               "auto_disable_channel": null,
               "upstream_error_policy": null
@@ -306,7 +305,7 @@ public sealed class SystemRetryPolicyServiceTests
         Assert.Equal([401], rule.StatusCodes);
         Assert.Equal(3, rule.Times);
         Assert.Equal(RetryPolicy.AutoDisableActionPermanent, rule.Action);
-        Assert.Empty(rule.KeywordPatterns);
+        Assert.Null(rule.KeywordPatterns);
         Assert.Null(rule.DisableDurationMinutes);
     }
 

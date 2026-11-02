@@ -11,6 +11,14 @@ public interface ISystemStore
 
     /// <summary>Port of SystemService.getSystemValue's query (live rows only).</summary>
     Task<SystemRecord?> GetByKeyAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of <c>setSystemValue</c>: ent's <c>OnConflict(key).UpdateNewValues()</c>
+    /// upsert. The conflicting row keeps its <c>id</c> and <c>created_at</c>;
+    /// the new values overwrite the remaining columns (ent's update set excludes
+    /// the primary key and the immutable creation timestamp).
+    /// </summary>
+    Task SetAsync(string key, string value, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -58,6 +66,35 @@ public sealed class SystemStore(AxonHubDbContext db) : ISystemStore
             new CommandDefinition(
                 sql,
                 new { Key = key },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task SetAsync(
+        string key,
+        string value,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
+
+        // Ent's generated upsert inserts every defaulted column and, on
+        // conflict, updates all insert columns except id/created_at.
+        const string sql = """
+            INSERT INTO "systems" ("created_at", "updated_at", "deleted_at", "key", "value")
+            VALUES (CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, @Key, @Value)
+            ON CONFLICT ("key") DO UPDATE SET
+                "updated_at" = EXCLUDED."updated_at",
+                "deleted_at" = EXCLUDED."deleted_at",
+                "key" = EXCLUDED."key",
+                "value" = EXCLUDED."value";
+            """;
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql,
+                new { Key = key, Value = value },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
     }

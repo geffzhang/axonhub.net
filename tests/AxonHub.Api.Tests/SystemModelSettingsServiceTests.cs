@@ -107,7 +107,7 @@ public sealed class SystemModelSettingsServiceTests
         var settings = await ReadAsync(
             value: """
                 {"developer_settings":[
-                    {"developer":"  openai  ","associations":[{"type":"channel_model","channel_id":7}]},
+                    {"developer":"  openai  ","associations":[{"type":"channel_model","channelModel":{"channelId":7}}]},
                     {"developer":"anthropic"},
                     null
                 ]}
@@ -117,16 +117,21 @@ public sealed class SystemModelSettingsServiceTests
             settings.DeveloperSettings,
             openai =>
             {
+                Assert.NotNull(openai);
                 Assert.Equal("openai", openai.Developer);
                 var association = Assert.Single(openai.Associations);
-                Assert.Equal("channel_model", association.GetProperty("type").GetString());
-                Assert.Equal(7L, association.GetProperty("channel_id").GetInt64());
+                Assert.NotNull(association);
+                Assert.Equal(ModelAssociation.TypeChannelModel, association.Type);
+                Assert.Equal(7, association.ChannelModel!.ChannelId);
             },
             anthropic =>
             {
+                Assert.NotNull(anthropic);
                 Assert.Equal("anthropic", anthropic.Developer);
                 Assert.Empty(anthropic.Associations);
-            });
+            },
+            // []*DeveloperModelSettings keeps a JSON null element.
+            Assert.Null);
     }
 
     [Fact]

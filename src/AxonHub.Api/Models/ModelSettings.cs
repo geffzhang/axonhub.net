@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace AxonHub.Api.Models;
 
 /// <summary>
@@ -49,13 +47,20 @@ public sealed record ModelSettings
     /// <summary>Hide configured models without a routable channel.</summary>
     public bool HideUnroutableModelsInList { get; init; }
 
-    /// <summary>Reusable association rules keyed by model developer.</summary>
-    public IReadOnlyList<DeveloperModelSettings> DeveloperSettings { get; init; } = [];
+    /// <summary>
+    /// Reusable association rules keyed by model developer. Null elements are
+    /// preserved because Go keeps <c>[]*DeveloperModelSettings</c> entries and
+    /// only skips them while normalizing.
+    /// </summary>
+    public IReadOnlyList<DeveloperModelSettings?> DeveloperSettings { get; init; } = [];
 }
 
 /// <summary>Port of biz.DeveloperModelSettings.</summary>
 /// <remarks>
-/// The associations stay as raw JSON: the port has no ModelAssociation model
-/// (C088), so their inner field types are not validated while decoding.
+/// Associations are <c>[]*objects.ModelAssociation</c> in Go, so null elements
+/// survive decoding (the reference serializes them back as null) and are
+/// skipped by normalization and validation.
 /// </remarks>
-public sealed record DeveloperModelSettings(string Developer, IReadOnlyList<JsonElement> Associations);
+public sealed record DeveloperModelSettings(
+    string Developer,
+    IReadOnlyList<ModelAssociation?> Associations);

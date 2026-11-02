@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.Security;
@@ -29,18 +28,13 @@ public interface ISecuritySettingsProvider
 
 /// <summary>
 /// Reads the <c>systems</c> key/value table. The reference caches system values;
-/// the port reads PostgreSQL on demand (C029).
+/// the port reads PostgreSQL on demand (C029). The JSON codec lives in
+/// <see cref="SecuritySettingsCodec"/> so the management GraphQL surface shares it.
 /// </summary>
 public sealed class SystemSettingsService(ISystemStore systems) : ISecuritySettingsProvider
 {
     /// <summary>biz.SystemKeySecuritySettings.</summary>
-    public const string SecuritySettingsKey = "security_settings";
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        // Go matches JSON keys to struct tags case-insensitively.
-        PropertyNameCaseInsensitive = true,
-    };
+    public const string SecuritySettingsKey = SecuritySettingsCodec.SecuritySettingsKey;
 
     public async Task<SecuritySettings> GetSecuritySettingsAsync(
         CancellationToken cancellationToken = default)
@@ -57,15 +51,14 @@ public sealed class SystemSettingsService(ISystemStore systems) : ISecuritySetti
             return SecuritySettings.Default;
         }
 
-        return row is null ? SecuritySettings.Default : Parse(row.Value);
-    }
+        if (row is null)
+        {
+            return SecuritySettings.Default;
+        }
 
-    private static SecuritySettings Parse(string value)
-    {
-        SecuritySettingsJson? stored;
         try
         {
-            stored = JsonSerializer.Deserialize<SecuritySettingsJson>(value, JsonOptions);
+            return SecuritySettingsCodec.Deserialize(row.Value);
         }
         catch (JsonException)
         {
@@ -73,49 +66,5 @@ public sealed class SystemSettingsService(ISystemStore systems) : ISecuritySetti
             // then falls back to the defaults.
             return SecuritySettings.Default;
         }
-
-        if (stored is null)
-        {
-            // Go unmarshals the literal "null" into the zero struct, which keeps
-            // both the default blocked list and the default icon flag.
-            return SecuritySettings.Default;
-        }
-
-        return new SecuritySettings(
-            NormalizeBlockedIps(stored.BlockedIps),
-            stored.ShowRequestLogIpBanIcon ?? true);
-    }
-
-    /// <summary>Port of normalizeSecuritySettings: trim, drop blanks, dedupe, keep order.</summary>
-    private static string[] NormalizeBlockedIps(string[]? values)
-    {
-        if (values is null)
-        {
-            return [];
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var normalized = new List<string>(values.Length);
-        foreach (var raw in values)
-        {
-            var value = raw.Trim();
-            if (value.Length == 0 || !seen.Add(value))
-            {
-                continue;
-            }
-
-            normalized.Add(value);
-        }
-
-        return [.. normalized];
-    }
-
-    private sealed class SecuritySettingsJson
-    {
-        [JsonPropertyName("blocked_ips")]
-        public string[]? BlockedIps { get; set; }
-
-        [JsonPropertyName("show_request_log_ip_ban_icon")]
-        public bool? ShowRequestLogIpBanIcon { get; set; }
     }
 }

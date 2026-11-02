@@ -1,0 +1,86 @@
+{"input":"","error":"missing field(s)"}
+{"input":" ","error":"missing field(s)"}
+{"input":"* * * * *"}
+{"input":"* * * * * * * foobar"}
+{"input":"* * * * * 1969","error":"syntax error in year field: '1969'"}
+{"input":"* * * * * 2100","error":"syntax error in year field: '2100'"}
+{"input":"* * * * 1-7","error":"invalid interval 1-7 (normalized to 1-0)"}
+{"input":"* * * * 6#0","error":"syntax error in day-of-week field: '6#0'"}
+{"input":"* * * * 6#5"}
+{"input":"* * * * 7"}
+{"input":"* * * * 7-7"}
+{"input":"* * * * 8","error":"syntax error in day-of-week field: '8'"}
+{"input":"* * * * ?"}
+{"input":"* * * * Sunday"}
+{"input":"* * * * sun"}
+{"input":"* * 15w * *"}
+{"input":"* * L * *"}
+{"input":"* * lw * *"}
+{"input":"*/5 * * * *"}
+{"input":"*/60 * * * * *","error":"invalid interval */60"}
+{"input":"0 0 * * 1,2#2"}
+{"input":"0 0 * * 5#3"}
+{"input":"0 0 * * 5L"}
+{"input":"0 0 * * 6#5"}
+{"input":"0 0 * * 6#6","error":"syntax error in day-of-week field: '6#6'"}
+{"input":"0 0 * * MON-FRI"}
+{"input":"0 0 * * monday#2"}
+{"input":"0 0 * * sun#2"}
+{"input":"0 0 0 * *","error":"syntax error in day-of-month field: '0'"}
+{"input":"0 0 0 * * *","error":"syntax error in day-of-month field: '0'"}
+{"input":"0 0 0 * * * *"}
+{"input":"0 0 0 * * * * *"}
+{"input":"0 0 0 * Feb-Nov/2 thu#3 2000-2050"}
+{"input":"0 0 0 1 1 *","error":"syntax error in day-of-month field: '0'"}
+{"input":"0 0 0 1 1 * 1970"}
+{"input":"0 0 0 1 1 * 19x0","error":"syntax error in year field: '19x0'"}
+{"input":"0 0 0 1 1 * 2000"}
+{"input":"0 0 0 1 1 * 2099"}
+{"input":"0 0 0 1 1 * 2100","error":"syntax error in year field: '2100'"}
+{"input":"0 0 1 * */2"}
+{"input":"0 0 1 * 1-5/0","error":"invalid interval 1-5/0"}
+{"input":"0 0 1 * 1-5/3"}
+{"input":"0 0 1 * 1-5/6"}
+{"input":"0 0 1 * 1-5/7","error":"invalid interval 1-5/7"}
+{"input":"0 0 1 * 1-5/8","error":"invalid interval 1-5/8"}
+{"input":"0 0 1 * 1/2"}
+{"input":"0 0 1 * Feb","error":"syntax error in day-of-week field: 'Feb'"}
+{"input":"0 0 1 1 *"}
+{"input":"0 0 1 Feb-30 *","error":"syntax error in month field: 'Feb-30'"}
+{"input":"0 0 1 JAN *"}
+{"input":"0 0 1 jan-mar *"}
+{"input":"0 0 1-5/2 * *"}
+{"input":"0 0 1W * *"}
+{"input":"0 0 32 * *","error":"syntax error in day-of-month field: '32'"}
+{"input":"0 0 L * *"}
+{"input":"0 0 LW * *"}
+{"input":"0 0/2 * * *"}
+{"input":"0-59/2 * * * *"}
+{"input":"05/2 * * * *"}
+{"input":"1 2 3 4","error":"missing field(s)"}
+{"input":"1 2 3 4 5 6 7 8","error":"syntax error in year field: '7'"}
+{"input":"1, * * * *"}
+{"input":"1,,2 * * * *"}
+{"input":"1,2,3 * * * *"}
+{"input":"2-20/61 * * * * *","error":"invalid interval 2-20/61"}
+{"input":"2/60 * * * * *","error":"invalid interval 2/60"}
+{"input":"30 3 15W 3/3 *"}
+{"input":"45 4 * * 6-5","error":"invalid interval 6-5 (normalized to 6-5)"}
+{"input":"45 4 * * 6-7","error":"invalid interval 6-7 (normalized to 6-0)"}
+{"input":"5/2 * * * *"}
+{"input":"5L * * * *","error":"syntax error in minute field: '5L'"}
+{"input":"60 * * * *","error":"syntax error in minute field: '60'"}
+{"input":"? ? ? ? ?"}
+{"input":"@annually"}
+{"input":"@daily"}
+{"input":"@daily extra"}
+{"input":"@every 5m","error":"missing field(s)"}
+{"input":"@hourly"}
+{"input":"@midnight","error":"missing field(s)"}
+{"input":"@monthly"}
+{"input":"@weekly"}
+{"input":"@yearly"}
+{"input":"JAN * * * *","error":"syntax error in minute field: 'JAN'"}
+{"input":"a b c d e","error":"syntax error in minute field: 'a'"}
+{"input":"bad","error":"missing field(s)"}
+{"input":"x@dailyx * * * *","error":"syntax error in second field: 'x0'"}
