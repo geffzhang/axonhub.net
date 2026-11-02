@@ -33,6 +33,7 @@ using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.OpenCode;
 using AxonHub.Llm.Transformer.TypeSafe;
 using AxonHub.Llm.Transformer.Xai;
+using AxonHub.Llm.Transformer.Xai.Subscription;
 using AxonHub.Llm.Transformer.Zai;
 using AxonHub.Llm.Transformer.Zenmux;
 
@@ -64,7 +65,7 @@ namespace AxonHub.Api.Orchestration;
 /// <c>burncloud</c>, <c>github</c>, <c>evolink</c>, <c>groq</c>,
 /// <c>qiniu_anthropic</c>, <c>aihubmix_anthropic</c>, <c>evolink_anthropic</c>,
 /// <c>longcat_anthropic</c>, <c>moonshot_anthropic</c>, <c>deepseek_anthropic</c>,
-/// <c>anthropic_aws</c> and <c>xai_responses</c>
+/// <c>anthropic_aws</c>, <c>xai_responses</c> and <c>xai_subscription</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -219,6 +220,11 @@ public static class ChannelOutboundFactory
     // endpoint, the responses API (channel_endpoint.go:296).
     public const string XaiResponsesChannelType = "xai_responses";
 
+    // channel_llm.go:867-884: xai_subscription is OAuth-only and speaks the
+    // Responses protocol through the Grok CLI endpoint with a refreshing token
+    // provider.
+    public const string XaiSubscriptionChannelType = "xai_subscription";
+
     // channel_llm.go:56-58: the default base URLs applied when a ZenMux
     // channel has none stored (channel_llm.go:695-705).
     public const string ZenmuxOpenAiBaseUrl = "https://zenmux.ai/api/v1";
@@ -254,10 +260,11 @@ public static class ChannelOutboundFactory
         // credentials in place of api keys; every other channel type still
         // needs a key.
         //
-        // channel_llm.go:670-674: github_copilot (like xai_subscription) is
+        // channel_llm.go:666-669: github_copilot and xai_subscription are
         // OAuth-only; an api key without an oauth object is rejected with its
         // own message before the generic key check runs.
-        var oauthRequiredChannel = candidate.Type == GithubCopilotChannelType;
+        var oauthRequiredChannel = candidate.Type
+            is GithubCopilotChannelType or XaiSubscriptionChannelType;
 
         var isOAuth = ChannelCredentials.IsOAuth(candidate.Credentials);
         if (oauthRequiredChannel && !isOAuth)
@@ -397,6 +404,14 @@ public static class ChannelOutboundFactory
                 candidate.BaseUrl ?? string.Empty,
                 provider,
                 provider.KeyIndex),
+            // channel_llm.go:867-884: xai_subscription wraps the Responses
+            // outbound with a refreshing OAuth token provider pinned to the
+            // Grok CLI endpoints. The reference also registers the provider's
+            // auto-refresh and an OnRefreshed persistence callback; the port's
+            // channel grains run neither yet (C094/C127).
+            XaiSubscriptionChannelType => CreateXaiSubscriptionOutbound(
+                candidate,
+                tokenRefreshExecutor),
             // channel_llm.go:885-893: longcat_anthropic speaks Anthropic
             // Messages through the LongCat platform (Bearer auth).
             LongcatAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
@@ -1120,6 +1135,71 @@ public static class ChannelOutboundFactory
                 "failed to create github_copilot outbound transformer: " + ex.Message,
                 ex);
         }
+    }
+
+    /// <summary>
+    /// Port of the xai_subscription branch of <c>buildChannelWithTransformer</c>
+    /// (channel_llm.go:867-884): resolve the OAuth credentials, build the
+    /// refreshing token provider over the xAI endpoints, and wrap the Responses
+    /// outbound. The reference also registers the provider's auto-refresh and
+    /// the <c>OnRefreshed</c> persistence callback; the port's channel grains
+    /// run neither yet (C094/C127).
+    /// </summary>
+    private static SubscriptionOutboundTransformer CreateXaiSubscriptionOutbound(
+        ChannelCandidate candidate,
+        IExecutor? tokenRefreshExecutor)
+    {
+        OAuthCredentials credentials;
+        try
+        {
+            credentials = ResolveOAuthCredentials(candidate);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "xAI subscription channel " + candidate.ChannelName
+                + " has invalid credentials: " + ex.Message,
+                ex);
+        }
+
+        var tokens = SubscriptionToken.NewTokenProvider(new SubscriptionTokenProviderParams
+        {
+            Credentials = credentials,
+            HttpClient = tokenRefreshExecutor,
+        });
+
+        try
+        {
+            return SubscriptionOutboundTransformer.NewOutboundTransformer(tokens);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "failed to create xAI subscription outbound transformer: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of <c>(*ChannelCredentials).ResolveOAuthCredentials</c>
+    /// (internal/objects/channel.go:460-468): a typed <c>oauth</c> object with a
+    /// non-blank access token wins; otherwise the legacy <c>apiKey</c> string is
+    /// parsed as the credentials document.
+    /// </summary>
+    private static OAuthCredentials ResolveOAuthCredentials(ChannelCandidate candidate)
+    {
+        var oauthJson = ChannelCredentials.GetOAuthObjectJson(candidate.Credentials);
+        if (oauthJson is not null)
+        {
+            var oauth = OAuthCredentialsJson.ParseOAuthObject(oauthJson);
+            if (oauth.AccessToken.Trim().Length > 0)
+            {
+                return oauth;
+            }
+        }
+
+        return OAuthCredentialsJson.ParseCredentialsJson(
+            ChannelCredentials.GetLegacyApiKey(candidate.Credentials));
     }
 
     /// <summary>Port of <c>buildCodexOutbound</c> (channel_llm.go:296-387).</summary>
