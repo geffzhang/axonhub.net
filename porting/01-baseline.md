@@ -2245,6 +2245,47 @@ CloneRequestForEndpoint 参数非空化（Go 的 nil 请求在 clone 处 panic�
 AntigravityHandlers 与 OAuth 路由、provider_quota 的 antigravity_checker）
 随下一提交。
 
+## 56. Antigravity 通道接线（ChannelOutboundFactory 的 antigravity 分支，5 例，2026-11-02）
+
+参照路线：`internal/server/biz/channel_llm.go:670-674`（TypeAntigravity 凭据
+校验：只消费单一 legacy APIKey 字段，TrimSpace 后为空则 "missing api key for
+channel %s"，不参与 enabled keys 检查）与 `:1375-1391`
+（buildChannelWithTransformer 的 antigravity 分支：
+antigravity.NewTransformer(Config{BaseURL, APIKey}, WithHTTPClient,
+WithOnTokenRefreshed(svc.onTokenRefreshed(c)))、错误包装 "failed to create
+antigravity outbound transformer"、GetTokenProvider + setupAutoRefresh）；
+`channel_endpoint.go:325`（antigravity 端点表条目
+APIFormatGeminiContents——端口按通道类型 + 入站 ApiFormat 分派，无端点表，
+该语义由 Gemini 入站格式天然满足）。
+
+测试面：参照无独立接线测试（buildChannelWithTransformer 的 antigravity 分支
+无 Go 单测）；端口按 GeminiChannelWiringTests 先例补 5 例接线锁定：信封
+变换器 + OAuth-only 鉴权（Bearer 令牌来自脚本化 TokenURL 执行器、
+X-Goog-Api-Key 恒缺省、信封 project 取自 legacy key 的 projectID 段、inner
+contents 透传）、自定义 base URL 保持、缺 APIKey / 纯空白 APIKey 的拒绝
+文案、enabled key 列表不满足 antigravity（参照只读 APIKey 字段）。
+
+本次移植新增：ChannelOutboundFactory 的 AntigravityChannelType 常量、凭据
+校验分支与 CreateAntigravityOutbound（错误包装对齐参照文案链 "failed to
+create antigravity outbound transformer: failed to create internal gemini
+transformer: …"）；测试 AntigravityChannelWiringTests.cs（5 例）。
+
+未移植并登记（管理面/后台任务切片）：refreshOAuthToken 的 antigravity 分支
+（extractProjectIDFromAntigravityCreds + APIKey 重写 refreshToken|projectID）
+并入 C094（无 OnRefreshed 持久化的同一机制）；AntigravityHandlers 与
+POST /admin/antigravity/oauth/start|exchange（C121）；
+ModelFetcher.fetchAntigravityModels（C122）；provider_quota 的
+AntigravityQuotaChecker 与 registerAntigravitySupport（C123）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| antigravity 分支的信封变换器、OAuth-only 鉴权、缺凭据文案与 key 列表语义 | `tests/AxonHub.Api.Tests/AntigravityChannelWiringTests.cs` | 5 |
+
+`AxonHub.Api.Tests` 由 1115 增至 1120，其余三个项目不变；四个项目合计 4224
+增至 4229。差异条目新增 C121–C123（真实缺口），C094 补记 antigravity 刷新
+写回分支。至此 antigravity 通道的请求服务链路（出站变换 + 通道接线）闭合，
+剩余为管理面（OAuth 交换、模型拉取、配额采集）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -2265,5 +2306,5 @@ AntigravityHandlers 与 OAuth 路由、provider_quota 的 antigravity_checker）
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120） | 中 | 按 provider 分组后续切片（剩余：Antigravity 通道接线与 OAuth 管理面、OpenaiResponses、Commandcode 等） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、OpenaiResponses、Commandcode 等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

@@ -7,6 +7,7 @@ using AxonHub.Llm.OAuth;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
+using AxonHub.Llm.Transformer.Antigravity;
 using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
 using AxonHub.Llm.Transformer.Bailian;
 using AxonHub.Llm.Transformer.Cerebras;
@@ -56,7 +57,8 @@ namespace AxonHub.Api.Orchestration;
 /// <c>volcengine</c>, <c>doubao_anthropic</c>, <c>volcengine_anthropic</c>,
 /// <c>zenmux</c>, <c>zenmux_responses</c>, <c>zenmux_anthropic</c>,
 /// <c>zenmux_video</c>, <c>github_copilot</c>, <c>gemini_openai</c>,
-/// <c>gemini</c>, <c>zenmux_gemini</c> and <c>gemini_vertex</c>
+/// <c>gemini</c>, <c>zenmux_gemini</c>, <c>gemini_vertex</c> and
+/// <c>antigravity</c>
 /// channel types are ported (the vertical slice); the
 /// other provider types are registered as a scope cut. Key
 /// selection follows getAPIKeyProvider: a single enabled key is static, several
@@ -68,6 +70,8 @@ public static class ChannelOutboundFactory
     public const string OpenAiChannelType = "openai";
 
     public const string AnthropicChannelType = "anthropic";
+
+    public const string AntigravityChannelType = "antigravity";
 
     public const string JinaChannelType = "jina";
 
@@ -212,12 +216,24 @@ public static class ChannelOutboundFactory
         // key is optional and disabled keys still mean no auth.
         var keylessChannel = candidate.Type is OllamaChannelType or OllamaAnthropicChannelType;
 
-        if (enabledKeys.Count == 0 && !oauth && !keylessChannel)
+        // channel_llm.go:670-674: antigravity consumes the single legacy APIKey
+        // field (refreshToken|projectID) directly; enabled key lists do not
+        // apply, so it leaves the generic key check to its own branch below.
+        var antigravityChannel = candidate.Type == AntigravityChannelType;
+
+        if (enabledKeys.Count == 0 && !oauth && !keylessChannel && !antigravityChannel)
         {
             throw new InvalidOperationException(
                 oauthCapableChannel
                     ? "missing credentials: oauth or api key required for channel " + candidate.ChannelName
                     : "missing api key for channel " + candidate.ChannelName);
+        }
+
+        if (antigravityChannel
+            && ChannelCredentials.GetLegacyApiKey(candidate.Credentials).Trim().Length == 0)
+        {
+            throw new InvalidOperationException(
+                "missing api key for channel " + candidate.ChannelName);
         }
 
         // WithTrace publishes the resolved trace id as the shared session id
@@ -612,6 +628,11 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = provider,
                 PlatformType = GeminiConstants.PlatformVertex,
             }),
+            // channel_llm.go:1375-1391: antigravity wraps the native Gemini
+            // outbound in the project envelope and authenticates exclusively
+            // through OAuth tokens minted from the legacy refreshToken|projectID
+            // key (channel_endpoint.go:325: a single Gemini-contents endpoint).
+            AntigravityChannelType => CreateAntigravityOutbound(candidate, tokenRefreshExecutor),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
@@ -715,6 +736,39 @@ public static class ChannelOutboundFactory
         {
             throw new InvalidOperationException(
                 "failed to create outbound transformer: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of the antigravity branch of <c>buildChannelWithTransformer</c>
+    /// (channel_llm.go:1375-1391). The transformer consumes the single legacy
+    /// APIKey field (refreshToken|projectID) directly. The reference registers
+    /// <c>onTokenRefreshed</c> and <c>setupAutoRefresh</c> on the channel; the
+    /// port's channels do not run refresh loops or write refreshed tokens back
+    /// (C094).
+    /// </summary>
+    private static AntigravityTransformer CreateAntigravityOutbound(
+        ChannelCandidate candidate,
+        IExecutor? tokenRefreshExecutor)
+    {
+        try
+        {
+            return AntigravityTransformer.Create(
+                new AntigravityConfig
+                {
+                    BaseURL = candidate.BaseUrl ?? string.Empty,
+                    APIKey = ChannelCredentials.GetLegacyApiKey(candidate.Credentials),
+                },
+                new AntigravityTransformerOptions
+                {
+                    HttpClient = tokenRefreshExecutor,
+                });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "failed to create antigravity outbound transformer: " + ex.Message,
                 ex);
         }
     }
