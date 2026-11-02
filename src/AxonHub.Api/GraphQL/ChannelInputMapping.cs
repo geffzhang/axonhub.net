@@ -110,6 +110,22 @@ public static class ChannelInputMapping
         };
     }
 
+    /// <summary>
+    /// Maps the GraphQL saveChannelEndpoints input to the service command
+    /// (channel.go:434-437). The endpoint list is required, so it maps directly
+    /// (an empty list stays an empty list).
+    /// </summary>
+    public static SaveChannelEndpointsCommand ToCommand(SaveChannelEndpointsInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        return new SaveChannelEndpointsCommand
+        {
+            ChannelId = GidValue.Parse(input.ChannelID).Id,
+            Endpoints = input.Endpoints.Select(ToEndpoint).ToList(),
+        };
+    }
+
     private static ChannelCredentialsDraft ToCredentials(ChannelCredentialsInput input)
         => new()
         {

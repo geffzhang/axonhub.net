@@ -862,6 +862,138 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         Assert.Equal(UpdatedAt, reloaded.UpdatedAt);
     }
 
+    [Fact]
+    public async Task GetReturnsOnlyLiveChannelRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var live = await SeedChannelAsync(context, name: "Live");
+        var deleted = await SeedChannelAsync(context, name: "Gone", deletedAt: 77);
+
+        var loaded = await store.GetAsync(live.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal("Live", loaded!.Name);
+        Assert.Equal(live.UpdatedAt, loaded.UpdatedAt);
+
+        Assert.Null(await store.GetAsync(deleted.Id));
+        Assert.Null(await store.GetAsync(424242));
+    }
+
+    [Fact]
+    public async Task SaveEndpointsWritesTheJsonAndStampsUpdatedAt()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            name: "Alpha",
+            settings: """{"extraModelPrefix":"cfg"}""",
+            endpoints: "[]");
+
+        var snapshot = await store.GetAsync(channel.Id);
+        Assert.NotNull(snapshot);
+
+        const string json =
+            """[{"api_format":"openai/chat_completions"},{"api_format":"openai/embedding","path":"/custom"}]""";
+
+        var saved = await store.SaveEndpointsAsync(snapshot!, json);
+        Assert.NotNull(saved);
+        Assert.Equal(json, saved!.Endpoints);
+        Assert.True(saved.UpdatedAt > channel.UpdatedAt);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+
+        using var document = JsonDocument.Parse(reloaded.Endpoints!);
+        var endpoints = document.RootElement;
+        Assert.Equal(2, endpoints.GetArrayLength());
+        Assert.Equal(
+            "openai/chat_completions",
+            endpoints[0].GetProperty("api_format").GetString());
+        Assert.Equal("/custom", endpoints[1].GetProperty("path").GetString());
+
+        // SaveChannelEndpoints writes only the endpoints column; jsonb
+        // re-renders the untouched settings with its own spacing.
+        using var settingsDocument = JsonDocument.Parse(reloaded.Settings!);
+        Assert.Equal(
+            "cfg",
+            settingsDocument.RootElement.GetProperty("extraModelPrefix").GetString());
+        Assert.True(reloaded.UpdatedAt > channel.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task SaveEndpointsHonoursTheVersionGuardAndMissingRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(context, name: "Alpha", endpoints: "[]");
+        var deleted = await SeedChannelAsync(context, name: "Gone", deletedAt: 77);
+
+        var snapshot = await store.GetAsync(channel.Id);
+        Assert.NotNull(snapshot);
+        snapshot!.UpdatedAt = snapshot.UpdatedAt.AddSeconds(-1);
+
+        Assert.Null(await store.SaveEndpointsAsync(snapshot, """[{"api_format":"openai/chat_completions"}]"""));
+
+        // A vanished or soft-deleted id never matches the guarded UPDATE.
+        var liveSnapshot = await store.GetAsync(channel.Id);
+        Assert.NotNull(liveSnapshot);
+        Assert.Null(await store.SaveEndpointsAsync(
+            new ChannelRecord
+            {
+                Id = 424242,
+                UpdatedAt = liveSnapshot!.UpdatedAt,
+                DeletedAt = 0,
+            },
+            "[]"));
+        Assert.Null(await store.SaveEndpointsAsync(
+            new ChannelRecord
+            {
+                Id = deleted.Id,
+                UpdatedAt = deleted.UpdatedAt,
+                DeletedAt = deleted.DeletedAt,
+            },
+            "[]"));
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Equal("[]", reloaded.Endpoints);
+        Assert.Equal(UpdatedAt, reloaded.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task SaveEndpointsAcceptsAnEmptyArray()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            name: "Alpha",
+            endpoints: """[{"api_format":"openai/chat_completions"}]""");
+
+        var snapshot = await store.GetAsync(channel.Id);
+        var saved = await store.SaveEndpointsAsync(snapshot!, "[]");
+
+        Assert.NotNull(saved);
+        Assert.Equal("[]", saved!.Endpoints);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Equal("[]", reloaded.Endpoints);
+    }
+
     private static JsonElement ParsePolicyJson(string? json)
     {
         using var document = JsonDocument.Parse(json!);

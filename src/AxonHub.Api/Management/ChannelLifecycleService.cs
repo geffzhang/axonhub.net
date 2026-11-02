@@ -822,6 +822,90 @@ public sealed class ChannelLifecycleService(
         }
     }
 
+    /// <summary>
+    /// Port of ChannelService.SaveChannelEndpoints (channel.go:1243-1275):
+    /// reads the channel, validates the endpoints against the channel type and
+    /// the stored model-protocol overrides, then writes only the endpoints
+    /// column under the loaded updated_at guard. The live build additionally
+    /// normalizes Responses transport intent and rewrites settings; the port
+    /// keeps the frozen save semantics (C148).
+    /// </summary>
+    public async Task<ChannelRecord> SaveEndpointsAsync(
+        SaveChannelEndpointsCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        ChannelRecord snapshot;
+        try
+        {
+            snapshot = await channels.GetAsync(command.ChannelId, cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    "failed to get channel: ent: channel not found");
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+
+        var error = ChannelValidation.ValidateEndpointsForChannelType(
+            snapshot.Type,
+            command.Endpoints);
+        if (error is not null)
+        {
+            throw new InvalidOperationException("invalid endpoints: " + error);
+        }
+
+        if (snapshot.Type == "xai_subscription")
+        {
+            throw new InvalidOperationException(
+                "xAI subscription channels do not support custom endpoints");
+        }
+
+        ChannelSettingsDraft? settings;
+        try
+        {
+            settings = ChannelWriteSerialization.ParseSettings(snapshot.Settings);
+        }
+        catch (JsonException ex)
+        {
+            // The reference decodes settings inside ent's Get, so a malformed
+            // JSON fails with the read prefix (C002 text difference).
+            throw new InvalidOperationException("failed to get channel: " + ex.Message, ex);
+        }
+
+        error = ChannelValidation.ValidateModelProtocols(
+            settings,
+            snapshot.Type,
+            command.Endpoints);
+        if (error is not null)
+        {
+            throw new InvalidOperationException(
+                "invalid endpoints for configured model protocols: " + error);
+        }
+
+        var endpointsJson = GoJson.MarshalToString(command.Endpoints);
+
+        ChannelRecord? updated;
+        try
+        {
+            updated = await channels.SaveEndpointsAsync(
+                    snapshot,
+                    endpointsJson,
+                    cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    "channel was updated concurrently; retry the operation");
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+
+        return updated;
+    }
+
     private async Task BulkUpdateStatusAsync(
         IReadOnlyList<long> ids,
         string status,

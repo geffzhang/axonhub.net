@@ -490,6 +490,25 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.SaveChannelEndpoints
+    /// (axonhub.resolvers.go:194-197; biz channel.go:1243-1275). The reference
+    /// resolver forwards the service error unchanged.
+    /// </summary>
+    [GraphQLName("saveChannelEndpoints")]
+    public async Task<ChannelType> SaveChannelEndpointsAsync(
+        SaveChannelEndpointsInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var channel = await channels.SaveEndpointsAsync(
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
     /// Port of mutationResolver.CreateChannel
     /// (axonhub.resolvers.go:193-201; biz channel.go:633-671).
     /// </summary>

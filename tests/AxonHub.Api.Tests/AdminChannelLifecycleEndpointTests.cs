@@ -512,12 +512,21 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public List<(long Id, ChannelUpdateRecord Update)> UpdateCalls { get; } = [];
 
+    public List<(long Id, string EndpointsJson)> SaveEndpointsCalls { get; } = [];
+
     public List<(long Id, string Name)> NameChecks { get; } = [];
 
     /// <summary>Simulates a concurrent writer invalidating the version guard.</summary>
     public bool UpdateConflict { get; set; }
 
+    /// <summary>Simulates a concurrent writer invalidating the endpoint save guard.</summary>
+    public bool SaveEndpointsConflict { get; set; }
+
     public Exception? GetForUpdateFailure { get; set; }
+
+    public Exception? GetFailure { get; set; }
+
+    public Exception? SaveEndpointsFailure { get; set; }
 
     public Exception? NameCheckFailure { get; set; }
 
@@ -552,6 +561,19 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         if (GetForUpdateFailure is not null)
         {
             throw GetForUpdateFailure;
+        }
+
+        return Task.FromResult(
+            _rows.SingleOrDefault(row => row.Id == id && row.DeletedAt == 0));
+    }
+
+    public Task<ChannelRecord?> GetAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        if (GetFailure is not null)
+        {
+            throw GetFailure;
         }
 
         return Task.FromResult(
@@ -623,6 +645,40 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
         row.UpdatedAt = DateTime.UtcNow;
         return Task.FromResult<ChannelRecord?>(row);
+    }
+
+    public Task<ChannelRecord?> SaveEndpointsAsync(
+        ChannelRecord snapshot,
+        string endpointsJson,
+        CancellationToken cancellationToken = default)
+    {
+        if (SaveEndpointsFailure is not null)
+        {
+            throw SaveEndpointsFailure;
+        }
+
+        if (SaveEndpointsConflict)
+        {
+            return Task.FromResult<ChannelRecord?>(null);
+        }
+
+        var row = _rows.SingleOrDefault(candidate =>
+            candidate.Id == snapshot.Id
+            && candidate.DeletedAt == 0
+            && candidate.UpdatedAt == snapshot.UpdatedAt);
+        if (row is null)
+        {
+            return Task.FromResult<ChannelRecord?>(null);
+        }
+
+        SaveEndpointsCalls.Add((row.Id, endpointsJson));
+        row.Endpoints = endpointsJson;
+        row.UpdatedAt = DateTime.UtcNow;
+
+        // ent returns the saved entity; the port projects the loaded snapshot.
+        snapshot.Endpoints = endpointsJson;
+        snapshot.UpdatedAt = row.UpdatedAt;
+        return Task.FromResult<ChannelRecord?>(snapshot);
     }
 
     public Task<ChannelRecord?> CreateAsync(

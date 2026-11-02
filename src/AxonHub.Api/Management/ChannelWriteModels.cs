@@ -128,6 +128,18 @@ public sealed class BulkUpdateAutoDisableCommand
 }
 
 /// <summary>
+/// Argument object for <see cref="ChannelLifecycleService.SaveEndpointsAsync"/>:
+/// biz.SaveChannelEndpointsInput (channel.go:434-437). The endpoint list is the
+/// decoder's non-nil slice; an explicitly empty GraphQL list stays empty.
+/// </summary>
+public sealed class SaveChannelEndpointsCommand
+{
+    public long ChannelId { get; init; }
+
+    public IReadOnlyList<ChannelEndpointDraft> Endpoints { get; init; } = [];
+}
+
+/// <summary>
 /// Port of objects.ChannelSettings (live channel.go:155-288) with Go's JSON
 /// tags, declaration order and <c>omitempty</c> behaviour. Nullable members are
 /// omitted by <c>ChannelWriteSerialization</c>; non-nullable members are always

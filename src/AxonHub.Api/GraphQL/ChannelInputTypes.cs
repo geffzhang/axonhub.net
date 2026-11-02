@@ -376,3 +376,17 @@ public sealed class ChannelEndpointInput
 
     public string? Transport { get; set; }
 }
+
+/// <summary>
+/// Port of <c>SaveChannelEndpointsInput</c> (axonhub.graphql:113-116;
+/// channel.go:434-437). Both members are non-null: gqlgen rejects a missing
+/// channelID before the resolver and decodes an empty endpoints list as [].
+/// </summary>
+public sealed class SaveChannelEndpointsInput
+{
+    [GraphQLName("channelID")]
+    [GraphQLType(typeof(IdType))]
+    public string ChannelID { get; set; } = string.Empty;
+
+    public IReadOnlyList<ChannelEndpointInput> Endpoints { get; set; } = [];
+}

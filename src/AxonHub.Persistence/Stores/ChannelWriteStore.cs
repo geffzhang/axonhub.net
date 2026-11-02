@@ -80,6 +80,19 @@ public interface IChannelWriteStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of the ent <c>Channel.Get</c> read used by SaveChannelEndpoints
+    /// (channel.go:1246-1250): returns null when no live row exists. Unlike
+    /// <see cref="GetForUpdateAsync"/>, failures carry the reference's
+    /// "failed to get channel" prefix.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The read failed; the message already carries "failed to get channel".
+    /// </exception>
+    Task<ChannelRecord?> GetAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of the update name check: <c>Name(...) AND IDNEQ(id)</c> over the
     /// soft-delete predicate. The caller raises the coded duplicate error.
     /// </summary>
@@ -104,6 +117,21 @@ public interface IChannelWriteStore
     Task<ChannelRecord?> UpdateAsync(
         ChannelRecord snapshot,
         ChannelUpdateRecord update,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of ChannelService.SaveChannelEndpoints' save half
+    /// (channel.go:1262-1276): writes only the endpoints column under the
+    /// loaded updated_at guard and returns the saved row. A null result means
+    /// the row vanished or the guard no longer matches (ent not-found, surfaced
+    /// by the caller as "channel was updated concurrently").
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The update failed; the message already carries "failed to update channel endpoints".
+    /// </exception>
+    Task<ChannelRecord?> SaveEndpointsAsync(
+        ChannelRecord snapshot,
+        string endpointsJson,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -222,10 +250,7 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
     {
         try
         {
-            return await db.Channels
-                .AsNoTracking()
-                .SingleOrDefaultAsync(row => row.Id == id && row.DeletedAt == 0, cancellationToken)
-                .ConfigureAwait(false);
+            return await LoadAsync(id, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -234,6 +259,25 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
                 ex);
         }
     }
+
+    public async Task<ChannelRecord?> GetAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await LoadAsync(id, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException("failed to get channel: " + ex.Message, ex);
+        }
+    }
+
+    private Task<ChannelRecord?> LoadAsync(long id, CancellationToken cancellationToken)
+        => db.Channels
+            .AsNoTracking()
+            .SingleOrDefaultAsync(row => row.Id == id && row.DeletedAt == 0, cancellationToken);
 
     public async Task<bool> NameExistsAsync(
         long id,
@@ -381,6 +425,52 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
             Remark = update.ClearRemark ? null : update.Remark ?? row.Remark,
             Endpoints = update.EndpointsJson ?? row.Endpoints,
         };
+
+    public async Task<ChannelRecord?> SaveEndpointsAsync(
+        ChannelRecord snapshot,
+        string endpointsJson,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(endpointsJson);
+
+        var now = DateTime.UtcNow;
+
+        int affected;
+        try
+        {
+            // UpdateOneID(...).Where(UpdatedAtEQ(...)).SetEndpoints(...).Save:
+            // the loaded version guards the write in the same statement.
+            affected = await db.Channels
+                .Where(row => row.Id == snapshot.Id
+                    && row.DeletedAt == 0
+                    && row.UpdatedAt == snapshot.UpdatedAt)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(row => row.Endpoints, endpointsJson)
+                        .SetProperty(row => row.UpdatedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to update channel endpoints: " + ex.Message,
+                ex);
+        }
+
+        if (affected == 0)
+        {
+            // The row vanished or the loaded updated_at no longer matches; ent
+            // reports both as not found.
+            return null;
+        }
+
+        // ent returns the saved entity: only endpoints and updated_at changed.
+        snapshot.Endpoints = endpointsJson;
+        snapshot.UpdatedAt = now;
+        return snapshot;
+    }
 
     public async Task<ChannelRecord?> CreateAsync(
         ChannelRecord channel,
