@@ -19,6 +19,9 @@ public sealed class CodedException : Exception
     /// <summary>xerrors.ErrCodeNotFound.</summary>
     public const string NotFound = "NOT_FOUND";
 
+    /// <summary>xerrors.ErrCodeDuplicateName.</summary>
+    public const string DuplicateName = "DUPLICATE_NAME";
+
     public CodedException(string code, string message, IReadOnlyDictionary<string, object?>? extensions = null)
         : base(message)
     {

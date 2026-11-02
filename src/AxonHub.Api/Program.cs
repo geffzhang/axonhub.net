@@ -4,6 +4,7 @@ using AxonHub.Api.Billing;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Http;
+using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
@@ -150,6 +151,15 @@ builder.Services.AddScoped<VideoService>();
 
 // The orchestrator reads the retry policy through the scoped system store.
 builder.Services.AddScoped<ChatCompletionOrchestrator>();
+
+// Users and roles (biz.UserService / biz.RoleService). Passwords keep the
+// reference's hex(bcrypt cost 10) format so rows are interchangeable with the
+// Go implementation.
+builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
+builder.Services.AddScoped<IUserAdminStore, UserAdminStore>();
+builder.Services.AddScoped<IRoleStore, RoleStore>();
+builder.Services.AddScoped<UserManagementService>();
+builder.Services.AddScoped<RoleManagementService>();
 
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
 // (routes.go:163). The first slice exposes the static scope catalog; the

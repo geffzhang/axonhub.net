@@ -380,6 +380,66 @@ public sealed class PromptProtectionRuleRecord
     public string Settings { get; set; } = "{}";
 }
 
+/// <summary>Row of the reference <c>roles</c> table.</summary>
+public sealed class RoleRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>system or project.</summary>
+    public string Level { get; set; } = "system";
+
+    /// <summary>JSON string array of scopes.</summary>
+    public string? Scopes { get; set; }
+
+    /// <summary>Project ID; 0 for system roles (Ent's nullable column).</summary>
+    public long? ProjectId { get; set; }
+
+    public bool IsSystemRole => Level == "system";
+}
+
+/// <summary>Row of the reference <c>user_roles</c> join table.</summary>
+public sealed class UserRoleRecord
+{
+    public long Id { get; set; }
+
+    /// <summary>Ent declares the timestamps nullable in this join table.</summary>
+    public DateTime? CreatedAt { get; set; }
+
+    public DateTime? UpdatedAt { get; set; }
+
+    public long UserId { get; set; }
+
+    public long RoleId { get; set; }
+}
+
+/// <summary>Row of the reference <c>user_projects</c> join table.</summary>
+public sealed class UserProjectRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    public bool IsOwner { get; set; }
+
+    /// <summary>JSON string array of project-scoped scopes.</summary>
+    public string? Scopes { get; set; }
+
+    public long UserId { get; set; }
+
+    public long ProjectId { get; set; }
+}
+
 /// <summary>Row of the reference <c>usage_logs</c> table.</summary>
 public sealed class UsageLogRecord
 {

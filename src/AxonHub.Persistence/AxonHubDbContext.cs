@@ -46,6 +46,12 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<ThreadRecord> Threads => Set<ThreadRecord>();
 
+    public DbSet<RoleRecord> Roles => Set<RoleRecord>();
+
+    public DbSet<UserRoleRecord> UserRoles => Set<UserRoleRecord>();
+
+    public DbSet<UserProjectRecord> UserProjects => Set<UserProjectRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -79,6 +85,84 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigurePromptProtectionRule(modelBuilder.Entity<PromptProtectionRuleRecord>());
         ConfigureTrace(modelBuilder.Entity<TraceRecord>());
         ConfigureThread(modelBuilder.Entity<ThreadRecord>());
+        ConfigureRole(modelBuilder.Entity<RoleRecord>());
+        ConfigureUserRole(modelBuilder.Entity<UserRoleRecord>());
+        ConfigureUserProject(modelBuilder.Entity<UserProjectRecord>());
+    }
+
+    private static void ConfigureRole(EntityTypeBuilder<RoleRecord> builder)
+    {
+        builder.ToTable("roles");
+        builder.HasKey(role => role.Id);
+        builder.Property(role => role.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(role => role.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(role => role.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(role => role.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(role => role.Name).HasColumnName("name").HasColumnType("varchar").IsRequired();
+        builder.Property(role => role.Level).HasColumnName("level").HasColumnType("varchar").IsRequired();
+        builder.Property(role => role.Scopes).HasColumnName("scopes").HasColumnType("jsonb");
+        builder.Property(role => role.ProjectId).HasColumnName("project_id");
+
+        builder.HasIndex(role => new { role.ProjectId, role.Name })
+            .HasDatabaseName("roles_by_project_id_name")
+            .IsUnique();
+        builder.HasIndex(role => role.Level).HasDatabaseName("roles_by_level");
+    }
+
+    private static void ConfigureUserRole(EntityTypeBuilder<UserRoleRecord> builder)
+    {
+        builder.ToTable("user_roles");
+        builder.HasKey(userRole => userRole.Id);
+        builder.Property(userRole => userRole.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(userRole => userRole.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(userRole => userRole.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(userRole => userRole.UserId).HasColumnName("user_id").IsRequired();
+        builder.Property(userRole => userRole.RoleId).HasColumnName("role_id").IsRequired();
+
+        builder.HasIndex(userRole => new { userRole.UserId, userRole.RoleId })
+            .HasDatabaseName("user_roles_by_user_id_role_id")
+            .IsUnique();
+        builder.HasIndex(userRole => userRole.RoleId).HasDatabaseName("user_roles_by_role_id");
+    }
+
+    private static void ConfigureUserProject(EntityTypeBuilder<UserProjectRecord> builder)
+    {
+        builder.ToTable("user_projects");
+        builder.HasKey(userProject => userProject.Id);
+        builder.Property(userProject => userProject.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(userProject => userProject.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(userProject => userProject.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(userProject => userProject.IsOwner)
+            .HasColumnName("is_owner")
+            .IsRequired();
+        builder.Property(userProject => userProject.Scopes).HasColumnName("scopes").HasColumnType("jsonb");
+        builder.Property(userProject => userProject.UserId).HasColumnName("user_id").IsRequired();
+        builder.Property(userProject => userProject.ProjectId)
+            .HasColumnName("project_id")
+            .IsRequired();
+
+        builder.HasIndex(userProject => new { userProject.UserId, userProject.ProjectId })
+            .HasDatabaseName("user_projects_by_user_id_project_id")
+            .IsUnique();
+        builder.HasIndex(userProject => userProject.ProjectId)
+            .HasDatabaseName("user_projects_by_project_id");
     }
 
     private static void ConfigureTrace(EntityTypeBuilder<TraceRecord> builder)

@@ -1,6 +1,8 @@
 using HotChocolate;
+using AxonHub.Api.Management;
 using AxonHub.Api.Scopes;
 using AxonHub.Api.Settings;
+using AxonHub.Persistence;
 
 namespace AxonHub.Api.GraphQL;
 
@@ -85,4 +87,70 @@ public sealed class AdminQuery
         CancellationToken cancellationToken)
         => SystemSettingsMapping.ToGraphQL(
             await settings.GetSecuritySettingsAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Port of queryResolver.Users (ent.resolvers.go:579-592).</summary>
+    [GraphQLName("users")]
+    public async Task<UserConnectionType> UsersAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        UserOrder? orderBy,
+        UserWhereInput? where,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ManagementMapping.ToUserSortField(orderBy);
+        var page = await users.ListAsync(
+                new UserListQuery
+                {
+                    Where = ManagementMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ManagementMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Roles (ent.resolvers.go:503-516).</summary>
+    [GraphQLName("roles")]
+    public async Task<RoleConnectionType> RolesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RoleOrder? orderBy,
+        RoleWhereInput? where,
+        [Service] RoleManagementService roles,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ManagementMapping.ToRoleSortField(orderBy);
+        var page = await roles.ListAsync(
+                new RoleListQuery
+                {
+                    Where = ManagementMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ManagementMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.BuildConnection(page, sortField);
+    }
 }

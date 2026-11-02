@@ -15,8 +15,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
     private static readonly string[] ExpectedTables =
     [
         "api_keys", "channel_model_prices", "channels", "projects",
-        "prompt_protection_rules", "request_executions", "requests", "systems",
-        "threads", "traces", "usage_logs", "users",
+        "prompt_protection_rules", "request_executions", "requests", "roles", "systems",
+        "threads", "traces", "usage_logs", "user_projects", "user_roles", "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -102,6 +102,20 @@ public sealed class SchemaTests(PostgresFixture fixture)
             "completion_rejected_prediction_tokens", "source", "format", "total_cost",
             "cost_items", "cost_price_reference_id", "channel_id", "project_id",
             "request_id",
+        ],
+        ["roles"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "name", "level",
+            "scopes", "project_id",
+        ],
+        ["user_projects"] =
+        [
+            "id", "created_at", "updated_at", "is_owner", "scopes", "user_id",
+            "project_id",
+        ],
+        ["user_roles"] =
+        [
+            "id", "created_at", "updated_at", "user_id", "role_id",
         ],
     };
 
@@ -246,6 +260,25 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["character varying"] =
                     ["model_id", "source", "format", "cost_price_reference_id"],
             },
+            ["roles"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "project_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] = ["scopes"],
+                ["character varying"] = ["name", "level"],
+            },
+            ["user_projects"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "user_id", "project_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["boolean"] = ["is_owner"],
+                ["jsonb"] = ["scopes"],
+            },
+            ["user_roles"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "user_id", "role_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+            },
         };
 
     private static readonly Dictionary<string, (string Table, bool Unique, string[] Columns)> ExpectedIndexes =
@@ -292,6 +325,13 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["usage_logs_by_project_id_created_at"] = ("usage_logs", false, ["project_id", "created_at"]),
             ["usage_logs_by_channel_id_created_at"] = ("usage_logs", false, ["channel_id", "created_at"]),
             ["usage_logs_by_api_key_id_created_at"] = ("usage_logs", false, ["api_key_id", "created_at"]),
+            ["roles_by_project_id_name"] = ("roles", true, ["project_id", "name"]),
+            ["roles_by_level"] = ("roles", false, ["level"]),
+            ["user_projects_by_user_id_project_id"] =
+                ("user_projects", true, ["user_id", "project_id"]),
+            ["user_projects_by_project_id"] = ("user_projects", false, ["project_id"]),
+            ["user_roles_by_user_id_role_id"] = ("user_roles", true, ["user_id", "role_id"]),
+            ["user_roles_by_role_id"] = ("user_roles", false, ["role_id"]),
         };
 
     [Fact]

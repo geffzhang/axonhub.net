@@ -20,6 +20,11 @@ public sealed class TestDatabase : IAsyncDisposable
         var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
         {
             SearchPath = Schema,
+            // Every test owns a distinct connection string (and therefore a
+            // distinct pool); pooled idle connections from a full run would
+            // exhaust the container's max_connections. Tests are serialized,
+            // so opening fresh connections is cheap enough.
+            Pooling = false,
         }.ConnectionString;
 
         Factory = new PostgresConnectionFactory(connectionString);
