@@ -165,6 +165,12 @@ builder.Services.AddScoped<RoleManagementService>();
 builder.Services.AddScoped<IChannelAdminStore, ChannelAdminStore>();
 builder.Services.AddScoped<ChannelQueryService>();
 
+// Channel lifecycle writes (status / delete / bulk status / bulk delete /
+// bulk tag management). The entgql Transactioner wraps each mutation; the
+// store reproduces that atomicity with a per-mutation transaction.
+builder.Services.AddScoped<IChannelWriteStore, ChannelWriteStore>();
+builder.Services.AddScoped<ChannelLifecycleService>();
+
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
 // (routes.go:163). The first slice exposes the static scope catalog; the
 // reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported

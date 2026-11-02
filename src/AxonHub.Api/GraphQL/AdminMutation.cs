@@ -292,4 +292,151 @@ public sealed class AdminMutation
         await roles.BulkDeleteAsync(roleIds, cancellationToken).ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateChannelStatus
+    /// (axonhub.resolvers.go:203-206; biz channel.go:1205-1220).
+    /// </summary>
+    [GraphQLName("updateChannelStatus")]
+    public async Task<ChannelType> UpdateChannelStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        ChannelStatusValue status,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var channel = await channels.UpdateStatusAsync(
+                gid.Id,
+                ChannelMapping.ToWire(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteChannel
+    /// (axonhub.resolvers.go:208-215; biz channel.go:1280-1290).
+    /// </summary>
+    [GraphQLName("deleteChannel")]
+    public async Task<bool> DeleteChannelAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+        await channels.DeleteAsync(gid.Id, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkArchiveChannels (axonhub.resolvers.go:217-226).</summary>
+    [GraphQLName("bulkArchiveChannels")]
+    public async Task<bool> BulkArchiveChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        await channels.BulkArchiveAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkDisableChannels (axonhub.resolvers.go:228-237).</summary>
+    [GraphQLName("bulkDisableChannels")]
+    public async Task<bool> BulkDisableChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        await channels.BulkDisableAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkEnableChannels (axonhub.resolvers.go:239-248).</summary>
+    [GraphQLName("bulkEnableChannels")]
+    public async Task<bool> BulkEnableChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        await channels.BulkEnableAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkRecoverChannels (axonhub.resolvers.go:250-259).</summary>
+    [GraphQLName("bulkRecoverChannels")]
+    public async Task<bool> BulkRecoverChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        await channels.BulkRecoverAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkDeleteChannels (axonhub.resolvers.go:261-270).</summary>
+    [GraphQLName("bulkDeleteChannels")]
+    public async Task<bool> BulkDeleteChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        await channels.BulkDeleteAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkAddChannelTags (axonhub.resolvers.go:272-281).</summary>
+    [GraphQLName("bulkAddChannelTags")]
+    public async Task<bool> BulkAddChannelTagsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> tags,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        await channels.BulkAddTagsAsync(ParseGids(ids), tags, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkRemoveChannelTags (axonhub.resolvers.go:283-292).</summary>
+    [GraphQLName("bulkRemoveChannelTags")]
+    public async Task<bool> BulkRemoveChannelTagsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> tags,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        await channels.BulkRemoveTagsAsync(ParseGids(ids), tags, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkManageChannelTags (axonhub.resolvers.go:294-303).</summary>
+    [GraphQLName("bulkManageChannelTags")]
+    public async Task<bool> BulkManageChannelTagsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> addTags,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> removeTags,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        await channels.BulkManageTagsAsync(
+                ParseGids(ids),
+                addTags,
+                removeTags,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    private static List<long> ParseGids(IReadOnlyList<string> ids)
+    {
+        var result = new List<long>(ids.Count);
+        foreach (var id in ids)
+        {
+            result.Add(GidValue.Parse(id).Id);
+        }
+
+        return result;
+    }
 }

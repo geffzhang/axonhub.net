@@ -2868,6 +2868,71 @@ ValueKind 以承载 string / int 排序值）、C135（ChannelWhereInput 一并�
 契约子集）、C014（channels 读取面已移植，写操作与管理员鉴权仍未接入）。差异
 总数 138 增至 141（85 接受 / 22 缺口 / 34 已解决）。
 
+## 66. 管理面 channels 生命周期写入切片（状态 / 删除 / 批量状态 / 批量删除 / 批量标签，23 例，2026-11-02）
+
+参照路线：`internal/server/gql/axonhub.resolvers.go:203-303`（10 个通道生命周期
+resolver）、`internal/server/biz/channel.go:1205-1220`（UpdateChannelStatus）、
+`:1280-1290`（DeleteChannel）、`internal/server/biz/channel_bulk.go:163-204`
+（bulkUpdateChannelStatus）、`:344-362`（BulkDeleteChannels）、`:365-432`
+（BulkManageChannelTags）、`internal/ent/schema/schematype/soft_delete.go:84`
+（软删除钩子）、`internal/server/gql/graphql.go:143`（entgql Transactioner 与两个
+Skip 例外）、`internal/server/gql/axonhub.graphql:944-953`（10 个变更签名）。
+
+本次新增 `src/AxonHub.Persistence/Stores/ChannelWriteStore.cs`（`IChannelWriteStore`
+与 EF Core 实现）、`src/AxonHub.Api/Management/ChannelLifecycleService.cs`
+（biz 层错误前缀与限流器失效）；`StoreFailureException.cs` 增加
+`ExpectedRowsMismatchException`（携带期望 / 实际行数，复现 biz 层
+`expected to find %d channels, but found %d`）；`AdminMutation.cs` 增加 10 个
+resolver（`updateChannelStatus`、`deleteChannel`、`bulkArchiveChannels`、
+`bulkDisableChannels`、`bulkEnableChannels`、`bulkRecoverChannels`、
+`bulkDeleteChannels`、`bulkAddChannelTags`、`bulkRemoveChannelTags`、
+`bulkManageChannelTags`），`Program.cs` 注册 `IChannelWriteStore` 与
+`ChannelLifecycleService`。
+
+写入语义：`updateChannelStatus` 等价于
+`UpdateOneID(id).SetStatus(status).ClearAutoDisabledAt().ClearAutoDisableExpiresAt().Save`，
+不动 `error_message`；缺失 / 已软删行返回 nil，resolver 报
+`failed to update channel status: ent: channel not found`，其余失败加
+`failed to update channel status: %w`。`deleteChannel` 是软删除
+（`deleted_at = time.Now().Unix()` 秒、`updated_at` 同时更新），成功后调用
+`forgetLimiter(id)`；未命中报 `failed to delete channel: ent: channel not found`，
+其余失败加 `failed to delete channel: %w`。返回的 Channel 是 Ent 的已变更实体
+（`updated_at` 为内存时间戳，而非存储截断值）。
+
+批量状态（archive / disable / enable / recover）：空 ids 直接返回；先按
+`IDIn(ids)` 统计活行数，与 ids 数量不符即报
+`expected to find %d channels, but found %d`（重复 id 也会失败），全部在写任何行
+之前；通过后统一置 status、清空自动禁用标记，recover 额外清空 `error_message`；
+失败按动作词包成 `failed to archive|disable|enable|recover channels: %w`。
+`bulkDeleteChannels` 不做数量校验：`Delete().Where(IDIn(ids))` 只软删命中的活行，
+随后对每个请求 id（含未命中的）调用 `forgetLimiter`；失败包成
+`failed to bulk delete channels: %w`。批量标签：`lo.Uniq(ids)` 保序去重，
+`normalizeChannelTags` 逐项 Trim、丢弃空串、保序去重；ids 或两侧标签全空时
+no-op；按 ids 载入活行并校验数量；逐通道先删 remove 集合、再追加未出现过的
+add 标签，无变化则跳过；有变化时以 `updated_at = 载入值` 为乐观守卫更新，
+守卫失效报 `channel %d was modified while managing tags; please retry: ent: channel not found`，
+其它更新失败报 `failed to manage tags for channel %d: %w`，查询失败报
+`failed to query channels for bulk tag management: %w`。
+
+事务：参照的 entgql Transactioner 把整个 mutation 包在一个 Ent 事务里；端口每个
+变更只调用一次存储方法，由存储方法内部的事务保证原子性（批量状态与标签管理显式
+`BeginTransaction`，单行删除是单条 `SaveChanges`，批量删除是单条 `ExecuteUpdate`），
+登记为 C142。管理员 GraphQL 鉴权与 `ScopeWriteChannels` 门禁仍未接入（C014），
+本切片只复刻持久化行为与参照错误文案。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| /admin/graphql 端到端：状态变更清空自动禁用标记且保留 error、gid 类型段被忽略、缺失行文案、删除软删并清限流器、批量四动作与 recover 清 error、数量不符、批量删除容忍缺失 id、标签 Trim / 去重 / no-op / 双列表委派、存储失败前缀、空列表、内省 | `tests/AxonHub.Api.Tests/AdminChannelLifecycleEndpointTests.cs` | 14 |
+| 存储：状态 / 标记 / updated_at、软删除 Unix 秒并隐藏行、数量校验不产生部分写、recover 清 error、批量删除只命中活行、标签增删与未变更行跳过、缺失行回滚、null tags 视为空数组 | `tests/AxonHub.Persistence.Tests/ChannelWriteStoreTests.cs` | 9 |
+
+`AxonHub.Api.Tests` 由 1332 增至 1346（+14），`AxonHub.Persistence.Tests` 由
+94 增至 103（+9），`AxonHub.Llm.Tests` 保持 3020，`AxonHub.Grains.Tests` 保持
+92；四个项目合计 4538 增至 4561，0 失败 0 跳过。
+
+差异：新增 C142（GraphQL 变更的事务边界：entgql Transactioner 改为存储层单方法
+事务）；更新 C014（通道生命周期写入已接入，createChannel / updateChannel 与
+管理员鉴权仍缺）。差异总数 141 增至 142（86 接受 / 22 缺口 / 34 已解决）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -2880,8 +2945,8 @@ ValueKind 以承载 string / int 排序值）、C135（ChannelWhereInput 一并�
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、channels、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
-| 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）与生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）已接入，但 createChannel / updateChannel 及其余通道写操作、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口只有读取/执行路径与 §66 的生命周期写入（不经过这些校验）；createChannel / updateChannel 尚未移植，非法配置按无覆盖/无限制处理（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
 | usage 成本管理面：`channel_model_prices` 写入、reference-id 轮换、版本表与自动定价 | 参照的 `SaveChannelModelPrices` / `channel_model_price_versions` / GraphQL 管理面未移植；端口只有读取路径与基础表（C048） | 中 | 随通道管理面落地 |
