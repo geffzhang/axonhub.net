@@ -2078,6 +2078,50 @@ ZenMux 默认 base 常量 `zenmuxGeminiBaseURL`）。测试
 `AxonHub.Grains.Tests` 保持 92，`AxonHub.Persistence.Tests` 保持 70；四个项目
 合计 3866 增至 3936。差异条目新增 C113（已接受）。
 
+## 53. Gemini 原生入站转换切片（inbound_convert.go 全量，102 例，2026-11-02）
+
+参照路线：`llm/transformer/gemini/inbound_convert.go`（754 行）——
+`ConvertGeminiToLLMRequest`（generation config 归一、thinking config →
+reasoning effort/budget + ExtraBody、response format 三级优先、工具声明
+（xjson 类型小写归一）、Google 原生工具、ToolConfig → ToolChoice、安全
+设置 / 图像配置 → TransformerMetadata）、`ConvertGeminiContentToLLMMessages`
+/ `ConvertGeminiContentToLLMMessage`（functionResponse → tool 消息立即返回、
+多函数响应拆分、thought → reasoning content、inline/file data →
+image/video/audio/document、functionCall → tool call + thought signature
+元数据、空 parts → null）、`GeminiJsonSchemaResponseFormat`、
+`ConvertGeminiThinkingConfigToGeminiOpenAIExtraBody`、
+`ConvertLLMToGeminiResponse` / `ConvertLLMChoiceToGeminiCandidate`
+（reasoning → thought part、text/多部件、tool calls 参数重解析（失败 →
+null）、thought signature 直通与逐工具元数据、grounding metadata 优先于
+annotations、citation 回退、finish reason 映射、usage 双向）、
+`CitationMetadataFromLLMAnnotations`、`FindMatchingFunctionCallId`。
+
+测试面：参照 inbound_convert_test.go 逐条移植，102 例——请求转换基础 12
+（简单文本 / 系统指令 / generation config / 单多 stop / thinking 8 组含
+level 优先级与 budget 保留）+ 音频 / 视频文件 2 + 响应格式 6 + 工具 9 +
+内容消息 10 + 多函数响应拆分 1 + thought signature 入站 4 + candidate
+thought signature 8（Encode 直通；Go 的"non-gemini 保持空"用例实为
+"encrypted_data" 直通断言）+ LLM→Gemini 响应 6（usage 的
+CandidatesTokenCount = Completion − Reasoning）+ finish reasons 5 +
+testdata 请求 4（含 tool-result 的 FindMatchingFunctionCallId 补全 ID）+
+testdata 响应 3 + 四向往返 12（工具数为空的两个夹具在 Go 侧靠
+`len(nil)==0` 通过，端口以 `?.Count ?? 0` 对齐）+ citation 回退 1 +
+grounding 优先 1 + grounding 5 + 安全设置 4 + 图像配置 4 + grounding 附加 5。
+
+本次移植新增 `src/AxonHub.Llm/Transformer/Gemini/GeminiInboundConvert.cs`、
+`src/AxonHub.Llm/Json/XjsonSchema.cs`（xjson.Transform 移植）与
+`src/AxonHub.Llm/Json/Xmap.cs`（xmap.GetPtr 移植）。测试
+`tests/AxonHub.Llm.Tests/GeminiInboundConvertTests.cs`（102）。安全设置 /
+图像配置的元数据提取 8 例此前已随 §49 移植于
+GeminiMetadataExtractionTests.cs。已接受差异见 C114（JSON Schema 归一化）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Gemini 入站请求 / 内容 / 响应三向转换、thinking 映射、grounding 与 thought signature | `tests/AxonHub.Llm.Tests/GeminiInboundConvertTests.cs` | 102 |
+
+`AxonHub.Llm.Tests` 由 2671 增至 2773，其余三个项目不变；四个项目合计
+3936 增至 4038。差异条目新增 C114（已接受）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
