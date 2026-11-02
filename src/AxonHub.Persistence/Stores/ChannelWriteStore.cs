@@ -12,6 +12,20 @@ namespace AxonHub.Persistence;
 public interface IChannelWriteStore
 {
     /// <summary>
+    /// Port of the create half of ChannelService.CreateChannel: checks the live
+    /// name (soft-delete predicate), then inserts the row. Returns null when a
+    /// live channel already owns the name (the caller raises the coded
+    /// duplicate-name error); a failed insert is a store failure.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The name check or insert failed; the message already carries the
+    /// reference prefix ("failed to check channel name"/"failed to create channel").
+    /// </exception>
+    Task<ChannelRecord?> CreateAsync(
+        ChannelRecord channel,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of ChannelService.UpdateChannelStatus: sets the status and clears the
     /// auto-disable markers. Returns null when the live row does not exist.
     /// </summary>
@@ -76,6 +90,44 @@ public interface IChannelWriteStore
 /// </summary>
 public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
 {
+    public async Task<ChannelRecord?> CreateAsync(
+        ChannelRecord channel,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        bool exists;
+        try
+        {
+            // Channel.Query().Where(Name(...)).First applies the ent
+            // SoftDeleteMixin predicate, so only live rows can collide.
+            exists = await db.Channels
+                .AnyAsync(row => row.Name == channel.Name && row.DeletedAt == 0, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException("failed to check channel name: " + ex.Message, ex);
+        }
+
+        if (exists)
+        {
+            return null;
+        }
+
+        try
+        {
+            db.Channels.Add(channel);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException("failed to create channel: " + ex.Message, ex);
+        }
+
+        return channel;
+    }
+
     public async Task<ChannelRecord?> UpdateStatusAsync(
         long id,
         string status,

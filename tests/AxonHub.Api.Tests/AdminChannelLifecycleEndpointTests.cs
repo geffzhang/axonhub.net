@@ -503,6 +503,10 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public List<(long[] Ids, string[] AddTags, string[] RemoveTags)> TagCalls { get; } = [];
 
+    public List<ChannelRecord> CreatedChannels { get; } = [];
+
+    public Exception? CreateFailure { get; set; }
+
     public Exception? StatusFailure { get; set; }
 
     public Exception? DeleteFailure { get; set; }
@@ -517,6 +521,28 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
     {
         record.Id = _nextId++;
         _rows.Add(record);
+    }
+
+    public Task<ChannelRecord?> CreateAsync(
+        ChannelRecord channel,
+        CancellationToken cancellationToken = default)
+    {
+        if (CreateFailure is not null)
+        {
+            throw CreateFailure;
+        }
+
+        // ent's name check honours the SoftDeleteMixin predicate: only a live
+        // row can own the name.
+        if (_rows.Any(row => row.DeletedAt == 0 && row.Name == channel.Name))
+        {
+            return Task.FromResult<ChannelRecord?>(null);
+        }
+
+        channel.Id = _nextId++;
+        _rows.Add(channel);
+        CreatedChannels.Add(channel);
+        return Task.FromResult<ChannelRecord?>(channel);
     }
 
     public Task<ChannelRecord?> UpdateStatusAsync(

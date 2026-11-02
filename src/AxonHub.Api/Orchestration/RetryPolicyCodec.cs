@@ -18,7 +18,7 @@ public static class RetryPolicyCodec
     public const string RetryPolicyKey = "retry_policy";
 
     /// <summary>biz.maxRetryResponseTimeoutSeconds.</summary>
-    private const int MaxRetryResponseTimeoutSeconds = 600;
+    internal const int MaxRetryResponseTimeoutSeconds = 600;
 
     private static readonly JsonSerializerOptions ReadOptions = new()
     {

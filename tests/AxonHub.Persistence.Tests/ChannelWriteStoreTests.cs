@@ -263,6 +263,142 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         Assert.Equal("""["new"]""", reloaded.Tags);
     }
 
+    [Fact]
+    public async Task CreateInsertsTheRowAndRoundTripsEveryColumn()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var record = new ChannelRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            DeletedAt = 0,
+            Type = "openai",
+            BaseUrl = "https://api.example/v1",
+            Name = "Created",
+            Status = "disabled",
+            Credentials = """{"apiKey":"k"}""",
+            DisabledApiKeys = "[]",
+            SupportedModels = """["m"]""",
+            ManualModels = "null",
+            AutoSyncSupportedModels = true,
+            AutoSyncModelPattern = "gpt-*",
+            Tags = """["t"]""",
+            DefaultTestModel = "m",
+            Policies = """{"stream":"unlimited"}""",
+            Settings = "null",
+            OrderingWeight = 0,
+            Remark = "r",
+            Endpoints = """[{"api_format":"openai/chat_completions","transport":"http"}]""",
+        };
+
+        var created = await store.CreateAsync(record);
+
+        Assert.Same(record, created);
+        Assert.True(created!.Id > 0);
+
+        // jsonb normalizes key order and whitespace; the values round-trip.
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == record.Id);
+        Assert.Equal(CreatedAt, reloaded.CreatedAt);
+        Assert.Equal(UpdatedAt, reloaded.UpdatedAt);
+        Assert.Equal(0, reloaded.DeletedAt);
+        Assert.Equal("openai", reloaded.Type);
+        Assert.Equal("https://api.example/v1", reloaded.BaseUrl);
+        Assert.Equal("Created", reloaded.Name);
+        Assert.Equal("disabled", reloaded.Status);
+        Assert.Equal("""{"apiKey": "k"}""", reloaded.Credentials);
+        Assert.Equal("[]", reloaded.DisabledApiKeys);
+        Assert.Equal("""["m"]""", reloaded.SupportedModels);
+        Assert.Equal("null", reloaded.ManualModels);
+        Assert.True(reloaded.AutoSyncSupportedModels);
+        Assert.Equal("gpt-*", reloaded.AutoSyncModelPattern);
+        Assert.Equal("""["t"]""", reloaded.Tags);
+        Assert.Equal("m", reloaded.DefaultTestModel);
+        Assert.Equal("""{"stream": "unlimited"}""", reloaded.Policies);
+        Assert.Equal("null", reloaded.Settings);
+        Assert.Equal(0, reloaded.OrderingWeight);
+        Assert.Equal("r", reloaded.Remark);
+        // jsonb sorts object keys by length, then bytewise.
+        Assert.Equal(
+            """[{"transport": "http", "api_format": "openai/chat_completions"}]""",
+            reloaded.Endpoints);
+    }
+
+    [Fact]
+    public async Task CreateReturnsNullWhenALiveChannelOwnsTheName()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        await SeedChannelAsync(context, name: "Taken");
+
+        var attempted = CreateRecord("Taken");
+        Assert.Null(await store.CreateAsync(attempted));
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.Equal(1, await verify.Channels.CountAsync(row => row.Name == "Taken"));
+    }
+
+    [Fact]
+    public async Task CreateAllowsAReusedNameAfterSoftDelete()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        await SeedChannelAsync(context, name: "Recycled", deletedAt: 1234);
+
+        var created = await store.CreateAsync(CreateRecord("Recycled"));
+
+        Assert.NotNull(created);
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.Equal(2, await verify.Channels.CountAsync(row => row.Name == "Recycled"));
+        Assert.Equal(1, await verify.Channels.CountAsync(row => row.Name == "Recycled" && row.DeletedAt == 0));
+    }
+
+    [Fact]
+    public async Task CreateWrapsAnInsertFailureWithTheReferencePrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var broken = CreateRecord("Broken");
+        broken.Settings = "not-json";
+
+        var failure = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.CreateAsync(broken));
+        Assert.StartsWith("failed to create channel: ", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Broken", failure.Message, StringComparison.Ordinal);
+    }
+
+    private static ChannelRecord CreateRecord(string name) => new()
+    {
+        CreatedAt = CreatedAt,
+        UpdatedAt = UpdatedAt,
+        Type = "openai",
+        Name = name,
+        Status = "disabled",
+        Credentials = "{}",
+        DisabledApiKeys = "[]",
+        SupportedModels = "[]",
+        ManualModels = "null",
+        AutoSyncModelPattern = string.Empty,
+        DefaultTestModel = string.Empty,
+        Policies = """{"stream":"unlimited"}""",
+        Settings = "null",
+        Tags = "[]",
+        Endpoints = "[]",
+    };
+
     private static async Task<ChannelRecord> SeedChannelAsync(
         AxonHubDbContext context,
         string name = "Alpha",

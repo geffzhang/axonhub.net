@@ -429,6 +429,24 @@ public sealed class AdminMutation
         return true;
     }
 
+    /// <summary>
+    /// Port of mutationResolver.CreateChannel
+    /// (axonhub.resolvers.go:193-201; biz channel.go:633-671).
+    /// </summary>
+    [GraphQLName("createChannel")]
+    public async Task<ChannelType> CreateChannelAsync(
+        CreateChannelInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var channel = await channels.CreateAsync(
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
     private static List<long> ParseGids(IReadOnlyList<string> ids)
     {
         var result = new List<long>(ids.Count);
