@@ -927,6 +927,26 @@ public sealed class ProviderQuotaStatusType
     public ChannelType Channel { get; init; } = new();
 }
 
+/// <summary>
+/// Port of <c>BulkImportChannelsResult</c> (axonhub.graphql:422-428;
+/// channel_bulk.go:474-481). <c>errors</c> is a nullable list: the reference's
+/// nil slice marshals as null, while the non-null <c>channels</c> list
+/// marshals a nil slice as [].
+/// </summary>
+[GraphQLName("BulkImportChannelsResult")]
+public sealed class BulkImportChannelsResultType
+{
+    public bool Success { get; init; }
+
+    public int Created { get; init; }
+
+    public int Failed { get; init; }
+
+    public IReadOnlyList<string>? Errors { get; init; }
+
+    public IReadOnlyList<ChannelType> Channels { get; init; } = [];
+}
+
 /// <summary>Port of the <c>Channel</c> object type (ent.graphql:407-543).</summary>
 [GraphQLName("Channel")]
 public sealed class ChannelType

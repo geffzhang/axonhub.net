@@ -126,6 +126,55 @@ public static class ChannelInputMapping
         };
     }
 
+    /// <summary>
+    /// Maps the GraphQL <c>BulkCreateChannelsInput</c> (axonhub.graphql:430-443)
+    /// to biz.BulkCreateChannelsInput (channel_bulk.go:49-63). Settings and
+    /// policies are decoded once; the service shares the same instances across
+    /// the batch, like the reference's pointer fields.
+    /// </summary>
+    public static BulkCreateChannelsCommand ToCommand(BulkCreateChannelsInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        return new BulkCreateChannelsCommand
+        {
+            Type = ChannelMapping.ToWire(input.Type),
+            Name = input.Name,
+            Tags = input.Tags?.ToList(),
+            BaseUrl = input.BaseUrl,
+            ApiKeys = input.ApiKeys.ToList(),
+            SupportedModels = input.SupportedModels.ToList(),
+            AutoSyncSupportedModels = input.AutoSyncSupportedModels,
+            DefaultTestModel = input.DefaultTestModel,
+            Settings = ToSettings(input.Settings),
+            Policies = ToPolicies(input.Policies),
+            OrderingWeight = input.OrderingWeight,
+            Remark = input.Remark,
+        };
+    }
+
+    /// <summary>
+    /// Maps the GraphQL <c>BulkImportChannelsInput</c> (axonhub.graphql:409-420)
+    /// to the biz item list (channel_bulk.go:464-472). Every list is non-null
+    /// in the schema, so an empty list stays empty.
+    /// </summary>
+    public static IReadOnlyList<BulkImportChannelItem> ToItems(BulkImportChannelsInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        return input.Channels
+            .Select(static item => new BulkImportChannelItem
+            {
+                Type = item.Type,
+                Name = item.Name,
+                BaseUrl = item.BaseUrl,
+                ApiKey = item.ApiKey,
+                SupportedModels = item.SupportedModels.ToList(),
+                DefaultTestModel = item.DefaultTestModel,
+            })
+            .ToList();
+    }
+
     private static ChannelCredentialsDraft ToCredentials(ChannelCredentialsInput input)
         => new()
         {

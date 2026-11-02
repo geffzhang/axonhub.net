@@ -21,10 +21,14 @@ public static class GraphQLSetup
             .AddType<MapScalarType>()
 
             // HotChocolate infers input-object names from the CLR type; the
-            // gqlgen SDL calls this one ChannelOrderingItem. Registering the
-            // descriptor explicitly fixes the wire name (axonhub.graphql:445).
+            // gqlgen SDL calls these ChannelOrderingItem and
+            // BulkImportChannelItem. Registering the descriptors explicitly
+            // fixes the wire names (axonhub.graphql:409, 445); the CLR suffix
+            // is only there to avoid clashing with the biz item type.
             .AddType(new InputObjectType<ChannelOrderingItemInput>(
                 descriptor => descriptor.Name("ChannelOrderingItem")))
+            .AddType(new InputObjectType<BulkImportChannelItemInput>(
+                descriptor => descriptor.Name("BulkImportChannelItem")))
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
 }

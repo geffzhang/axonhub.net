@@ -527,6 +527,15 @@ public static class ChannelMapping
             "Enum \"ChannelStatus\" cannot represent value: \"" + value + "\"");
     }
 
+    /// <summary>
+    /// Port of channel.TypeValidator's membership half (channel.go:287-293):
+    /// true when the wire spelling names a known channel type. Bulk create and
+    /// bulk import receive the type as a plain string and must reject unknown
+    /// values with the ent validator text.
+    /// </summary>
+    public static bool IsKnownChannelType(string value)
+        => ChannelTypesByWire.ContainsKey(value);
+
     public static string ToWire(ChannelTypeValue value) => ChannelTypeWires[value];
 
     public static string ToWire(ChannelStatusValue value) => ChannelStatusWires[value];

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using AxonHub.Persistence;
 
 namespace AxonHub.Api.Management;
 
@@ -21,7 +22,11 @@ public sealed class CreateChannelCommand
 
     public string Name { get; init; } = string.Empty;
 
-    public ChannelCredentialsDraft Credentials { get; init; } = new();
+    /// <summary>
+    /// Mutated by DuplicateChannel's zenmux management-key inheritance
+    /// (channel_duplicate.go:30-32), so the initializer is settable.
+    /// </summary>
+    public ChannelCredentialsDraft Credentials { get; set; } = new();
 
     public IReadOnlyList<string> SupportedModels { get; init; } = [];
 
@@ -138,6 +143,76 @@ public sealed class SaveChannelEndpointsCommand
 
     public IReadOnlyList<ChannelEndpointDraft> Endpoints { get; init; } = [];
 }
+
+/// <summary>
+/// Argument object for <see cref="ChannelLifecycleService.BulkCreateChannelsAsync"/>:
+/// biz.BulkCreateChannelsInput (channel_bulk.go:49-63). <c>orderingWeight</c> is
+/// carried by the input but ignored, because createChannel never calls
+/// <c>SetOrderingWeight</c> (C139).
+/// </summary>
+public sealed class BulkCreateChannelsCommand
+{
+    public string Type { get; init; } = string.Empty;
+
+    public string Name { get; init; } = string.Empty;
+
+    public IReadOnlyList<string>? Tags { get; init; }
+
+    public string? BaseUrl { get; init; }
+
+    public IReadOnlyList<string> ApiKeys { get; init; } = [];
+
+    public IReadOnlyList<string> SupportedModels { get; init; } = [];
+
+    public bool? AutoSyncSupportedModels { get; init; }
+
+    public string DefaultTestModel { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Shared by reference across every channel: createChannel mutates the
+    /// pointer, so later channels observe the earlier normalization.
+    /// </summary>
+    public ChannelPoliciesDraft? Policies { get; init; }
+
+    /// <summary>Shared by reference across every channel (see Policies).</summary>
+    public ChannelSettingsDraft? Settings { get; init; }
+
+    public int? OrderingWeight { get; init; }
+
+    public string? Remark { get; init; }
+}
+
+/// <summary>
+/// Port of biz.BulkImportChannelItem (channel_bulk.go:464-472). The two URL/key
+/// members are nullable because GraphQL marks them nullable; the service treats
+/// null and empty identically.
+/// </summary>
+public sealed class BulkImportChannelItem
+{
+    public string Type { get; init; } = string.Empty;
+
+    public string Name { get; init; } = string.Empty;
+
+    public string? BaseUrl { get; init; }
+
+    public string? ApiKey { get; init; }
+
+    public IReadOnlyList<string> SupportedModels { get; init; } = [];
+
+    public string DefaultTestModel { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// Port of biz.BulkImportChannelsResult (channel_bulk.go:474-481). Errors stays
+/// null when every row succeeds (Go's nil slice marshals as GraphQL null);
+/// Channels is the successfully created rows in input order.
+/// </summary>
+public sealed record BulkImportChannelsResult(
+    bool Success,
+    int Created,
+    int Failed,
+    IReadOnlyList<string>? Errors,
+    IReadOnlyList<ChannelRecord> Channels);
 
 /// <summary>
 /// Port of biz.DeleteDisabledAPIKeysResult (channel_apikey.go:280-284). Message

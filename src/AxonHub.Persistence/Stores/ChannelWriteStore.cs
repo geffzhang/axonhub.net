@@ -203,6 +203,81 @@ public interface IChannelWriteStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of BulkCreateChannels' existing-name snapshot
+    /// (channel_bulk.go:82-90): every live channel name, in storage order. The
+    /// caller builds the numbering set from it.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The query failed; the message already carries
+    /// "failed to query existing channels".
+    /// </exception>
+    Task<IReadOnlyList<string>> ListLiveNamesAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of ChannelService.DuplicateChannel's transaction
+    /// (channel_duplicate.go:17-84). Opens one transaction for the whole
+    /// mutation and runs the reference's exact order: load the live source
+    /// ("failed to get source channel"), let <paramref name="inherit"/> apply
+    /// the endpoint/credential fallbacks, check the live name ("failed to
+    /// check channel name"), build the validated record, insert it ("failed to
+    /// create channel"), then run <paramref name="afterInsert"/> (price copy
+    /// and ensure) inside the same transaction.
+    /// </summary>
+    /// <returns>
+    /// Null when a live channel already owns <paramref name="name"/>; the
+    /// caller raises the coded duplicate-name error. A missing source is a
+    /// store failure so the reference's prefix survives.
+    /// </returns>
+    /// <exception cref="StoreFailureException">
+    /// The source read, name check or insert failed; the message already
+    /// carries the reference prefix.
+    /// </exception>
+    Task<ChannelRecord?> DuplicateAsync(
+        long sourceId,
+        string name,
+        Action<ChannelRecord> inherit,
+        Func<ChannelRecord> buildRecord,
+        Func<long, CancellationToken, Task>? afterInsert = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of BulkCreateChannels' transaction (channel_bulk.go:100-155): runs
+    /// <paramref name="beforeInsert"/> (the once-per-batch price-template
+    /// resolution) before the first insert, then builds one record per factory,
+    /// inserts it and runs <paramref name="afterEachInsert"/> with the same
+    /// transaction. Every insert failure is wrapped with
+    /// "failed to create channel '&lt;name&gt;'" like the reference's loop; a
+    /// failure in any step rolls the whole batch back.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The template resolution or an insert failed; the message already carries
+    /// the reference prefix.
+    /// </exception>
+    Task<IReadOnlyList<ChannelRecord>> CreateManyAsync(
+        IReadOnlyList<Func<ChannelRecord>> recordFactories,
+        Func<CancellationToken, Task>? beforeInsert = null,
+        Func<ChannelRecord, CancellationToken, Task>? afterEachInsert = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of one BulkImportChannels row (channel_bulk.go:518-539): a direct
+    /// ent <c>Channel.Create()</c> with no name pre-check and no normalization,
+    /// followed by the row's price ensure in the same transaction. The failing
+    /// row's raw error text is what the caller appends to the result, so the
+    /// store never adds a prefix. The context's change tracker is cleared after
+    /// a rollback so the next row starts from the reference's clean state.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The insert or <paramref name="afterInsert"/> failed; the message is the
+    /// unwrapped provider/ensure error.
+    /// </exception>
+    Task<ChannelRecord> ImportCreateAsync(
+        ChannelRecord channel,
+        Func<long, CancellationToken, Task>? afterInsert = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of ChannelService.UpdateChannelStatus: sets the status and clears the
     /// auto-disable markers. Returns null when the live row does not exist.
     /// </summary>
@@ -632,7 +707,11 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new StoreFailureException("failed to create channel: " + ex.Message, ex);
+            // ent's Save returns the driver error verbatim; EF wraps it in a
+            // DbUpdateException, so the reference-visible text is the base one.
+            throw new StoreFailureException(
+                "failed to create channel: " + ex.GetBaseException().Message,
+                ex);
         }
 
         if (afterInsert is not null)
@@ -645,6 +724,223 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return channel;
+    }
+
+    public async Task<IReadOnlyList<string>> ListLiveNamesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Channel.Query().Select(channel.FieldName).All(ctx): the
+            // SoftDeleteMixin predicate keeps only live rows.
+            return await db.Channels
+                .AsNoTracking()
+                .Where(row => row.DeletedAt == 0)
+                .Select(row => row.Name)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to query existing channels: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task<ChannelRecord?> DuplicateAsync(
+        long sourceId,
+        string name,
+        Action<ChannelRecord> inherit,
+        Func<ChannelRecord> buildRecord,
+        Func<long, CancellationToken, Task>? afterInsert = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(inherit);
+        ArgumentNullException.ThrowIfNull(buildRecord);
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        ChannelRecord source;
+        try
+        {
+            // db.Channel.Get applies the SoftDeleteMixin predicate; ent's
+            // not-found error flows through the duplicate prefix.
+            source = await db.Channels
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    row => row.Id == sourceId && row.DeletedAt == 0,
+                    cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new StoreFailureException(
+                    "failed to get source channel: ent: channel not found",
+                    new InvalidOperationException("ent: channel not found"));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException
+            and not StoreFailureException)
+        {
+            throw new StoreFailureException(
+                "failed to get source channel: " + ex.Message,
+                ex);
+        }
+
+        // Endpoint and zenmux-credential inheritance happen before the name
+        // check, exactly like channel_duplicate.go:27-32.
+        inherit(source);
+
+        bool exists;
+        try
+        {
+            exists = await db.Channels
+                .AnyAsync(
+                    row => row.Name == name && row.DeletedAt == 0,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to check channel name: " + ex.Message,
+                ex);
+        }
+
+        if (exists)
+        {
+            return null;
+        }
+
+        // createChannel's validators run only after the duplicate-name check.
+        var channel = buildRecord();
+
+        try
+        {
+            db.Channels.Add(channel);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // ent's Save returns the driver error verbatim; EF wraps it in a
+            // DbUpdateException, so the reference-visible text is the base one.
+            throw new StoreFailureException(
+                "failed to create channel: " + ex.GetBaseException().Message,
+                ex);
+        }
+
+        if (afterInsert is not null)
+        {
+            // Price-copy and ensure failures carry their own reference
+            // prefixes and roll the channel insert back.
+            await afterInsert(channel.Id, cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return channel;
+    }
+
+    public async Task<IReadOnlyList<ChannelRecord>> CreateManyAsync(
+        IReadOnlyList<Func<ChannelRecord>> recordFactories,
+        Func<CancellationToken, Task>? beforeInsert = null,
+        Func<ChannelRecord, CancellationToken, Task>? afterEachInsert = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(recordFactories);
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // resolveChannelModelPriceTemplates runs once at the top of the
+        // reference transaction (channel_bulk.go:101-104), before the first
+        // createChannel.
+        if (beforeInsert is not null)
+        {
+            await beforeInsert(cancellationToken).ConfigureAwait(false);
+        }
+
+        var created = new List<ChannelRecord>(recordFactories.Count);
+        foreach (var factory in recordFactories)
+        {
+            // createChannel validation/normalization is deferred to this
+            // point so it runs in the reference's per-channel order; a
+            // validation failure aborts the batch before the insert.
+            var channel = factory();
+
+            try
+            {
+                db.Channels.Add(channel);
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // BulkCreateChannels wraps every createChannel failure with
+                // the generated name (channel_bulk.go:134-137). The inner
+                // prefix comes from createChannel's own Save wrapping.
+                throw new StoreFailureException(
+                    "failed to create channel '" + channel.Name + "': "
+                        + "failed to create channel: " + ex.GetBaseException().Message,
+                    ex);
+            }
+
+            if (afterEachInsert is not null)
+            {
+                // The caller wraps applyChannelModelPriceTemplates failures
+                // with "failed to auto-configure prices for channel '...'".
+                await afterEachInsert(channel, cancellationToken).ConfigureAwait(false);
+            }
+
+            created.Add(channel);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return created;
+    }
+
+    public async Task<ChannelRecord> ImportCreateAsync(
+        ChannelRecord channel,
+        Func<long, CancellationToken, Task>? afterInsert = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        try
+        {
+            // Channel.Create().Save(ctx): no name pre-check, no validators.
+            db.Channels.Add(channel);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            if (afterInsert is not null)
+            {
+                await afterInsert(channel.Id, cancellationToken).ConfigureAwait(false);
+            }
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return channel;
+        }
+        catch (StoreFailureException)
+        {
+            // The row's ensure already carries the reference message
+            // ("failed to auto-configure channel model price: ..."); the caller
+            // appends it verbatim.
+            db.ChangeTracker.Clear();
+            throw;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The reference's per-row transaction leaves the ent client clean;
+            // EF keeps added entities tracked, which would poison the next row.
+            db.ChangeTracker.Clear();
+
+            // BulkImportChannels appends err.Error() verbatim, so the row
+            // carries the driver text rather than EF's wrapper.
+            throw new StoreFailureException(ex.GetBaseException().Message, ex);
+        }
     }
 
     public async Task<ChannelRecord?> UpdateStatusAsync(

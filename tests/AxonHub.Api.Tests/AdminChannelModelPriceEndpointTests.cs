@@ -895,5 +895,25 @@ public sealed class AdminChannelModelPriceEndpointTests : IAsyncLifetime
             ChannelPriceReferenceIdFactory referenceIdFactory,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException("auto-pricing is covered by the channel lifecycle tests");
+
+        public Task<IReadOnlyList<ChannelModelPriceTemplate>> ResolveAutoPriceTemplatesAsync(
+            IReadOnlyList<string> modelIds,
+            ModelCardPriceJsonFactory modelCardToPriceJson,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("auto-pricing is covered by the channel lifecycle tests");
+
+        public Task<bool> ApplyAutoPriceTemplatesAsync(
+            long channelId,
+            IReadOnlyList<ChannelModelPriceTemplate> templates,
+            ChannelPriceReferenceIdFactory referenceIdFactory,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("auto-pricing is covered by the channel lifecycle tests");
+
+        public Task CopyChannelPricesAsync(
+            long sourceChannelId,
+            long targetChannelId,
+            ChannelPriceReferenceIdFactory referenceIdFactory,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("price copying is covered by the channel lifecycle tests");
     }
 }

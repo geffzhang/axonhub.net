@@ -3330,6 +3330,82 @@ CalculatePriceChanges 三组测试，没有 `ensureChannelModelPrices` 单测，
 错误文案、非有限值与 decimal 精度边界）。差异总数 151 增至 152（95 接受 / 22 缺口 /
 35 已解决）。
 
+## 75. 管理面 channels 重复 / 批量创建 / 批量导入切片（18 + 18 例，2026-11-02）
+
+参照路线：`internal/server/gql/axonhub.resolvers.go:179-182`（duplicateChannel）、
+`:184-186`（bulkCreateChannels）、`:375-388`（bulkImportChannels）；
+`internal/server/biz/channel_duplicate.go:17-84`（源加载前缀、端点与 zenmux 管理
+key 继承先于重名检查、createChannel 后在同一事务内逐行复制价格并 ensure、提交后
+`reloadChannelsAfterCommit`）；`internal/server/biz/channel_bulk.go:67-161`（事务前
+校验顺序、live 名称快照、编号命名与共享计数器、tags 回退、事务内一次
+resolveChannelModelPriceTemplates、逐通道 create / ensure 的错误前缀）与
+`:484-568`（逐行校验、raw ent builder、每行独立事务与 ensure、失败行追加
+`Row %d (%s): %s` 后继续）；`internal/ent/schema/channel.go` 的列默认值与
+`channels_by_name` 唯一索引（软删参与）。
+
+本次新增 `IChannelWriteStore` 的四个写入面：
+
+- `ListLiveNamesAsync`：只取 live 行的名称集合，失败前缀
+  `failed to query existing channels:`（bulk create 的事务前快照）。
+- `DuplicateAsync(sourceId, name, inherit, buildRecord, afterInsert)`：单事务；
+  读取 live 源行（缺失为 `failed to get source channel: ent: channel not found`），
+  先运行 `inherit`（输入端点为 null 时继承源端点；双方均为 zenmux 且输入
+  managementApiKey 为空时继承源 key），再做 live 重名查询（命中返回 null，由服务层
+  抛 `DUPLICATE_NAME`，因此重名判定先于 createChannel 的字段校验），随后才
+  `buildRecord`；插入失败包 `failed to create channel: <驱动文本>`；`afterInsert`
+  在提交前运行价格复制与 ensure，异常使通道与价格一起回滚。
+- `CreateManyAsync(factories, beforeInsert, afterEachInsert)`：单事务；
+  `beforeInsert` 在第一个插入前运行一次（resolve 模板）；逐工厂构建并插入，插入
+  失败包 `failed to create channel '<name>': failed to create channel: <驱动文本>`，
+  工厂校验失败原样上抛；`afterEachInsert` 在提交前逐通道运行（apply 模板），任一
+  失败回滚整批。
+- `ImportCreateAsync(record, afterInsert)`：每行自开事务；不做应用层重名预检（与
+  参照一样由唯一索引裁决）；插入失败直接暴露驱动文本；`afterInsert` 运行 ensure，
+  失败回滚该行并保留 ensure 的完整前缀。
+
+`ChannelLifecycleService` 三个方法逐条复刻参照：
+
+- `DuplicateChannelAsync`：存储层重名返回 null 后抛 `CodedException`（code
+  `DUPLICATE_NAME`、resource channel、field name），文案
+  `channel name '<name>' already exists`。
+- `BulkCreateChannelsAsync`：事务前顺序固定为 `no API keys provided` →
+  `base URL is required` → 类型校验
+  `invalid channel type '<type>': channel: invalid enum value for type field: "<type>"`
+  → live 名称快照；名称格式 `<name> - (<counter>)` 且跳过快照中已占用的编号，两个
+  新名称共享同一计数器；空 tags 回退 `[name]`；每个通道的凭据为
+  `{"apiKeys":[<key>]}`；所有通道共享同一 policies / settings 实例；事务内先
+  resolve 一次模板、再逐通道创建并 apply，错误前缀分别为
+  `failed to create channel '<name>':` 与
+  `failed to auto-configure prices for channel '<name>':`。
+- `BulkImportChannelsAsync`：逐行校验顺序为类型（`Row N: Invalid channel type
+  '<type>'`）、base URL（`Row N (<name>): Base URL is required`）、API key
+  （`Row N (<name>): API Key is required`）；`ToImportRecord` 复刻 raw ent
+  builder（status disabled、空列表列、policies `{"stream":"unlimited"}`、settings
+  `{"modelMappings":[]}`、credentials `{"apiKey":"<key>"}`、orderingWeight 0）；
+  每行事务内插入并 ensure；失败追加 `Row N (<name>): <错误文本>` 后继续；
+  `Success = failed == 0`，无失败时 `Errors` 为 null、`Channels` 为成功行列表。
+
+GraphQL 接线：`duplicateChannel(sourceID: ID!, input: CreateChannelInput!)`、
+`bulkCreateChannels(input: BulkCreateChannelsInput!)`（返回 `[Channel!]!`）、
+`bulkImportChannels(input: BulkImportChannelsInput!)`（返回
+`BulkImportChannelsResult!`）。HotChocolate 的输入对象命名约定会在 CLR 名后追加
+`Input`，因此 `BulkImportChannelItemInput` 通过显式 `InputObjectType` 注册为 SDL 名
+`BulkImportChannelItem`（与 `ChannelOrderingItem` 同一处理）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| GraphQL 三个变更：zenmux 端点 / 管理 key 继承与顺序、调用方覆盖、重名先于字段校验、自由名后校验、源缺失、复制失败整体回滚、编号跳过 live 名与 tags 回退、模板只 resolve 一次、共享 tags / settings 与 orderingWeight 0、空 key / 空 URL、未知类型、校验包装、apply 失败回滚、导入行序 / 默认值 / 失败后继续 / ensure 失败、全成功 `errors=null`、schema 顺序与类型名 | `tests/AxonHub.Api.Tests/AdminChannelDuplicateBulkEndpointTests.cs` | 18 |
+| 持久层写入面：live 名称、duplicate 继承先于重名检查、缺失 / 软删源前缀、通道与价格同事务提交、复制失败回滚、插入失败前缀、批量 resolve 一次与逐通道回调、批量失败回滚、工厂校验原样传播、import 跳过预检并保留驱动文本、ensure 失败回滚该行 | `tests/AxonHub.Persistence.Tests/ChannelWriteStoreTests.cs`（11 个 ListLiveNames / Duplicate* / CreateMany* / ImportCreate* 用例） | 11 |
+| 持久层价格复制与自动定价：Resolve 过滤与顺序、模板卡失败前缀、Apply 新建行与版本共用 `now`、既有行与版本不动、apply 失败回滚并入调用方事务、Copy 复制 live 行并生成新 reference、copy 失败回滚 | `tests/AxonHub.Persistence.Tests/ChannelModelPriceStoreTests.cs`（7 个 Resolve* / Apply* / Copy* 用例） | 7 |
+
+`AxonHub.Api.Tests` 由 1524 增至 1542（+18），`AxonHub.Persistence.Tests` 由 146
+增至 164（+11 写入面 + 7 价格），`AxonHub.Llm.Tests` 保持 3020，`AxonHub.Grains.Tests`
+保持 92；四个项目合计 4782 增至 4818，0 失败 0 跳过。
+
+差异：新增 C153（插入失败时 Npgsql / EF 的驱动错误文本无法复刻 ent / pgx 文本，
+外层前缀与行号形状保持一致）；更新 C014（重复 / 批量创建 / 批量导入已接入，剩
+测试通道与模型同步）与覆盖缺口表。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -3342,7 +3418,7 @@ CalculatePriceChanges 三组测试，没有 `ensureChannelModelPrices` 单测，
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，但其余通道写操作（重复、批量创建、测试、模型同步）、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，但其余通道写操作（测试、模型同步）、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），其余通道写操作未移植（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |

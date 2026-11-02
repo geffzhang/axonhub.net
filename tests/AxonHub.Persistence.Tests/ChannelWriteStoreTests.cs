@@ -1291,6 +1291,330 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         Assert.Equal("Alpha", reloaded.Name);
     }
 
+    [Fact]
+    public async Task ListLiveNamesReturnsOnlyLiveRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        await SeedChannelAsync(context, name: "Alpha");
+        await SeedChannelAsync(context, name: "Bravo");
+        await SeedChannelAsync(context, name: "Gone", deletedAt: 1234);
+
+        var names = await store.ListLiveNamesAsync();
+
+        Assert.Equal(2, names.Count);
+        Assert.Contains("Alpha", names);
+        Assert.Contains("Bravo", names);
+        Assert.DoesNotContain("Gone", names);
+    }
+
+    [Fact]
+    public async Task DuplicateInheritsBeforeTheNameCheckAndSkipsTheBuild()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var source = await SeedChannelAsync(
+            context,
+            name: "Source",
+            type: "zenmux",
+            credentials: """{"managementApiKey":"mgmt"}""",
+            endpoints: """[{"api_format":"openai/chat_completions"}]""");
+        await SeedChannelAsync(context, name: "Taken");
+
+        ChannelRecord? inherited = null;
+        var buildRan = false;
+        var duplicate = await store.DuplicateAsync(
+            source.Id,
+            "Taken",
+            loaded => inherited = loaded,
+            () =>
+            {
+                buildRan = true;
+                return CreateRecord("Taken");
+            });
+
+        // The live-name check wins and createChannel never runs, but the
+        // inheritance callback already saw the loaded source
+        // (channel_duplicate.go:27-45).
+        Assert.Null(duplicate);
+        Assert.False(buildRan);
+        Assert.NotNull(inherited);
+        Assert.Equal(source.Id, inherited!.Id);
+        Assert.Equal("Source", inherited.Name);
+        Assert.Contains("openai/chat_completions", inherited.Endpoints);
+        Assert.Contains("managementApiKey", inherited.Credentials);
+    }
+
+    [Fact]
+    public async Task DuplicateOnAMissingOrSoftDeletedSourceKeepsTheReferencePrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var deleted = await SeedChannelAsync(context, name: "Gone", deletedAt: 55);
+
+        var missing = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.DuplicateAsync(424242, "Copy", _ => { }, () => CreateRecord("Copy")));
+        Assert.Equal("failed to get source channel: ent: channel not found", missing.Message);
+
+        var softDeleted = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.DuplicateAsync(deleted.Id, "Copy", _ => { }, () => CreateRecord("Copy")));
+        Assert.Equal("failed to get source channel: ent: channel not found", softDeleted.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.False(await verify.Channels.AnyAsync(row => row.Name == "Copy"));
+    }
+
+    [Fact]
+    public async Task DuplicateCommitsTheChannelAndItsCopiedPricesTogether()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+        var prices = new ChannelModelPriceStore(context);
+
+        var source = await SeedChannelAsync(context, name: "Source");
+        await prices.CreateAsync(NewPrice(source.Id, "gpt-4o", "source-ref"));
+
+        long? hookChannelId = null;
+        var created = await store.DuplicateAsync(
+            source.Id,
+            "Copy",
+            _ => { },
+            () => CreateRecord("Copy"),
+            async (channelId, token) =>
+            {
+                hookChannelId = channelId;
+                await prices.CopyChannelPricesAsync(source.Id, channelId, () => "copy-ref", token);
+            });
+
+        Assert.NotNull(created);
+        Assert.Equal(created.Id, hookChannelId);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var copied = await verify.ChannelModelPrices.SingleAsync(row => row.ChannelId == created.Id);
+        Assert.Equal("gpt-4o", copied.ModelId);
+        Assert.Equal("copy-ref", copied.ReferenceId);
+        Assert.True(await verify.ChannelModelPriceVersions.AnyAsync(
+            row => row.ChannelModelPriceId == copied.Id && row.Status == "active"));
+
+        // The source row is untouched.
+        Assert.Equal(1, await verify.ChannelModelPrices.CountAsync(row => row.ChannelId == source.Id));
+    }
+
+    [Fact]
+    public async Task DuplicateRollsBackTheChannelWhenThePriceCopyFails()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+        var prices = new ChannelModelPriceStore(context);
+
+        var source = await SeedChannelAsync(context, name: "Source");
+        await prices.CreateAsync(NewPrice(source.Id, "gpt-4o", "source-ref-a"));
+        await prices.CreateAsync(NewPrice(source.Id, "gpt-4o-mini", "source-ref-b"));
+
+        // The copy generates a reference id per row; a constant id collides on
+        // the second insert and aborts the whole duplicate transaction.
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.DuplicateAsync(
+                source.Id,
+                "Copy",
+                _ => { },
+                () => CreateRecord("Copy"),
+                (channelId, token) => prices.CopyChannelPricesAsync(
+                    source.Id,
+                    channelId,
+                    () => "colliding-ref",
+                    token)));
+
+        Assert.StartsWith(
+            "failed to copy channel model price: failed to create channel model price: "
+                + "23505: duplicate key value violates unique constraint",
+            error.Message,
+            StringComparison.Ordinal);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.False(await verify.Channels.AnyAsync(row => row.Name == "Copy"));
+        Assert.False(await verify.ChannelModelPrices.AnyAsync(row => row.ReferenceId == "colliding-ref"));
+        // The source prices are the only rows left.
+        Assert.Equal(2, await verify.ChannelModelPrices.CountAsync());
+    }
+
+    [Fact]
+    public async Task DuplicateWrapsAnInsertFailureWithTheCreatePrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var source = await SeedChannelAsync(context, name: "Source");
+        var broken = CreateRecord("Broken");
+        broken.Settings = "not-json";
+
+        var failure = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.DuplicateAsync(source.Id, "Broken", _ => { }, () => broken));
+
+        // ent's Save surfaces the driver error; EF's DbUpdateException wrapper
+        // must not leak into the reference-visible prefix.
+        Assert.StartsWith(
+            "failed to create channel: 22P02: invalid input syntax for type json",
+            failure.Message,
+            StringComparison.Ordinal);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.False(await verify.Channels.AnyAsync(row => row.Name == "Broken"));
+    }
+
+    [Fact]
+    public async Task CreateManyResolvesOnceAndRunsTheHookPerChannel()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var order = new List<string>();
+        var created = await store.CreateManyAsync(
+            [() => CreateRecord("One"), () => CreateRecord("Two")],
+            _ =>
+            {
+                order.Add("before");
+                return Task.CompletedTask;
+            },
+            (channel, _) =>
+            {
+                Assert.True(channel.Id > 0);
+                order.Add("after:" + channel.Name);
+                return Task.CompletedTask;
+            });
+
+        // resolveChannelModelPriceTemplates precedes the first insert, and the
+        // apply hook runs after each insert (channel_bulk.go:100-155).
+        Assert.Equal(["before", "after:One", "after:Two"], order);
+        Assert.Equal(["One", "Two"], created.Select(static channel => channel.Name).ToArray());
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.Equal(2, await verify.Channels.CountAsync(row => row.Name == "One" || row.Name == "Two"));
+    }
+
+    [Fact]
+    public async Task CreateManyWrapsAnInsertFailureAndRollsBackTheBatch()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.CreateManyAsync(
+                [() => CreateRecord("Dup"), () => CreateRecord("Dup")]));
+
+        // createChannel and BulkCreateChannels add their prefixes around the
+        // driver text, not around EF's DbUpdateException message.
+        Assert.StartsWith(
+            "failed to create channel 'Dup': failed to create channel: "
+                + "23505: duplicate key value violates unique constraint",
+            error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("channels_by_name", error.Message, StringComparison.Ordinal);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.False(await verify.Channels.AnyAsync(row => row.Name == "Dup"));
+    }
+
+    [Fact]
+    public async Task CreateManyPropagatesFactoryValidationFailuresUnwrapped()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.CreateManyAsync(
+                [
+                    () => CreateRecord("One"),
+                    () => throw new InvalidOperationException(
+                        "failed to create channel 'Two': invalid rate limit: rpm must be >= 0"),
+                ]));
+
+        // The service already wrapped createChannel's validator error with the
+        // generated name; the store must not touch it (channel_bulk.go:134-137).
+        Assert.Equal(
+            "failed to create channel 'Two': invalid rate limit: rpm must be >= 0",
+            error.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.False(await verify.Channels.AnyAsync(row => row.Name == "One"));
+    }
+
+    [Fact]
+    public async Task ImportCreateSkipsTheNamePreCheckAndKeepsTheRawDriverError()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        await SeedChannelAsync(context, name: "Taken");
+
+        // Channel.Create().Save never checks the live name first
+        // (channel_bulk.go:520-527); the unique index reports the collision.
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.ImportCreateAsync(CreateRecord("Taken")));
+        Assert.StartsWith(
+            "23505: duplicate key value violates unique constraint",
+            error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("channels_by_name", error.Message, StringComparison.Ordinal);
+
+        // The failed row left no tracked entity behind, so the next row in the
+        // import starts from a clean context.
+        var created = await store.ImportCreateAsync(CreateRecord("Fresh"));
+        Assert.Equal("Fresh", created.Name);
+        Assert.True(created.Id > 0);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.True(await verify.Channels.AnyAsync(row => row.Name == "Fresh"));
+    }
+
+    [Fact]
+    public async Task ImportCreateRollsBackTheRowWhenTheEnsureFails()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.ImportCreateAsync(
+                CreateRecord("HookImport"),
+                (_, _) => throw new StoreFailureException(
+                    "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+                    new InvalidOperationException("boom"))));
+
+        // BulkImportChannels appends the ensure error verbatim; the store must
+        // not collapse it to the inner exception's text.
+        Assert.Equal(
+            "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+            error.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.False(await verify.Channels.AnyAsync(row => row.Name == "HookImport"));
+    }
+
     private static ChannelRecord CreateRecord(string name) => new()
     {
         CreatedAt = CreatedAt,
@@ -1309,6 +1633,20 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         Tags = "[]",
         Endpoints = "[]",
     };
+
+    private static ChannelModelPriceRecord NewPrice(
+        long channelId,
+        string modelId,
+        string referenceId)
+        => new()
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            ChannelId = channelId,
+            ModelId = modelId,
+            Price = """{"items":[]}""",
+            ReferenceId = referenceId,
+        };
 
     private static async Task<ChannelRecord> SeedChannelAsync(
         AxonHubDbContext context,

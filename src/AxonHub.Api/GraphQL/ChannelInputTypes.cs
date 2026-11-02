@@ -390,3 +390,64 @@ public sealed class SaveChannelEndpointsInput
 
     public IReadOnlyList<ChannelEndpointInput> Endpoints { get; set; } = [];
 }
+
+/// <summary>
+/// Port of <c>BulkCreateChannelsInput</c> (axonhub.graphql:430-443;
+/// channel_bulk.go:49-63). Nullable list fields keep nil distinct from an
+/// explicit empty list; the service applies the base-name tag fallback.
+/// </summary>
+public sealed class BulkCreateChannelsInput
+{
+    public ChannelTypeValue Type { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public IReadOnlyList<string>? Tags { get; set; }
+
+    [GraphQLName("baseURL")]
+    public string? BaseUrl { get; set; }
+
+    public IReadOnlyList<string> ApiKeys { get; set; } = [];
+
+    public IReadOnlyList<string> SupportedModels { get; set; } = [];
+
+    public bool? AutoSyncSupportedModels { get; set; }
+
+    public string DefaultTestModel { get; set; } = string.Empty;
+
+    public ChannelSettingsInput? Settings { get; set; }
+
+    public ChannelPoliciesInput? Policies { get; set; }
+
+    public int? OrderingWeight { get; set; }
+
+    public string? Remark { get; set; }
+}
+
+/// <summary>
+/// Port of <c>BulkImportChannelItem</c> (axonhub.graphql:409-416). The type
+/// stays a string because the schema declares <c>String!</c>; the service runs
+/// the ent type validator itself.
+/// </summary>
+[GraphQLName("BulkImportChannelItem")]
+public sealed class BulkImportChannelItemInput
+{
+    public string Type { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    [GraphQLName("baseURL")]
+    public string? BaseUrl { get; set; }
+
+    public string? ApiKey { get; set; }
+
+    public IReadOnlyList<string> SupportedModels { get; set; } = [];
+
+    public string DefaultTestModel { get; set; } = string.Empty;
+}
+
+/// <summary>Port of <c>BulkImportChannelsInput</c> (axonhub.graphql:418-420).</summary>
+public sealed class BulkImportChannelsInput
+{
+    public IReadOnlyList<BulkImportChannelItemInput> Channels { get; set; } = [];
+}

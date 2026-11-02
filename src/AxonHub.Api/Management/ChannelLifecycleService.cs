@@ -41,6 +41,59 @@ public sealed class ChannelLifecycleService(
     {
         ArgumentNullException.ThrowIfNull(command);
 
+        var record = PrepareCreate(command);
+
+        ChannelRecord? created;
+        try
+        {
+            // CreateChannel runs ensureChannelModelPrices inside the create
+            // transaction (channel.go:647-660): the channel's supported models
+            // are priced from the model library before the commit.
+            created = await channels.CreateAsync(
+                    record,
+                    (channelId, token) => prices.EnsureAutoPricesAsync(
+                        channelId,
+                        command.SupportedModels,
+                        ModelCardPricing.ToPriceJson,
+                        ChannelModelPriceService.GenerateReferenceId,
+                        token),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+
+        if (created is null)
+        {
+            throw new CodedException(
+                CodedException.DuplicateName,
+                $"channel name '{command.Name}' already exists",
+                new Dictionary<string, object?>
+                {
+                    ["resource"] = "channel",
+                    ["field"] = "name",
+                    ["value"] = command.Name,
+                });
+        }
+
+        // The reference reloads its in-memory channel cache here; the port
+        // builds limiters lazily, so there is nothing to refresh.
+        return created;
+    }
+
+    /// <summary>
+    /// Port of the validation/normalization half of createChannel
+    /// (channel.go:527-631), shared by create, duplicate, bulk create and bulk
+    /// import. It mutates the command exactly like the reference (cookie
+    /// canonicalization, xai rewrite, settings normalizers). Bulk create hands
+    /// the same settings/policies instances to every channel, so these
+    /// mutations accumulate across the batch like the reference's shared
+    /// pointers.
+    /// </summary>
+    private ChannelRecord PrepareCreate(CreateChannelCommand command)
+    {
         // normalizeCommandCodeQuotaCookieSettings: canonicalize the browser
         // cookie on Command Code channels, clear the block everywhere else.
         var error = ChannelValidation.NormalizeCommandCodeQuotaCookieSettings(
@@ -164,22 +217,51 @@ public sealed class ChannelLifecycleService(
             throw new InvalidOperationException(error);
         }
 
-        var record = ChannelWriteSerialization.ToRecord(command, DateTime.UtcNow);
+        return ChannelWriteSerialization.ToRecord(command, DateTime.UtcNow);
+    }
 
-        ChannelRecord? created;
+    /// <summary>
+    /// Port of ChannelService.DuplicateChannel (channel_duplicate.go:17-84):
+    /// loads the source in the same transaction, inherits its endpoints when
+    /// the input omits them and its zenmux management key when both sides are
+    /// zenmux types, checks the live name, creates the channel, copies every
+    /// current price with a fresh reference ID and runs the model-library
+    /// ensure. Any failure rolls the whole transaction back.
+    /// </summary>
+    public async Task<ChannelRecord> DuplicateAsync(
+        long sourceId,
+        CreateChannelCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        ChannelRecord? duplicated;
         try
         {
-            // CreateChannel runs ensureChannelModelPrices inside the create
-            // transaction (channel.go:647-660): the channel's supported models
-            // are priced from the model library before the commit.
-            created = await channels.CreateAsync(
-                    record,
-                    (channelId, token) => prices.EnsureAutoPricesAsync(
-                        channelId,
-                        command.SupportedModels,
-                        ModelCardPricing.ToPriceJson,
-                        ChannelModelPriceService.GenerateReferenceId,
-                        token),
+            duplicated = await channels.DuplicateAsync(
+                    sourceId,
+                    command.Name,
+                    source => ApplyDuplicateInheritance(source, command),
+                    () => PrepareCreate(command),
+                    async (channelId, token) =>
+                    {
+                        // createChannelModelPrice per source row, then
+                        // ensureChannelModelPrices (channel_duplicate.go:50-68).
+                        await prices.CopyChannelPricesAsync(
+                                sourceId,
+                                channelId,
+                                ChannelModelPriceService.GenerateReferenceId,
+                                token)
+                            .ConfigureAwait(false);
+
+                        await prices.EnsureAutoPricesAsync(
+                                channelId,
+                                command.SupportedModels,
+                                ModelCardPricing.ToPriceJson,
+                                ChannelModelPriceService.GenerateReferenceId,
+                                token)
+                            .ConfigureAwait(false);
+                    },
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -188,7 +270,7 @@ public sealed class ChannelLifecycleService(
             throw new InvalidOperationException(ex.Message, ex);
         }
 
-        if (created is null)
+        if (duplicated is null)
         {
             throw new CodedException(
                 CodedException.DuplicateName,
@@ -201,9 +283,292 @@ public sealed class ChannelLifecycleService(
                 });
         }
 
-        // The reference reloads its in-memory channel cache here; the port
-        // builds limiters lazily, so there is nothing to refresh.
+        return duplicated;
+    }
+
+    /// <summary>
+    /// Port of DuplicateChannel's input fallbacks (channel_duplicate.go:27-32).
+    /// Source JSON is decoded here because the port's ent read leaves the
+    /// columns raw; decode failures carry the source-read prefix, exactly like
+    /// ent scanning the source entity.
+    /// </summary>
+    private static void ApplyDuplicateInheritance(
+        ChannelRecord source,
+        CreateChannelCommand command)
+    {
+        if (command.Endpoints is null)
+        {
+            try
+            {
+                command.Endpoints = ChannelWriteSerialization.ParseEndpoints(source.Endpoints);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to get source channel: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (!ChannelValidation.IsZenmuxChannelType(source.Type)
+            || !ChannelValidation.IsZenmuxChannelType(command.Type)
+            || !string.IsNullOrEmpty(command.Credentials.ManagementApiKey))
+        {
+            return;
+        }
+
+        ChannelCredentialsDraft sourceCredentials;
+        try
+        {
+            sourceCredentials = ChannelWriteSerialization.ParseCredentials(source.Credentials);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get source channel: " + ex.Message,
+                ex);
+        }
+
+        // Go copies the string (empty included); the draft stores null for an
+        // empty key so the omitempty wire shape survives.
+        command.Credentials.ManagementApiKey =
+            string.IsNullOrEmpty(sourceCredentials.ManagementApiKey)
+                ? null
+                : sourceCredentials.ManagementApiKey;
+    }
+
+    /// <summary>
+    /// Port of ChannelService.BulkCreateChannels (channel_bulk.go:67-161):
+    /// validates before opening the transaction, snapshots every live name,
+    /// numbers the generated names while skipping existing ones, resolves the
+    /// price templates once inside the transaction, then creates and prices
+    /// one channel per API key. The whole batch commits or rolls back as one.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelRecord>> BulkCreateChannelsAsync(
+        BulkCreateChannelsCommand input,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        if (input.ApiKeys.Count == 0)
+        {
+            throw new InvalidOperationException("no API keys provided");
+        }
+
+        if (input.BaseUrl is null)
+        {
+            throw new InvalidOperationException("base URL is required");
+        }
+
+        if (!ChannelMapping.IsKnownChannelType(input.Type))
+        {
+            // channel.TypeValidator text (ent/channel/channel.go:287-293).
+            throw new InvalidOperationException(
+                "invalid channel type '" + input.Type + "': "
+                    + "channel: invalid enum value for type field: "
+                    + GoCast.GoQuote(input.Type));
+        }
+
+        IReadOnlyList<string> liveNames;
+        try
+        {
+            liveNames = await channels.ListLiveNamesAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+
+        var existingNames = new HashSet<string>(liveNames, StringComparer.Ordinal);
+
+        // All channels use the numbered format "base - (1)", "base - (2)",
+        // and skip any counter already taken by a live channel
+        // (channel_bulk.go:92-116).
+        var counter = 1;
+        var names = new List<string>(input.ApiKeys.Count);
+        foreach (var _ in input.ApiKeys)
+        {
+            var channelName = input.Name + " - (" + counter + ")";
+            while (existingNames.Contains(channelName))
+            {
+                counter++;
+                channelName = input.Name + " - (" + counter + ")";
+            }
+
+            counter++;
+            existingNames.Add(channelName);
+            names.Add(channelName);
+        }
+
+        // len(tags)==0 falls back to the base name, covering both an omitted
+        // list and an explicit empty one (channel_bulk.go:95-98).
+        IReadOnlyList<string> tagsToUse =
+            input.Tags is { Count: > 0 } ? input.Tags : [input.Name];
+
+        var recordFactories = new List<Func<ChannelRecord>>(input.ApiKeys.Count);
+        for (var index = 0; index < input.ApiKeys.Count; index++)
+        {
+            var apiKey = input.ApiKeys[index];
+            var channelName = names[index];
+            var command = new CreateChannelCommand
+            {
+                Type = input.Type,
+                BaseUrl = input.BaseUrl,
+                Name = channelName,
+                Credentials = new ChannelCredentialsDraft { ApiKeys = [apiKey] },
+                SupportedModels = input.SupportedModels,
+                AutoSyncSupportedModels = input.AutoSyncSupportedModels,
+                Tags = tagsToUse,
+                DefaultTestModel = input.DefaultTestModel,
+
+                // Same instances for every channel: createChannel mutates
+                // them in place (channel_bulk.go:128-129).
+                Policies = input.Policies,
+                Settings = input.Settings,
+                Remark = input.Remark,
+            };
+
+            recordFactories.Add(() =>
+            {
+                try
+                {
+                    return PrepareCreate(command);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Every createChannel failure, validation included, is
+                    // wrapped with the generated name (channel_bulk.go:134-137).
+                    throw new InvalidOperationException(
+                        "failed to create channel '" + channelName + "': " + ex.Message,
+                        ex);
+                }
+            });
+        }
+
+        IReadOnlyList<ChannelModelPriceTemplate> templates = [];
+        IReadOnlyList<ChannelRecord> created;
+        try
+        {
+            created = await channels.CreateManyAsync(
+                    recordFactories,
+                    async token =>
+                    {
+                        // resolveChannelModelPriceTemplates runs once per batch
+                        // inside the transaction (channel_bulk.go:101-104).
+                        templates = await prices.ResolveAutoPriceTemplatesAsync(
+                                input.SupportedModels,
+                                ModelCardPricing.ToPriceJson,
+                                token)
+                            .ConfigureAwait(false);
+                    },
+                    async (channel, token) =>
+                    {
+                        try
+                        {
+                            await prices.ApplyAutoPriceTemplatesAsync(
+                                    channel.Id,
+                                    templates,
+                                    ChannelModelPriceService.GenerateReferenceId,
+                                    token)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            throw new InvalidOperationException(
+                                "failed to auto-configure prices for channel '"
+                                    + channel.Name + "': " + ex.Message,
+                                ex);
+                        }
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+
         return created;
+    }
+
+    /// <summary>
+    /// Port of ChannelService.BulkImportChannels (channel_bulk.go:484-568):
+    /// validates each row in order (type, base URL, API key), creates the row
+    /// with the raw ent builder plus the model-library ensure in its own
+    /// transaction, and keeps going after a failed row. The result carries the
+    /// successfully created channels, the per-row error strings and
+    /// success = no failures.
+    /// </summary>
+    public async Task<BulkImportChannelsResult> BulkImportChannelsAsync(
+        IReadOnlyList<BulkImportChannelItem> items,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        var createdChannels = new List<ChannelRecord>();
+        var errors = new List<string>();
+        var created = 0;
+        var failed = 0;
+
+        for (var index = 0; index < items.Count; index++)
+        {
+            var item = items[index];
+            var row = index + 1;
+
+            if (!ChannelMapping.IsKnownChannelType(item.Type))
+            {
+                errors.Add("Row " + row + ": Invalid channel type '" + item.Type + "'");
+                failed++;
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(item.BaseUrl))
+            {
+                errors.Add("Row " + row + " (" + item.Name + "): Base URL is required");
+                failed++;
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(item.ApiKey))
+            {
+                errors.Add("Row " + row + " (" + item.Name + "): API Key is required");
+                failed++;
+                continue;
+            }
+
+            var supportedModels = item.SupportedModels;
+            try
+            {
+                var channel = await channels.ImportCreateAsync(
+                        ChannelWriteSerialization.ToImportRecord(item, DateTime.UtcNow),
+                        (channelId, token) => prices.EnsureAutoPricesAsync(
+                            channelId,
+                            supportedModels,
+                            ModelCardPricing.ToPriceJson,
+                            ChannelModelPriceService.GenerateReferenceId,
+                            token),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                createdChannels.Add(channel);
+                created++;
+            }
+            catch (StoreFailureException ex)
+            {
+                // The row's raw error text, no additional prefix
+                // (channel_bulk.go:540-544).
+                errors.Add("Row " + row + " (" + item.Name + "): " + ex.Message);
+                failed++;
+            }
+        }
+
+        return new BulkImportChannelsResult(
+            Success: failed == 0,
+            Created: created,
+            Failed: failed,
+            Errors: errors.Count == 0 ? null : errors,
+            Channels: createdChannels);
     }
 
     /// <summary>

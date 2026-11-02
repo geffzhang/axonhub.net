@@ -97,6 +97,57 @@ public interface IChannelModelPriceStore
         ChannelPriceReferenceIdFactory referenceIdFactory,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Port of resolveChannelModelPriceTemplates (channel_price.go:142-191):
+    /// de-duplicates the non-empty model IDs preserving their first occurrence,
+    /// reads the enabled/disabled model cards in batches of 500, and converts
+    /// each priced card into a template in input order. Callers that need to
+    /// apply the same plan to many channels resolve it once, exactly like
+    /// BulkCreateChannels (channel_bulk.go:100-104).
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The library query or card decoding failed; the message already carries
+    /// "failed to query model prices from model library".
+    /// </exception>
+    Task<IReadOnlyList<ChannelModelPriceTemplate>> ResolveAutoPriceTemplatesAsync(
+        IReadOnlyList<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of applyChannelModelPriceTemplates (channel_price.go:195-212): one
+    /// <c>now</c> for the whole plan, then one create-if-missing per template.
+    /// The reference runs it inside the caller's logical transaction; this
+    /// method never opens one, so the ambient transaction (if any) is reused.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// A create failed; the message already carries
+    /// "failed to auto-configure channel model price: model_id=...".
+    /// </exception>
+    Task<bool> ApplyAutoPriceTemplatesAsync(
+        long channelId,
+        IReadOnlyList<ChannelModelPriceTemplate> templates,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of DuplicateChannel's price copy (channel_duplicate.go:50-64):
+    /// reads every live price of the source channel, then creates the current
+    /// price and its initial active version for the target channel. One
+    /// <c>now</c> is shared by the whole copy and every row gets a fresh
+    /// reference ID. The caller must run it inside the duplicate transaction so
+    /// the channel and its prices commit together.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The source query failed with "failed to query source channel model
+    /// prices", or a row failed with "failed to copy channel model price".
+    /// </exception>
+    Task CopyChannelPricesAsync(
+        long sourceChannelId,
+        long targetChannelId,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Version rows of one price, ordered by id (test/read seam).</summary>
     Task<IReadOnlyList<ChannelModelPriceVersionRecord>> ListVersionsAsync(
         long channelModelPriceId,
@@ -381,11 +432,59 @@ public sealed class ChannelModelPriceStore(AxonHubDbContext db) : IChannelModelP
             return false;
         }
 
-        var templates = await ResolveTemplatesAsync(
+        var templates = await ResolveAutoPriceTemplatesAsync(
                 missingModelIds,
                 modelCardToPriceJson,
                 cancellationToken)
             .ConfigureAwait(false);
+
+        return await ApplyAutoPriceTemplatesAsync(
+                channelId,
+                templates,
+                referenceIdFactory,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<ChannelModelPriceTemplate>> ResolveAutoPriceTemplatesAsync(
+        IReadOnlyList<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(modelIds);
+        ArgumentNullException.ThrowIfNull(modelCardToPriceJson);
+
+        // uniqueNonEmptyModelIDs keeps the first occurrence order.
+        var uniqueModelIds = new List<string>(modelIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var modelId in modelIds)
+        {
+            if (modelId.Length > 0 && seen.Add(modelId))
+            {
+                uniqueModelIds.Add(modelId);
+            }
+        }
+
+        if (uniqueModelIds.Count == 0)
+        {
+            return [];
+        }
+
+        return await ResolveTemplatesAsync(
+                uniqueModelIds,
+                modelCardToPriceJson,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<bool> ApplyAutoPriceTemplatesAsync(
+        long channelId,
+        IReadOnlyList<ChannelModelPriceTemplate> templates,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(templates);
+        ArgumentNullException.ThrowIfNull(referenceIdFactory);
 
         // applyChannelModelPriceTemplates stamps one now for the whole plan.
         var now = DateTime.UtcNow;
@@ -403,13 +502,6 @@ public sealed class ChannelModelPriceStore(AxonHubDbContext db) : IChannelModelP
                     .ConfigureAwait(false);
                 changed = changed || created;
             }
-            catch (StoreFailureException ex)
-            {
-                throw new StoreFailureException(
-                    "failed to auto-configure channel model price: "
-                        + "model_id=" + template.ModelId + ": " + ex.Message,
-                    ex);
-            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 throw new StoreFailureException(
@@ -420,6 +512,104 @@ public sealed class ChannelModelPriceStore(AxonHubDbContext db) : IChannelModelP
         }
 
         return changed;
+    }
+
+    public async Task CopyChannelPricesAsync(
+        long sourceChannelId,
+        long targetChannelId,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(referenceIdFactory);
+
+        IReadOnlyList<ChannelModelPriceRecord> sourcePrices;
+        try
+        {
+            // db.ChannelModelPrice.Query().Where(ChannelID(source)): the
+            // SoftDeleteMixin predicate keeps only live rows.
+            var connection = await db.OpenDapperConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var rows = await connection.QueryAsync<ChannelModelPriceRecord>(
+                new CommandDefinition(
+                    "SELECT " + Columns
+                        + " FROM \"channel_model_prices\""
+                        + " WHERE \"channel_id\" = @ChannelId AND \"deleted_at\" = 0"
+                        + " ORDER BY \"id\";",
+                    new { ChannelId = sourceChannelId },
+                    transaction: db.CurrentDbTransaction,
+                    cancellationToken: cancellationToken)).ConfigureAwait(false);
+            sourcePrices = rows.AsList();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to query source channel model prices: " + ex.Message,
+                ex);
+        }
+
+        // time.Now() is stamped once for every copied row
+        // (channel_duplicate.go:59).
+        var now = DateTime.UtcNow;
+        foreach (var source in sourcePrices)
+        {
+            try
+            {
+                await CreateCurrentPriceAsync(
+                        targetChannelId,
+                        source.ModelId,
+                        source.Price,
+                        now,
+                        referenceIdFactory(),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to copy channel model price: " + ex.Message,
+                    ex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Port of createChannelModelPrice (channel_price.go:238-260): a plain
+    /// save (no conflict handling) plus the initial active version. The caller
+    /// must already be inside the mutation transaction.
+    /// </summary>
+    private async Task CreateCurrentPriceAsync(
+        long channelId,
+        string modelId,
+        string priceJson,
+        DateTime now,
+        string referenceId,
+        CancellationToken cancellationToken)
+    {
+        var entity = new ChannelModelPriceRecord
+        {
+            ChannelId = channelId,
+            ModelId = modelId,
+            Price = priceJson,
+            ReferenceId = referenceId,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        try
+        {
+            db.ChannelModelPrices.Add(entity);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // ent's Save returns the driver error verbatim; EF wraps it in a
+            // DbUpdateException, so the reference-visible text is the base one.
+            throw new StoreFailureException(
+                "failed to create channel model price: " + ex.GetBaseException().Message,
+                ex);
+        }
+
+        await InsertActiveVersionAsync(entity, now, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<HashSet<string>> ListExistingModelIdsAsync(
@@ -755,7 +945,8 @@ public sealed class ChannelModelPriceStore(AxonHubDbContext db) : IChannelModelP
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             throw new StoreFailureException(
-                "failed to create channel model price version: " + ex.Message,
+                "failed to create channel model price version: "
+                    + ex.GetBaseException().Message,
                 ex);
         }
     }

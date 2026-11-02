@@ -746,6 +746,286 @@ public sealed class ChannelModelPriceStoreTests(PostgresFixture fixture)
         Assert.Empty(await store.ListByChannelAsync(channelId));
     }
 
+    [Fact]
+    public async Task ResolveAutoPriceTemplatesFiltersTheLibraryAndKeepsInputOrder()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelModelPriceStore(context);
+
+        SeedModel(context, "gpt-4o", "enabled", """{"priced":true}""");
+        SeedModel(context, "gpt-4o-mini", "disabled", """{"priced":true}""");
+        SeedModel(context, "archived-model", "archived", """{"priced":true}""");
+        SeedModel(
+            context,
+            "deleted-model",
+            "enabled",
+            """{"priced":true}""",
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        SeedModel(context, "unpriced-model", "enabled", """{"priced":false}""");
+        await context.SaveChangesAsync();
+
+        var converted = new List<string>();
+        var templates = await store.ResolveAutoPriceTemplatesAsync(
+            [
+                "gpt-4o",
+                "",
+                "gpt-4o-mini",
+                "gpt-4o",
+                "archived-model",
+                "deleted-model",
+                "unpriced-model",
+                "missing-model",
+            ],
+            card =>
+            {
+                converted.Add(card);
+                return JsonNode.Parse(card)?["priced"]?.GetValue<bool>() == true
+                    ? PriceJson
+                    : null;
+            });
+
+        // Only enabled/disabled live models with a usable card become
+        // templates, in first-occurrence order (channel_price.go:142-191).
+        Assert.Equal(AutoPricedModels, templates.Select(template => template.ModelId).ToArray());
+        Assert.All(templates, template => Assert.Equal(PriceJson, template.PriceJson));
+
+        // The card conversion runs once per library hit (the unpriced card
+        // included), not per input entry.
+        Assert.Equal(3, converted.Count);
+
+        // Resolving templates is a read-only step.
+        Assert.Equal(0, await context.ChannelModelPrices.CountAsync());
+        Assert.Equal(0, await context.ChannelModelPriceVersions.CountAsync());
+    }
+
+    [Fact]
+    public async Task ResolveAutoPriceTemplatesWrapsCardFailuresWithTheLibraryPrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelModelPriceStore(context);
+
+        SeedModel(context, "gpt-4o", "enabled", """{"priced":true}""");
+        await context.SaveChangesAsync();
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.ResolveAutoPriceTemplatesAsync(
+                ["gpt-4o"],
+                _ => throw new InvalidOperationException("bad card")));
+
+        Assert.Equal("failed to query model prices from model library: bad card", error.Message);
+    }
+
+    [Fact]
+    public async Task ApplyAutoPriceTemplatesCreatesFreshRowsAndVersionsWithOneTimestamp()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-apply-templates"));
+
+        var nextReference = 0;
+        var changed = await store.ApplyAutoPriceTemplatesAsync(
+            channelId,
+            [
+                new ChannelModelPriceTemplate("gpt-4o", PriceJson),
+                new ChannelModelPriceTemplate("gpt-4o-mini", PriceJson),
+            ],
+            () => "tpl-ref-" + (++nextReference));
+
+        Assert.True(changed);
+        Assert.Equal(2, nextReference);
+
+        var rows = await store.ListByChannelAsync(channelId);
+        Assert.Equal(AutoPricedModels, rows.Select(row => row.ModelId).ToArray());
+        Assert.Equal(["tpl-ref-1", "tpl-ref-2"], rows.Select(row => row.ReferenceId).ToArray());
+
+        // applyChannelModelPriceTemplates stamps one now for the whole plan.
+        var now = rows[0].CreatedAt;
+        Assert.All(rows, row => Assert.Equal(now, row.CreatedAt));
+        Assert.All(rows, row => Assert.Equal(now, row.UpdatedAt));
+
+        foreach (var row in rows)
+        {
+            var version = Assert.Single(await store.ListVersionsAsync(row.Id));
+            Assert.Equal("active", version.Status);
+            Assert.Equal(row.ReferenceId, version.ReferenceId);
+            Assert.Equal(now, version.EffectiveStartAt);
+            Assert.Null(version.EffectiveEndAt);
+            AssertJsonEquivalent(row.Price, version.Price);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyAutoPriceTemplatesKeepsExistingRowsAndTheirVersions()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-apply-templates-idempotent"));
+
+        var nextReference = 0;
+        string NextReference() => "tpl-ref-" + (++nextReference);
+        ChannelModelPriceTemplate[] templates = [new("gpt-4o", PriceJson)];
+
+        Assert.True(await store.ApplyAutoPriceTemplatesAsync(channelId, templates, NextReference));
+        var existing = Assert.Single(await store.ListByChannelAsync(channelId));
+
+        Assert.False(await store.ApplyAutoPriceTemplatesAsync(channelId, templates, NextReference));
+
+        // generateReferenceID still runs per template before the upsert; the
+        // conflict simply creates nothing (channel_price.go:123-139).
+        Assert.Equal(2, nextReference);
+        var row = Assert.Single(await store.ListByChannelAsync(channelId));
+        Assert.Equal(existing.Id, row.Id);
+        Assert.Equal("tpl-ref-1", row.ReferenceId);
+        Assert.Single(await store.ListVersionsAsync(row.Id));
+    }
+
+    [Fact]
+    public async Task ApplyAutoPriceTemplatesWrapsFailuresAndJoinsTheCallerTransaction()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-apply-templates-failure"));
+
+        await using (var transaction = await context.Database.BeginTransactionAsync())
+        {
+            // A constant reference id collides on the second insert.
+            var error = await Assert.ThrowsAsync<StoreFailureException>(
+                () => store.ApplyAutoPriceTemplatesAsync(
+                    channelId,
+                    [
+                        new ChannelModelPriceTemplate("model-a", PriceJson),
+                        new ChannelModelPriceTemplate("model-b", PriceJson),
+                    ],
+                    () => "same-ref"));
+
+            Assert.StartsWith(
+                "failed to auto-configure channel model price: model_id=model-b: "
+                    + "failed to create channel model price: 23505: "
+                    + "duplicate key value violates unique constraint",
+                error.Message,
+                StringComparison.Ordinal);
+
+            await transaction.RollbackAsync();
+        }
+
+        Assert.Empty(await store.ListByChannelAsync(channelId));
+        await using var connection = await db.Factory.OpenAsync();
+        Assert.Equal(
+            0,
+            await connection.ExecuteScalarAsync<long>(
+                "SELECT count(*) FROM \"channel_model_price_versions\";"));
+    }
+
+    [Fact]
+    public async Task CopyChannelPricesCopiesLiveSourceRowsWithFreshReferences()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var sourceId = await channels.CreateAsync(NewChannel("price-copy-source"));
+        var targetId = await channels.CreateAsync(NewChannel("price-copy-target"));
+
+        await store.CreateAsync(NewPrice(sourceId, "gpt-4o", "src-ref-1"));
+        await store.CreateAsync(NewPrice(sourceId, "gpt-4o-mini", "src-ref-2"));
+        var deletedId = await store.CreateAsync(NewPrice(sourceId, "gone-model", "src-ref-deleted"));
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"channel_model_prices\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, Id = deletedId });
+        }
+
+        var nextReference = 0;
+        await using (var transaction = await context.Database.BeginTransactionAsync())
+        {
+            await store.CopyChannelPricesAsync(
+                sourceId,
+                targetId,
+                () => "copy-ref-" + (++nextReference));
+            await transaction.CommitAsync();
+        }
+
+        Assert.Equal(2, nextReference);
+
+        var rows = await store.ListByChannelAsync(targetId);
+        Assert.Equal(AutoPricedModels, rows.Select(row => row.ModelId).ToArray());
+        Assert.Equal(["copy-ref-1", "copy-ref-2"], rows.Select(row => row.ReferenceId).ToArray());
+
+        // DuplicateChannel stamps one time.Now() for every copied row
+        // (channel_duplicate.go:59).
+        var now = rows[0].CreatedAt;
+        Assert.All(rows, row => Assert.Equal(now, row.CreatedAt));
+        Assert.All(rows, row => Assert.Equal(now, row.UpdatedAt));
+
+        foreach (var row in rows)
+        {
+            AssertJsonEquivalent(PriceJson, row.Price);
+            var version = Assert.Single(await store.ListVersionsAsync(row.Id));
+            Assert.Equal("active", version.Status);
+            Assert.Equal(row.ReferenceId, version.ReferenceId);
+            Assert.Equal(now, version.EffectiveStartAt);
+        }
+
+        // Soft-deleted source rows are not copied, and the source is untouched.
+        Assert.Equal(2, (await store.ListByChannelAsync(sourceId)).Count);
+    }
+
+    [Fact]
+    public async Task CopyChannelPricesWrapsFailuresAndLeavesTheTargetEmptyOnRollback()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var sourceId = await channels.CreateAsync(NewChannel("price-copy-failure-source"));
+        var targetId = await channels.CreateAsync(NewChannel("price-copy-failure-target"));
+
+        await store.CreateAsync(NewPrice(sourceId, "gpt-4o", "src-ref-a"));
+        await store.CreateAsync(NewPrice(sourceId, "gpt-4o-mini", "src-ref-b"));
+
+        await using (var transaction = await context.Database.BeginTransactionAsync())
+        {
+            var error = await Assert.ThrowsAsync<StoreFailureException>(
+                () => store.CopyChannelPricesAsync(sourceId, targetId, () => "same-ref"));
+
+            Assert.StartsWith(
+                "failed to copy channel model price: failed to create channel model price: "
+                    + "23505: duplicate key value violates unique constraint",
+                error.Message,
+                StringComparison.Ordinal);
+
+            await transaction.RollbackAsync();
+        }
+
+        Assert.Empty(await store.ListByChannelAsync(targetId));
+        await using var connection = await db.Factory.OpenAsync();
+        Assert.Equal(
+            0,
+            await connection.ExecuteScalarAsync<long>(
+                "SELECT count(*) FROM \"channel_model_price_versions\";"));
+    }
+
     /// <summary>
     /// jsonb round-trips rewrite whitespace and key order, so stored prices are
     /// compared structurally (the reference only ever decodes them).

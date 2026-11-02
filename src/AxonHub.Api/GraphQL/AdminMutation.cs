@@ -738,6 +738,72 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.DuplicateChannel
+    /// (axonhub.resolvers.go:178-181; biz channel_duplicate.go:17-84).
+    /// </summary>
+    [GraphQLName("duplicateChannel")]
+    public async Task<ChannelType> DuplicateChannelAsync(
+        [GraphQLType(typeof(IdType))] string sourceID,
+        CreateChannelInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(sourceID);
+
+        var channel = await channels.DuplicateAsync(
+                gid.Id,
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkCreateChannels
+    /// (axonhub.resolvers.go:183-186; biz channel_bulk.go:67-161).
+    /// </summary>
+    [GraphQLName("bulkCreateChannels")]
+    public async Task<IReadOnlyList<ChannelType>> BulkCreateChannelsAsync(
+        BulkCreateChannelsInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var created = await channels.BulkCreateChannelsAsync(
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return created.Select(ChannelMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkImportChannels
+    /// (axonhub.resolvers.go:374-388; biz channel_bulk.go:484-568). The biz
+    /// service never fails the whole mutation: per-row errors are data.
+    /// </summary>
+    [GraphQLName("bulkImportChannels")]
+    public async Task<BulkImportChannelsResultType> BulkImportChannelsAsync(
+        BulkImportChannelsInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var result = await channels.BulkImportChannelsAsync(
+                ChannelInputMapping.ToItems(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new BulkImportChannelsResultType
+        {
+            Success = result.Success,
+            Created = result.Created,
+            Failed = result.Failed,
+            Errors = result.Errors,
+            Channels = result.Channels.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
+    /// <summary>
     /// Port of mutationResolver.UpdateChannel
     /// (axonhub.resolvers.go:188-190; biz channel.go:849-1203).
     /// </summary>

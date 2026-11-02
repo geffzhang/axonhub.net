@@ -18,6 +18,13 @@ public static class ChannelWriteSerialization
     public const string DefaultPoliciesJson = """{"stream":"unlimited"}""";
 
     /// <summary>
+    /// ent's channel settings schema default
+    /// (<c>&amp;objects.ChannelSettings{ModelMappings: []}</c>). Bulk import
+    /// never sets the column, so this default is inserted.
+    /// </summary>
+    public const string DefaultSettingsJson = """{"modelMappings":[]}""";
+
+    /// <summary>
     /// Decodes a stored settings column the way ent's JSON scanner does
     /// (Go's json.Unmarshal into <c>*objects.ChannelSettings</c>): JSON null is
     /// a nil pointer, and fields the Go struct marks <c>omitempty</c> are
@@ -228,6 +235,46 @@ public static class ChannelWriteSerialization
             Endpoints = command.Endpoints is null
                 ? "[]"
                 : GoJson.MarshalToString(command.Endpoints),
+        };
+    }
+
+    /// <summary>
+    /// Builds the row of one BulkImportChannels item
+    /// (channel_bulk.go:520-527). The reference calls the ent builder directly
+    /// and sets only type/name/baseURL/credentials/supportedModels/
+    /// defaultTestModel, so every other column takes the schema default:
+    /// status disabled, empty lists for disabled keys/manual models/tags/
+    /// endpoints, policies <c>{"stream":"unlimited"}</c>, settings
+    /// <c>{"modelMappings":[]}</c>, and the zero sync/ordering values.
+    /// </summary>
+    public static ChannelRecord ToImportRecord(
+        BulkImportChannelItem item,
+        DateTime now)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        return new ChannelRecord
+        {
+            CreatedAt = now,
+            UpdatedAt = now,
+            DeletedAt = 0,
+            Type = item.Type,
+            BaseUrl = item.BaseUrl,
+            Name = item.Name,
+            Status = "disabled",
+            Credentials = GoJson.MarshalToString(
+                new ChannelCredentialsDraft { ApiKey = item.ApiKey }),
+            DisabledApiKeys = "[]",
+            SupportedModels = GoJson.MarshalToString(item.SupportedModels),
+            ManualModels = "[]",
+            AutoSyncSupportedModels = false,
+            AutoSyncModelPattern = string.Empty,
+            Tags = "[]",
+            DefaultTestModel = item.DefaultTestModel,
+            Policies = DefaultPoliciesJson,
+            Settings = DefaultSettingsJson,
+            OrderingWeight = 0,
+            Endpoints = "[]",
         };
     }
 }

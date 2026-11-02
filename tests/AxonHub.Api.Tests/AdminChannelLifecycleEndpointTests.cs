@@ -520,6 +520,12 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public List<(long Id, string Name)> NameChecks { get; } = [];
 
+    public List<(long SourceId, string Name)> DuplicateCalls { get; } = [];
+
+    public List<string> BulkCreateCalls { get; } = [];
+
+    public List<long> ImportCreateCalls { get; } = [];
+
     /// <summary>Simulates a concurrent writer invalidating the version guard.</summary>
     public bool UpdateConflict { get; set; }
 
@@ -542,6 +548,13 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
     public Exception? UpdateFailure { get; set; }
 
     public Exception? CreateFailure { get; set; }
+
+    public Exception? BulkCreateFailure { get; set; }
+
+    public Exception? ImportCreateFailure { get; set; }
+
+    /// <summary>Simulates a duplicate live name at the import insert.</summary>
+    public bool ImportNameConflict { get; set; }
 
     public Exception? StatusFailure { get; set; }
 
@@ -783,6 +796,174 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         return channel;
     }
 
+    public Task<IReadOnlyList<string>> ListLiveNamesAsync(
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<string>>(
+            _rows.Where(row => row.DeletedAt == 0)
+                .Select(row => row.Name)
+                .ToList());
+
+    public async Task<ChannelRecord?> DuplicateAsync(
+        long sourceId,
+        string name,
+        Action<ChannelRecord> inherit,
+        Func<ChannelRecord> buildRecord,
+        Func<long, CancellationToken, Task>? afterInsert = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (GetFailure is not null)
+        {
+            throw new StoreFailureException(
+                "failed to get source channel: " + GetFailure.Message,
+                GetFailure);
+        }
+
+        var source = _rows.SingleOrDefault(row => row.Id == sourceId && row.DeletedAt == 0)
+            ?? throw new StoreFailureException(
+                "failed to get source channel: ent: channel not found",
+                new InvalidOperationException("ent: channel not found"));
+
+        DuplicateCalls.Add((sourceId, name));
+        inherit(source);
+
+        if (NameCheckFailure is not null)
+        {
+            throw new StoreFailureException(
+                "failed to check channel name: " + NameCheckFailure.Message,
+                NameCheckFailure);
+        }
+
+        if (_rows.Any(row => row.DeletedAt == 0 && row.Name == name))
+        {
+            return null;
+        }
+
+        var channel = buildRecord();
+        if (CreateFailure is not null)
+        {
+            throw new StoreFailureException(
+                "failed to create channel: " + CreateFailure.Message,
+                CreateFailure);
+        }
+
+        channel.Id = _nextId++;
+        _rows.Add(channel);
+        CreatedChannels.Add(channel);
+
+        if (afterInsert is not null)
+        {
+            try
+            {
+                await afterInsert(channel.Id, cancellationToken);
+            }
+            catch
+            {
+                _rows.Remove(channel);
+                CreatedChannels.Remove(channel);
+                throw;
+            }
+        }
+
+        return channel;
+    }
+
+    public async Task<IReadOnlyList<ChannelRecord>> CreateManyAsync(
+        IReadOnlyList<Func<ChannelRecord>> recordFactories,
+        Func<CancellationToken, Task>? beforeInsert = null,
+        Func<ChannelRecord, CancellationToken, Task>? afterEachInsert = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (BulkCreateFailure is not null)
+        {
+            throw BulkCreateFailure;
+        }
+
+        if (beforeInsert is not null)
+        {
+            await beforeInsert(cancellationToken);
+        }
+
+        var created = new List<ChannelRecord>(recordFactories.Count);
+        try
+        {
+            foreach (var factory in recordFactories)
+            {
+                var channel = factory();
+                BulkCreateCalls.Add(channel.Name);
+
+                if (CreateFailure is not null)
+                {
+                    throw new StoreFailureException(
+                        "failed to create channel '" + channel.Name + "': "
+                            + "failed to create channel: " + CreateFailure.Message,
+                        CreateFailure);
+                }
+
+                channel.Id = _nextId++;
+                _rows.Add(channel);
+                CreatedChannels.Add(channel);
+                created.Add(channel);
+
+                if (afterEachInsert is not null)
+                {
+                    await afterEachInsert(channel, cancellationToken);
+                }
+            }
+        }
+        catch
+        {
+            // The real transaction rolls the whole batch back.
+            foreach (var channel in created)
+            {
+                _rows.Remove(channel);
+                CreatedChannels.Remove(channel);
+            }
+
+            throw;
+        }
+
+        return created;
+    }
+
+    public async Task<ChannelRecord> ImportCreateAsync(
+        ChannelRecord channel,
+        Func<long, CancellationToken, Task>? afterInsert = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (ImportCreateFailure is not null)
+        {
+            throw new StoreFailureException(ImportCreateFailure.Message, ImportCreateFailure);
+        }
+
+        if (ImportNameConflict && _rows.Any(row => row.DeletedAt == 0 && row.Name == channel.Name))
+        {
+            throw new StoreFailureException(
+                "ent: constraint failed: duplicate channel name",
+                new InvalidOperationException("duplicate channel name"));
+        }
+
+        ImportCreateCalls.Add(0);
+        channel.Id = _nextId++;
+        _rows.Add(channel);
+        CreatedChannels.Add(channel);
+
+        if (afterInsert is not null)
+        {
+            try
+            {
+                await afterInsert(channel.Id, cancellationToken);
+            }
+            catch
+            {
+                _rows.Remove(channel);
+                CreatedChannels.Remove(channel);
+                throw;
+            }
+        }
+
+        return channel;
+    }
+
     public Task<ChannelRecord?> UpdateStatusAsync(
         long id,
         string status,
@@ -995,7 +1176,21 @@ internal sealed class FakeChannelModelPriceStore : IChannelModelPriceStore
 {
     public List<(long ChannelId, IReadOnlyList<string> ModelIds)> EnsureCalls { get; } = [];
 
+    public List<IReadOnlyList<string>> ResolveCalls { get; } = [];
+
+    public List<(long ChannelId, IReadOnlyList<ChannelModelPriceTemplate> Templates)> ApplyCalls { get; } = [];
+
+    public List<(long SourceChannelId, long TargetChannelId)> CopyCalls { get; } = [];
+
     public StoreFailureException? EnsureFailure { get; set; }
+
+    public StoreFailureException? ResolveFailure { get; set; }
+
+    public StoreFailureException? ApplyFailure { get; set; }
+
+    public StoreFailureException? CopyFailure { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceTemplate> Templates { get; set; } = [];
 
     public Task<bool> EnsureAutoPricesAsync(
         long channelId,
@@ -1011,6 +1206,50 @@ internal sealed class FakeChannelModelPriceStore : IChannelModelPriceStore
 
         EnsureCalls.Add((channelId, modelIds.ToArray()));
         return Task.FromResult(false);
+    }
+
+    public Task<IReadOnlyList<ChannelModelPriceTemplate>> ResolveAutoPriceTemplatesAsync(
+        IReadOnlyList<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        CancellationToken cancellationToken = default)
+    {
+        ResolveCalls.Add(modelIds.ToArray());
+        if (ResolveFailure is not null)
+        {
+            throw ResolveFailure;
+        }
+
+        return Task.FromResult(Templates);
+    }
+
+    public Task<bool> ApplyAutoPriceTemplatesAsync(
+        long channelId,
+        IReadOnlyList<ChannelModelPriceTemplate> templates,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+    {
+        ApplyCalls.Add((channelId, templates.ToArray()));
+        if (ApplyFailure is not null)
+        {
+            throw ApplyFailure;
+        }
+
+        return Task.FromResult(templates.Count > 0);
+    }
+
+    public Task CopyChannelPricesAsync(
+        long sourceChannelId,
+        long targetChannelId,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+    {
+        CopyCalls.Add((sourceChannelId, targetChannelId));
+        if (CopyFailure is not null)
+        {
+            throw CopyFailure;
+        }
+
+        return Task.CompletedTask;
     }
 
     public Task<long> CreateAsync(
