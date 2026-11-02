@@ -32,6 +32,7 @@ public sealed class AdminChannelLifecycleEndpointTests : IAsyncLifetime
 
     private readonly FakeChannelWriteStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
+    private readonly FakeChannelModelPriceStore _prices = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -42,6 +43,7 @@ public sealed class AdminChannelLifecycleEndpointTests : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
+        builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
         builder.Services.AddSingleton(_limiters);
         builder.Services.AddSingleton<ChannelLifecycleService>();
 
@@ -602,9 +604,10 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
             _rows.Any(row => row.DeletedAt == 0 && row.Id != id && row.Name == name));
     }
 
-    public Task<ChannelRecord?> UpdateAsync(
+    public async Task<ChannelRecord?> UpdateAsync(
         ChannelRecord snapshot,
         ChannelUpdateRecord update,
+        Func<long, CancellationToken, Task>? afterUpdate = null,
         CancellationToken cancellationToken = default)
     {
         if (UpdateFailure is not null)
@@ -614,7 +617,7 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
         if (UpdateConflict)
         {
-            return Task.FromResult<ChannelRecord?>(null);
+            return null;
         }
 
         var row = _rows.SingleOrDefault(candidate =>
@@ -622,7 +625,7 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         if (row is null
             || (update.ExpectedUpdatedAt is { } expected && row.UpdatedAt != expected))
         {
-            return Task.FromResult<ChannelRecord?>(null);
+            return null;
         }
 
         UpdateCalls.Add((snapshot.Id, update));
@@ -651,7 +654,13 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         }
 
         row.UpdatedAt = DateTime.UtcNow;
-        return Task.FromResult<ChannelRecord?>(row);
+
+        if (afterUpdate is not null)
+        {
+            await afterUpdate(row.Id, cancellationToken);
+        }
+
+        return row;
     }
 
     public Task<ChannelRecord?> SaveEndpointsAsync(
@@ -735,8 +744,9 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         return Task.FromResult(true);
     }
 
-    public Task<ChannelRecord?> CreateAsync(
+    public async Task<ChannelRecord?> CreateAsync(
         ChannelRecord channel,
+        Func<long, CancellationToken, Task>? afterInsert = null,
         CancellationToken cancellationToken = default)
     {
         if (CreateFailure is not null)
@@ -748,13 +758,29 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         // row can own the name.
         if (_rows.Any(row => row.DeletedAt == 0 && row.Name == channel.Name))
         {
-            return Task.FromResult<ChannelRecord?>(null);
+            return null;
         }
 
         channel.Id = _nextId++;
         _rows.Add(channel);
         CreatedChannels.Add(channel);
-        return Task.FromResult<ChannelRecord?>(channel);
+
+        if (afterInsert is not null)
+        {
+            try
+            {
+                await afterInsert(channel.Id, cancellationToken);
+            }
+            catch
+            {
+                // The real transaction rolls the insert back.
+                _rows.Remove(channel);
+                CreatedChannels.Remove(channel);
+                throw;
+            }
+        }
+
+        return channel;
     }
 
     public Task<ChannelRecord?> UpdateStatusAsync(
@@ -958,6 +984,61 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
         return Task.FromResult<IReadOnlyList<ChannelRecord>>(matches);
     }
+}
+
+/// <summary>
+/// In-memory IChannelModelPriceStore for the channel lifecycle hosts: the
+/// auto-price seam records what CreateChannel/UpdateChannel asked for. The
+/// pricing-management methods stay unused by these hosts.
+/// </summary>
+internal sealed class FakeChannelModelPriceStore : IChannelModelPriceStore
+{
+    public List<(long ChannelId, IReadOnlyList<string> ModelIds)> EnsureCalls { get; } = [];
+
+    public StoreFailureException? EnsureFailure { get; set; }
+
+    public Task<bool> EnsureAutoPricesAsync(
+        long channelId,
+        IReadOnlyList<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+    {
+        if (EnsureFailure is not null)
+        {
+            throw EnsureFailure;
+        }
+
+        EnsureCalls.Add((channelId, modelIds.ToArray()));
+        return Task.FromResult(false);
+    }
+
+    public Task<long> CreateAsync(
+        ChannelModelPriceRecord price,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel lifecycle never creates a price directly");
+
+    public Task<IReadOnlyList<ChannelModelPriceRecord>> ListByChannelAsync(
+        long channelId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel lifecycle never lists prices");
+
+    public Task<IReadOnlyList<ChannelModelPriceRecord>> ListEnabledChannelPricesAsync(
+        long channelId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel lifecycle never reads enabled prices");
+
+    public Task<IReadOnlyList<ChannelModelPriceRecord?>> ApplyAsync(
+        long channelId,
+        IReadOnlyList<ChannelModelPriceChange> changes,
+        DateTime now,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel lifecycle never applies a price plan");
+
+    public Task<IReadOnlyList<ChannelModelPriceVersionRecord>> ListVersionsAsync(
+        long channelModelPriceId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel lifecycle never lists price versions");
 }
 
 internal static class ChannelRecordTestExtensions

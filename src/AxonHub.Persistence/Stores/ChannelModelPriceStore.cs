@@ -29,6 +29,20 @@ public sealed record ChannelModelPriceChange(
     string? ReferenceId,
     ChannelModelPriceRecord? Existing);
 
+/// <summary>
+/// Maps a raw <c>models.model_card</c> JSON document to the objects.ModelPrice
+/// JSON to store, or null when the card yields no priced items
+/// (modelCardToChannelModelPrice, channel_price.go:58-88). The Go wire shape
+/// stays in the API layer's billing code.
+/// </summary>
+public delegate string? ModelCardPriceJsonFactory(string modelCardJson);
+
+/// <summary>Port of generateReferenceID (channel_price.go:534-544).</summary>
+public delegate string ChannelPriceReferenceIdFactory();
+
+/// <summary>One resolved auto-price candidate (channelModelPriceTemplate).</summary>
+public sealed record ChannelModelPriceTemplate(string ModelId, string PriceJson);
+
 /// <summary>Persistence seam for the reference <c>channel_model_prices</c> table.</summary>
 public interface IChannelModelPriceStore
 {
@@ -61,6 +75,26 @@ public interface IChannelModelPriceStore
         long channelId,
         IReadOnlyList<ChannelModelPriceChange> changes,
         DateTime now,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of ensureChannelModelPrices (channel_price.go:262-315): fills prices
+    /// for the given model IDs that have no live price yet, reading the costs
+    /// from the model library. When a transaction is already open the writes
+    /// join it (the reference's nested RunInTransaction); a standalone call
+    /// opens and commits its own, like the reference. Returns whether any price
+    /// row was created by this call.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The message already carries the reference prefix ("failed to query
+    /// existing channel model prices", "failed to query model prices from model
+    /// library", or "failed to auto-configure channel model price: model_id=...").
+    /// </exception>
+    Task<bool> EnsureAutoPricesAsync(
+        long channelId,
+        IReadOnlyList<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
         CancellationToken cancellationToken = default);
 
     /// <summary>Version rows of one price, ordered by id (test/read seam).</summary>
@@ -270,6 +304,317 @@ public sealed class ChannelModelPriceStore(AxonHubDbContext db) : IChannelModelP
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
         return rows.AsList();
+    }
+
+    /// <summary>channelModelPriceQueryBatchSize (channel_price.go:45).</summary>
+    private const int QueryBatchSize = 500;
+
+    public async Task<bool> EnsureAutoPricesAsync(
+        long channelId,
+        IReadOnlyList<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(modelIds);
+        ArgumentNullException.ThrowIfNull(modelCardToPriceJson);
+        ArgumentNullException.ThrowIfNull(referenceIdFactory);
+
+        // uniqueNonEmptyModelIDs keeps the first occurrence order.
+        var uniqueModelIds = new List<string>(modelIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var modelId in modelIds)
+        {
+            if (modelId.Length > 0 && seen.Add(modelId))
+            {
+                uniqueModelIds.Add(modelId);
+            }
+        }
+
+        if (uniqueModelIds.Count == 0)
+        {
+            return false;
+        }
+
+        // ent's RunInTransaction reuses the enclosing logical transaction and
+        // only opens one for a standalone call (channel_price.go:272).
+        await using var transaction = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+
+        var changed = await EnsureAutoPricesCoreAsync(
+                channelId,
+                uniqueModelIds,
+                modelCardToPriceJson,
+                referenceIdFactory,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return changed;
+    }
+
+    private async Task<bool> EnsureAutoPricesCoreAsync(
+        long channelId,
+        List<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken)
+    {
+        var existingModelIds = await ListExistingModelIdsAsync(channelId, modelIds, cancellationToken)
+            .ConfigureAwait(false);
+        var missingModelIds = new List<string>(modelIds.Count);
+        foreach (var modelId in modelIds)
+        {
+            if (!existingModelIds.Contains(modelId))
+            {
+                missingModelIds.Add(modelId);
+            }
+        }
+
+        if (missingModelIds.Count == 0)
+        {
+            return false;
+        }
+
+        var templates = await ResolveTemplatesAsync(
+                missingModelIds,
+                modelCardToPriceJson,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        // applyChannelModelPriceTemplates stamps one now for the whole plan.
+        var now = DateTime.UtcNow;
+        var changed = false;
+        foreach (var template in templates)
+        {
+            try
+            {
+                var created = await CreatePriceIfMissingAsync(
+                        channelId,
+                        template,
+                        referenceIdFactory(),
+                        now,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                changed = changed || created;
+            }
+            catch (StoreFailureException ex)
+            {
+                throw new StoreFailureException(
+                    "failed to auto-configure channel model price: "
+                        + "model_id=" + template.ModelId + ": " + ex.Message,
+                    ex);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to auto-configure channel model price: "
+                        + "model_id=" + template.ModelId + ": " + ex.Message,
+                    ex);
+            }
+        }
+
+        return changed;
+    }
+
+    private async Task<HashSet<string>> ListExistingModelIdsAsync(
+        long channelId,
+        List<string> modelIds,
+        CancellationToken cancellationToken)
+    {
+        var existingModelIds = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            var connection = await db.OpenDapperConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            for (var start = 0; start < modelIds.Count; start += QueryBatchSize)
+            {
+                var batch = modelIds.Skip(start).Take(QueryBatchSize).ToArray();
+                var rows = await connection.QueryAsync<string>(new CommandDefinition(
+                    """
+                    SELECT "model_id" FROM "channel_model_prices"
+                    WHERE "channel_id" = @ChannelId
+                      AND "model_id" = ANY(@ModelIds)
+                      AND "deleted_at" = 0;
+                    """,
+                    new { ChannelId = channelId, ModelIds = batch },
+                    transaction: db.CurrentDbTransaction,
+                    cancellationToken: cancellationToken)).ConfigureAwait(false);
+                foreach (var modelId in rows)
+                {
+                    existingModelIds.Add(modelId);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to query existing channel model prices: " + ex.Message,
+                ex);
+        }
+
+        return existingModelIds;
+    }
+
+    private async Task<IReadOnlyList<ChannelModelPriceTemplate>> ResolveTemplatesAsync(
+        List<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        CancellationToken cancellationToken)
+    {
+        // resolveChannelModelPriceTemplates keeps one card per model id; the
+        // live-row unique index makes duplicates impossible.
+        var modelCards = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            var connection = await db.OpenDapperConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            for (var start = 0; start < modelIds.Count; start += QueryBatchSize)
+            {
+                var batch = modelIds.Skip(start).Take(QueryBatchSize).ToArray();
+                var rows = await connection.QueryAsync<ModelCardRow>(new CommandDefinition(
+                    """
+                    SELECT "model_id", "model_card" FROM "models"
+                    WHERE "model_id" = ANY(@ModelIds)
+                      AND "status" IN ('enabled', 'disabled')
+                      AND "deleted_at" = 0;
+                    """,
+                    new { ModelIds = batch },
+                    transaction: db.CurrentDbTransaction,
+                    cancellationToken: cancellationToken)).ConfigureAwait(false);
+                foreach (var row in rows)
+                {
+                    modelCards[row.ModelId] = row.ModelCard;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to query model prices from model library: " + ex.Message,
+                ex);
+        }
+
+        var templates = new List<ChannelModelPriceTemplate>(modelCards.Count);
+        foreach (var modelId in modelIds)
+        {
+            if (!modelCards.TryGetValue(modelId, out var modelCard))
+            {
+                continue;
+            }
+
+            string? priceJson;
+            try
+            {
+                priceJson = modelCardToPriceJson(modelCard);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // ent decodes model_card while scanning the query rows, so a
+                // malformed card fails under the same query prefix.
+                throw new StoreFailureException(
+                    "failed to query model prices from model library: " + ex.Message,
+                    ex);
+            }
+
+            if (priceJson is null)
+            {
+                continue;
+            }
+
+            templates.Add(new ChannelModelPriceTemplate(modelId, priceJson));
+        }
+
+        return templates;
+    }
+
+    private async Task<bool> CreatePriceIfMissingAsync(
+        long channelId,
+        ChannelModelPriceTemplate template,
+        string candidateReferenceId,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var connection = await db.OpenDapperConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO "channel_model_prices"
+                    ("created_at", "updated_at", "deleted_at", "model_id", "price",
+                     "reference_id", "channel_id")
+                VALUES (@Now, @Now, 0, @ModelId, CAST(@Price AS jsonb), @ReferenceId, @ChannelId)
+                ON CONFLICT ("channel_id", "model_id", "deleted_at") DO NOTHING;
+                """,
+                new
+                {
+                    Now = now,
+                    ModelId = template.ModelId,
+                    Price = template.PriceJson,
+                    ReferenceId = candidateReferenceId,
+                    ChannelId = channelId,
+                },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to create channel model price: " + ex.Message,
+                ex);
+        }
+
+        ChannelModelPriceRecord? entity;
+        try
+        {
+            var connection = await db.OpenDapperConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            entity = await connection.QuerySingleOrDefaultAsync<ChannelModelPriceRecord>(
+                new CommandDefinition(
+                    "SELECT " + Columns
+                        + " FROM \"channel_model_prices\""
+                        + " WHERE \"channel_id\" = @ChannelId AND \"model_id\" = @ModelId"
+                        + " AND \"deleted_at\" = 0;",
+                    new { ChannelId = channelId, ModelId = template.ModelId },
+                    transaction: db.CurrentDbTransaction,
+                    cancellationToken: cancellationToken)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to load channel model price after upsert: " + ex.Message,
+                ex);
+        }
+
+        if (entity is null)
+        {
+            throw new StoreFailureException(
+                "failed to load channel model price after upsert: ent: channel model price not found",
+                new InvalidOperationException("ent: channel model price not found"));
+        }
+
+        // The candidate reference id identifies whether this transaction won
+        // the upsert race; only the winner creates the initial version
+        // (channel_price.go:131-139).
+        if (entity.ReferenceId != candidateReferenceId)
+        {
+            return false;
+        }
+
+        await InsertActiveVersionAsync(entity, now, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    private sealed class ModelCardRow
+    {
+        public string ModelId { get; set; } = string.Empty;
+
+        public string ModelCard { get; set; } = "{}";
     }
 
     private async Task<ChannelModelPriceRecord> CreateCurrentAsync(

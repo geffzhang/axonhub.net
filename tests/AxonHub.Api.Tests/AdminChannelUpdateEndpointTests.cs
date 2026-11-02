@@ -23,6 +23,8 @@ namespace AxonHub.Api.Tests;
 public sealed class AdminChannelUpdateEndpointTests : IAsyncLifetime
 {
     private static readonly string[] SupportedModelsA = ["a"];
+    private static readonly string[] SupportedModelsPriced = ["gpt-4o", "gpt-4o-mini"];
+    private static readonly string[] SupportedModelsGpt4o = ["gpt-4o"];
 
     private const string UpdateMutation =
         """
@@ -35,6 +37,7 @@ public sealed class AdminChannelUpdateEndpointTests : IAsyncLifetime
 
     private readonly FakeChannelWriteStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
+    private readonly FakeChannelModelPriceStore _prices = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -45,6 +48,7 @@ public sealed class AdminChannelUpdateEndpointTests : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
+        builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
         builder.Services.AddSingleton(_limiters);
         builder.Services.AddSingleton<ChannelLifecycleService>();
 
@@ -383,6 +387,66 @@ public sealed class AdminChannelUpdateEndpointTests : IAsyncLifetime
         var protocols = settings.RootElement.GetProperty("modelProtocols");
         Assert.Equal(1, protocols.GetArrayLength());
         Assert.Equal("a", protocols[0].GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateChannelEnsuresPricesOnlyWhenSupportedModelsIsProvided()
+    {
+        var channel = SeedChannel(name: "PriceUpdate");
+
+        // Absent: the column is untouched and no ensure runs (input nil).
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { name = "Renamed" },
+            });
+        Assert.Empty(_prices.EnsureCalls);
+
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { supportedModels = SupportedModelsPriced },
+            });
+        var call = Assert.Single(_prices.EnsureCalls);
+        Assert.Equal(channel.Id, call.ChannelId);
+        Assert.Equal(SupportedModelsPriced, call.ModelIds);
+
+        // An empty list is still "provided" and runs the ensure.
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { supportedModels = Array.Empty<string>() },
+            });
+        Assert.Equal(2, _prices.EnsureCalls.Count);
+        Assert.Empty(_prices.EnsureCalls[1].ModelIds);
+    }
+
+    [Fact]
+    public async Task UpdateChannelSurfacesAutoPricingFailuresUnwrapped()
+    {
+        var channel = SeedChannel(name: "PriceUpdateFailure");
+        _prices.EnsureFailure = new StoreFailureException(
+            "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+            new InvalidOperationException("boom"));
+
+        var errors = await QueryErrorsAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { supportedModels = SupportedModelsGpt4o },
+            });
+
+        // UpdateChannel returns the ensure error unchanged.
+        Assert.Equal(
+            "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+            errors[0].GetProperty("message").GetString());
     }
 
     [Fact]

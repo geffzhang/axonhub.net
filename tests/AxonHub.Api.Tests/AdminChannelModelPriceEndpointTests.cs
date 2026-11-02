@@ -887,5 +887,13 @@ public sealed class AdminChannelModelPriceEndpointTests : IAsyncLifetime
             long channelModelPriceId,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException("versions are asserted in the persistence tests");
+
+        public Task<bool> EnsureAutoPricesAsync(
+            long channelId,
+            IReadOnlyList<string> modelIds,
+            ModelCardPriceJsonFactory modelCardToPriceJson,
+            ChannelPriceReferenceIdFactory referenceIdFactory,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("auto-pricing is covered by the channel lifecycle tests");
     }
 }

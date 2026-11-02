@@ -112,6 +112,48 @@ public sealed class ChannelModelPriceVersionRecord
     public string ReferenceId { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// Row of the reference <c>models</c> table (internal/ent/schema/model.go). The
+/// model library supplies the automatic channel prices: each enabled or
+/// disabled model's <see cref="ModelCard"/> carries the per-token costs.
+/// </summary>
+public sealed class ModelRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Developer { get; set; } = string.Empty;
+
+    public string ModelId { get; set; } = string.Empty;
+
+    /// <summary>Ent enum model.Type: chat / embedding / rerank / image_generation / video_generation.</summary>
+    public string Type { get; set; } = "chat";
+
+    public string Name { get; set; } = string.Empty;
+
+    public string Icon { get; set; } = string.Empty;
+
+    /// <summary>SQL keyword, always quoted by the generated DDL.</summary>
+    public string Group { get; set; } = string.Empty;
+
+    /// <summary>objects.ModelCard JSON; costs are float64 numbers.</summary>
+    public string ModelCard { get; set; } = "{}";
+
+    /// <summary>objects.ModelSettings JSON.</summary>
+    public string Settings { get; set; } = "{}";
+
+    /// <summary>Ent enum model.Status: enabled / disabled / archived.</summary>
+    public string Status { get; set; } = "disabled";
+
+    public string? Remark { get; set; }
+}
+
 /// <summary>Row of the reference <c>requests</c> table.</summary>
 public sealed class RequestRecord
 {

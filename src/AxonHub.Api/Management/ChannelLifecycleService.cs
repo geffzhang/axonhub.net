@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AxonHub.Abstractions;
+using AxonHub.Api.Billing;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
@@ -18,7 +19,8 @@ namespace AxonHub.Api.Management;
 /// </summary>
 public sealed class ChannelLifecycleService(
     IChannelWriteStore channels,
-    ChannelLimiterManager limiters)
+    ChannelLimiterManager limiters,
+    IChannelModelPriceStore prices)
 {
     /// <summary>
     /// Port of ChannelService.apiKeyOpsLock: the reference serializes every
@@ -167,7 +169,18 @@ public sealed class ChannelLifecycleService(
         ChannelRecord? created;
         try
         {
-            created = await channels.CreateAsync(record, cancellationToken)
+            // CreateChannel runs ensureChannelModelPrices inside the create
+            // transaction (channel.go:647-660): the channel's supported models
+            // are priced from the model library before the commit.
+            created = await channels.CreateAsync(
+                    record,
+                    (channelId, token) => prices.EnsureAutoPricesAsync(
+                        channelId,
+                        command.SupportedModels,
+                        ModelCardPricing.ToPriceJson,
+                        ChannelModelPriceService.GenerateReferenceId,
+                        token),
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (StoreFailureException ex)
@@ -549,10 +562,28 @@ public sealed class ChannelLifecycleService(
             ExpectedUpdatedAt = guardProviderIdentity ? snapshot.UpdatedAt : null,
         };
 
+        // UpdateChannel only ensures prices when SupportedModels was provided
+        // (nil means untouched; an empty list still runs the ensure), and the
+        // call shares the update's transaction (channel.go:1163-1167).
+        var ensureModels = command.SupportedModels;
+        Func<long, CancellationToken, Task>? afterUpdate =
+            ensureModels is null
+                ? null
+                : (channelId, token) => prices.EnsureAutoPricesAsync(
+                    channelId,
+                    ensureModels,
+                    ModelCardPricing.ToPriceJson,
+                    ChannelModelPriceService.GenerateReferenceId,
+                    token);
+
         ChannelRecord? updated;
         try
         {
-            updated = await channels.UpdateAsync(snapshot, update, cancellationToken)
+            updated = await channels.UpdateAsync(
+                    snapshot,
+                    update,
+                    afterUpdate,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (StoreFailureException ex)

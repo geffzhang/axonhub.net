@@ -15,9 +15,9 @@ public sealed class SchemaTests(PostgresFixture fixture)
     private static readonly string[] ExpectedTables =
     [
         "api_keys", "channel_model_price_versions", "channel_model_prices", "channels",
-        "projects", "prompt_protection_rules", "request_executions", "requests", "roles",
-        "systems", "threads", "traces", "usage_logs", "user_projects", "user_roles",
-        "users",
+        "models", "projects", "prompt_protection_rules", "request_executions", "requests",
+        "roles", "systems", "threads", "traces", "usage_logs", "user_projects",
+        "user_roles", "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -61,6 +61,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
             "id", "created_at", "updated_at", "channel_id", "model_id", "price",
             "status", "effective_start_at", "effective_end_at", "reference_id",
             "channel_model_price_id",
+        ],
+        ["models"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "developer", "model_id",
+            "type", "name", "icon", "group", "model_card", "settings", "status",
+            "remark",
         ],
         ["prompt_protection_rules"] =
         [
@@ -189,6 +195,17 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["jsonb"] = ["price"],
                 ["character varying"] = ["model_id", "status", "reference_id"],
             },
+            ["models"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] = ["model_card", "settings"],
+                ["character varying"] =
+                [
+                    "developer", "model_id", "type", "name", "icon", "group", "status",
+                    "remark",
+                ],
+            },
             ["prompt_protection_rules"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["bigint"] = ["id", "deleted_at"],
@@ -306,6 +323,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["channel_model_price_versions_reference_id_key"] =
                 ("channel_model_price_versions", true, ["reference_id"]),
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
+            ["models_by_name"] = ("models", true, ["name", "deleted_at"]),
+            ["models_by_model_id"] = ("models", true, ["model_id", "deleted_at"]),
             ["projects_by_name"] = ("projects", true, ["name", "deleted_at"]),
             ["user_email_deleted_at"] = ("users", true, ["email", "deleted_at"]),
             ["api_keys_by_user_id"] = ("api_keys", false, ["user_id"]),

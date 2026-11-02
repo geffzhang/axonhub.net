@@ -32,6 +32,8 @@ public sealed class AdminChannelCreateEndpointTests : IAsyncLifetime
     private static readonly string[] ChatCompletionFormat = ["openai/chat_completions"];
     private static readonly int[] RetryableStatusCodes399 = [399];
     private static readonly string[] BogusFormat = ["bogus/format"];
+    private static readonly string[] PricedModels = ["gpt-4o", "gpt-4o-mini"];
+    private static readonly string[] SinglePricedModel = ["gpt-4o"];
 
     private const string CreateMutation =
         """
@@ -45,6 +47,7 @@ public sealed class AdminChannelCreateEndpointTests : IAsyncLifetime
 
     private readonly FakeChannelWriteStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
+    private readonly FakeChannelModelPriceStore _prices = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -55,6 +58,7 @@ public sealed class AdminChannelCreateEndpointTests : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
+        builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
         builder.Services.AddSingleton(_limiters);
         builder.Services.AddSingleton<ChannelLifecycleService>();
 
@@ -777,6 +781,59 @@ public sealed class AdminChannelCreateEndpointTests : IAsyncLifetime
             });
 
         Assert.Equal("failed to create channel: boom", errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task CreateChannelEnsuresPricesForTheSupportedModels()
+    {
+        var data = await QueryDataAsync(
+            CreateMutation,
+            new
+            {
+                input = new
+                {
+                    type = "openai",
+                    name = "Priced",
+                    credentials = new { apiKey = "sk-priced" },
+                    supportedModels = PricedModels,
+                    defaultTestModel = "gpt-4o",
+                },
+            });
+
+        Assert.Equal("Priced", data.GetProperty("createChannel").GetProperty("name").GetString());
+        var created = Assert.Single(_channels.CreatedChannels);
+        var call = Assert.Single(_prices.EnsureCalls);
+        Assert.Equal(created.Id, call.ChannelId);
+        Assert.Equal(PricedModels, call.ModelIds);
+    }
+
+    [Fact]
+    public async Task CreateChannelRollsBackAndSurfacesAutoPricingFailures()
+    {
+        _prices.EnsureFailure = new StoreFailureException(
+            "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+            new InvalidOperationException("boom"));
+
+        var errors = await QueryErrorsAsync(
+            CreateMutation,
+            new
+            {
+                input = new
+                {
+                    type = "openai",
+                    name = "BrokenPricing",
+                    credentials = new { apiKey = "k" },
+                    supportedModels = SinglePricedModel,
+                    defaultTestModel = string.Empty,
+                },
+            });
+
+        // CreateChannel returns the ensure error unchanged and the fake rolls
+        // the inserted row back like the real transaction.
+        Assert.Equal(
+            "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+            errors[0].GetProperty("message").GetString());
+        Assert.Empty(_channels.CreatedChannels);
     }
 
     [Fact]

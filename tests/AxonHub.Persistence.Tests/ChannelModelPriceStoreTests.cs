@@ -15,6 +15,8 @@ public sealed class ChannelModelPriceStoreTests(PostgresFixture fixture)
 {
     private static readonly DateTime CreatedAt = new(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
     private static readonly DateTime UpdatedAt = new(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+    private static readonly string[] AutoPricedModels = ["gpt-4o", "gpt-4o-mini"];
+    private static readonly string[] AutoPriceReferences = ["auto-ref-1", "auto-ref-2"];
 
     private const string PriceJson =
         """{"items":[{"itemCode":"prompt_tokens","pricing":{"mode":"usage_per_unit","usagePerUnit":"0.03"}}]}""";
@@ -537,6 +539,213 @@ public sealed class ChannelModelPriceStoreTests(PostgresFixture fixture)
             deleteError.Message);
     }
 
+    [Fact]
+    public async Task EnsureAutoPricesFillsMissingPricesFromTheModelLibrary()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-ensure"));
+        var channelUpdatedAt = await ChannelUpdatedAtAsync(context, channelId);
+
+        SeedModel(context, "gpt-4o", "enabled", """{"priced":true}""");
+        SeedModel(context, "gpt-4o-mini", "disabled", """{"priced":true}""");
+        SeedModel(context, "archived-model", "archived", """{"priced":true}""");
+        SeedModel(
+            context,
+            "deleted-model",
+            "enabled",
+            """{"priced":true}""",
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        SeedModel(context, "unpriced-model", "enabled", """{"priced":false}""");
+        await context.SaveChangesAsync();
+
+        var nextReference = 0;
+        var created = await store.EnsureAutoPricesAsync(
+            channelId,
+            [
+                "gpt-4o",
+                "gpt-4o-mini",
+                "archived-model",
+                "deleted-model",
+                "unpriced-model",
+                "missing-model",
+                "gpt-4o",
+                "",
+            ],
+            card => JsonNode.Parse(card)?["priced"]?.GetValue<bool>() == true
+                ? PriceJson
+                : null,
+            () => "auto-ref-" + (++nextReference));
+
+        Assert.True(created);
+        Assert.Equal(2, nextReference);
+
+        // Only enabled/disabled live models with a usable card are priced, in
+        // first-occurrence order; duplicates and blank ids are dropped.
+        var rows = await store.ListByChannelAsync(channelId);
+        Assert.Equal(AutoPricedModels, rows.Select(row => row.ModelId).ToArray());
+        Assert.Equal(AutoPriceReferences, rows.Select(row => row.ReferenceId).ToArray());
+
+        foreach (var row in rows)
+        {
+            Assert.Equal(channelId, row.ChannelId);
+
+            var version = Assert.Single(await store.ListVersionsAsync(row.Id));
+            Assert.Equal(channelId, version.ChannelId);
+            Assert.Equal(row.ModelId, version.ModelId);
+            Assert.Equal(row.Id, version.ChannelModelPriceId);
+            Assert.Equal("active", version.Status);
+            Assert.Equal(row.ReferenceId, version.ReferenceId);
+            AssertJsonEquivalent(PriceJson, version.Price);
+            Assert.Null(version.EffectiveEndAt);
+        }
+
+        // ensureChannelModelPrices never touches the channel row.
+        Assert.Equal(channelUpdatedAt, await ChannelUpdatedAtAsync(context, channelId));
+    }
+
+    [Fact]
+    public async Task EnsureAutoPricesKeepsExistingPricesAndVersionHistory()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-ensure-idempotent"));
+        SeedModel(context, "gpt-4o", "enabled", """{"priced":true}""");
+        SeedModel(context, "gpt-4.1", "enabled", """{"priced":true}""");
+        await context.SaveChangesAsync();
+
+        var nextReference = 0;
+        string NextReference() => "auto-ref-" + (++nextReference);
+
+        Assert.True(await store.EnsureAutoPricesAsync(
+            channelId, ["gpt-4o"], _ => PriceJson, NextReference));
+
+        var manualId = await store.CreateAsync(NewPrice(channelId, "gpt-4.1", "manual-ref"));
+
+        var again = await store.EnsureAutoPricesAsync(
+            channelId,
+            ["gpt-4o", "gpt-4.1", "gpt-4o"],
+            _ => PriceJson,
+            NextReference);
+
+        Assert.False(again);
+        Assert.Equal(1, nextReference);
+
+        var rows = await store.ListByChannelAsync(channelId);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("auto-ref-1", rows.Single(row => row.ModelId == "gpt-4o").ReferenceId);
+        var untouched = rows.Single(row => row.ModelId == "gpt-4.1");
+        Assert.Equal(manualId, untouched.Id);
+        Assert.Equal("manual-ref", untouched.ReferenceId);
+
+        var versions = await store.ListVersionsAsync(manualId);
+        Assert.Empty(versions);
+        Assert.Single(await store.ListVersionsAsync(rows.Single(row => row.ModelId == "gpt-4o").Id));
+    }
+
+    [Fact]
+    public async Task EnsureAutoPricesJoinsTheCallersTransaction()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-ensure-rollback"));
+        SeedModel(context, "gpt-4o", "enabled", """{"priced":true}""");
+        await context.SaveChangesAsync();
+
+        await using (var transaction = await context.Database.BeginTransactionAsync())
+        {
+            Assert.True(await store.EnsureAutoPricesAsync(
+                channelId, ["gpt-4o"], _ => PriceJson, () => "auto-ref-rollback"));
+
+            // The rows are visible inside the caller's transaction.
+            Assert.Single(await store.ListByChannelAsync(channelId));
+
+            await transaction.RollbackAsync();
+        }
+
+        Assert.Empty(await store.ListByChannelAsync(channelId));
+        await using var connection = await db.Factory.OpenAsync();
+        Assert.Equal(
+            0,
+            await connection.ExecuteScalarAsync<long>(
+                "SELECT count(*) FROM \"channel_model_price_versions\";"));
+    }
+
+    [Fact]
+    public async Task EnsureAutoPricesWrapsCreationFailuresWithTheModelPrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-ensure-duplicate-ref"));
+        SeedModel(context, "model-a", "enabled", """{"priced":true}""");
+        SeedModel(context, "model-b", "enabled", """{"priced":true}""");
+        await context.SaveChangesAsync();
+
+        // The candidate reference id is globally unique, so the second insert
+        // fails and the whole standalone ensure transaction rolls back.
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.EnsureAutoPricesAsync(
+                channelId,
+                ["model-a", "model-b"],
+                _ => PriceJson,
+                () => "colliding-ref"));
+
+        Assert.StartsWith(
+            "failed to auto-configure channel model price: model_id=model-b: "
+                + "failed to create channel model price: ",
+            error.Message,
+            StringComparison.Ordinal);
+
+        Assert.Empty(await store.ListByChannelAsync(channelId));
+        await using var connection = await db.Factory.OpenAsync();
+        Assert.Equal(
+            0,
+            await connection.ExecuteScalarAsync<long>(
+                "SELECT count(*) FROM \"channel_model_price_versions\";"));
+    }
+
+    [Fact]
+    public async Task EnsureAutoPricesWrapsModelCardFailuresWithTheLibraryPrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-ensure-bad-card"));
+        SeedModel(context, "gpt-4o", "enabled", """{"priced":true}""");
+        await context.SaveChangesAsync();
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.EnsureAutoPricesAsync(
+                channelId,
+                ["gpt-4o"],
+                _ => throw new InvalidOperationException("bad model card"),
+                () => "auto-ref"));
+
+        // ent decodes model_card while scanning the query rows, so the failure
+        // carries the library query prefix and nothing is written.
+        Assert.Equal("failed to query model prices from model library: bad model card", error.Message);
+        Assert.Empty(await store.ListByChannelAsync(channelId));
+    }
+
     /// <summary>
     /// jsonb round-trips rewrite whitespace and key order, so stored prices are
     /// compared structurally (the reference only ever decodes them).
@@ -573,6 +782,33 @@ public sealed class ChannelModelPriceStoreTests(PostgresFixture fixture)
         Settings = "{}",
         Endpoints = """["chat"]""",
     };
+
+    private static ModelRecord SeedModel(
+        AxonHubDbContext context,
+        string modelId,
+        string status,
+        string modelCard,
+        long deletedAt = 0)
+    {
+        var model = new ModelRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            DeletedAt = deletedAt,
+            Developer = "test-developer",
+            ModelId = modelId,
+            Type = "chat",
+            Name = modelId + "-name",
+            Icon = "TestIcon",
+            Group = "test-group",
+            ModelCard = modelCard,
+            Settings = "{}",
+            Status = status,
+        };
+
+        context.Models.Add(model);
+        return model;
+    }
 
     private static ChannelModelPriceRecord NewPrice(long channelId, string modelId, string referenceId)
         => new()

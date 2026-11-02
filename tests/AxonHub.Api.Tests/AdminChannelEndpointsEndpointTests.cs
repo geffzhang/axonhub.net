@@ -33,6 +33,7 @@ public sealed class AdminChannelEndpointsEndpointTests : IAsyncLifetime
 
     private readonly FakeChannelWriteStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
+    private readonly FakeChannelModelPriceStore _prices = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -43,6 +44,7 @@ public sealed class AdminChannelEndpointsEndpointTests : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
+        builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
         builder.Services.AddSingleton(_limiters);
         builder.Services.AddSingleton<ChannelLifecycleService>();
 

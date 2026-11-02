@@ -1175,6 +1175,122 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         return document.RootElement.Clone();
     }
 
+    [Fact]
+    public async Task CreateRunsTheAfterInsertHookInsideTheTransaction()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        long? hookChannelId = null;
+        var created = await store.CreateAsync(
+            CreateRecord("HookCreate"),
+            async (channelId, token) =>
+            {
+                hookChannelId = channelId;
+                context.ChannelModelPrices.Add(new ChannelModelPriceRecord
+                {
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow,
+                    ChannelId = channelId,
+                    ModelId = "gpt-4o",
+                    Price = """{"items":[]}""",
+                    ReferenceId = "hook-ref",
+                });
+                await context.SaveChangesAsync(token);
+            });
+
+        Assert.NotNull(created);
+        Assert.Equal(created.Id, hookChannelId);
+
+        // Both writes committed together.
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.True(await verify.ChannelModelPrices.AnyAsync(row => row.ChannelId == created.Id));
+    }
+
+    [Fact]
+    public async Task CreateRollsBackTheChannelWhenTheAfterInsertHookFails()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.CreateAsync(
+                CreateRecord("HookRollback"),
+                (_, _) => throw new StoreFailureException(
+                    "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+                    new InvalidOperationException("boom"))));
+
+        // CreateChannel returns the ensure error unchanged.
+        Assert.Equal(
+            "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+            error.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.False(await verify.Channels.AnyAsync(row => row.Name == "HookRollback"));
+    }
+
+    [Fact]
+    public async Task UpdateRunsTheAfterUpdateHookAfterTheSave()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(context);
+        var snapshot = await store.GetForUpdateAsync(channel.Id);
+        Assert.NotNull(snapshot);
+
+        string? nameInsideHook = null;
+        var updated = await store.UpdateAsync(
+            snapshot,
+            new ChannelUpdateRecord { Name = "Renamed" },
+            async (id, token) =>
+            {
+                nameInsideHook = await context.Channels
+                    .AsNoTracking()
+                    .Where(row => row.Id == id)
+                    .Select(row => row.Name)
+                    .SingleAsync(token);
+            });
+
+        Assert.NotNull(updated);
+        Assert.Equal("Renamed", nameInsideHook);
+    }
+
+    [Fact]
+    public async Task UpdateRollsBackTheRowWhenTheAfterUpdateHookFails()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(context);
+        var snapshot = await store.GetForUpdateAsync(channel.Id);
+        Assert.NotNull(snapshot);
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.UpdateAsync(
+                snapshot,
+                new ChannelUpdateRecord { Name = "Renamed" },
+                (_, _) => throw new StoreFailureException(
+                    "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+                    new InvalidOperationException("boom"))));
+
+        Assert.Equal(
+            "failed to auto-configure channel model price: model_id=gpt-4o: boom",
+            error.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Equal("Alpha", reloaded.Name);
+    }
+
     private static ChannelRecord CreateRecord(string name) => new()
     {
         CreatedAt = CreatedAt,

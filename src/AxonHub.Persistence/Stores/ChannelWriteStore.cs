@@ -139,12 +139,18 @@ public interface IChannelWriteStore
     /// as ent's not-found -> "channel was updated concurrently"). The snapshot
     /// supplies the identity and the untouched columns of the returned row.
     /// </summary>
+    /// <param name="afterUpdate">
+    /// Runs inside the same transaction as the update, exactly like the
+    /// reference's nested ensureChannelModelPrices call (channel.go:1163-1167);
+    /// its failures roll the update back and are rethrown unwrapped.
+    /// </param>
     /// <exception cref="StoreFailureException">
     /// The read/update failed; the message already carries "failed to update channel".
     /// </exception>
     Task<ChannelRecord?> UpdateAsync(
         ChannelRecord snapshot,
         ChannelUpdateRecord update,
+        Func<long, CancellationToken, Task>? afterUpdate = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -182,12 +188,18 @@ public interface IChannelWriteStore
     /// live channel already owns the name (the caller raises the coded
     /// duplicate-name error); a failed insert is a store failure.
     /// </summary>
+    /// <param name="afterInsert">
+    /// Runs inside the same transaction as the insert, exactly like the
+    /// reference's nested ensureChannelModelPrices call (channel.go:647-660);
+    /// its failures roll the insert back and are rethrown unwrapped.
+    /// </param>
     /// <exception cref="StoreFailureException">
     /// The name check or insert failed; the message already carries the
     /// reference prefix ("failed to check channel name"/"failed to create channel").
     /// </exception>
     Task<ChannelRecord?> CreateAsync(
         ChannelRecord channel,
+        Func<long, CancellationToken, Task>? afterInsert = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -343,6 +355,7 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
     public async Task<ChannelRecord?> UpdateAsync(
         ChannelRecord snapshot,
         ChannelUpdateRecord update,
+        Func<long, CancellationToken, Task>? afterUpdate = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -369,6 +382,12 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
             ? null
             : update.AutoSyncModelPattern;
         var now = DateTime.UtcNow;
+
+        // UpdateChannel wraps the save and the follow-up ensureChannelModelPrices
+        // in one RunInTransaction (channel.go:1072-1172); the hook joins it.
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
 
         int affected;
         try
@@ -424,9 +443,17 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
         if (affected == 0)
         {
             // The row vanished or the loaded updated_at no longer matches; ent
-            // reports both as not found.
+            // reports both as not found. Disposing rolls the transaction back
+            // (nothing was written).
             return null;
         }
+
+        if (afterUpdate is not null)
+        {
+            await afterUpdate(snapshot.Id, cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
         // ent returns the saved entity. The port projects the loaded snapshot
         // instead of reloading; concurrent edits of untouched columns are
@@ -568,6 +595,7 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
 
     public async Task<ChannelRecord?> CreateAsync(
         ChannelRecord channel,
+        Func<long, CancellationToken, Task>? afterInsert = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -591,6 +619,12 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
             return null;
         }
 
+        // CreateChannel wraps createChannel and ensureChannelModelPrices in one
+        // RunInTransaction (channel.go:647-660).
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         try
         {
             db.Channels.Add(channel);
@@ -601,6 +635,15 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
             throw new StoreFailureException("failed to create channel: " + ex.Message, ex);
         }
 
+        if (afterInsert is not null)
+        {
+            // A StoreFailureException from the pricing hook keeps its own
+            // prefix, exactly like the reference returning the ensure error
+            // unchanged from CreateChannel's transaction.
+            await afterInsert(channel.Id, cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return channel;
     }
 

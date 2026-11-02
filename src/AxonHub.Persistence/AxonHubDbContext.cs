@@ -28,6 +28,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<ChannelModelPriceVersionRecord> ChannelModelPriceVersions => Set<ChannelModelPriceVersionRecord>();
 
+    public DbSet<ModelRecord> Models => Set<ModelRecord>();
+
     public DbSet<RequestRecord> Requests => Set<RequestRecord>();
 
     public DbSet<RequestExecutionRecord> RequestExecutions => Set<RequestExecutionRecord>();
@@ -78,6 +80,7 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureChannel(modelBuilder.Entity<ChannelRecord>());
         ConfigureChannelModelPrice(modelBuilder.Entity<ChannelModelPriceRecord>());
         ConfigureChannelModelPriceVersion(modelBuilder.Entity<ChannelModelPriceVersionRecord>());
+        ConfigureModel(modelBuilder.Entity<ModelRecord>());
         ConfigureRequest(modelBuilder.Entity<RequestRecord>());
         ConfigureRequestExecution(modelBuilder.Entity<RequestExecutionRecord>());
         ConfigureUsageLog(modelBuilder.Entity<UsageLogRecord>());
@@ -479,6 +482,48 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
         builder.HasIndex(version => version.ReferenceId)
             .HasDatabaseName("channel_model_price_versions_reference_id_key")
+            .IsUnique();
+    }
+
+    private static void ConfigureModel(EntityTypeBuilder<ModelRecord> builder)
+    {
+        builder.ToTable("models");
+        builder.HasKey(model => model.Id);
+        builder.Property(model => model.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(model => model.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(model => model.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        builder.Property(model => model.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(model => model.Developer)
+            .HasColumnName("developer")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(model => model.ModelId)
+            .HasColumnName("model_id")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(model => model.Type).HasColumnName("type").HasColumnType("varchar").IsRequired();
+        builder.Property(model => model.Name).HasColumnName("name").HasColumnType("varchar").IsRequired();
+        builder.Property(model => model.Icon).HasColumnName("icon").HasColumnType("varchar").IsRequired();
+        builder.Property(model => model.Group).HasColumnName("group").HasColumnType("varchar").IsRequired();
+        builder.Property(model => model.ModelCard)
+            .HasColumnName("model_card")
+            .HasColumnType("jsonb")
+            .IsRequired();
+        builder.Property(model => model.Settings)
+            .HasColumnName("settings")
+            .HasColumnType("jsonb")
+            .IsRequired();
+        builder.Property(model => model.Status).HasColumnName("status").HasColumnType("varchar").IsRequired();
+        builder.Property(model => model.Remark).HasColumnName("remark").HasColumnType("varchar");
+
+        builder.HasIndex(model => new { model.Name, model.DeletedAt })
+            .HasDatabaseName("models_by_name")
+            .IsUnique();
+        builder.HasIndex(model => new { model.ModelId, model.DeletedAt })
+            .HasDatabaseName("models_by_model_id")
             .IsUnique();
     }
 

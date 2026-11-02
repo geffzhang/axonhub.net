@@ -56,6 +56,7 @@ public sealed class AdminChannelBulkEndpointTests : IAsyncLifetime
 
     private readonly FakeChannelWriteStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
+    private readonly FakeChannelModelPriceStore _prices = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -66,6 +67,7 @@ public sealed class AdminChannelBulkEndpointTests : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
+        builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
         builder.Services.AddSingleton(_limiters);
         builder.Services.AddSingleton<ChannelLifecycleService>();
 
@@ -405,7 +407,7 @@ public sealed class AdminChannelBulkEndpointTests : IAsyncLifetime
     {
         // The GraphQL enum makes this branch unreachable from the wire, but the
         // service keeps the reference's %q error for parity (channel_bulk.go:274).
-        var service = new ChannelLifecycleService(_channels, _limiters);
+        var service = new ChannelLifecycleService(_channels, _limiters, _prices);
 
         var error = await Assert.ThrowsAsync<CodedException>(
             () => service.BulkUpdateAutoDisableAsync(new BulkUpdateAutoDisableCommand
