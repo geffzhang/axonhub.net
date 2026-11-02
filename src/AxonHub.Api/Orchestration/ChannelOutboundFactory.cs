@@ -851,6 +851,207 @@ public static class ChannelOutboundFactory
     }
 
     /// <summary>
+    /// The primary outbound API format of a channel type: the first entry of
+    /// <c>defaultEndpointsForChannelType</c> (channel_endpoint.go:225-345).
+    /// Returns null for the types the reference registers no default endpoint
+    /// for (opencode_go_anthropic) or does not model.
+    /// </summary>
+    public static string? PrimaryApiFormat(string channelType)
+        => channelType switch
+        {
+            OpenAiChannelType or ZenmuxChannelType or AtlascloudChannelType
+                or VercelChannelType or DeepinfraChannelType or QiniuChannelType
+                or PpioChannelType or SiliconflowChannelType or AihubmixChannelType
+                or BurncloudChannelType or GithubChannelType or EvolinkChannelType
+                or GroqChannelType or ClineChannelType or GeminiOpenAiChannelType
+                or DeepSeekChannelType or FireworksChannelType or DoubaoChannelType
+                or VolcengineChannelType or MoonshotChannelType or ZhipuChannelType
+                or ZaiChannelType or XiaomiChannelType or OpenRouterChannelType
+                or LongcatChannelType or MinimaxChannelType or ModelscopeChannelType
+                or BailianChannelType or GithubCopilotChannelType or CerebrasChannelType
+                or NanogptChannelType or OpenCodeGoChannelType or CommandcodeChannelType
+                or XaiChannelType
+                => ApiFormats.OpenAIChatCompletion,
+            OpenaiResponsesChannelType or ZenmuxResponsesChannelType or CodexChannelType
+                or FennoChannelType or BailianResponsesChannelType
+                or NanogptResponsesChannelType or XaiResponsesChannelType
+                or XaiSubscriptionChannelType
+                => ApiFormats.OpenAIResponse,
+            AnthropicChannelType or ZenmuxAnthropicChannelType or AnthropicAwsChannelType
+                or AnthropicGcpChannelType or QiniuAnthropicChannelType
+                or AihubmixAnthropicChannelType or EvolinkAnthropicChannelType
+                or DeepseekAnthropicChannelType or MoonshotAnthropicChannelType
+                or ZhipuAnthropicChannelType or ZaiAnthropicChannelType
+                or XiaomiAnthropicChannelType or LongcatAnthropicChannelType
+                or MinimaxAnthropicChannelType or DoubaoAnthropicChannelType
+                or VolcengineAnthropicChannelType or BailianAnthropicChannelType
+                or MoonshotCodingChannelType or ClaudeCodeChannelType
+                or OllamaAnthropicChannelType or CommandcodeAnthropicChannelType
+                => ApiFormats.AnthropicMessage,
+            GeminiChannelType or ZenmuxGeminiChannelType or GeminiVertexChannelType
+                or AntigravityChannelType
+                => ApiFormats.GeminiContents,
+            JinaChannelType => ApiFormats.JinaRerank,
+            OllamaChannelType => ApiFormats.OllamaChat,
+            TypeSafeChannelType => ApiFormats.TypeSafeSystemOne,
+            ZenmuxVideoChannelType => ApiFormats.ZenmuxVideo,
+            _ => null,
+        };
+
+    /// <summary>
+    /// Port of <c>buildNonDefaultEndpointOutbound</c>'s three auto-detection
+    /// branches (channel_llm.go:393-560): the generic transformer a channel
+    /// gets for an API format outside its default endpoint set. Codex/Fenno
+    /// responses and Command Code messages keep their family transformers,
+    /// exactly like the reference switch; chat falls back to the family
+    /// transformer only when the base URL names the provider version
+    /// (channel_llm.go:610-628).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The format is not one of the three detection surfaces.
+    /// </exception>
+    public static IOutboundTransformer CreateNonDefaultEndpointOutbound(
+        ChannelCandidate candidate,
+        string apiFormat,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+
+        var baseUrl = ResolveChannelBaseUrl(candidate);
+
+        // channel_llm.go:408-412: every non-default outbound of a Command Code
+        // channel validates the base URL before the format switch.
+        if (candidate.Type is CommandcodeChannelType or CommandcodeAnthropicChannelType)
+        {
+            var parsed = Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out var commandCodeUri);
+            if (!parsed || commandCodeUri!.Scheme != Uri.UriSchemeHttps || commandCodeUri.Host.Length == 0)
+            {
+                throw new InvalidOperationException("Command Code base URL must use HTTPS");
+            }
+        }
+
+        var provider = new ChannelApiKeyProvider(
+            ChannelCredentials.GetEnabledApiKeys(candidate.Credentials, candidate.DisabledApiKeys, now),
+            ChannelCredentials.GetAllApiKeys(candidate.Credentials));
+
+        switch (apiFormat)
+        {
+            case ApiFormats.OpenAIChatCompletion:
+                if (candidate.Type == ClineChannelType)
+                {
+                    return new ClineOutboundTransformer(new ClineOutboundConfig
+                    {
+                        BaseUrl = baseUrl,
+                        ApiKeyProvider = provider,
+                        ChannelApiKeyIndex = provider.KeyIndex,
+                    });
+                }
+
+                if (ProviderChatEndpointUsesFamilyVersion(candidate.Type, baseUrl))
+                {
+                    return Create(candidate, new LlmRequest { ApiFormat = apiFormat }, now);
+                }
+
+                return OpenAiOutboundTransformer.Create(baseUrl, provider, provider.KeyIndex);
+            case ApiFormats.OpenAIResponse:
+                if (candidate.Type is CodexChannelType or FennoChannelType)
+                {
+                    return Create(candidate, new LlmRequest { ApiFormat = apiFormat }, now);
+                }
+
+                return new ResponsesOutboundTransformer(new ResponsesOutboundConfig
+                {
+                    BaseUrl = baseUrl,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                    Transport = InferTransport(baseUrl),
+                });
+            case ApiFormats.AnthropicMessage:
+                if (candidate.Type == CommandcodeChannelType)
+                {
+                    // channel_llm.go:526-534: a chat-format Command Code
+                    // channel opting into messages keeps the Command Code
+                    // platform (Bearer auth); Create would return its OpenAI
+                    // chat outbound because it dispatches on request format.
+                    return new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                    {
+                        Type = AnthropicPlatformType.CommandCode,
+                        BaseUrl = baseUrl,
+                        ApiKeyProvider = provider,
+                        ChannelApiKeyIndex = provider.KeyIndex,
+                    });
+                }
+
+                if (candidate.Type == CommandcodeAnthropicChannelType)
+                {
+                    return Create(candidate, new LlmRequest { ApiFormat = apiFormat }, now);
+                }
+
+                return new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                {
+                    Type = AnthropicPlatformType.Direct,
+                    BaseUrl = baseUrl,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                });
+            default:
+                throw new InvalidOperationException(
+                    "unsupported api_format for endpoint detection: " + apiFormat);
+        }
+    }
+
+    /// <summary>
+    /// The base URL <c>buildNonDefaultEndpointOutbound</c> starts from: the
+    /// entity's raw <c>base_url</c> (channel_llm.go:402). It deliberately skips
+    /// <c>buildChannelWithTransformer</c>'s ZenMux defaults, so a ZenMux channel
+    /// without an explicit base URL gets the reference's invalid_request probe
+    /// instead of its primary default route.
+    /// </summary>
+    public static string ResolveChannelBaseUrl(ChannelCandidate candidate)
+        => candidate.BaseUrl ?? string.Empty;
+
+    /// <summary>
+    /// Port of providerChatEndpointUsesFamilyVersion (channel_llm.go:610-628):
+    /// Xiaomi always uses its family transformer; Zai/Zhipu/Bailian-family
+    /// channels do only when the base URL carries v4/v3.
+    /// </summary>
+    private static bool ProviderChatEndpointUsesFamilyVersion(string channelType, string baseUrl)
+    {
+        if (channelType is XiaomiChannelType or XiaomiAnthropicChannelType)
+        {
+            return true;
+        }
+
+        var version = channelType switch
+        {
+            ZaiChannelType or ZhipuChannelType or ZhipuAnthropicChannelType
+                or ZaiAnthropicChannelType => "v4",
+            DoubaoChannelType or VolcengineChannelType or DoubaoAnthropicChannelType
+                or VolcengineAnthropicChannelType => "v3",
+            _ => null,
+        };
+
+        return version is not null && UrlPathContainsSegment(baseUrl, version);
+    }
+
+    /// <summary>Port of urlPathContainsSegment (channel_llm.go:630-638).</summary>
+    private static bool UrlPathContainsSegment(string rawUrl, string segment)
+    {
+        var trimmed = rawUrl.EndsWith("##", StringComparison.Ordinal)
+            ? rawUrl[..^2]
+            : rawUrl;
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        return uri.AbsolutePath
+            .Trim('/')
+            .Split('/')
+            .Contains(segment, StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Port of the zai/xiaomi branch of <c>newProviderChatOutbound</c>
     /// (channel_llm.go:575-597). The request_id fallback reads the shared
     /// session id, which the endpoint threads onto the wire request (C062).

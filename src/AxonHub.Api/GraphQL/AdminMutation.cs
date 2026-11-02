@@ -509,6 +509,38 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.DetectChannelEndpoints
+    /// (axonhub.resolvers.go:199-201; biz channel_endpoint_detect.go:72-115).
+    /// The reference resolver forwards the service error unchanged.
+    /// </summary>
+    [GraphQLName("detectChannelEndpoints")]
+    public async Task<DetectChannelEndpointsPayload> DetectChannelEndpointsAsync(
+        DetectChannelEndpointsInput input,
+        [Service] ChannelEndpointDetectService detector,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(input.ChannelID);
+
+        var result = await detector.DetectAsync(
+                new DetectChannelEndpointsCommand(gid.Id, input.Model),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new DetectChannelEndpointsPayload
+        {
+            Endpoints = result.Endpoints
+                .Select(static endpoint => new DetectedChannelEndpointType
+                {
+                    ApiFormat = endpoint.ApiFormat,
+                    Supported = endpoint.Supported,
+                    StatusCode = endpoint.StatusCode,
+                    Reason = endpoint.Reason,
+                })
+                .ToList(),
+        };
+    }
+
+    /// <summary>
     /// Port of mutationResolver.DisableChannelAPIKey
     /// (axonhub.resolvers.go:418-424; biz channel_apikey.go:23-144). The
     /// resolver always reports error code 0 and the manual-disable reason.

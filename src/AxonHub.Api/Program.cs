@@ -171,6 +171,10 @@ builder.Services.AddScoped<ChannelQueryService>();
 builder.Services.AddScoped<IChannelWriteStore, ChannelWriteStore>();
 builder.Services.AddScoped<ChannelLifecycleService>();
 
+// Endpoint auto-detection (detectChannelEndpoints): read-only upstream probes
+// built from the channel type's primary outbound and generic peers.
+builder.Services.AddScoped<ChannelEndpointDetectService>();
+
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
 // (routes.go:163). The first slice exposes the static scope catalog; the
 // reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported
