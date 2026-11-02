@@ -2334,6 +2334,59 @@ Transport、ValidateEndpoints 的 websocket/compact 拒绝）——C082/C094 同
 模型拉取沿用 C123/C088）。至此 openai_responses 通道的请求服务链路闭合，
 剩余为 provider_quota 与 ModelFetcher 的后台切片。
 
+## 58. Commandcode 通道接线（ChannelOutboundFactory 的 commandcode / commandcode_anthropic 分支，12 例，2026-11-02）
+
+参照路线：`internal/server/biz/channel_llm.go:1195-1204`
+（buildChannelWithTransformer 的 TypeCommandcode 分支：普通 openai.Config
+{PlatformOpenAI, BaseURL, APIKeyProvider}，错误包装 "failed to create
+outbound transformer"）、`:911-918`（TypeCommandcodeAnthropic 分支：anthropic
+Config{Type: PlatformCommandCode, BaseURL, APIKeyProvider}，同款错误包装）、
+`:640-647`（validateCommandCodeBaseURL：url.Parse(TrimSpace) 后 scheme https
+且 host 非空，否则 "Command Code base URL must use HTTPS"）、`:683-688`
+（凭据校验与默认分支同构：enabled keys 为空且无 key-test override 即
+"missing api key for channel %s"，配额采集 cookie 永不作推理凭据）、
+`:705-711`（两类通道在构建前校验 HTTPS 基址并把 HTTP client 换成
+WithRejectHTTPSDowngrade）、`channel_endpoint.go:339-340`（默认端点：
+commandcode = openAIChatOnlyDefaultEndpoints、commandcode_anthropic = 单一
+AnthropicMessage 端点）。Llm 层无新代码：AnthropicPlatformType.CommandCode
+（Bearer 而非 X-API-Key、signature 解码 / adaptive thinking / output_config
+与 Direct 同组，outbound.go:251、outbound_convert.go:96、thinking.go）已在
+Anthropic 出站切片中随枚举移植并锁定。
+
+测试面：参照有 `TestCommandCodeOutboundRouting`
+（channel_llm_commandcode_test.go）：chat 走 /chat/completions + Bearer、
+OpenAI 格式模型全通过、anthropic 走 /messages + Bearer、anthropic 端点与
+模型无关、普通 anthropic direct 保持 X-API-Key、缺 key 报错、apiKeyOverride
+两条（禁用 key 可被 override、空白 override 不替换）。端口补 12 例接线
+锁定：chat 出站与 Bearer、anthropic 出站与 Bearer 且 X-API-Key 恒缺省、
+缺 key 文案、非 HTTPS 与垃圾 URL 拒绝、大写 scheme 通过、key 检查先于 URL
+检查。apiKeyOverride 两条属通道 key 测试流（管理面），未移植，补记入 C014。
+
+本次移植新增：ChannelOutboundFactory 的 CommandcodeChannelType /
+CommandcodeAnthropicChannelType 常量、HTTPS 基址校验（先凭据后 URL 的顺序
+对齐参照）、两个 switch 分支（commandcode 复用 OpenAiOutboundTransformer
+.Create；commandcode_anthropic 以 AnthropicPlatformType.CommandCode 构造，
+参照的错误包装在凭据校验通过后不可达——anthropic 构造只有 Vertex 分支会
+失败——端口不包装）。测试 CommandcodeChannelWiringTests.cs（12 例）。
+
+未移植并登记：WithRejectHTTPSDowngrade（HTTPS→HTTP 重定向拒绝，端口共享
+executor 默认跟随重定向）登记为 C124 真实缺口；URL 解析严格性差异（Go
+url.Parse 接受 https://host:bad，.NET Uri.TryCreate 拒绝）并入 C124；
+channel_llm.go:527-529（commandcode 通道自定义 anthropic 格式端点 →
+PlatformCommandCode + EndpointPath）属端点表裁剪（C082）；模型路由
+isCommandCodeAnthropicModel（claude 前缀 → anthropic 通道）属 ModelFetcher
+缺口（C088）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| commandcode / commandcode_anthropic 的出站分派、Bearer 鉴权、HTTPS 基址校验与校验顺序 | `tests/AxonHub.Api.Tests/CommandcodeChannelWiringTests.cs` | 12 |
+
+`AxonHub.Api.Tests` 由 1124 增至 1136，其余三个项目不变；四个项目合计 4233
+增至 4245。差异条目新增 C124（真实缺口：HTTPS 降级拒绝与 URL 校验裁剪），
+C014 补记通道 key 测试流。至此 commandcode / commandcode_anthropic 通道的
+请求服务链路闭合，剩余为 key 测试流（管理面）与 provider_quota / 模型拉取
+（后台切片）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -2354,5 +2407,5 @@ Transport、ValidateEndpoints 的 websocket/compact 拒绝）——C082/C094 同
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表（data_storages / prompts / roles 等） | 请求链路四表、鉴权三表、`systems`、`traces`（第 30 节）与 `threads`（第 31 节）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合 | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、Commandcode 等） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、其余别名通道类型等） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口没有 `models` 表与 profile，列表恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

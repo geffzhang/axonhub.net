@@ -44,7 +44,8 @@ namespace AxonHub.Api.Orchestration;
 /// <c>buildChannel</c> → the channel-type switch).
 /// </summary>
 /// <remarks>
-/// Only the <c>openai</c>, <c>openai_responses</c>, <c>anthropic</c>, <c>claudecode</c>,
+/// Only the <c>openai</c>, <c>openai_responses</c>, <c>anthropic</c>,
+/// <c>commandcode</c>, <c>commandcode_anthropic</c>, <c>claudecode</c>,
 /// <c>opencode_go</c>, <c>opencode_go_anthropic</c>, <c>jina</c>,
 /// <c>typesafe</c>, <c>codex</c>, <c>fenno</c>, <c>deepseek</c>, <c>fireworks</c>,
 /// <c>moonshot</c>, <c>longcat</c>, <c>cline</c>, <c>xai</c>, <c>openrouter</c>,
@@ -72,6 +73,10 @@ public static class ChannelOutboundFactory
     public const string OpenaiResponsesChannelType = "openai_responses";
 
     public const string AnthropicChannelType = "anthropic";
+
+    public const string CommandcodeChannelType = "commandcode";
+
+    public const string CommandcodeAnthropicChannelType = "commandcode_anthropic";
 
     public const string AntigravityChannelType = "antigravity";
 
@@ -238,6 +243,23 @@ public static class ChannelOutboundFactory
                 "missing api key for channel " + candidate.ChannelName);
         }
 
+        // channel_llm.go:640-647, 705-711: both Command Code channel types
+        // require an HTTPS base URL. The reference also hands them an
+        // HTTPS-downgrade-rejecting client; that needs the per-channel client
+        // seam the port does not have yet (C124).
+        var commandCodeChannel = candidate.Type is CommandcodeChannelType or CommandcodeAnthropicChannelType;
+        if (commandCodeChannel)
+        {
+            var parsed = Uri.TryCreate(
+                (candidate.BaseUrl ?? string.Empty).Trim(),
+                UriKind.Absolute,
+                out var commandCodeUri);
+            if (!parsed || commandCodeUri!.Scheme != Uri.UriSchemeHttps || commandCodeUri.Host.Length == 0)
+            {
+                throw new InvalidOperationException("Command Code base URL must use HTTPS");
+            }
+        }
+
         // WithTrace publishes the resolved trace id as the shared session id
         // (shared.WithSessionID), which the endpoint threads onto the wire
         // request; the reference provider reads it back from the request context
@@ -291,6 +313,34 @@ public static class ChannelOutboundFactory
                 candidate.BaseUrl ?? string.Empty,
                 provider,
                 provider.KeyIndex),
+            // channel_llm.go:1195-1204: the commandcode channel's primary
+            // outbound is the plain OpenAI chat outbound; the default endpoint
+            // set is chat only (channel_endpoint.go:339). A custom
+            // Anthropic-format endpoint would be served by the Command Code
+            // anthropic outbound with Bearer auth (channel_llm.go:527-529),
+            // but the slice has no endpoint records (C082). Credential
+            // validation shares the generic enabled-keys check
+            // (channel_llm.go:683-688 behaves like the default case once the
+            // key-test override is absent; the port has no key-test flow,
+            // C014). The reference's error wrap is unreachable after the
+            // credential check.
+            CommandcodeChannelType => OpenAiOutboundTransformer.Create(
+                candidate.BaseUrl ?? string.Empty,
+                provider,
+                provider.KeyIndex),
+            // channel_llm.go:911-918: commandcode_anthropic speaks Anthropic
+            // Messages through the Command Code platform — Bearer auth instead
+            // of X-API-Key, with Direct-like signature decoding and thinking
+            // support (outbound.go:251, outbound_convert.go:96, thinking.go).
+            // The default endpoint set is a single messages endpoint
+            // (channel_endpoint.go:340).
+            CommandcodeAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+            {
+                Type = AnthropicPlatformType.CommandCode,
+                BaseUrl = candidate.BaseUrl ?? string.Empty,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
             // channel_llm.go:924-989: OAuth channels get a JSON-refreshing
             // Claude token provider; plain key channels rotate through the
             // per-attempt key provider.
