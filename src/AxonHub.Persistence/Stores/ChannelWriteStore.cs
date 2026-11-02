@@ -58,6 +58,34 @@ public sealed class ChannelUpdateRecord
 }
 
 /// <summary>
+/// Port of the Channel.UpdateOneID builder used by the API key bookkeeping
+/// (channel_apikey.go:84-108, 181-189, 211-217, 262-268, 347-353):
+/// disabled_api_keys is always written; credentials only when set; the recovery
+/// columns follow their clear flags. The reference applies no updated_at guard
+/// to these writes.
+/// </summary>
+public sealed class ChannelApiKeyStateRecord
+{
+    public long Id { get; init; }
+
+    public required string DisabledApiKeysJson { get; init; }
+
+    public string? CredentialsJson { get; init; }
+
+    public string? Status { get; set; }
+
+    public string? ErrorMessage { get; set; }
+
+    public bool ClearErrorMessage { get; set; }
+
+    public DateTime? AutoDisabledAt { get; set; }
+
+    public bool ClearAutoDisabledAt { get; set; }
+
+    public bool ClearAutoDisableExpiresAt { get; set; }
+}
+
+/// <summary>
 /// Port of biz.ChannelOrderingItem (channel_bulk.go:18-21): one channel's new
 /// failover priority.
 /// </summary>
@@ -132,6 +160,20 @@ public interface IChannelWriteStore
     Task<ChannelRecord?> SaveEndpointsAsync(
         ChannelRecord snapshot,
         string endpointsJson,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of the Channel.UpdateOneID(...).Save writes of the API key
+    /// bookkeeping (channel_apikey.go): always writes disabled_api_keys, writes
+    /// credentials only when provided, and applies the recovery-column clear
+    /// flags. Returns false when the live row no longer exists (ent not-found).
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The update failed; the message is the raw provider error (the caller
+    /// adds the reference's per-operation prefix).
+    /// </exception>
+    Task<bool> UpdateApiKeyStateAsync(
+        ChannelApiKeyStateRecord state,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -470,6 +512,58 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
         snapshot.Endpoints = endpointsJson;
         snapshot.UpdatedAt = now;
         return snapshot;
+    }
+
+    public async Task<bool> UpdateApiKeyStateAsync(
+        ChannelApiKeyStateRecord state,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(state.DisabledApiKeysJson);
+
+        var setErrorMessage = state.ClearErrorMessage || state.ErrorMessage is not null;
+        var errorMessage = state.ClearErrorMessage ? null : state.ErrorMessage;
+        var setAutoDisabledAt = state.ClearAutoDisabledAt || state.AutoDisabledAt is not null;
+        DateTime? autoDisabledAt = state.ClearAutoDisabledAt ? null : state.AutoDisabledAt;
+        var now = DateTime.UtcNow;
+
+        int affected;
+        try
+        {
+            // UpdateOneID(...).Save: the SoftDeleteMixin predicate applies, and
+            // the time mixin stamps updated_at. No version guard is used here.
+            affected = await db.Channels
+                .Where(row => row.Id == state.Id && row.DeletedAt == 0)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(row => row.DisabledApiKeys, state.DisabledApiKeysJson)
+                        .SetProperty(
+                            row => row.Credentials,
+                            row => state.CredentialsJson ?? row.Credentials)
+                        .SetProperty(row => row.Status, row => state.Status ?? row.Status)
+                        .SetProperty(
+                            row => row.ErrorMessage,
+                            row => setErrorMessage ? errorMessage : row.ErrorMessage)
+                        .SetProperty(
+                            row => row.AutoDisabledAt,
+                            row => setAutoDisabledAt ? autoDisabledAt : row.AutoDisabledAt)
+                        .SetProperty(
+                            row => row.AutoDisableExpiresAt,
+                            row => state.ClearAutoDisableExpiresAt
+                                ? (DateTime?)null
+                                : row.AutoDisableExpiresAt)
+                        .SetProperty(row => row.UpdatedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The caller wraps this with the operation-specific reference
+            // prefix ("failed to disable api key: ...").
+            throw new StoreFailureException(ex.Message, ex);
+        }
+
+        return affected > 0;
     }
 
     public async Task<ChannelRecord?> CreateAsync(

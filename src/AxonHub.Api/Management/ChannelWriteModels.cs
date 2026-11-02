@@ -140,6 +140,13 @@ public sealed class SaveChannelEndpointsCommand
 }
 
 /// <summary>
+/// Port of biz.DeleteDisabledAPIKeysResult (channel_apikey.go:280-284). Message
+/// is empty on success and <c>ONE_KEY_PRESERVED</c> when the last credential had
+/// to be restored.
+/// </summary>
+public sealed record DeleteDisabledApiKeysResult(bool Success, string Message);
+
+/// <summary>
 /// Port of objects.ChannelSettings (live channel.go:155-288) with Go's JSON
 /// tags, declaration order and <c>omitempty</c> behaviour. Nullable members are
 /// omitted by <c>ChannelWriteSerialization</c>; non-nullable members are always

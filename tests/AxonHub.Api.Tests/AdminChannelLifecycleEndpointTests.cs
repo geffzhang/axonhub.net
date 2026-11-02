@@ -514,6 +514,8 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public List<(long Id, string EndpointsJson)> SaveEndpointsCalls { get; } = [];
 
+    public List<ChannelApiKeyStateRecord> ApiKeyStateCalls { get; } = [];
+
     public List<(long Id, string Name)> NameChecks { get; } = [];
 
     /// <summary>Simulates a concurrent writer invalidating the version guard.</summary>
@@ -527,6 +529,11 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
     public Exception? GetFailure { get; set; }
 
     public Exception? SaveEndpointsFailure { get; set; }
+
+    public Exception? ApiKeyStateFailure { get; set; }
+
+    /// <summary>Simulates the row disappearing between the read and the write.</summary>
+    public bool ApiKeyStateRowMissing { get; set; }
 
     public Exception? NameCheckFailure { get; set; }
 
@@ -679,6 +686,53 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         snapshot.Endpoints = endpointsJson;
         snapshot.UpdatedAt = row.UpdatedAt;
         return Task.FromResult<ChannelRecord?>(snapshot);
+    }
+
+    public Task<bool> UpdateApiKeyStateAsync(
+        ChannelApiKeyStateRecord state,
+        CancellationToken cancellationToken = default)
+    {
+        if (ApiKeyStateFailure is not null)
+        {
+            throw ApiKeyStateFailure;
+        }
+
+        var row = _rows.SingleOrDefault(candidate =>
+            candidate.Id == state.Id && candidate.DeletedAt == 0);
+        if (row is null || ApiKeyStateRowMissing)
+        {
+            return Task.FromResult(false);
+        }
+
+        ApiKeyStateCalls.Add(state);
+        row.DisabledApiKeys = state.DisabledApiKeysJson;
+        row.Credentials = state.CredentialsJson ?? row.Credentials;
+        row.Status = state.Status ?? row.Status;
+        if (state.ClearErrorMessage)
+        {
+            row.ErrorMessage = null;
+        }
+        else if (state.ErrorMessage is not null)
+        {
+            row.ErrorMessage = state.ErrorMessage;
+        }
+
+        if (state.ClearAutoDisabledAt)
+        {
+            row.AutoDisabledAt = null;
+        }
+        else if (state.AutoDisabledAt is not null)
+        {
+            row.AutoDisabledAt = state.AutoDisabledAt;
+        }
+
+        if (state.ClearAutoDisableExpiresAt)
+        {
+            row.AutoDisableExpiresAt = null;
+        }
+
+        row.UpdatedAt = DateTime.UtcNow;
+        return Task.FromResult(true);
     }
 
     public Task<ChannelRecord?> CreateAsync(

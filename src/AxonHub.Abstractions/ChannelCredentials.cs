@@ -15,6 +15,14 @@ namespace AxonHub.Abstractions;
 /// </remarks>
 public static class ChannelCredentials
 {
+    /// <summary>
+    /// Port of objects.OAuthCredentialRef (internal/objects/channel.go:390-396):
+    /// the stable identity the auto-disable bookkeeping uses for an OAuth
+    /// channel, whose access token is replaced on every refresh. The sentinel
+    /// must never reach outbound requests or credential-management consumers.
+    /// </summary>
+    public const string OAuthCredentialRef = "__oauth__";
+
     /// <summary>Port of GetEnabledAPIKeys: legacy apiKey first, then apiKeys, minus active disables.</summary>
     public static IReadOnlyList<string> GetEnabledApiKeys(
         string? credentialsJson,
@@ -116,6 +124,66 @@ public static class ChannelCredentials
         }
 
         return keys;
+    }
+
+    /// <summary>
+    /// Port of GetAllCredentialRefs (internal/objects/channel.go:398-414): the
+    /// identities every credential the channel can be disabled on. OAuth
+    /// channels collapse to the single <see cref="OAuthCredentialRef"/>; every
+    /// other channel uses its API keys.
+    /// </summary>
+    public static IReadOnlyList<string> GetAllCredentialRefs(string? credentialsJson)
+    {
+        if (IsOAuth(credentialsJson))
+        {
+            return [OAuthCredentialRef];
+        }
+
+        return GetAllApiKeys(credentialsJson);
+    }
+
+    /// <summary>
+    /// Port of GetEnabledCredentialRefs: <see cref="GetAllCredentialRefs"/>
+    /// minus the active disable records (empty keys and elapsed temporary
+    /// disables do not hide a credential).
+    /// </summary>
+    public static IReadOnlyList<string> GetEnabledCredentialRefs(
+        string? credentialsJson,
+        IReadOnlyList<DisabledApiKey> disabledKeys,
+        DateTimeOffset now)
+    {
+        var candidates = GetAllCredentialRefs(credentialsJson);
+        if (disabledKeys.Count == 0)
+        {
+            return candidates;
+        }
+
+        var disabled = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var disabledKey in disabledKeys)
+        {
+            if (disabledKey.Key.Length == 0 || disabledKey.IsExpired(now))
+            {
+                continue;
+            }
+
+            disabled.Add(disabledKey.Key);
+        }
+
+        if (disabled.Count == 0)
+        {
+            return candidates;
+        }
+
+        var enabled = new List<string>(candidates.Count);
+        foreach (var key in candidates)
+        {
+            if (!disabled.Contains(key))
+            {
+                enabled.Add(key);
+            }
+        }
+
+        return enabled;
     }
 
     /// <summary>

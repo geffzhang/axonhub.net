@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AxonHub.Abstractions;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
@@ -19,6 +20,14 @@ public sealed class ChannelLifecycleService(
     IChannelWriteStore channels,
     ChannelLimiterManager limiters)
 {
+    /// <summary>
+    /// Port of ChannelService.apiKeyOpsLock: the reference serializes every
+    /// credential bookkeeping mutation with one process-wide mutex, so the
+    /// check-then-write sequence cannot interleave across requests. The port's
+    /// service is scoped, hence the static lock.
+    /// </summary>
+    private static readonly SemaphoreSlim ApiKeyOpsLock = new(1, 1);
+
     /// <summary>
     /// Port of ChannelService.CreateChannel (channel.go:633-671) over the frozen
     /// createChannel pipeline (channel.go:547-631), extended with the live
@@ -904,6 +913,428 @@ public sealed class ChannelLifecycleService(
         }
 
         return updated;
+    }
+
+    /// <summary>
+    /// Port of ChannelService.DisableAPIKey (channel_apikey.go:23-144): appends
+    /// an active disable record for the credential reference and disables the
+    /// whole channel when no enabled credential remains. The reference's
+    /// auto-disable event and cache reload have no counterpart in the port
+    /// (C149).
+    /// </summary>
+    public async Task DisableApiKeyAsync(
+        long channelId,
+        string key,
+        int errorCode,
+        string reason,
+        DateTime? expiresAt = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (key.Length == 0)
+        {
+            throw new InvalidOperationException("api key cannot be empty");
+        }
+
+        // The reference mutex (sync.Mutex) is not cancellable; block until it is free.
+        await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
+                .ConfigureAwait(false);
+            var disabledKeys = ParseDisabledKeys(snapshot);
+            var now = DateTime.UtcNow;
+
+            // OAuth channels expose the fixed OAuthCredentialRef as their only
+            // credential identity, so callers pass the sentinel rather than the
+            // rotating access token.
+            var allKeys = ChannelCredentials.GetAllCredentialRefs(snapshot.Credentials);
+            if (!allKeys.Contains(key, StringComparer.Ordinal))
+            {
+                return;
+            }
+
+            // Elapsed temporary disables are dropped before the new record is
+            // appended; they no longer hide the credential.
+            var activeKeys = new List<DisabledApiKey>(disabledKeys.Count + 1);
+            foreach (var disabled in disabledKeys)
+            {
+                if (!disabled.IsExpired(now))
+                {
+                    activeKeys.Add(disabled);
+                }
+            }
+
+            if (activeKeys.Any(disabled => string.Equals(disabled.Key, key, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            activeKeys.Add(new DisabledApiKey
+            {
+                Key = key,
+                DisabledAt = now,
+                ErrorCode = errorCode,
+                Reason = string.IsNullOrEmpty(reason) ? null : reason,
+                ExpiresAt = expiresAt,
+            });
+
+            var enabledKeys = ChannelCredentials.GetEnabledCredentialRefs(
+                snapshot.Credentials,
+                activeKeys,
+                new DateTimeOffset(now));
+
+            var state = new ChannelApiKeyStateRecord
+            {
+                Id = channelId,
+                DisabledApiKeysJson =
+                    ChannelWriteSerialization.SerializeDisabledApiKeys(activeKeys),
+            };
+
+            if (enabledKeys.Count == 0)
+            {
+                state.Status = "disabled";
+                state.ErrorMessage = $"All API keys disabled (last error: {errorCode})";
+                state.AutoDisabledAt = now;
+                state.ClearAutoDisableExpiresAt = true;
+            }
+
+            await SaveApiKeyStateAsync(state, "failed to disable api key", cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ApiKeyOpsLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Port of ChannelService.EnableAPIKey (channel_apikey.go:147-192): removes
+    /// the credential's disable record and recovers a channel that was disabled
+    /// solely because every credential was unavailable.
+    /// </summary>
+    public async Task EnableApiKeyAsync(
+        long channelId,
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        // The reference mutex (sync.Mutex) is not cancellable; block until it is free.
+        await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
+                .ConfigureAwait(false);
+            var disabledKeys = ParseDisabledKeys(snapshot);
+            if (disabledKeys.Count == 0)
+            {
+                return;
+            }
+
+            var newDisabledKeys = new List<DisabledApiKey>(disabledKeys.Count);
+            var found = false;
+            foreach (var disabled in disabledKeys)
+            {
+                if (string.Equals(disabled.Key, key, StringComparison.Ordinal))
+                {
+                    found = true;
+                    continue;
+                }
+
+                newDisabledKeys.Add(disabled);
+            }
+
+            if (!found)
+            {
+                return;
+            }
+
+            await SaveApiKeyStateAsync(
+                    BuildEnableState(snapshot, snapshot.Credentials, null, newDisabledKeys),
+                    "failed to enable api key",
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ApiKeyOpsLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Port of ChannelService.EnableAllAPIKeys (channel_apikey.go:195-226):
+    /// clears disabled_api_keys and recovers the channel when an enabled
+    /// credential remains.
+    /// </summary>
+    public async Task EnableAllApiKeysAsync(
+        long channelId,
+        CancellationToken cancellationToken = default)
+    {
+        // The reference mutex (sync.Mutex) is not cancellable; block until it is free.
+        await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
+                .ConfigureAwait(false);
+            var disabledKeys = ParseDisabledKeys(snapshot);
+            if (disabledKeys.Count == 0)
+            {
+                return;
+            }
+
+            await SaveApiKeyStateAsync(
+                    BuildEnableState(snapshot, snapshot.Credentials, null, []),
+                    "failed to enable all api keys",
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ApiKeyOpsLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Port of ChannelService.EnableSelectedAPIKeys (channel_apikey.go:229-278):
+    /// removes only the named disable records; a no-op list or an unmatched
+    /// selection skips the read entirely.
+    /// </summary>
+    public async Task EnableSelectedApiKeysAsync(
+        long channelId,
+        IReadOnlyList<string> keys,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (keys.Count == 0)
+        {
+            return;
+        }
+
+        // The reference mutex (sync.Mutex) is not cancellable; block until it is free.
+        await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
+                .ConfigureAwait(false);
+            var disabledKeys = ParseDisabledKeys(snapshot);
+            if (disabledKeys.Count == 0)
+            {
+                return;
+            }
+
+            var keysToEnable = new HashSet<string>(keys, StringComparer.Ordinal);
+            var newDisabledKeys = new List<DisabledApiKey>(disabledKeys.Count);
+            foreach (var disabled in disabledKeys)
+            {
+                if (!keysToEnable.Contains(disabled.Key))
+                {
+                    newDisabledKeys.Add(disabled);
+                }
+            }
+
+            if (newDisabledKeys.Count == disabledKeys.Count)
+            {
+                return;
+            }
+
+            await SaveApiKeyStateAsync(
+                    BuildEnableState(snapshot, snapshot.Credentials, null, newDisabledKeys),
+                    "failed to enable selected api keys",
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ApiKeyOpsLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Port of ChannelService.DeleteDisabledAPIKeys (channel_apikey.go:288-370):
+    /// removes the named keys from both disabled_api_keys and the credentials,
+    /// refuses OAuth channels, and restores one submitted key when deletion
+    /// would leave the channel without any credential.
+    /// </summary>
+    public async Task<DeleteDisabledApiKeysResult> DeleteDisabledApiKeysAsync(
+        long channelId,
+        IReadOnlyList<string> keys,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (keys.Count == 0)
+        {
+            return new DeleteDisabledApiKeysResult(true, string.Empty);
+        }
+
+        // The reference mutex (sync.Mutex) is not cancellable; block until it is free.
+        await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
+                .ConfigureAwait(false);
+            var disabledKeys = ParseDisabledKeys(snapshot);
+
+            ChannelCredentialsDraft credentials;
+            try
+            {
+                credentials = ChannelWriteSerialization.ParseCredentials(snapshot.Credentials);
+            }
+            catch (JsonException ex)
+            {
+                // ent decodes credentials inside Channel.Get.
+                throw new InvalidOperationException("failed to get channel: " + ex.Message, ex);
+            }
+
+            if (ChannelCredentials.IsOAuth(snapshot.Credentials))
+            {
+                throw new InvalidOperationException(
+                    "cannot delete API keys for OAuth channels");
+            }
+
+            var keysToDelete = new HashSet<string>(keys, StringComparer.Ordinal);
+            var newDisabledKeys = new List<DisabledApiKey>(disabledKeys.Count);
+            foreach (var disabled in disabledKeys)
+            {
+                if (!keysToDelete.Contains(disabled.Key))
+                {
+                    newDisabledKeys.Add(disabled);
+                }
+            }
+
+            if (credentials.ApiKeys is { Count: > 0 } apiKeys)
+            {
+                var filtered = new List<string>(apiKeys.Count);
+                foreach (var apiKey in apiKeys)
+                {
+                    if (!keysToDelete.Contains(apiKey))
+                    {
+                        filtered.Add(apiKey);
+                    }
+                }
+
+                // Go assigns an empty non-nil slice; omitempty drops it again.
+                credentials.ApiKeys = filtered.Count == 0 ? null : filtered;
+            }
+
+            if (!string.IsNullOrEmpty(credentials.ApiKey)
+                && keysToDelete.Contains(credentials.ApiKey))
+            {
+                credentials.ApiKey = null;
+            }
+
+            var credentialsJson = GoJson.MarshalToString(credentials);
+
+            // The key set is measured before the preserve-last-key restore, so
+            // the reference reports ONE_KEY_PRESERVED based on this snapshot.
+            var preserveOneKey = ChannelCredentials.GetAllApiKeys(credentialsJson).Count == 0;
+            if (preserveOneKey)
+            {
+                credentials.ApiKeys = [keys[0]];
+                credentialsJson = GoJson.MarshalToString(credentials);
+            }
+
+            await SaveApiKeyStateAsync(
+                    BuildEnableState(snapshot, credentialsJson, credentialsJson, newDisabledKeys),
+                    "failed to delete disabled api keys",
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return new DeleteDisabledApiKeysResult(
+                true,
+                preserveOneKey ? "ONE_KEY_PRESERVED" : string.Empty);
+        }
+        finally
+        {
+            ApiKeyOpsLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Builds the state row shared by the enable/delete operations: writes the
+    /// new disabled list, optionally rewrites credentials, and applies
+    /// applyRecoveredChannelStatus (channel_apikey.go:372-391).
+    /// </summary>
+    private static ChannelApiKeyStateRecord BuildEnableState(
+        ChannelRecord snapshot,
+        string credentialsJsonForRefs,
+        string? credentialsJsonToWrite,
+        IReadOnlyList<DisabledApiKey> disabledKeys)
+    {
+        var now = DateTime.UtcNow;
+        var state = new ChannelApiKeyStateRecord
+        {
+            Id = snapshot.Id,
+            DisabledApiKeysJson = ChannelWriteSerialization.SerializeDisabledApiKeys(disabledKeys),
+            CredentialsJson = credentialsJsonToWrite,
+        };
+
+        if (snapshot.Status != "disabled"
+            || snapshot.ErrorMessage is null
+            || !snapshot.ErrorMessage.StartsWith(
+                "All API keys disabled",
+                StringComparison.Ordinal)
+            || ChannelCredentials.GetEnabledCredentialRefs(
+                credentialsJsonForRefs,
+                disabledKeys,
+                new DateTimeOffset(now)).Count == 0)
+        {
+            return state;
+        }
+
+        state.Status = "enabled";
+        state.ClearErrorMessage = true;
+        state.ClearAutoDisabledAt = true;
+        state.ClearAutoDisableExpiresAt = true;
+        return state;
+    }
+
+    private async Task<ChannelRecord> GetChannelForApiKeyOpAsync(
+        long channelId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await channels.GetAsync(channelId, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    "failed to get channel: ent: channel not found");
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+    }
+
+    private static List<DisabledApiKey> ParseDisabledKeys(ChannelRecord snapshot)
+    {
+        try
+        {
+            return ChannelWriteSerialization.ParseDisabledApiKeys(snapshot.DisabledApiKeys);
+        }
+        catch (JsonException ex)
+        {
+            // ent decodes disabled_api_keys inside Channel.Get.
+            throw new InvalidOperationException("failed to get channel: " + ex.Message, ex);
+        }
+    }
+
+    private async Task SaveApiKeyStateAsync(
+        ChannelApiKeyStateRecord state,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        bool updated;
+        try
+        {
+            updated = await channels.UpdateApiKeyStateAsync(state, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (StoreFailureException ex)
+        {
+            throw new InvalidOperationException(action + ": " + ex.Message, ex);
+        }
+
+        if (!updated)
+        {
+            throw new InvalidOperationException(action + ": ent: channel not found");
+        }
     }
 
     private async Task BulkUpdateStatusAsync(

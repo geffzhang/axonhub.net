@@ -77,3 +77,17 @@ public sealed class BulkUpdateChannelAutoDisablePayload
 
     public IReadOnlyList<ChannelType> Channels { get; init; } = [];
 }
+
+/// <summary>
+/// Port of <c>DeleteDisabledAPIKeysPayload</c> (axonhub.graphql:932-935),
+/// mapped by gqlgen to biz.DeleteDisabledAPIKeysResult. The SDL declares
+/// message nullable, but the reference always emits a Go string (empty rather
+/// than null after a successful delete).
+/// </summary>
+[GraphQLName("DeleteDisabledAPIKeysPayload")]
+public sealed class DeleteDisabledApiKeysPayload
+{
+    public bool Success { get; init; }
+
+    public string? Message { get; init; } = string.Empty;
+}

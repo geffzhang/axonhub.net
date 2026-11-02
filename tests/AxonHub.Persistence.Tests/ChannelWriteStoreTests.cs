@@ -994,6 +994,181 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         Assert.Equal("[]", reloaded.Endpoints);
     }
 
+    [Fact]
+    public async Task UpdateApiKeyStateWritesDisabledKeysAndAutoDisableColumns()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            status: "enabled",
+            credentials: """{"apiKey":"sk-one"}""",
+            autoDisableExpiresAt: UpdatedAt.AddHours(1));
+        var disabledAt = new DateTime(2026, 11, 2, 1, 2, 3, 456, DateTimeKind.Utc);
+        const string disabledJson =
+            """[{"key":"sk-one","disabledAt":"2026-11-02T01:02:03.456Z","errorCode":0,"reason":"Manually disabled by user"}]""";
+
+        var updated = await store.UpdateApiKeyStateAsync(
+            new ChannelApiKeyStateRecord
+            {
+                Id = channel.Id,
+                DisabledApiKeysJson = disabledJson,
+                Status = "disabled",
+                ErrorMessage = "All API keys disabled (last error: 0)",
+                AutoDisabledAt = disabledAt,
+                ClearAutoDisableExpiresAt = true,
+            });
+
+        Assert.True(updated);
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+
+        // jsonb re-renders the document (spacing and key order), so compare the
+        // parsed record rather than the stored text.
+        using var disabledDocument = JsonDocument.Parse(reloaded.DisabledApiKeys!);
+        var record = Assert.Single(disabledDocument.RootElement.EnumerateArray());
+        Assert.Equal("sk-one", record.GetProperty("key").GetString());
+        Assert.Equal(0, record.GetProperty("errorCode").GetInt32());
+        Assert.Equal("Manually disabled by user", record.GetProperty("reason").GetString());
+        Assert.Equal(disabledAt, record.GetProperty("disabledAt").GetDateTime());
+        Assert.Equal("disabled", reloaded.Status);
+        Assert.Equal("All API keys disabled (last error: 0)", reloaded.ErrorMessage);
+        Assert.Equal(disabledAt, reloaded.AutoDisabledAt);
+        Assert.Null(reloaded.AutoDisableExpiresAt);
+
+        // The credentials column is only written when provided.
+        using var credentialsDocument = JsonDocument.Parse(reloaded.Credentials);
+        Assert.Equal(
+            "sk-one",
+            credentialsDocument.RootElement.GetProperty("apiKey").GetString());
+        Assert.True(reloaded.UpdatedAt > UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateApiKeyStateLeavesUnspecifiedColumnsUntouched()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            status: "enabled",
+            errorMessage: "boom",
+            credentials: """{"apiKey":"sk-one"}""",
+            autoDisabledAt: UpdatedAt,
+            autoDisableExpiresAt: UpdatedAt.AddHours(1),
+            disabledApiKeys:
+                """[{"key":"sk-one","disabledAt":"2026-01-01T00:00:00Z","errorCode":0}]""");
+
+        Assert.True(await store.UpdateApiKeyStateAsync(
+            new ChannelApiKeyStateRecord
+            {
+                Id = channel.Id,
+                DisabledApiKeysJson = "[]",
+            }));
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Equal("[]", reloaded.DisabledApiKeys);
+        Assert.Equal("enabled", reloaded.Status);
+        Assert.Equal("boom", reloaded.ErrorMessage);
+        Assert.Equal(UpdatedAt, reloaded.AutoDisabledAt);
+        Assert.Equal(UpdatedAt.AddHours(1), reloaded.AutoDisableExpiresAt);
+
+        // jsonb re-renders spacing; compare the parsed value.
+        using var credentialsDocument = JsonDocument.Parse(reloaded.Credentials);
+        Assert.Equal(
+            "sk-one",
+            credentialsDocument.RootElement.GetProperty("apiKey").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateApiKeyStateClearsTheRecoveryMarkers()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            status: "disabled",
+            errorMessage: "All API keys disabled (last error: 429)",
+            credentials: """{"apiKeys":["a","b"]}""",
+            autoDisabledAt: UpdatedAt,
+            autoDisableExpiresAt: UpdatedAt.AddHours(1),
+            disabledApiKeys:
+                """[{"key":"a","disabledAt":"2026-01-01T00:00:00Z","errorCode":429}]""");
+
+        Assert.True(await store.UpdateApiKeyStateAsync(
+            new ChannelApiKeyStateRecord
+            {
+                Id = channel.Id,
+                DisabledApiKeysJson = "[]",
+                CredentialsJson = """{"apiKeys":["b"]}""",
+                Status = "enabled",
+                ClearErrorMessage = true,
+                ClearAutoDisabledAt = true,
+                ClearAutoDisableExpiresAt = true,
+            }));
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Equal("[]", reloaded.DisabledApiKeys);
+
+        // jsonb re-renders spacing; compare the parsed list.
+        using var credentialsDocument = JsonDocument.Parse(reloaded.Credentials);
+        Assert.Equal(
+            ["b"],
+            credentialsDocument.RootElement.GetProperty("apiKeys")
+                .EnumerateArray().Select(static key => key.GetString()!).ToArray());
+        Assert.Equal("enabled", reloaded.Status);
+        Assert.Null(reloaded.ErrorMessage);
+        Assert.Null(reloaded.AutoDisabledAt);
+        Assert.Null(reloaded.AutoDisableExpiresAt);
+    }
+
+    [Fact]
+    public async Task UpdateApiKeyStateReturnsFalseForMissingAndSoftDeletedRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var deleted = await SeedChannelAsync(
+            context,
+            name: "Gone",
+            deletedAt: 77,
+            disabledApiKeys:
+                """[{"key":"sk-one","disabledAt":"2026-01-01T00:00:00Z","errorCode":0}]""");
+
+        Assert.False(await store.UpdateApiKeyStateAsync(
+            new ChannelApiKeyStateRecord
+            {
+                Id = 424242,
+                DisabledApiKeysJson = "[]",
+            }));
+        Assert.False(await store.UpdateApiKeyStateAsync(
+            new ChannelApiKeyStateRecord
+            {
+                Id = deleted.Id,
+                DisabledApiKeysJson = "[]",
+            }));
+
+        // The soft-deleted row is untouched: the ent predicate filters it out.
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == deleted.Id);
+        Assert.Equal(77, reloaded.DeletedAt);
+        Assert.Contains("sk-one", reloaded.DisabledApiKeys);
+    }
+
     private static JsonElement ParsePolicyJson(string? json)
     {
         using var document = JsonDocument.Parse(json!);
@@ -1038,7 +1213,8 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         string autoSyncModelPattern = "",
         string? endpoints = "[]",
         long orderingWeight = 0,
-        string defaultTestModel = "")
+        string defaultTestModel = "",
+        string? disabledApiKeys = "[]")
     {
         var channel = new ChannelRecord
         {
@@ -1050,6 +1226,7 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
             Name = name,
             Status = status,
             Credentials = credentials,
+            DisabledApiKeys = disabledApiKeys,
             SupportedModels = supportedModels,
             AutoSyncModelPattern = autoSyncModelPattern,
             DefaultTestModel = defaultTestModel,

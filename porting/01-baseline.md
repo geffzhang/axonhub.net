@@ -3118,6 +3118,49 @@ Go 的 `api_format` / `path` / `base_url` / `transport` 字段序与 `omitempty`
 重写延后）；更新 C014（端点保存已接入）、C144 与 C146（saveChannelEndpoints 沿用冻结
 校验与单快照守卫写入）。差异总数 147 增至 148（91 接受 / 23 缺口 / 34 已解决）。
 
+## 71. 管理面 channels API key 记账切片（禁用 / 启用 / 删除，29 例，2026-11-02）
+
+参照路线：`internal/server/gql/axonhub.resolvers.go:418-462`（disableChannelAPIKey /
+enableChannelAPIKey / enableAllChannelAPIKeys / enableSelectedChannelAPIKeys /
+deleteDisabledChannelAPIKeys 五个 resolver）、`internal/server/biz/channel_apikey.go`
+（`DisableAPIKey` / `EnableAPIKey` / `EnableAllAPIKeys` / `EnableSelectedAPIKeys` /
+`DeleteDisabledAPIKeys` 与 `applyRecoveredChannelStatus`）、
+`internal/objects/channel.go:315-470`（`DisabledAPIKey`、`OAuthCredentialRef`、
+`GetAllCredentialRefs` / `GetEnabledCredentialRefs` / `filterDisabled`）、
+`internal/server/gql/axonhub.graphql:932-935`（payload）与 `:966-974`（五个变更）。
+
+本次新增 `DisabledApiKey` 抽象（RFC3339Nano 的 `disabledAt`，可选的 `reason` /
+`expiresAt`）、`ChannelCredentials` 的凭据引用辅助（OAuth 通道固定哨兵
+`__oauth__`，其余由 `apiKey` + `apiKeys` 组成）、
+`ChannelWriteSerialization.ParseDisabledApiKeys` / `SerializeDisabledApiKeys`、
+`IChannelWriteStore.UpdateApiKeyStateAsync`（始终写 `disabled_api_keys`，凭据仅在显式提供时
+写，按 set / clear 标志写状态、错误、自动禁用标记）、
+`ChannelLifecycleService` 的五个操作与 `DeleteDisabledApiKeysResult`，以及五个
+GraphQL 变更与 `DeleteDisabledAPIKeysPayload`。禁用把记录追加到 `disabled_api_keys`
+（过期的临时禁用先被清理），全部 key 都被禁用时把通道置为 `disabled` 并写
+`All API keys disabled (last error: %d)`、`autoDisabledAt` 并清除 `autoDisableExpiresAt`；
+启用按 key 移除禁用记录，若错误文案以 `All API keys disabled` 开头且仍有启用的凭据引用则
+恢复 `enabled` 并清空错误与两个自动禁用时间（其他 key 仍禁用也恢复）。删除拒绝 OAuth
+通道，从 `apiKey` / `apiKeys` 移除后若一个 key 都不剩则把首个 key 还原进 `apiKeys` 并返回
+`ONE_KEY_PRESERVED`。服务层错误带 `failed to disable api key: ` 等前缀，resolver 再叠加
+`failed to disable channel API key: ` 等前缀；读取失败统一为
+`failed to get channel: ent: channel not found`。操作经静态 `SemaphoreSlim` 串行化
+（参照的 `sync.Mutex` 不可取消，端口用 `CancellationToken.None` 等待）。live 的
+Vertex key 参与、`ChannelAutoDisabledEvent` 与启用通道缓存刷新按冻结语义延后（C149）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| /admin/graphql 端到端：禁用追加记录且通道保持 enabled、第二个 key、最后一个 key 自动禁用（文案 / 状态 / 标记）、OAuth 哨兵、未知 key 与已禁用 key 无操作、过期记录清理、空 key、缺失通道的双前缀、损坏的禁用手账读取前缀、启用恢复、其他 key 仍禁用时的恢复、非前缀错误不恢复、启用缺失记录无操作、enableAll、enableSelected（含恢复）、空选择列表不读取、删除保留最后一个 key（`ONE_KEY_PRESERVED` 与 `apiKeys` 还原）、删除旧式 key、删除后的恢复、OAuth 拒绝、空删除列表、存储失败与缺失行的前缀叠加、内省 | `tests/AxonHub.Api.Tests/AdminChannelApiKeyEndpointTests.cs` | 25 |
+| 存储：§70 的 32 例，另加 `disabled_api_keys` 与自动禁用列写入、未指定列不动、恢复标记清空、缺失与软删行返回 false | `tests/AxonHub.Persistence.Tests/ChannelWriteStoreTests.cs` | 36 |
+
+`AxonHub.Api.Tests` 由 1399 增至 1424（+25），`AxonHub.Persistence.Tests` 由 126 增至
+130（+4），`AxonHub.Llm.Tests` 保持 3020，`AxonHub.Grains.Tests` 保持 92；四个项目合计
+4637 增至 4666，0 失败 0 跳过。
+
+差异：新增 C149（通道 API key 记账按冻结语义实现，live 的 Vertex key 删除与自动禁用
+事件 / 缓存刷新延后）；更新 C014（API key 禁用 / 启用 / 删除记账已接入）。差异总数
+148 增至 149（92 接受 / 23 缺口 / 34 已解决）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -3130,7 +3173,7 @@ Go 的 `api_format` / `path` / `base_url` / `transport` 字段序与 `omitempty`
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）已接入，但其余通道写操作（重复、批量创建、测试、禁用 key、定价、模型同步）、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）已接入，但其余通道写操作（重复、批量创建、测试、定价、模型同步）、鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），其余通道写操作未移植（C037），`channel_override_templates` 表未建 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |

@@ -509,6 +509,162 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.DisableChannelAPIKey
+    /// (axonhub.resolvers.go:418-424; biz channel_apikey.go:23-144). The
+    /// resolver always reports error code 0 and the manual-disable reason.
+    /// </summary>
+    [GraphQLName("disableChannelAPIKey")]
+    public async Task<bool> DisableChannelApiKeyAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        string key,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        try
+        {
+            await channels.DisableApiKeyAsync(
+                    gid.Id,
+                    key,
+                    0,
+                    "Manually disabled by user",
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to disable channel API key: %w", err)
+            throw new InvalidOperationException(
+                "failed to disable channel API key: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.EnableChannelAPIKey (axonhub.resolvers.go:427-433).</summary>
+    [GraphQLName("enableChannelAPIKey")]
+    public async Task<bool> EnableChannelApiKeyAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        string key,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        try
+        {
+            await channels.EnableApiKeyAsync(
+                    gid.Id,
+                    key,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to enable channel API key: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.EnableAllChannelAPIKeys (axonhub.resolvers.go:436-442).</summary>
+    [GraphQLName("enableAllChannelAPIKeys")]
+    public async Task<bool> EnableAllChannelApiKeysAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        try
+        {
+            await channels.EnableAllApiKeysAsync(
+                    gid.Id,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to enable all channel API keys: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.EnableSelectedChannelAPIKeys
+    /// (axonhub.resolvers.go:445-451).
+    /// </summary>
+    [GraphQLName("enableSelectedChannelAPIKeys")]
+    public async Task<bool> EnableSelectedChannelApiKeysAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> keys,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        try
+        {
+            await channels.EnableSelectedApiKeysAsync(
+                    gid.Id,
+                    keys,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to enable selected channel API keys: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteDisabledChannelAPIKeys
+    /// (axonhub.resolvers.go:454-462; biz channel_apikey.go:288-370).
+    /// </summary>
+    [GraphQLName("deleteDisabledChannelAPIKeys")]
+    public async Task<DeleteDisabledApiKeysPayload> DeleteDisabledChannelApiKeysAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> keys,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        DeleteDisabledApiKeysResult result;
+        try
+        {
+            result = await channels.DeleteDisabledApiKeysAsync(
+                    gid.Id,
+                    keys,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to delete disabled channel API keys: " + ex.Message,
+                ex);
+        }
+
+        return new DeleteDisabledApiKeysPayload
+        {
+            Success = result.Success,
+            Message = result.Message,
+        };
+    }
+
+    /// <summary>
     /// Port of mutationResolver.CreateChannel
     /// (axonhub.resolvers.go:193-201; biz channel.go:633-671).
     /// </summary>

@@ -1,3 +1,4 @@
+using AxonHub.Abstractions;
 using AxonHub.Llm.Json;
 using AxonHub.Persistence;
 
@@ -90,6 +91,44 @@ public static class ChannelWriteSerialization
 
         return endpoints;
     }
+
+    /// <summary>
+    /// Decodes the stored disabled_api_keys column the way ent's JSON scanner
+    /// does (Go's json.Unmarshal into a <c>[]objects.DisabledAPIKey</c>): null
+    /// and an absent column are the empty list. Go folds field names
+    /// case-insensitively and treats <c>omitempty</c> strings as absent, so an
+    /// empty reason is normalized back to null.
+    /// </summary>
+    /// <exception cref="System.Text.Json.JsonException">The stored JSON is malformed.</exception>
+    public static List<DisabledApiKey> ParseDisabledApiKeys(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw) || string.Equals(raw, "null", StringComparison.Ordinal))
+        {
+            return [];
+        }
+
+        var keys = LlmJson.Deserialize<List<DisabledApiKey?>>(raw) ?? [];
+
+        // JSON null elements decode into the zero Go struct rather than null;
+        // System.Text.Json keeps them as null list entries.
+        var result = new List<DisabledApiKey>(keys.Count);
+        foreach (var key in keys)
+        {
+            var entry = key ?? new DisabledApiKey();
+            entry.Reason = NullIfEmpty(entry.Reason);
+            result.Add(entry);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Marshals disabled_api_keys with the reference's struct tags: key,
+    /// disabledAt (RFC 3339 UTC), errorCode, then the omitted-when-empty reason
+    /// and expiresAt. An empty list stores <c>[]</c>.
+    /// </summary>
+    public static string SerializeDisabledApiKeys(IReadOnlyList<DisabledApiKey> keys)
+        => GoJson.MarshalToString(keys);
 
     private static void PruneGoOmitEmpty(ChannelSettingsDraft settings)
     {
