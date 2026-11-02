@@ -189,16 +189,17 @@ public sealed class AnthropicOutboundTransformerTests
     }
 
     [Fact]
-    public void VertexPlatformIsRejectedAtConstruction()
+    public void CreateWithConfig_returns_the_plain_outbound_for_direct()
     {
-        var exception = Assert.Throws<NotSupportedException>(() => new AnthropicOutboundTransformer(
-            new AnthropicOutboundConfig
-            {
-                Type = AnthropicPlatformType.Vertex,
-                BaseUrl = "https://us-central1-aiplatform.googleapis.com",
-            }));
+        var transformer = AnthropicOutboundTransformer.CreateWithConfig(new AnthropicOutboundConfig
+        {
+            Type = AnthropicPlatformType.Direct,
+            BaseUrl = "https://api.anthropic.com",
+            ApiKeyProvider = new StaticApiKeyProvider("test-api-key"),
+        });
 
-        Assert.Contains("Vertex AI executor is not ported", exception.Message, StringComparison.Ordinal);
+        var plain = Assert.IsType<AnthropicOutboundTransformer>(transformer);
+        Assert.Equal("https://api.anthropic.com/v1", plain.Config.BaseUrl);
     }
 
     // ------------------------------------------------------------------

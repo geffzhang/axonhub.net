@@ -216,6 +216,10 @@ public static class ChannelOutboundFactory
 
     public const string AnthropicAwsChannelType = "anthropic_aws";
 
+    // channel_llm.go:677-680, 1069-1085: anthropic_gcp authenticates with GCP
+    // credentials and has no API keys.
+    public const string AnthropicGcpChannelType = "anthropic_gcp";
+
     // channel_llm.go:855-863: the xAI responses channel has exactly one
     // endpoint, the responses API (channel_endpoint.go:296).
     public const string XaiResponsesChannelType = "xai_responses";
@@ -275,9 +279,11 @@ public static class ChannelOutboundFactory
 
         var oauth = (oauthCapableChannel || oauthRequiredChannel) && isOAuth;
 
-        // channel_llm.go:677-680: Ollama runs locally without a key; a stored
-        // key is optional and disabled keys still mean no auth.
-        var keylessChannel = candidate.Type is OllamaChannelType or OllamaAnthropicChannelType;
+        // channel_llm.go:677-682: Ollama runs locally without a key, and
+        // anthropic_gcp uses the credentials' gcp object instead of API keys.
+        var keylessChannel = candidate.Type is OllamaChannelType
+            or OllamaAnthropicChannelType
+            or AnthropicGcpChannelType;
 
         // channel_llm.go:670-674: antigravity consumes the single legacy APIKey
         // field (refreshToken|projectID) directly; enabled key lists do not
@@ -459,6 +465,9 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
             }),
+            // channel_llm.go:1069-1085: anthropic_gcp authenticates with the
+            // channel's GCP credentials and rewrites requests for Vertex AI.
+            AnthropicGcpChannelType => CreateAnthropicGcpOutbound(candidate),
             // channel_llm.go:1277-1280: the OpenAI-compatible alias channels
             // share the plain OpenAI outbound (PlatformOpenAI). Their default
             // endpoint sets — openAICompatibleDefaultEndpoints
@@ -933,6 +942,39 @@ public static class ChannelOutboundFactory
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
                 ApiKeyProvider = apiKeyProvider,
                 ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+            });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "failed to create outbound transformer: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of the anthropic_gcp branch of <c>buildChannelWithTransformer</c>
+    /// (channel_llm.go:1069-1085): the reference wraps the constructor error
+    /// with <c>failed to create outbound transformer</c>, and reports missing
+    /// GCP credentials before calling it.
+    /// </summary>
+    private static IOutboundTransformer CreateAnthropicGcpOutbound(ChannelCandidate candidate)
+    {
+        var gcp = ChannelCredentials.GetGcpCredential(candidate.Credentials);
+        if (gcp is null)
+        {
+            throw new InvalidOperationException(
+                "GCP credentials are required for anthropic_vertex channel");
+        }
+
+        try
+        {
+            return AnthropicOutboundTransformer.CreateWithConfig(new AnthropicOutboundConfig
+            {
+                Type = AnthropicPlatformType.Vertex,
+                Region = gcp.Region,
+                ProjectId = gcp.ProjectId,
+                JsonData = gcp.JsonData,
             });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)

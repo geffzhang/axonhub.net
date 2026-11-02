@@ -262,6 +262,88 @@ public static class ChannelCredentials
         }
     }
 
+    /// <summary>
+    /// The channel's <c>gcp</c> object (objects.GCPCredential,
+    /// internal/objects/channel.go:483-487), or null when the document has
+    /// none. A non-object value means Ent would have failed to decode the
+    /// channel; the port treats it as absent (C013).
+    /// </summary>
+    public static GcpCredential? GetGcpCredential(string? credentialsJson)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return null;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(credentialsJson);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            GcpCredential? credential = null;
+            foreach (var property in root.EnumerateObject())
+            {
+                if (FoldAscii(property.Name) != "gcp")
+                {
+                    continue;
+                }
+
+                // Go's decoder lets the last duplicate key win.
+                if (property.Value.ValueKind != JsonValueKind.Object)
+                {
+                    credential = null;
+                    continue;
+                }
+
+                var region = string.Empty;
+                var projectId = string.Empty;
+                var jsonData = string.Empty;
+                foreach (var field in property.Value.EnumerateObject())
+                {
+                    switch (FoldAscii(field.Name))
+                    {
+                        case "region":
+                            region = StringValue(field.Value, region);
+                            break;
+                        case "projectid":
+                            projectId = StringValue(field.Value, projectId);
+                            break;
+                        case "jsondata":
+                            jsonData = StringValue(field.Value, jsonData);
+                            break;
+                    }
+                }
+
+                credential = new GcpCredential
+                {
+                    Region = region,
+                    ProjectId = projectId,
+                    JsonData = jsonData,
+                };
+            }
+
+            return credential;
+        }
+    }
+
+    private static string StringValue(JsonElement value, string current)
+        => value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : current;
+
     private static List<string> ActiveDisabledKeys(string? disabledJson, DateTimeOffset now)
     {
         var disabled = new HashSet<string>(StringComparer.Ordinal);
@@ -399,4 +481,14 @@ public static class ChannelCredentials
 
         return new string(chars);
     }
+}
+
+/// <summary>Port of objects.GCPCredential (internal/objects/channel.go:483-487).</summary>
+public sealed class GcpCredential
+{
+    public string Region { get; init; } = string.Empty;
+
+    public string ProjectId { get; init; } = string.Empty;
+
+    public string JsonData { get; init; } = string.Empty;
 }

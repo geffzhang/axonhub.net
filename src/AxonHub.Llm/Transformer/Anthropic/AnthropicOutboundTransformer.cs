@@ -4,6 +4,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Vertex;
 
 namespace AxonHub.Llm.Transformer.Anthropic;
 
@@ -51,11 +52,11 @@ public sealed class AnthropicOutboundConfig
 /// outbound_stream.go).
 /// </summary>
 /// <remarks>
-/// Scope cut: the Vertex AI executor (and its OAuth/JWT signing) is not ported,
-/// so a Vertex config is rejected at construction. The Bedrock wire envelope is
-/// a codec on the shared HTTP client in the reference and is likewise not
-/// ported; it is unreachable because <c>ChannelOutboundFactory</c> only builds
-/// Direct transformers (difference C056).
+/// A Vertex config must be built through <see cref="CreateWithConfig"/>: the
+/// reference wraps the outbound in a <c>VertexTransformer</c> backed by a
+/// Vertex AI executor. The Bedrock wire envelope is a codec on the shared HTTP
+/// client in the reference; the port's Bedrock platform emits the Anthropic
+/// body directly (difference C056).
 /// </remarks>
 public sealed class AnthropicOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
 {
@@ -64,18 +65,10 @@ public sealed class AnthropicOutboundTransformer : IOutboundTransformer, IApiKey
     /// <summary>The key the latest TransformRequest used; null until it runs.</summary>
     private string? _selectedApiKey;
 
-    /// <summary>Port of NewOutboundTransformerWithConfig.</summary>
+    /// <summary>The Outbound half of NewOutboundTransformerWithConfig.</summary>
     public AnthropicOutboundTransformer(AnthropicOutboundConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
-
-        if (config.Type == AnthropicPlatformType.Vertex)
-        {
-            // The reference wraps the transformer in a VertexTransformer backed
-            // by vertex.NewExecutorFromJSON; that executor is not ported.
-            throw new NotSupportedException(
-                "Vertex AI executor is not ported: choose the direct Anthropic platform");
-        }
 
         _config = config;
 
@@ -87,6 +80,35 @@ public sealed class AnthropicOutboundTransformer : IOutboundTransformer, IApiKey
             : config.EndpointPath.Length > 0
                 ? HttpClientUtils.NormalizeBaseUrl(config.BaseUrl, string.Empty)
                 : HttpClientUtils.NormalizeBaseUrl(config.BaseUrl, "v1");
+    }
+
+    /// <summary>
+    /// Port of <c>NewOutboundTransformerWithConfig</c> (outbound.go:92-128):
+    /// Vertex creates its executor before base-URL normalization and wraps the
+    /// outbound in a <see cref="VertexTransformer"/>; every other platform
+    /// returns the plain outbound.
+    /// </summary>
+    public static IOutboundTransformer CreateWithConfig(AnthropicOutboundConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        VertexExecutor? executor = null;
+        if (config.Type == AnthropicPlatformType.Vertex)
+        {
+            try
+            {
+                executor = VertexExecutor.FromJson(config.Region, config.ProjectId, config.JsonData);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to create vertex transformer: " + ex.Message,
+                    ex);
+            }
+        }
+
+        var transformer = new AnthropicOutboundTransformer(config);
+        return executor is null ? transformer : new VertexTransformer(transformer, executor);
     }
 
     /// <summary>Port of NewOutboundTransformer(baseURL, apiKey).</summary>

@@ -2501,6 +2501,75 @@ ParseBillingResponses / PlanFromAccessToken 的宿主
 provider_quota/xai_subscription_checker.go（C123 同族）。差异条目 C127 由
 「真实缺口」改写为「已解决（残余各自登记）」。
 
+## 61. anthropic_gcp 通道：Vertex 执行器、VertexTransformer 与 GCP 令牌链（3 文件 + 44 例，2026-11-02）
+
+参照路线：`llm/vertex/executor.go`（NewExecutor / NewExecutorFromJSON / Do /
+DoStream / transformRequest 全量）；`llm/transformer/anthropic/vertex.go`
+（CustomizeExecutor 返回内置执行器，其余方法透传内嵌 Outbound）；
+`outbound.go:88-120`（Vertex 先构造执行器、再规范化 BaseURL，并用
+VertexTransformer 包装；其余平台返回普通 outbound）；`internal/server/biz/
+channel_llm.go:677-682`（anthropic_gcp 豁免 API key 校验）与
+`:1069-1085`（缺 GCP 报 "GCP credentials are required for anthropic_vertex
+channel"，以 Region/ProjectID/JSONData 构造 PlatformVertex，再包
+"failed to create outbound transformer: %w"）；`internal/objects/channel.go`
+的 GCPCredential（`gcp.region`、`gcp.projectID`、`gcp.jsonData`）；
+`golang.org/x/oauth2@v0.36.0` 的 `google.CredentialsFromJSONWithParams`、
+`jwt/jwt.go`、`internal/token.go`、`authhandler`、`google/error.go`。
+
+本次新增：`src/AxonHub.Llm/Vertex/GcpCredentials.cs`（凭据检测顺序与 Go 风格
+解码、两种令牌源、C128 显式拒绝）、`Vertex/GcpTokenSource.cs`（reuse 缓存、
+RS256 JWT-bearer、refresh grant、form/JSON 响应解析、oauth2 精确错误文案）、
+`Vertex/VertexExecutor.cs`（请求改写与 GcpAuthHandler）、
+`Transformer/Anthropic/VertexTransformer.cs`；`Json/RawJsonModelPatch.cs`
+增补顶层 gjson/sjson 语义（`RawJsonGjson`）；`AnthropicOutboundTransformer`
+新增 `CreateWithConfig` 复刻参照工厂顺序（构造函数本身不再拒绝 Vertex）；
+`ChannelCredentials.GetGcpCredential` / `GcpCredential` 与
+`ChannelOutboundFactory` 的 `anthropic_gcp` 分支（keyless 规则、缺 GCP 文案、
+**failed to create outbound transformer:** 包装）。
+
+执行器语义：逐字段复制 Method/URL/Headers/Body/RequestID/OnResponseHeaders 并
+把 Auth 置空；body 非空时按 sjson 追加 `anthropic_version`（已存在则保留，
+键缺失或值为 null 视为缺失）；`/v1/messages` + POST 取 gjson 的 model（空即
+"model field is required"）、按 sjson 删除 model、按 `stream` 选
+`rawPredict`/`streamRawPredict`；`/v1/messages/count_tokens` + POST 只改 URL
+不删 model；其余端点直接拼接 baseURL。baseURL 保留参照的结尾斜杠，因此
+outbound 已生成的绝对路径（Vertex 的 BaseURL 为空）会得到与参照相同的
+`...googleapis.com//v1/projects/...` 双斜杠——这是被测试锁定的原样行为。
+OAuth 头由 `GcpAuthHandler`（DelegatingHandler）在 HttpClient 之下注入，因为
+端口的 `BuildHttpRequest` 会剥离 Authorization；空 access_token 时不加头，
+等价于 oauth2.Transport。
+
+令牌链语义：凭据解码按 Go `encoding/json`（大小写不敏感、重复键后者胜、null
+为 no-op、UnmarshalTypeError 文案）；`service_account` / `gdch_service_account`
+走 RS256 JWT-bearer（header `{"alg","typ","kid"?}`、claims 顺序
+iss/aud/exp/iat、iat=now-10s、exp=iat+1h、aud 默认取 token URL、
+RawURLEncoding、每次取令牌重新解析私钥）；`authorized_user` 走 refresh grant
+（client_id/client_secret 放表单、按 `mime.ParseMediaType` 选择
+form/text-plain 或 JSON、响应 refresh_token 覆盖旧值、缺失则保留请求值、
+`expires_in` 走 json.Number 且大于 MaxInt32 时截断）；两条流都由
+reuseTokenSource 缓存（10 秒提前量、零过期永不过期、空 access_token 永不
+有效）。错误文案保留参照原文：`oauth2: cannot fetch token: ...`、
+`oauth2: %q %q %q`、`oauth2: cannot parse json: ...`、
+`oauth2: server response missing access_token`、
+`oauth2: token expired and refresh token is not set`、
+`missing 'type' field in credentials`、`unknown credential type: %q`。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Vertex 执行器（构造校验、FromJson 包装、URL 改写、sjson 字节语义、令牌注入与缓存） | `tests/AxonHub.Llm.Tests/VertexExecutorTests.cs` | 11 |
+| VertexTransformer 与工厂（CreateWithConfig 顺序与错误、透传、端到端线上形状） | `tests/AxonHub.Llm.Tests/AnthropicVertexTransformerTests.cs` | 7 |
+| GCP 令牌链（JWT 断言字节与签名、aud 默认/覆盖、reuse 与刷新、form/JSON、精确错误、C128） | `tests/AxonHub.Llm.Tests/GcpTokenSourceTests.cs` | 13 |
+| anthropic_gcp 通道接线（keyless、gcp 必填、错误包装、Vertex URL） | `tests/AxonHub.Api.Tests/AnthropicGcpChannelWiringTests.cs` | 4 |
+
+`AxonHub.Llm.Tests` 由 2989 增至 3020，`AxonHub.Api.Tests` 由 1185 增至 1189，
+其余两个项目不变；四个项目合计 4336 增至 4371。
+
+未移植并登记：external_account / external_account_authorized_user /
+impersonated_service_account 与交互式 web/installed 客户端配置显式
+NotSupportedException，私钥/jws/传输错误文本的底层后缀近似，统一登记为
+C128；Bedrock 的 AWS EventStream 流式解码仍是独立缺口，C056 已收窄为
+Bedrock 单项。差异条目 C125 由「真实缺口」改写为「已解决（残余 C128）」。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
