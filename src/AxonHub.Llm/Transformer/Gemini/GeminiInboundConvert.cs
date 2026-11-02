@@ -638,8 +638,9 @@ public static class GeminiInboundConvert
     {
         var resp = new GenerateContentResponse
         {
-            ResponseId = chatResp.Id,
-            ModelVersion = chatResp.Model,
+            // Go: omitempty drops "" for both fields.
+            ResponseId = NullIfEmpty(chatResp.Id),
+            ModelVersion = NullIfEmpty(chatResp.Model),
         };
 
         // Convert choices to candidates.
@@ -659,7 +660,8 @@ public static class GeminiInboundConvert
             candidates.Add(candidate);
         }
 
-        resp.Candidates = candidates;
+        // Go: omitempty drops the empty slice.
+        resp.Candidates = candidates.Count == 0 ? null : candidates;
         resp.UsageMetadata = GeminiConvert.ConvertToGeminiUsage(chatResp.Usage);
 
         return resp;
@@ -781,6 +783,9 @@ public static class GeminiInboundConvert
                     }
                 }
 
+                // Go: omitempty drops the empty map ("{}" parses to one).
+                args = args is { Count: 0 } ? null : args;
+
                 var part = new Part
                 {
                     FunctionCall = new GeminiFunctionCall
@@ -814,7 +819,8 @@ public static class GeminiInboundConvert
                 }
             }
 
-            content.Parts = parts;
+            // Go: omitempty drops the empty slice.
+            content.Parts = parts.Count == 0 ? null : parts;
             candidate.Content = content;
         }
 
@@ -829,8 +835,8 @@ public static class GeminiInboundConvert
             candidate.CitationMetadata = CitationMetadataFromLLMAnnotations(msg.Annotations);
         }
 
-        // Convert finish reason.
-        candidate.FinishReason = GeminiConvert.ConvertLlmFinishReasonToGemini(choice.FinishReason);
+        // Convert finish reason. Go: omitempty drops the "" returned for nil.
+        candidate.FinishReason = NullIfEmpty(GeminiConvert.ConvertLlmFinishReasonToGemini(choice.FinishReason));
 
         return candidate;
     }
@@ -867,4 +873,12 @@ public static class GeminiInboundConvert
 
         return string.Empty;
     }
+
+    /// <summary>
+    /// Go <c>omitempty</c> on a string drops "" as well as nil; STJ's
+    /// <see cref="System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull"/>
+    /// keeps "". Null the empty string at the assignment site (house pattern,
+    /// see ClineErrors.NullIfEmpty).
+    /// </summary>
+    private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
 }

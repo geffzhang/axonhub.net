@@ -38,6 +38,16 @@ public interface IApiKeyAuthenticator
     Task<RequestIdentity> AuthenticateAsync(
         HttpRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Strict authentication for surfaces that never fall back to no-auth
+    /// (middleware.WithGeminiKeyAuth): a supplied key is mandatory and any
+    /// lookup or validation failure rejects the request.
+    /// </summary>
+    Task<RequestIdentity> AuthenticateKeyAsync(
+        HttpRequest request,
+        string key,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -92,6 +102,26 @@ public sealed class ApiKeyAuthenticator(
         }
 
         apiKey ??= await AuthenticateNoAuthAsync(cancellationToken).ConfigureAwait(false);
+
+        CheckAllowedIps(request, apiKey);
+
+        return new RequestIdentity(apiKey.ProjectId, apiKey.Id);
+    }
+
+    /// <summary>
+    /// Port of middleware.WithGeminiKeyAuth's direct AuthService.
+    /// AuthenticateAPIKey call (auth.go:262-310): no no-auth fallback, the
+    /// allowed_ips check follows a successful lookup exactly like the
+    /// reference.
+    /// </summary>
+    public async Task<RequestIdentity> AuthenticateKeyAsync(
+        HttpRequest request,
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var apiKey = await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false);
 
         CheckAllowedIps(request, apiKey);
 

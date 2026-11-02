@@ -100,6 +100,16 @@ public sealed class ApiKeyAuthMiddlewareTests
             _ = cancellationToken;
             return Task.FromResult(authenticate(request));
         }
+
+        public Task<RequestIdentity> AuthenticateKeyAsync(
+            HttpRequest request,
+            string key,
+            CancellationToken cancellationToken = default)
+        {
+            _ = key;
+            _ = cancellationToken;
+            return Task.FromResult(authenticate(request));
+        }
     }
 
     private sealed class NextCall

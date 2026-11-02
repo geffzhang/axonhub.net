@@ -1464,7 +1464,8 @@ public sealed class GeminiInboundConvertTests
 
         Assert.NotNull(result);
         Assert.NotNull(result.Content);
-        Assert.Empty(result.Content.Parts!);
+        // Go: omitempty drops the empty slice on the wire; the port nulls it.
+        Assert.Null(result.Content.Parts);
     }
 
     // ==================================================================

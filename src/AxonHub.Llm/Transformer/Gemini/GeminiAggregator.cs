@@ -259,6 +259,9 @@ public static class GeminiAggregator
                     }
                 }
 
+                // Go: omitempty drops the empty map ("{}" parses to one).
+                args = args is { Count: 0 } ? null : args;
+
                 parts.Add(new Part
                 {
                     FunctionCall = new FunctionCall
@@ -278,7 +281,8 @@ public static class GeminiAggregator
                 parts.Add(new Part { InlineData = inlineData });
             }
 
-            content.Parts = parts;
+            // Go: omitempty drops the empty slice.
+            content.Parts = parts.Count == 0 ? null : parts;
 
             // Determine finish reason.
             var finishReason = agg.FinishReason;
@@ -299,9 +303,10 @@ public static class GeminiAggregator
 
         var response = new GenerateContentResponse
         {
-            ResponseId = responseId,
-            ModelVersion = modelVersion,
-            Candidates = candidates,
+            // Go: omitempty drops "" and the empty slice.
+            ResponseId = NullIfEmpty(responseId),
+            ModelVersion = NullIfEmpty(modelVersion),
+            Candidates = candidates.Count == 0 ? null : candidates,
             UsageMetadata = usage,
         };
 
@@ -314,4 +319,7 @@ public static class GeminiAggregator
 
         return GoJson.Marshal(response);
     }
+
+    /// <summary>Go <c>omitempty</c> on a string drops "" as well as nil.</summary>
+    private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
 }

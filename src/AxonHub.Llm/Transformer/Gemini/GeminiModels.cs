@@ -251,18 +251,37 @@ public sealed class ToolJsonConverter : JsonConverter<Tool>
 
     public override void Write(Utf8JsonWriter writer, Tool value, JsonSerializerOptions options)
     {
-        // Re-entering with this converter would recurse; write the plain
-        // properties (camelCase only, matching the Go struct tags).
-        var withoutThis = new JsonSerializerOptions(options);
-        for (var i = withoutThis.Converters.Count - 1; i >= 0; i--)
+        // The class-level [JsonConverter] takes precedence over the options
+        // converter list, so re-serializing with this converter "removed"
+        // still re-enters Write (StackOverflow). Emit the properties directly
+        // instead, in Go struct order with Go omitempty semantics.
+        writer.WriteStartObject();
+
+        if (value.FunctionDeclarations is { Count: > 0 } functionDeclarations)
         {
-            if (withoutThis.Converters[i] is ToolJsonConverter)
-            {
-                withoutThis.Converters.RemoveAt(i);
-            }
+            writer.WritePropertyName("functionDeclarations");
+            JsonSerializer.Serialize(writer, functionDeclarations, options);
         }
 
-        JsonSerializer.Serialize(writer, value, withoutThis);
+        if (value.CodeExecution is { } codeExecution)
+        {
+            writer.WritePropertyName("codeExecution");
+            JsonSerializer.Serialize(writer, codeExecution, options);
+        }
+
+        if (value.GoogleSearch is { } googleSearch)
+        {
+            writer.WritePropertyName("googleSearch");
+            JsonSerializer.Serialize(writer, googleSearch, options);
+        }
+
+        if (value.UrlContext is { } urlContext)
+        {
+            writer.WritePropertyName("urlContext");
+            JsonSerializer.Serialize(writer, urlContext, options);
+        }
+
+        writer.WriteEndObject();
     }
 
     private static bool EqualsFold(string name, string tag)
@@ -529,7 +548,7 @@ public sealed class Candidate
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Content? Content { get; set; }
 
-    /// <summary>The reason why the model stopped generating tokens.</summary>
+    /// <summary>The reason why the model stopped generating tokens. Go: omitempty (drops "" too).</summary>
     [JsonPropertyName("finishReason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FinishReason { get; set; }

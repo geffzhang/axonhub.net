@@ -15,6 +15,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.Doubao;
+using AxonHub.Llm.Transformer.Gemini;
 using AxonHub.Llm.Transformer.Jina;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
@@ -55,6 +56,11 @@ builder.Services.AddSingleton<IInboundTransformer, OpenAiInboundTransformer>();
 // reuses the chat handler with a different inbound transformer, exactly like
 // internal/server/api/anthropic.go delegates to ChatCompletionHandlers.
 builder.Services.AddSingleton<AnthropicInboundTransformer>();
+
+// The native Gemini surface (POST /v1beta/models/{model}:generateContent and
+// /gemini/{apiVersion}/...): the Gemini inbound transformer is stateless, so
+// one singleton serves every scoped orchestrator.
+builder.Services.AddSingleton<GeminiInboundTransformer>();
 
 // The Responses API surface (POST /v1/responses, POST /v1/responses/compact)
 // uses the same chat handler with the Responses inbound transformers.
@@ -187,6 +193,22 @@ app.UseWhen(
         branch.UseMiddleware<ApiKeyAuthMiddleware>();
 
         // routes.go:185-192: WithThread then WithTrace, both after the API key.
+        branch.UseMiddleware<ThreadMiddleware>();
+        branch.UseMiddleware<TraceMiddleware>();
+    });
+
+// The native Gemini surface (routes.go:266-289): the /gemini/:version group
+// and the /v1beta alias run IP blocklist + Gemini key auth (query `key` or
+// the regular header extractor) instead of WithAPIKeyConfig, then the same
+// thread/trace pair. WithTimeout/WithSource/WithResponseHeaders stay
+// unregistered like the rest of the port (C115).
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/v1beta")
+        || context.Request.Path.StartsWithSegments("/gemini"),
+    static branch =>
+    {
+        branch.UseMiddleware<IpBlocklistMiddleware>();
+        branch.UseMiddleware<GeminiKeyAuthMiddleware>();
         branch.UseMiddleware<ThreadMiddleware>();
         branch.UseMiddleware<TraceMiddleware>();
     });
@@ -381,5 +403,14 @@ static Task HandleSystemOneAsync(
 
 app.MapPost("/v1/systemone", HandleSystemOneAsync);
 app.MapPost("/typesafe/v1/systemone", HandleSystemOneAsync);
+
+// Native Gemini surface (routes.go:266-289): both groups share the handler
+// pair. GenerateContent picks the writer from the alt query parameter;
+// ListModels serves the /v1beta/models and /gemini/{apiVersion}/models
+// literals.
+app.MapPost("/v1beta/models/{**action}", GeminiEndpoint.GenerateContentAsync);
+app.MapGet("/v1beta/models", GeminiEndpoint.ListModelsAsync);
+app.MapPost("/gemini/{apiVersion}/models/{**action}", GeminiEndpoint.GenerateContentAsync);
+app.MapGet("/gemini/{apiVersion}/models", GeminiEndpoint.ListModelsAsync);
 
 app.Run();
