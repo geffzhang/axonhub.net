@@ -296,6 +296,134 @@ public sealed class AdminMutation
         return true;
     }
 
+    /// <summary>Port of mutationResolver.CreateProject (axonhub.resolvers.go:582-584).</summary>
+    /// <remarks>
+    /// The resolver binds the whole ent.CreateProjectInput; ProjectService
+    /// reads only name and description (project.go:53-157).
+    /// </remarks>
+    [GraphQLName("createProject")]
+    public async Task<ProjectType> CreateProjectAsync(
+        CreateProjectInput input,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var project = await projects.CreateAsync(
+                new CreateProjectCommand
+                {
+                    Name = input.Name,
+                    Description = input.Description,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>Port of mutationResolver.UpdateProject (axonhub.resolvers.go:587-589).</summary>
+    /// <remarks>
+    /// The input's status field is not applied: the reference passes it in
+    /// ent.UpdateProjectInput but UpdateProject only sets name/description and
+    /// the user edges (project.go:160-188).
+    /// </remarks>
+    [GraphQLName("updateProject")]
+    public async Task<ProjectType> UpdateProjectAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateProjectInput input,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var project = await projects.UpdateAsync(
+                new UpdateProjectCommand
+                {
+                    Id = gid.Id,
+                    Name = input.Name,
+                    Description = input.Description,
+                    ClearUsers = input.ClearUsers ?? false,
+                    AddUserIds = ManagementMapping.ParseGidList(input.AddUserIDs),
+                    RemoveUserIds = ManagementMapping.ParseGidList(input.RemoveUserIDs),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateProjectStatus (axonhub.resolvers.go:592-594;
+    /// biz/project.go:300-315).
+    /// </summary>
+    [GraphQLName("updateProjectStatus")]
+    public async Task<ProjectType> UpdateProjectStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        ProjectStatusValue status,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var project = await projects.UpdateStatusAsync(
+                gid.Id,
+                ProjectMapping.ToWireStatus(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateProjectProfiles
+    /// (axonhub.resolvers.go:597-599; biz/project.go:236-256). The input binds
+    /// straight to objects.ProjectProfiles, so a nil profiles list stays nil
+    /// and an empty one serializes as [].
+    /// </summary>
+    [GraphQLName("updateProjectProfiles")]
+    public async Task<ProjectType> UpdateProjectProfilesAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateProjectProfilesInput input,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var project = await projects.UpdateProfilesAsync(
+                new UpdateProjectProfilesCommand
+                {
+                    Id = gid.Id,
+                    Profiles = new ProjectProfilesModel
+                    {
+                        ActiveProfile = input.ActiveProfile,
+                        Profiles = input.Profiles?
+                            .Select(static profile => new ProjectProfileModel
+                            {
+                                Name = profile.Name,
+                                ChannelIDs = profile.ChannelIDs,
+                                ChannelTags = profile.ChannelTags,
+                                ChannelTagsMatchMode = profile.ChannelTagsMatchMode
+                                    ?? string.Empty,
+                            })
+                            .ToList(),
+                    },
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>Port of mutationResolver.DeleteProject (axonhub.resolvers.go:602-608).</summary>
+    [GraphQLName("deleteProject")]
+    public async Task<bool> DeleteProjectAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+        await projects.DeleteAsync(gid.Id, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
     /// <summary>
     /// Port of mutationResolver.AddUserToProject (axonhub.resolvers.go:610-614).
     /// </summary>

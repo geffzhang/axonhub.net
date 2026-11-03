@@ -120,6 +120,13 @@ public sealed class ProjectType : INode
     public string Description { get; init; } = string.Empty;
 
     public ProjectStatusValue Status { get; init; }
+
+    /// <summary>
+    /// Port of the entgql <c>Project.profiles</c> field (ent.graphql:2852). The
+    /// column is nullable jsonb, so a NULL column is serialized as null.
+    /// </summary>
+    [GraphQLType(typeof(ProjectProfilesType))]
+    public ProjectProfilesType? Profiles { get; init; }
 }
 
 /// <summary>Port of gql's <c>UpdateMeInput</c> (me.graphql:31-36).</summary>
@@ -196,6 +203,7 @@ public static class UserProfileMapping
         Name = record.Name,
         Description = record.Description,
         Status = ToGraphQLStatus(record.Status),
+        Profiles = ProjectMapping.ToGraphQL(record.Profiles),
     };
 
     public static ProjectStatusValue ToGraphQLStatus(string status) => status switch

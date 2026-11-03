@@ -155,6 +155,39 @@ public sealed class AdminQuery
         return ManagementMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>Port of queryResolver.Projects (ent.resolvers.go:439-452).</summary>
+    [GraphQLName("projects")]
+    public async Task<ProjectConnectionType> ProjectsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ProjectOrder? orderBy,
+        ProjectWhereInput? where,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ProjectMapping.ToSortField(orderBy);
+        var page = await projects.ListAsync(
+                new ProjectListQuery
+                {
+                    Where = ProjectMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ProjectMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ProjectMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>
     /// Port of queryResolver.ChannelOverrideTemplates (ent.resolvers.go:383-397).
     /// </summary>

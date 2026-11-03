@@ -4018,6 +4018,78 @@ C153 沿用（user_projects 唯一冲突的存储文案）；C161 沿用（Updat
 的 isOwner 拒绝测试以目标持有调用方缺失的 scope 复现——生产上 ctx 用户经
 GetUserByID 预载边）。
 
+## 86. 项目管理切片（projects 查询与五个变更，41 例，2026-11-03）
+
+参照 `internal/server/biz/project.go` 的 CreateProject（51-157）、UpdateProject
+（159-188）、UpdateProjectProfiles（236-256）、ValidateProjectProfiles
+（259-298）、UpdateProjectStatus（300-315）、DeleteProject（335-385）与
+`internal/server/gql/ent.resolvers.go` 的 projects 查询（439-452）及
+`axonhub.resolvers.go` 的五个变更（582-608），端口新增 `IProjectStore`
+（EF 写 + Dapper 读）、`ProjectManagementService`、`ProjectProfilesCodec`、
+GraphQL `ProjectOrder` / `ProjectWhereInput` / `ProjectConnection` /
+`ProjectProfiles` / `ChannelTagsMatchMode`（标量）与 projects / createProject /
+updateProject / updateProjectStatus / updateProjectProfiles / deleteProject
+六个成员，对齐前端 projects.ts 的实际查询与变更：
+
+- CreateProject：ctx 用户缺失报 `user not found in context`；重名检查
+  `Project.Query().Where(NameEQ).Exist` → 包
+  `failed to check project name uniqueness: %w`，重名抛
+  `xerrors.DuplicateNameError("project", name)`（`project name '<name>'
+  already exists` + resource/field/value 扩展）；建项目只写 Name 与非 nil
+  Description，其余取 ent 默认（description ""、status "active"、profiles
+  `{"activeProfile":"","profiles":null}`）；随后按序建 Admin / Developer /
+  Viewer 三个 LevelProject 角色（失败前缀 `failed to create admin role: ` /
+  `developer` / `viewer`，作用域与参照逐条一致），再以 IsOwner=true、
+  Scopes=[] 写 owner 关系（失败 `failed to assign user to project: %w`）。
+  参照无事务：任一步失败保留已写入行。CreateProjectInput 的 status /
+  userIDs 绑定但不使用。
+- UpdateProject：无权限检查；SetNillableName / SetNillableDescription、
+  ClearUsers、AddUserIDs、RemoveUserIDs；存储失败统一包
+  `failed to update project: %w`，缺失行报 `failed to update project:
+  ent: project not found`；input status 不生效。ent 的 sqlgraph 顺序为节点
+  UPDATE → 边 clear → 边 add，join 表新增为普通 INSERT（无 ON CONFLICT），
+  重复成员触发唯一冲突并回滚整个更新，文案前缀
+  `add m2m edge for table user_projects: `。
+- UpdateProjectStatus：只写 status，`failed to update project status: %w`。
+- UpdateProjectProfiles：先 ValidateProjectProfiles（错误不包前缀），再序列化
+  与写入，失败包 `failed to update project profiles: %w`。校验顺序：名称
+  Trim/ToLower 后为空 → `profile name cannot be empty`；重复 →
+  `duplicate profile name: <原始 name>`；matchMode 非 ""/any/all/none →
+  `profile '<name>' channelTagsMatchMode is invalid`；最后 ActiveProfile
+  非空时须与某个 profile.Name 大小写敏感相等 →
+  `active profile '<name>' does not exist in the profiles list`。
+- profiles JSON：字段顺序 activeProfile、profiles；profile 内 name、
+  channelIDs、channelTags、channelTagsMatchMode，nil 与空切片均省略、
+  空 mode 省略；HTML 转义 `<`/`>`/`&`/U+2028/U+2029、控制字符小写
+  `\u00xx`，均按 Go encoding/json 输出。
+- DeleteProject：CanDeleteProject（仅系统 owner）失败包
+  `permission denied: %w`；事务内取项目 → `failed to get project: %w`；
+  硬删 user_projects → `failed to delete project users: %w`；按 project_id
+  软删角色（不清理 user_roles）→ `failed to delete project roles: %w`；
+  软删 api_keys → `failed to delete project API keys: %w`；软删项目 →
+  `failed to delete project: %w`；缺失项目返回 false，resolver 报
+  `failed to get project: ent: project not found`；成功返回 true。
+- projects 查询：CREATED_AT 改写为 ent.DefaultProjectOrder 的 id 并保留
+  direction，UPDATED_AT 走 updated_at；Project.profiles 在所有 Project
+  出口（projectUsers.node、myProjects、变更、connection）接线，jsonb NULL
+  序列化为 null。
+- 项目缓存失效在端口为 no-op（新增 C174）；ChannelTagsMatchMode 以
+  字符串标量实现（新增 C175）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 服务语义：创建顺序（项目 → 三角色 → owner）、重名 DUPLICATE_NAME、缺用户、角色失败保留项目；更新（名称 / 边替换 / 重复加边回滚 / 缺失）、状态、profiles 序列化与异常、删除权限与软删；校验器 5 例（含 3 个 theory 行）；JSON 编解码 2 例 | `tests/AxonHub.Api.Tests/ProjectManagementServiceTests.cs` | 19（新增） |
+| 存储语义：NameExists 忽略软删、过滤 / 排序 / keyset / last、部分列更新与 updated_at、边替换与 join 默认值、重复加边整体回滚、profiles / status 与缺失、AssignOwner 与重复前缀、删除级联（user_projects 硬删、角色与 API key 软删、user_roles 保留） | `tests/AxonHub.Persistence.Tests/ProjectStoreTests.cs` | 8（新增） |
+| 端点线形：projects 连接形状（含 profiles 与空 mode）、nameContainsFold or 过滤与 status、keyset 分页、分页参数校验、createProject（角色 / owner / 默认 profiles / 重名扩展）、updateProject（status 忽略、边、重复加边前缀）、updateProjectStatus、updateProjectProfiles（Go JSON 往返、校验文案不包前缀）、deleteProject（成功 / 缺失 / 非 owner） | `tests/AxonHub.Api.Tests/AdminProjectsEndpointTests.cs` | 14（新增） |
+
+`AxonHub.Persistence.Tests` 由 187 增至 195（+8），`AxonHub.Api.Tests` 由
+2114 增至 2147（+33）；四个项目合计 5413 增至 5454，0 失败 0 跳过。
+
+差异：C165 更新（Project.profiles 已接线；projects 查询接入，单实体与其余
+SDL 成员仍缺）；新增 C174（项目缓存失效为 no-op）；新增 C175
+（ChannelTagsMatchMode 为字符串标量，SDL kind 与枚举字面量语法差异）；
+C153 沿用（user_projects 唯一冲突的存储文案）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

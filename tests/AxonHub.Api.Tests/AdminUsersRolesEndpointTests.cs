@@ -1370,6 +1370,12 @@ internal sealed class FakeRoleStore : IRoleStore
 
     public List<RoleListQuery> Queries { get; } = [];
 
+    /// <summary>All role rows in creation order, soft-deleted included.</summary>
+    public IReadOnlyList<RoleRecord> Rows => _rows;
+
+    /// <summary>When set, CreateAsync throws it like a failed insert would.</summary>
+    public Exception? CreateFailure { get; set; }
+
     public void Assign(long userId, long roleId)
     {
         if (!_userRoles.TryGetValue(userId, out var roleIds))
@@ -1406,6 +1412,11 @@ internal sealed class FakeRoleStore : IRoleStore
 
     public Task<long> CreateAsync(RoleRecord role, CancellationToken cancellationToken = default)
     {
+        if (CreateFailure is not null)
+        {
+            return Task.FromException<long>(CreateFailure);
+        }
+
         role.Id = _nextId++;
         _rows.Add(role);
         return Task.FromResult(role.Id);

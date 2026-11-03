@@ -164,6 +164,11 @@ builder.Services.AddScoped<PermissionValidator>();
 builder.Services.AddScoped<UserManagementService>();
 builder.Services.AddScoped<RoleManagementService>();
 
+// Projects (biz.ProjectService): CRUD over the projects table plus the
+// project-level role presets and the creator's UserProject row. The project
+// cache is not ported (C174).
+builder.Services.AddScoped<ProjectManagementService>();
+
 // Channel management reads (entgql channels / queryChannels / aggregates).
 builder.Services.AddScoped<IChannelAdminStore, ChannelAdminStore>();
 builder.Services.AddScoped<ChannelQueryService>();
