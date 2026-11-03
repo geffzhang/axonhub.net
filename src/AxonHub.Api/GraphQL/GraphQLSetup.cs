@@ -29,6 +29,8 @@ public static class GraphQLSetup
                 descriptor => descriptor.Name("ChannelOrderingItem")))
             .AddType(new InputObjectType<BulkImportChannelItemInput>(
                 descriptor => descriptor.Name("BulkImportChannelItem")))
+            .AddTypeExtension<ProjectTypeExtensions>()
+            .AddTypeExtension<UserTypeExtensions>()
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
 }

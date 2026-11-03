@@ -3956,6 +3956,68 @@ UpdateUserStatus / DeleteRole / BulkDeleteRoles 无权限校验，AppendScopes �
 接入，残余收窄为通道管理面其余部分；C161 扩展记当前用户的边数据由校验器
 按需读取；新增 C172（Go map 遍历顺序 vs 端口确定顺序）。
 
+## 85. 项目成员切片（addUserToProject / removeUserFromProject / updateProjectUser 与 node() 项目成员查询，32 例，2026-11-03）
+
+参照 `internal/server/biz/user.go` 的 AddUserToProject（394-461）、
+RemoveUserFromProject（463-500）、UpdateProjectUser（502-579）与
+`axonhub.resolvers.go` 的三个变更（610-632），端口在 `UserAdminStore` 增加
+`user_projects` 的新增 / 删除 / 更新与两条列表存储方法、在
+`UserManagementService` 增加三个服务方法，GraphQL 侧新增 `UserProject`
+类型（实现 Node 接口）、
+`Project.projectUsers` / `User.projectUsers` 扩展与 `node(id:)` 查询，对齐
+entgql 生成的形状与前端 project-users 页面的实际查询：
+
+- AddUserToProject：主体为 test principal（`IsTest`）时跳过全部权限检查
+  （authz.GetPrincipal + IsTest 的旁路）；否则 scopes 先 CanGrantScopes
+  （包 `permission denied: %w`），再逐个 roleID 按系统旁路加载角色
+  （`Role.Query().Where(IDEQ, ProjectIDEQ)`）——缺失或跨项目报
+  `project role %d not found`（不包 permission denied），其它失败报
+  `failed to load project role %d: %w`——再 CanGrantRole(role.Scopes)
+  （包 `permission denied: %w`）。随后事务内：建 UserProject（isOwner /
+  scopes 仅非 nil 时写入，缺省 isOwner=false）→ `failed to add user to
+  project: %w`；roleIDs 为空直接返回；取用户 → `failed to get user: %w`；
+  加角色（去重且跳过既有）→ `failed to add roles to user: %w`；提交。
+  存储失败原样转发（UpdateStatusAsync 先例），其余包装
+  `failed to add user to project: `。
+- RemoveUserFromProject：无权限检查、无事务；删除关系 → `failed to remove
+  user from project: %w`；rowsAffected == 0 直接返回（不清理角色、不失效
+  缓存）；查该用户在该项目下的角色边 → `failed to query user project
+  roles: %w`；移除 → `failed to remove user project roles: %w`；系统角色与
+  其它项目角色保留。
+- UpdateProjectUser：三个权限检查先行（CanEditUserPermissions(userID,
+  &projectID)、scopes → CanGrantScopes、逐个 addRoleID → CanEditRole，全部
+  包 `permission denied: %w`）；关系缺失报 `failed to find user project
+  relationship: ent: user_project not found`；写 isOwner / scopes →
+  `failed to update project user: %w`；取用户 → `failed to get user: %w`；
+  先加后移角色（同一角色同时出现在两列表时移除胜）→ `failed to update user
+  roles: %w`。
+- 线路形状：`UserProject` 的 id / createdAt / updatedAt / userID / projectID /
+  isOwner / scopes / user / project 与 SDL（ent.graphql:7336-7352）一致；
+  `AddUserToProjectInput` / `UpdateProjectUserInput` /
+  `RemoveUserFromProjectInput` 按 axonhub.graphql:674-694 命名
+  （roleIDs / addRoleIDs / removeRoleIDs 为 gid 数组）；`node(id:)` 解析
+  `gid://axonhub/<Type>/<id>`（GUID 的四个解析文案照搬），Project / User
+  分别返回实体或 `ent: project not found` / `ent: user not found`，其余
+  18 个 ent 类型报 `unknown node type: %s`（C165）；Project / User 的
+  projectUsers 无排序（参照 `QueryProjectUsers().All(ctx)`，C164 沿用）。
+- 三个变更后的 `invalidateUserCache` 在端口为 no-op（C173）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 服务语义：Add（成功 / 带角色 / nil owner / 重复关系）、Remove（成功 / 缺失 / 项目角色清理）与 Update（scopes / 加角色 / 移角色 / 加移并施 / 缺失 / scopes+角色 / isOwner 成功 / isOwner 拒绝）的参照逐字文案 | `tests/AxonHub.Api.Tests/ProjectUserServiceTests.cs` | 15（新增） |
+| 存储语义：关系创建与角色去重、isOwner 缺省与 scopes 缺省 null、重复关系前缀、缺用户回滚整事务、删除只清理该项目角色、无关系不动角色、先加后移、缺失关系前缀、列表无排序 | `tests/AxonHub.Persistence.Tests/UserAdminStoreTests.cs` | 9（新增） |
+| 端点线形：node() 的 Project / User projectUsers 查询（前端 buildProjectUsersQuery 形状，含 `roles(where: { projectID })`）、未知类型与缺失节点文案、三个变更输入输出、跨项目角色拒绝、移除幂等、更新加移角色、缺失关系 | `tests/AxonHub.Api.Tests/AdminUsersRolesEndpointTests.cs` | 8（新增） |
+
+`AxonHub.Persistence.Tests` 由 178 增至 187（+9），`AxonHub.Api.Tests` 由
+2091 增至 2114（+23）；四个项目合计 5381 增至 5413，0 失败 0 跳过。
+
+差异：C165 更新（projectUsers 已在 Project / User 接线；node() 只解析
+Project / User，其余 18 个 ent 类型报 `unknown node type: %s`）；新增 C173
+（三个变更后的 invalidateUserCache 为 no-op——管理面读取路径无 UserCache）；
+C153 沿用（user_projects 唯一冲突的存储文案）；C161 沿用（UpdateProjectUser
+的 isOwner 拒绝测试以目标持有调用方缺失的 scope 复现——生产上 ctx 用户经
+GetUserByID 预载边）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -3968,7 +4030,7 @@ UpdateUserStatus / DeleteRole / BulkDeleteRoles 无权限校验，AppendScopes �
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 18 个 ent 类型见 C165）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），通道测试由 §76 接入，模型同步由 §77 接入，覆盖模板的 `channel_override_templates` 表、`channelOverrideTemplates` 查询与 create/update/delete/apply/clear 五个变更由 §78 接入（隐私作用域 C161、where 子集 C162、通道顺序 C163），其余通道写操作（C037）未移植 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |

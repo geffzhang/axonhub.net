@@ -4,8 +4,11 @@ namespace AxonHub.Api.Management;
 /// The authenticated management user the reference reads from the Gin context
 /// (contexts.GetUser / scopes.getUserFromContext). <see cref="IsOwner"/>
 /// mirrors the ent <c>is_owner</c> flag the privacy rules key on.
+/// <see cref="IsTest"/> mirrors the principal type the reference sets via
+/// <c>authz.WithTestBypass</c>; when true, AddUserToProject skips its
+/// permission checks exactly like the reference (user.go:395-401).
 /// </summary>
-public sealed record ManagementUser(long Id, bool IsOwner);
+public sealed record ManagementUser(long Id, bool IsOwner, bool IsTest = false);
 
 /// <summary>
 /// Current-user seam for the management resolvers. The admin GraphQL gate

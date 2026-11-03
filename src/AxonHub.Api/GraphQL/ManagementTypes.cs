@@ -261,7 +261,7 @@ public sealed class UpdateRoleInput
 
 /// <summary>Port of the <c>User</c> object type (ent.graphql:7107-...).</summary>
 [GraphQLName("User")]
-public sealed class UserType
+public sealed class UserType : INode
 {
     [GraphQLIgnore]
     public long DbId { get; init; }

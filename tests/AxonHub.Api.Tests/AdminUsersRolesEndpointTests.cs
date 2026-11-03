@@ -25,6 +25,8 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     private static readonly string[] UserStatusNames = ["activated", "deactivated"];
     private static readonly string[] RoleLevelNames = ["system", "project"];
     private static readonly string[] OrderDirectionNames = ["ASC", "DESC"];
+    private static readonly string[] ReadProjectScopes = ["read_project"];
+    private static readonly string[] ReadWriteProjectScopes = ["read_project", "write_project"];
 
     private readonly FakeUserAdminStore _users = new();
     private readonly FakeRoleStore _roles = new();
@@ -532,6 +534,343 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         Assert.Equal("SCALAR", data.GetProperty("cursor").GetProperty("kind").GetString());
     }
 
+    [Fact]
+    public async Task NodeResolvesProjectWithProjectUsersLikeTheFrontendQuery()
+    {
+        var project = _gate.Projects.Add(static project =>
+        {
+            project.Name = "Test Project";
+            project.Description = "A test project";
+        });
+        var alice = SeedUser("alice@example.com", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), firstName: "Alice");
+        var developer = SeedRole("Developer", project.Id, level: "project");
+        _roles.Assign(alice.Id, developer.Id);
+
+        await _users.AddProjectUserAsync(alice.Id, project.Id, true, ReadProjectScopes, [developer.Id]);
+
+        // buildProjectUsersQuery (frontend/src/features/proejct-users/data/users.ts).
+        var projectId = "gid://axonhub/Project/" + project.Id;
+        var data = await QueryDataAsync(
+            """
+            query NodeProject($projectId: ID!) {
+              node(id: $projectId) {
+                ... on Project {
+                  id
+                  name
+                  projectUsers {
+                    id
+                    userID
+                    projectID
+                    isOwner
+                    scopes
+                    user {
+                      id
+                      createdAt
+                      updatedAt
+                      email
+                      status
+                      firstName
+                      lastName
+                      preferLanguage
+                      roles(where: { projectID: $projectId }) { edges { node { id name } } }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId });
+
+        var node = data.GetProperty("node");
+        Assert.Equal(projectId, node.GetProperty("id").GetString());
+        Assert.Equal("Test Project", node.GetProperty("name").GetString());
+
+        var projectUser = Assert.Single(
+            node.GetProperty("projectUsers").EnumerateArray().ToArray());
+        Assert.Equal(
+            "gid://axonhub/UserProject/1",
+            projectUser.GetProperty("id").GetString());
+        Assert.Equal(
+            "gid://axonhub/User/" + alice.Id,
+            projectUser.GetProperty("userID").GetString());
+        Assert.Equal(projectId, projectUser.GetProperty("projectID").GetString());
+        Assert.True(projectUser.GetProperty("isOwner").GetBoolean());
+        Assert.Equal(
+            ReadProjectScopes,
+            projectUser.GetProperty("scopes").EnumerateArray()
+                .Select(static scope => scope.GetString()).ToArray());
+
+        var user = projectUser.GetProperty("user");
+        Assert.Equal("gid://axonhub/User/" + alice.Id, user.GetProperty("id").GetString());
+        Assert.Equal("alice@example.com", user.GetProperty("email").GetString());
+        Assert.Equal("activated", user.GetProperty("status").GetString());
+        Assert.Equal("Alice", user.GetProperty("firstName").GetString());
+
+        var roles = user.GetProperty("roles").GetProperty("edges").EnumerateArray().ToArray();
+        Assert.Single(roles);
+        Assert.Equal(
+            "gid://axonhub/Role/" + developer.Id,
+            roles[0].GetProperty("node").GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task NodeResolvesUserWithProjectUsers()
+    {
+        var project = _gate.Projects.Add();
+        var alice = SeedUser("alice@example.com", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        await _users.AddProjectUserAsync(alice.Id, project.Id, false, null, []);
+
+        // users-add-to-project-dialog.tsx checks the user's existing projects.
+        var data = await QueryDataAsync(
+            """
+            query NodeUser($userId: ID!) {
+              node(id: $userId) {
+                ... on User {
+                  id
+                  projectUsers { projectID }
+                }
+              }
+            }
+            """,
+            new { userId = "gid://axonhub/User/" + alice.Id });
+
+        var node = data.GetProperty("node");
+        Assert.Equal("gid://axonhub/User/" + alice.Id, node.GetProperty("id").GetString());
+        var projectUsers = node.GetProperty("projectUsers").EnumerateArray().ToArray();
+        Assert.Single(projectUsers);
+        Assert.Equal(
+            "gid://axonhub/Project/" + project.Id,
+            projectUsers[0].GetProperty("projectID").GetString());
+    }
+
+    [Fact]
+    public async Task NodeReportsUnknownTypesAndMissingNodesLikeTheReference()
+    {
+        // The reference maps every ent type to a Noder lookup; the port only
+        // resolves Project and User (C165).
+        var unknown = await QueryErrorsAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/Channel/1" });
+        Assert.Equal(
+            "unknown node type: Channel",
+            unknown[0].GetProperty("message").GetString());
+
+        var missingProject = await QueryErrorsAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/Project/999" });
+        Assert.Equal(
+            "ent: project not found",
+            missingProject[0].GetProperty("message").GetString());
+
+        var missingUser = await QueryErrorsAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/User/999" });
+        Assert.Equal(
+            "ent: user not found",
+            missingUser[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task AddUserToProjectMutationMatchesTheFrontendShape()
+    {
+        var project = _gate.Projects.Add();
+        var alice = SeedUser("alice@example.com", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var developer = SeedRole("Developer", project.Id, level: "project");
+
+        var data = await QueryDataAsync(
+            """
+            mutation AddUserToProject($input: AddUserToProjectInput!) {
+              addUserToProject(input: $input) {
+                id userID projectID isOwner scopes
+              }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/" + project.Id,
+                    userId = "gid://axonhub/User/" + alice.Id,
+                    isOwner = true,
+                    scopes = ReadProjectScopes,
+                    roleIDs = new[] { "gid://axonhub/Role/" + developer.Id },
+                },
+            });
+
+        var userProject = data.GetProperty("addUserToProject");
+        Assert.Equal("gid://axonhub/UserProject/1", userProject.GetProperty("id").GetString());
+        Assert.Equal(
+            "gid://axonhub/User/" + alice.Id,
+            userProject.GetProperty("userID").GetString());
+        Assert.Equal(
+            "gid://axonhub/Project/" + project.Id,
+            userProject.GetProperty("projectID").GetString());
+        Assert.True(userProject.GetProperty("isOwner").GetBoolean());
+        Assert.Equal(
+            ReadProjectScopes,
+            userProject.GetProperty("scopes").EnumerateArray()
+                .Select(static scope => scope.GetString()).ToArray());
+
+        Assert.Single(await _users.ListProjectUsersForUserAsync(alice.Id));
+        Assert.Equal([developer.Id], _roles.UserRoleIds(alice.Id));
+    }
+
+    [Fact]
+    public async Task AddUserToProjectRejectsRolesOfOtherProjectsLikeTheReference()
+    {
+        var project = _gate.Projects.Add();
+        var otherProject = _gate.Projects.Add();
+        var alice = SeedUser("alice@example.com", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var foreignRole = SeedRole("Other Admin", otherProject.Id, level: "project");
+
+        // ProjectIDEQ(projectID) in the role query rejects roles of other
+        // projects and system roles alike (user.go:404-409).
+        var errors = await QueryErrorsAsync(
+            """
+            mutation AddUserToProject($input: AddUserToProjectInput!) {
+              addUserToProject(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/" + project.Id,
+                    userId = "gid://axonhub/User/" + alice.Id,
+                    roleIDs = new[] { "gid://axonhub/Role/" + foreignRole.Id },
+                },
+            });
+
+        Assert.Equal(
+            "project role " + foreignRole.Id + " not found",
+            errors[0].GetProperty("message").GetString());
+
+        // The failure happened before the transaction: no relationship exists.
+        Assert.Empty(await _users.ListProjectUsersForUserAsync(alice.Id));
+    }
+
+    [Fact]
+    public async Task RemoveUserFromProjectMutationReturnsTrueAndCleansUpProjectRoles()
+    {
+        var project = _gate.Projects.Add();
+        var alice = SeedUser("alice@example.com", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var developer = SeedRole("Developer", project.Id, level: "project");
+        var globalRole = SeedRole("Global Viewer", projectId: 0);
+        await _users.AddProjectUserAsync(alice.Id, project.Id, false, null, [developer.Id]);
+        _roles.Assign(alice.Id, globalRole.Id);
+
+        var data = await QueryDataAsync(
+            """
+            mutation RemoveUserFromProject($input: RemoveUserFromProjectInput!) {
+              removeUserFromProject(input: $input)
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/" + project.Id,
+                    userId = "gid://axonhub/User/" + alice.Id,
+                },
+            });
+
+        Assert.True(data.GetProperty("removeUserFromProject").GetBoolean());
+        Assert.Empty(await _users.ListProjectUsersForUserAsync(alice.Id));
+        // The project role link is removed; the global role link survives.
+        Assert.Equal([globalRole.Id], _roles.UserRoleIds(alice.Id));
+
+        // Removing the now-missing relationship still returns true
+        // (user.go:476-478).
+        var again = await QueryDataAsync(
+            """
+            mutation RemoveUserFromProject($input: RemoveUserFromProjectInput!) {
+              removeUserFromProject(input: $input)
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/" + project.Id,
+                    userId = "gid://axonhub/User/" + alice.Id,
+                },
+            });
+
+        Assert.True(again.GetProperty("removeUserFromProject").GetBoolean());
+    }
+
+    [Fact]
+    public async Task UpdateProjectUserMutationMatchesTheFrontendShape()
+    {
+        var project = _gate.Projects.Add();
+        var alice = SeedUser("alice@example.com", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var admin = SeedRole("Project Admin", project.Id, level: "project");
+        var member = SeedRole("Project Member", project.Id, level: "project");
+        await _users.AddProjectUserAsync(alice.Id, project.Id, false, ReadProjectScopes, [member.Id]);
+
+        var data = await QueryDataAsync(
+            """
+            mutation UpdateProjectUser($input: UpdateProjectUserInput!) {
+              updateProjectUser(input: $input) {
+                id userID projectID isOwner scopes
+              }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/" + project.Id,
+                    userId = "gid://axonhub/User/" + alice.Id,
+                    isOwner = true,
+                    scopes = ReadWriteProjectScopes,
+                    addRoleIDs = new[] { "gid://axonhub/Role/" + admin.Id },
+                    removeRoleIDs = new[] { "gid://axonhub/Role/" + member.Id },
+                },
+            });
+
+        var userProject = data.GetProperty("updateProjectUser");
+        Assert.True(userProject.GetProperty("isOwner").GetBoolean());
+        Assert.Equal(
+            ReadWriteProjectScopes,
+            userProject.GetProperty("scopes").EnumerateArray()
+                .Select(static scope => scope.GetString()).ToArray());
+        Assert.Equal([admin.Id], _roles.UserRoleIds(alice.Id));
+    }
+
+    [Fact]
+    public async Task UpdateProjectUserReportsTheMissingRelationshipLikeTheReference()
+    {
+        var project = _gate.Projects.Add();
+        var alice = SeedUser("alice@example.com", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        var errors = await QueryErrorsAsync(
+            """
+            mutation UpdateProjectUser($input: UpdateProjectUserInput!) {
+              updateProjectUser(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/" + project.Id,
+                    userId = "gid://axonhub/User/" + alice.Id,
+                    scopes = ReadProjectScopes,
+                },
+            });
+
+        Assert.Equal(
+            "failed to find user project relationship: ent: user_project not found",
+            errors[0].GetProperty("message").GetString());
+    }
+
     private UserRecord SeedUser(
         string email,
         DateTime createdAt,
@@ -616,6 +955,7 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
     private readonly List<UserRecord> _rows = [];
     private readonly List<UserProjectRecord> _userProjects = [];
     private long _nextId = 1;
+    private long _nextProjectUserId = 1;
 
     public List<UserListQuery> Queries { get; } = [];
 
@@ -800,6 +1140,167 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
         return Task.FromResult(true);
     }
 
+    /// <summary>When set, AddProjectUserAsync throws it like a failed insert would.</summary>
+    public Exception? AddProjectUserFailure { get; set; }
+
+    public Task<UserProjectRecord> AddProjectUserAsync(
+        long userId,
+        long projectId,
+        bool? isOwner,
+        IReadOnlyList<string>? scopes,
+        IReadOnlyList<long> roleIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (AddProjectUserFailure is not null)
+        {
+            throw AddProjectUserFailure;
+        }
+
+        if (_userProjects.Any(up => up.UserId == userId && up.ProjectId == projectId))
+        {
+            // The reference's SQLite error text for the unique index
+            // user_projects_by_user_id_project_id (C153).
+            throw new StoreFailureException(
+                "failed to add user to project: ent: constraint failed: insert node to table "
+                    + "\"user_projects\": UNIQUE constraint failed: user_projects.user_id, "
+                    + "user_projects.project_id",
+                new InvalidOperationException("duplicate relationship"));
+        }
+
+        var row = new UserProjectRecord
+        {
+            Id = _nextProjectUserId++,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            UserId = userId,
+            ProjectId = projectId,
+            // Ent's create default for is_owner is false (user.go:426-428).
+            IsOwner = isOwner ?? false,
+            Scopes = scopes is null ? null : JsonSerializer.Serialize(scopes),
+        };
+        _userProjects.Add(row);
+
+        if (roleIds.Count > 0)
+        {
+            if (Live(userId) is null)
+            {
+                // The reference runs the whole mutation in one transaction, so
+                // the created row rolls back with the failure (user.go:443-446).
+                _userProjects.Remove(row);
+                throw new StoreFailureException(
+                    "failed to get user: ent: user not found",
+                    new InvalidOperationException("ent: user not found"));
+            }
+
+            if (RolesSource is FakeRoleStore fakeRoles)
+            {
+                foreach (var roleId in roleIds)
+                {
+                    fakeRoles.Assign(userId, roleId);
+                }
+            }
+        }
+
+        return Task.FromResult(row);
+    }
+
+    public Task RemoveProjectUserAsync(
+        long userId,
+        long projectId,
+        CancellationToken cancellationToken = default)
+    {
+        var removed = _userProjects.RemoveAll(
+            up => up.UserId == userId && up.ProjectId == projectId);
+
+        // The reference returns success without role cleanup when no
+        // relationship matched (user.go:476-478).
+        if (removed == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (RolesSource is FakeRoleStore fakeRoles)
+        {
+            // Roles of this project the removed user still has (user.go:480-485).
+            foreach (var roleId in fakeRoles.ProjectRoleIds(projectId))
+            {
+                if (fakeRoles.UserRoleIds(userId).Contains(roleId))
+                {
+                    fakeRoles.Unassign(userId, roleId);
+                }
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<UserProjectRecord> UpdateProjectUserAsync(
+        long userId,
+        long projectId,
+        bool? isOwner,
+        IReadOnlyList<string>? scopes,
+        IReadOnlyList<long> addRoleIds,
+        IReadOnlyList<long> removeRoleIds,
+        CancellationToken cancellationToken = default)
+    {
+        var row = _userProjects.FirstOrDefault(
+            up => up.UserId == userId && up.ProjectId == projectId);
+        if (row is null)
+        {
+            throw new StoreFailureException(
+                "failed to find user project relationship: ent: user_project not found",
+                new InvalidOperationException("ent: user_project not found"));
+        }
+
+        if (isOwner is not null)
+        {
+            row.IsOwner = isOwner.Value;
+        }
+
+        if (scopes is not null)
+        {
+            row.Scopes = JsonSerializer.Serialize(scopes);
+        }
+
+        row.UpdatedAt = DateTime.UtcNow;
+
+        if (Live(userId) is null)
+        {
+            throw new StoreFailureException(
+                "failed to get user: ent: user not found",
+                new InvalidOperationException("ent: user not found"));
+        }
+
+        if (RolesSource is FakeRoleStore fakeRoles)
+        {
+            // Ent applies AddRoleIDs before RemoveRoleIDs, so a role in both
+            // lists ends up removed (user.go:560-570).
+            foreach (var roleId in addRoleIds)
+            {
+                fakeRoles.Assign(userId, roleId);
+            }
+
+            foreach (var roleId in removeRoleIds)
+            {
+                fakeRoles.Unassign(userId, roleId);
+            }
+        }
+
+        return Task.FromResult(row);
+    }
+
+    public Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersAsync(
+        long projectId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<UserProjectRecord>>(
+            _userProjects.Where(up => up.ProjectId == projectId).ToList());
+
+    public Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersForUserAsync(
+        long userId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<UserProjectRecord>>(
+            _userProjects.Where(up => up.UserId == userId).ToList());
+
     private UserRecord? Live(long id)
         => _rows.FirstOrDefault(row => row.Id == id && row.DeletedAt == 0);
 
@@ -877,7 +1378,30 @@ internal sealed class FakeRoleStore : IRoleStore
             _userRoles[userId] = roleIds;
         }
 
-        roleIds.Add(roleId);
+        // Mirrors the store's dedupe against the existing user_roles links.
+        if (!roleIds.Contains(roleId))
+        {
+            roleIds.Add(roleId);
+        }
+    }
+
+    /// <summary>The role IDs currently linked to the user (mutation order).</summary>
+    public List<long> UserRoleIds(long userId)
+        => _userRoles.TryGetValue(userId, out var roleIds) ? [.. roleIds] : [];
+
+    /// <summary>The live role IDs whose project_id equals the given project.</summary>
+    public List<long> ProjectRoleIds(long projectId)
+        => _rows
+            .Where(row => row.DeletedAt == 0 && row.ProjectId == projectId)
+            .Select(static row => row.Id)
+            .ToList();
+
+    public void Unassign(long userId, long roleId)
+    {
+        if (_userRoles.TryGetValue(userId, out var roleIds))
+        {
+            roleIds.RemoveAll(id => id == roleId);
+        }
     }
 
     public Task<long> CreateAsync(RoleRecord role, CancellationToken cancellationToken = default)

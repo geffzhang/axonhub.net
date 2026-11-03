@@ -1,4 +1,5 @@
 using HotChocolate;
+using HotChocolate.Types;
 using AxonHub.Api.Management;
 using AxonHub.Api.Scopes;
 using AxonHub.Api.Settings;
@@ -267,5 +268,45 @@ public sealed class AdminQuery
         var projects = await profiles.GetMyProjectsAsync(cancellationToken)
             .ConfigureAwait(false);
         return [.. projects.Select(UserProfileMapping.ToGraphQL)];
+    }
+
+    /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
+    /// <remarks>
+    /// The reference maps every ent type string to a Noder table lookup; the
+    /// port resolves only Project and User so far and reports every other type
+    /// as "unknown node type: %s" (C165).
+    /// </remarks>
+    [GraphQLName("node")]
+    public async Task<INode?> NodeAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] IProjectStore projects,
+        [Service] IUserAdminStore users,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        switch (gid.Type)
+        {
+            case "Project":
+            {
+                var project = await projects.GetByIdAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return project is null
+                    ? throw new InvalidOperationException("ent: project not found")
+                    : UserProfileMapping.ToGraphQL(project);
+            }
+
+            case "User":
+            {
+                var user = await users.GetByIdAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return user is null
+                    ? throw new InvalidOperationException("ent: user not found")
+                    : ManagementMapping.ToGraphQL(user);
+            }
+
+            default:
+                throw new InvalidOperationException("unknown node type: " + gid.Type);
+        }
     }
 }

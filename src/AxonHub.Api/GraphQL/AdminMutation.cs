@@ -297,6 +297,76 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.AddUserToProject (axonhub.resolvers.go:610-614).
+    /// </summary>
+    [GraphQLName("addUserToProject")]
+    public async Task<UserProjectType> AddUserToProjectAsync(
+        AddUserToProjectInput input,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        var userProject = await users.AddUserToProjectAsync(
+                new AddProjectUserCommand
+                {
+                    UserId = GidValue.Parse(input.UserId).Id,
+                    ProjectId = GidValue.Parse(input.ProjectId).Id,
+                    IsOwner = input.IsOwner,
+                    Scopes = input.Scopes?.ToList(),
+                    // objects.IntGuids(nil) yields an empty slice in the reference.
+                    RoleIds = ManagementMapping.ParseGidList(input.RoleIDs) ?? [],
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ProjectUserMapping.ToGraphQL(userProject);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.RemoveUserFromProject
+    /// (axonhub.resolvers.go:616-624).
+    /// </summary>
+    [GraphQLName("removeUserFromProject")]
+    public async Task<bool> RemoveUserFromProjectAsync(
+        RemoveUserFromProjectInput input,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        await users.RemoveUserFromProjectAsync(
+                GidValue.Parse(input.UserId).Id,
+                GidValue.Parse(input.ProjectId).Id,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateProjectUser (axonhub.resolvers.go:626-632).
+    /// </summary>
+    [GraphQLName("updateProjectUser")]
+    public async Task<UserProjectType> UpdateProjectUserAsync(
+        UpdateProjectUserInput input,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        var userProject = await users.UpdateProjectUserAsync(
+                new UpdateProjectUserCommand
+                {
+                    UserId = GidValue.Parse(input.UserId).Id,
+                    ProjectId = GidValue.Parse(input.ProjectId).Id,
+                    IsOwner = input.IsOwner,
+                    Scopes = input.Scopes?.ToList(),
+                    // objects.IntGuids(nil) yields an empty slice in the reference.
+                    AddRoleIds = ManagementMapping.ParseGidList(input.AddRoleIDs) ?? [],
+                    RemoveRoleIds = ManagementMapping.ParseGidList(input.RemoveRoleIDs) ?? [],
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ProjectUserMapping.ToGraphQL(userProject);
+    }
+
+    /// <summary>
     /// Port of mutationResolver.UpdateChannelStatus
     /// (axonhub.resolvers.go:203-206; biz channel.go:1205-1220).
     /// </summary>

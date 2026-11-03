@@ -129,6 +129,58 @@ public interface IUserAdminStore
 
     /// <summary>Deletes relations, archives personal keys and soft-deletes the user.</summary>
     Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of UserService.AddUserToProject's store steps (user.go:420-452):
+    /// creates the user_project row in a transaction and, when roleIds is
+    /// non-empty, adds the user_roles links. Step failures carry the reference's
+    /// per-step wording ("failed to add user to project: %w", "failed to get
+    /// user: %w", "failed to add roles to user: %w") as
+    /// <see cref="StoreFailureException"/>; the service forwards them unchanged.
+    /// </summary>
+    Task<UserProjectRecord> AddProjectUserAsync(
+        long userId,
+        long projectId,
+        bool? isOwner,
+        IReadOnlyList<string>? scopes,
+        IReadOnlyList<long> roleIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of UserService.RemoveUserFromProject's store steps (user.go:465-494):
+    /// deletes the user_project rows; when none matched, returns without role
+    /// cleanup. Otherwise removes the user_roles links of every live project
+    /// role of the project the user still has.
+    /// </summary>
+    Task RemoveProjectUserAsync(
+        long userId,
+        long projectId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of UserService.UpdateProjectUser's store steps (user.go:525-573):
+    /// updates the user_project row (missing relationship raises the reference
+    /// wording "failed to find user project relationship: %w"), then applies the
+    /// role adds before the removals on the user.
+    /// </summary>
+    Task<UserProjectRecord> UpdateProjectUserAsync(
+        long userId,
+        long projectId,
+        bool? isOwner,
+        IReadOnlyList<string>? scopes,
+        IReadOnlyList<long> addRoleIds,
+        IReadOnlyList<long> removeRoleIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of <c>Project.QueryProjectUsers().All()</c> (no ordering).</summary>
+    Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersAsync(
+        long projectId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of <c>User.QueryProjectUsers().All()</c> (no ordering).</summary>
+    Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersForUserAsync(
+        long userId,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -141,6 +193,11 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
         "id", "created_at", "updated_at", "deleted_at", "email", "status",
         "prefer_language", "password", "first_name", "last_name", "avatar",
         "is_owner", "scopes"
+        """;
+
+    private const string UserProjectColumns = """
+        "id", "created_at", "updated_at", "is_owner", "scopes", "user_id",
+        "project_id"
         """;
 
     public async Task<long> CreateAsync(
@@ -529,6 +586,333 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return true;
+    }
+
+    public async Task<UserProjectRecord> AddProjectUserAsync(
+        long userId,
+        long projectId,
+        bool? isOwner,
+        IReadOnlyList<string>? scopes,
+        IReadOnlyList<long> roleIds,
+        CancellationToken cancellationToken = default)
+    {
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var now = DateTime.UtcNow;
+        var row = new UserProjectRecord
+        {
+            CreatedAt = now,
+            UpdatedAt = now,
+            UserId = userId,
+            ProjectId = projectId,
+            // Ent's create default for is_owner is false (user.go:426-428).
+            IsOwner = isOwner ?? false,
+            Scopes = scopes is null ? null : JsonSerializer.Serialize(scopes),
+        };
+
+        db.UserProjects.Add(row);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException ex)
+        {
+            throw new StoreFailureException(
+                "failed to add user to project: " + ex.GetBaseException().Message,
+                ex);
+        }
+
+        if (roleIds.Count > 0)
+        {
+            var user = await db.Users
+                .SingleOrDefaultAsync(
+                    row => row.Id == userId && row.DeletedAt == 0,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (user is null)
+            {
+                throw new StoreFailureException(
+                    "failed to get user: ent: user not found",
+                    new InvalidOperationException("ent: user not found"));
+            }
+
+            await AddUserRolesAsync(userId, roleIds, now, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return row;
+    }
+
+    public async Task RemoveProjectUserAsync(
+        long userId,
+        long projectId,
+        CancellationToken cancellationToken = default)
+    {
+        int deleted;
+        try
+        {
+            deleted = await db.UserProjects
+                .Where(row => row.UserId == userId && row.ProjectId == projectId)
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new StoreFailureException(
+                "failed to remove user from project: " + ex.GetBaseException().Message,
+                ex);
+        }
+
+        if (deleted == 0)
+        {
+            // The reference returns success without role cleanup or cache
+            // invalidation when no relationship matched (user.go:476-478).
+            return;
+        }
+
+        // Reference (user.go:480-482): Role.Query().
+        //   Where(ProjectIDEQ(projectID), HasUsersWith(IDEQ(userID))).IDs()
+        // — the roles of this project the removed user still has. Links of
+        // system roles (NULL project_id) never match ProjectIDEQ.
+        List<long> roleIds;
+        try
+        {
+            roleIds = await db.UserRoles
+                .Join(
+                    db.Roles,
+                    userRole => userRole.RoleId,
+                    role => role.Id,
+                    (userRole, role) => new { userRole.Id, userRole.UserId, role.ProjectId, role.DeletedAt })
+                .Where(joined => joined.UserId == userId
+                    && joined.DeletedAt == 0
+                    && joined.ProjectId == projectId)
+                .Select(joined => joined.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new StoreFailureException(
+                "failed to query user project roles: " + ex.GetBaseException().Message,
+                ex);
+        }
+
+        if (roleIds.Count > 0)
+        {
+            try
+            {
+                await db.UserRoles
+                    .Where(row => roleIds.Contains(row.Id))
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new StoreFailureException(
+                    "failed to remove user project roles: " + ex.GetBaseException().Message,
+                    ex);
+            }
+        }
+    }
+
+    public async Task<UserProjectRecord> UpdateProjectUserAsync(
+        long userId,
+        long projectId,
+        bool? isOwner,
+        IReadOnlyList<string>? scopes,
+        IReadOnlyList<long> addRoleIds,
+        IReadOnlyList<long> removeRoleIds,
+        CancellationToken cancellationToken = default)
+    {
+        var row = await db.UserProjects
+            .SingleOrDefaultAsync(
+                row => row.UserId == userId && row.ProjectId == projectId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (row is null)
+        {
+            throw new StoreFailureException(
+                "failed to find user project relationship: ent: user_project not found",
+                new InvalidOperationException("ent: user_project not found"));
+        }
+
+        if (isOwner is not null)
+        {
+            row.IsOwner = isOwner.Value;
+        }
+
+        if (scopes is not null)
+        {
+            row.Scopes = JsonSerializer.Serialize(scopes);
+        }
+
+        row.UpdatedAt = DateTime.UtcNow;
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException ex)
+        {
+            throw new StoreFailureException(
+                "failed to update project user: " + ex.GetBaseException().Message,
+                ex);
+        }
+
+        var user = await db.Users
+            .SingleOrDefaultAsync(
+                row => row.Id == userId && row.DeletedAt == 0,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (user is null)
+        {
+            throw new StoreFailureException(
+                "failed to get user: ent: user not found",
+                new InvalidOperationException("ent: user not found"));
+        }
+
+        await UpdateUserRolesAsync(
+                userId,
+                addRoleIds,
+                removeRoleIds,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return row;
+    }
+
+    public async Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersAsync(
+        long projectId,
+        CancellationToken cancellationToken = default)
+    {
+        const string sql = "SELECT " + UserProjectColumns
+            + " FROM \"user_projects\" WHERE \"project_id\" = @ProjectId;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<UserProjectRecord>(
+            new CommandDefinition(
+                sql,
+                new { ProjectId = projectId },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+
+        return rows.AsList();
+    }
+
+    public async Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersForUserAsync(
+        long userId,
+        CancellationToken cancellationToken = default)
+    {
+        const string sql = "SELECT " + UserProjectColumns
+            + " FROM \"user_projects\" WHERE \"user_id\" = @UserId;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<UserProjectRecord>(
+            new CommandDefinition(
+                sql,
+                new { UserId = userId },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+
+        return rows.AsList();
+    }
+
+    /// <summary>Port of <c>user.Update().AddRoleIDs(...)</c> for a live user.</summary>
+    private async Task AddUserRolesAsync(
+        long userId,
+        IReadOnlyList<long> roleIds,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        var existing = await db.UserRoles
+            .Where(row => row.UserId == userId)
+            .Select(row => row.RoleId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var roleId in roleIds.Distinct().Except(existing))
+        {
+            db.UserRoles.Add(new UserRoleRecord
+            {
+                CreatedAt = now,
+                UpdatedAt = now,
+                UserId = userId,
+                RoleId = roleId,
+            });
+        }
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException ex)
+        {
+            throw new StoreFailureException(
+                "failed to add roles to user: " + ex.GetBaseException().Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of <c>user.Update().AddRoleIDs(...).RemoveRoleIDs(...).Exec()</c>:
+    /// ent applies the additions before the removals, so a role in both lists
+    /// ends up removed.
+    /// </summary>
+    private async Task UpdateUserRolesAsync(
+        long userId,
+        IReadOnlyList<long> addRoleIds,
+        IReadOnlyList<long> removeRoleIds,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var pending = false;
+
+        if (addRoleIds.Count > 0)
+        {
+            var existing = await db.UserRoles
+                .Where(row => row.UserId == userId)
+                .Select(row => row.RoleId)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            foreach (var roleId in addRoleIds.Distinct().Except(existing))
+            {
+                db.UserRoles.Add(new UserRoleRecord
+                {
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    UserId = userId,
+                    RoleId = roleId,
+                });
+                pending = true;
+            }
+        }
+
+        if (removeRoleIds.Count > 0)
+        {
+            pending |= await db.UserRoles
+                .Where(row => row.UserId == userId && removeRoleIds.Contains(row.RoleId))
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false) > 0;
+        }
+
+        if (!pending)
+        {
+            return;
+        }
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException ex)
+        {
+            throw new StoreFailureException(
+                "failed to update user roles: " + ex.GetBaseException().Message,
+                ex);
+        }
     }
 
     private async Task UpdatePersonalApiKeyStatusAsync(

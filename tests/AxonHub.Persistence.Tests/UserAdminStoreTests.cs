@@ -288,6 +288,214 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
         Assert.StartsWith("failed to archive user personal API keys: ", error.Message);
     }
 
+    [Fact]
+    public async Task AddProjectUserCreatesTheRelationshipAndRoleLinks()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+        var roleIds = await SeedRolesAsync(context, 2);
+
+        var row = await store.AddProjectUserAsync(
+            userId,
+            7,
+            isOwner: true,
+            scopes: ["read_project"],
+            [roleIds[0], roleIds[0], roleIds[1]]);
+
+        Assert.Equal(userId, row.UserId);
+        Assert.Equal(7, row.ProjectId);
+        Assert.True(row.IsOwner);
+        RecordAssert.Json("""["read_project"]""", row.Scopes);
+
+        var roles = await context.UserRoles
+            .Where(link => link.UserId == userId)
+            .Select(link => link.RoleId)
+            .ToListAsync();
+        Assert.Equal(Expected(roleIds[0], roleIds[1]), roles.Order());
+    }
+
+    [Fact]
+    public async Task AddProjectUserDefaultsIsOwnerToFalseAndLeavesScopesNull()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+
+        // Ent's create default for is_owner is false (user.go:426-428).
+        var row = await store.AddProjectUserAsync(userId, 7, null, null, []);
+
+        Assert.False(row.IsOwner);
+        Assert.Null(row.Scopes);
+    }
+
+    [Fact]
+    public async Task AddProjectUserReportsTheDuplicateRelationshipWithTheReferencePrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+        await store.AddProjectUserAsync(userId, 7, null, null, []);
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.AddProjectUserAsync(userId, 7, null, null, []));
+
+        Assert.StartsWith("failed to add user to project: ", error.Message);
+    }
+
+    [Fact]
+    public async Task AddProjectUserReportsTheMissingUserAndRollsTheInsertBack()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var roleIds = await SeedRolesAsync(context, 1);
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.AddProjectUserAsync(999_999, 7, null, null, [roleIds[0]]));
+
+        // Reference AddUserToProject: client.User.Get → "failed to get user: %w"
+        // inside the transaction (user.go:443-446).
+        Assert.Equal("failed to get user: ent: user not found", error.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.Equal(0, await verify.UserProjects.CountAsync());
+    }
+
+    [Fact]
+    public async Task RemoveProjectUserDeletesTheRelationshipAndProjectRoleLinksOnly()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+        var projectRole = await SeedRoleAsync(context, "Project Admin", "project", 7);
+        var otherProjectRole = await SeedRoleAsync(context, "Other Admin", "project", 8);
+        var systemRole = await SeedRoleAsync(context, "Global Viewer", "system", 0);
+        await store.AddProjectUserAsync(
+            userId, 7, null, null, [projectRole, otherProjectRole, systemRole]);
+
+        await store.RemoveProjectUserAsync(userId, 7);
+
+        Assert.Empty(await store.ListProjectUsersForUserAsync(userId));
+
+        var remaining = await context.UserRoles
+            .Where(link => link.UserId == userId)
+            .Select(link => link.RoleId)
+            .ToListAsync();
+        Assert.Equal(Expected(otherProjectRole, systemRole), remaining.Order());
+    }
+
+    [Fact]
+    public async Task RemoveProjectUserWithNoRelationshipLeavesRoleLinksUntouched()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+        var systemRole = await SeedRoleAsync(context, "Global Viewer", "system", 0);
+        await store.AddProjectUserAsync(userId, 9, null, null, [systemRole]);
+
+        // rowsAffected == 0 returns before the role cleanup (user.go:476-478).
+        await store.RemoveProjectUserAsync(userId, 7);
+
+        Assert.Equal(
+            Expected(systemRole),
+            await context.UserRoles
+                .Where(link => link.UserId == userId)
+                .Select(link => link.RoleId)
+                .ToListAsync());
+    }
+
+    [Fact]
+    public async Task UpdateProjectUserAppliesFieldsAndAddsBeforeRemovingRoles()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+        var role1 = await SeedRoleAsync(context, "Role 1", "system", 0);
+        var role2 = await SeedRoleAsync(context, "Role 2", "system", 0);
+        await store.AddProjectUserAsync(userId, 7, null, ["read_project"], [role1]);
+
+        // role1 appears in both lists: ent applies the adds before the removes,
+        // so it ends up removed (user.go:560-570).
+        var row = await store.UpdateProjectUserAsync(
+            userId,
+            7,
+            isOwner: true,
+            scopes: ["read_project", "write_project"],
+            [role1, role2],
+            [role1]);
+
+        Assert.True(row.IsOwner);
+        RecordAssert.Json("""["read_project","write_project"]""", row.Scopes);
+
+        var remaining = await context.UserRoles
+            .Where(link => link.UserId == userId)
+            .Select(link => link.RoleId)
+            .ToListAsync();
+        Assert.Equal(Expected(role2), remaining);
+    }
+
+    [Fact]
+    public async Task UpdateProjectUserReportsTheMissingRelationshipWithTheReferencePrefix()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.UpdateProjectUserAsync(999_999, 7, null, null, [], []));
+
+        Assert.Equal(
+            "failed to find user project relationship: ent: user_project not found",
+            error.Message);
+    }
+
+    [Fact]
+    public async Task ListProjectUsersReturnsEveryRowWithoutOrdering()
+    {
+        // Project.QueryProjectUsers().All() / User.QueryProjectUsers().All()
+        // have no order clause, so the port asserts set equality (C164).
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var alice = await store.CreateAsync(NewUser("alice@example.com"), null);
+        var bob = await store.CreateAsync(NewUser("bob@example.com"), null);
+        await store.AddProjectUserAsync(alice, 7, null, null, []);
+        await store.AddProjectUserAsync(bob, 7, null, null, []);
+        await store.AddProjectUserAsync(bob, 8, null, null, []);
+
+        var projectUsers = await store.ListProjectUsersAsync(7);
+        Assert.Equal(
+            Expected((alice, 7L), (bob, 7L)),
+            projectUsers.Select(row => (row.UserId, row.ProjectId)).Order());
+
+        var bobs = await store.ListProjectUsersForUserAsync(bob);
+        Assert.Equal(Expected(7L, 8L), bobs.Select(row => row.ProjectId).Order());
+    }
+
     private static async Task BreakApiKeysTableAsync(TestDatabase db)
     {
         await using var connection = await db.Factory.OpenAsync();
@@ -295,6 +503,25 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
     }
 
     private static T[] Expected<T>(params T[] values) => values;
+
+    private static async Task<long> SeedRoleAsync(
+        AxonHubDbContext context,
+        string name,
+        string level,
+        long projectId)
+    {
+        var role = new RoleRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            Name = name,
+            Level = level,
+            ProjectId = projectId,
+        };
+        context.Roles.Add(role);
+        await context.SaveChangesAsync();
+        return role.Id;
+    }
 
     private static async Task<long[]> SeedRolesAsync(AxonHubDbContext context, int count)
     {

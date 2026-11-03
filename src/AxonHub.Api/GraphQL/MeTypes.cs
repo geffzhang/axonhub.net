@@ -97,11 +97,11 @@ public enum ProjectStatusValue
 
 /// <summary>
 /// Port of the scalar surface of the entgql <c>Project</c> type
-/// (ent.graphql:2836-2852). The entgql edge connections and <c>projectUsers</c>
-/// are not wired yet (C165).
+/// (ent.graphql:2836-2852). The entgql edge connections other than
+/// <c>projectUsers</c> (ProjectTypeExtensions) are not wired yet (C165).
 /// </summary>
 [GraphQLName("Project")]
-public sealed class ProjectType
+public sealed class ProjectType : INode
 {
     [GraphQLIgnore]
     public long DbId { get; init; }
