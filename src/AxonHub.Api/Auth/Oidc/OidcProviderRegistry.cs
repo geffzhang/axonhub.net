@@ -19,7 +19,15 @@ public sealed record OidcProviderRuntime(
     bool HasDiscovery,
     bool HasVerifier,
     string RedirectUrl,
-    IReadOnlyList<string> Scopes);
+    IReadOnlyList<string> Scopes)
+{
+    /// <summary>
+    /// The issuer the ID-token verifier expects: the discovery document's
+    /// issuer, or <c>issuer</c>/<c>issuer_url</c> when a manual JWKS URL
+    /// replaces the verifier (oidc.go:228-236).
+    /// </summary>
+    public string VerifierIssuer { get; init; } = string.Empty;
+}
 
 /// <summary>The active/last-check pair of <c>OIDCService.getProviderInfo</c>.</summary>
 public readonly record struct OidcProviderStatus(bool Active, long LastCheck);
@@ -172,11 +180,20 @@ public sealed class OidcProviderRegistry(
             var tokenEndpoint = discovered?.TokenEndpoint ?? string.Empty;
             var userInfoEndpoint = discovered?.UserInfoEndpoint;
             var jwksUri = discovered?.JwksUri;
+            var verifierIssuer = discovered?.Issuer ?? string.Empty;
 
             if (provider.AuthUrl.Length > 0 && provider.TokenUrl.Length > 0)
             {
                 authorizationEndpoint = provider.AuthUrl;
                 tokenEndpoint = provider.TokenUrl;
+            }
+
+            // A manual jwks_url replaces the discovery verifier and with it
+            // the expected issuer (oidc.go:228-236).
+            if (provider.JwksUrl.Length > 0)
+            {
+                jwksUri = provider.JwksUrl;
+                verifierIssuer = provider.GetIssuer();
             }
 
             var hasVerifier = discovered is not null || provider.JwksUrl.Length > 0;
@@ -224,7 +241,10 @@ public sealed class OidcProviderRegistry(
                     discovered is not null,
                     hasVerifier,
                     redirectUrl,
-                    scopes);
+                    scopes)
+                {
+                    VerifierIssuer = verifierIssuer,
+                };
             }
         }
 
@@ -261,6 +281,18 @@ public sealed class OidcProviderRegistry(
         lock (_mutex)
         {
             return GetRuntimeProviderLocked(identifier);
+        }
+    }
+
+    /// <summary>
+    /// Port of <c>findOIDCProviderConfig</c> (oidc.go:342-351), used by the
+    /// authorize flow to reinitialize a provider that failed its startup check.
+    /// </summary>
+    public OidcProviderConfig? FindConfiguredProvider(string identifier)
+    {
+        lock (_mutex)
+        {
+            return FindConfiguredProviderLocked(identifier);
         }
     }
 

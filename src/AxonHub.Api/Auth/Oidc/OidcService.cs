@@ -66,6 +66,9 @@ public sealed record OidcProviderInfo
 /// </summary>
 public sealed class OidcService(OidcProviderRegistry registry, IUserProfileStore profiles)
 {
+    /// <summary>Port of <c>OIDCService.CountProviders</c> (oidc.go:338-340).</summary>
+    public int CountProviders() => registry.CountProviders();
+
     /// <summary>Port of <c>OIDCService.GetProviders</c>.</summary>
     public async Task<IReadOnlyList<OidcProviderInfo>> GetProvidersAsync(
         long? userId,

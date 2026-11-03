@@ -233,6 +233,23 @@ builder.Services.AddSingleton<OidcProviderRegistry>();
 builder.Services.AddHostedService<OidcInitializationHostedService>();
 builder.Services.AddScoped<OidcService>();
 
+// The OIDC login flow (oidc.go:509-1300): state/PKCE caches, the oauth2 token
+// exchange, ID-token/JWKS verification, UserInfo, and the exchange-code store.
+// The reference's default cache.mode is "memory"; the Redis modes are not
+// ported (C171).
+var oidcLoginOptions = OidcLoginOptions.FromConfiguration(builder.Configuration);
+builder.Services.AddSingleton(oidcLoginOptions);
+builder.Services.AddSingleton<IOidcCache, OidcMemoryCache>();
+builder.Services.AddSingleton<IOidcTokenClient>(
+    static _ => new OidcTokenClient(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
+builder.Services.AddSingleton<IOidcJwksClient>(
+    static _ => new OidcJwksClient(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
+builder.Services.AddSingleton<IOidcIdTokenVerifier, OidcIdTokenVerifier>();
+builder.Services.AddSingleton<IOidcUserInfoClient>(
+    static _ => new OidcUserInfoClient(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
+builder.Services.AddScoped<IOidcLoginStore, OidcLoginStore>();
+builder.Services.AddScoped<OidcLoginService>();
+
 // Management login (biz.AuthService): signin/refresh issue HS256 tokens signed
 // with the systems.system_jwt_secret_key row. The linked-provider check now
 // reads the configured oidc_login_only flags.
@@ -275,6 +292,23 @@ RequestDelegate oidcProvidersHandler = context => OidcHandlers.GetProvidersAsync
     context.RequestAborted);
 app.MapGet("/oauth/oidc/providers", oidcProvidersHandler);
 
+// The public login flow (oidc.go:74-81): authorize, IdP callback and the
+// one-time exchange code redemption.
+app.MapOidcLoginRoutes();
+
+// NewOIDCHandlers warns when providers are configured without a public URL
+// (api/oidc.go:36-41). An empty value still fails each flow at getBaseURL.
+if (oidcProviders.Count > 0 && oidcLoginOptions.PublicUrl.Length == 0)
+{
+    LoggerMessage.Define(
+        LogLevel.Warning,
+        new EventId(0, "OidcPublicUrlMissing"),
+        "OIDC is enabled but server.public_url is not configured. "
+        + "This is insecure and can lead to Host header injection attacks in production.")(
+        app.Logger,
+        null);
+}
+
 // The management GraphQL endpoint the frontend calls
 // (frontend/src/gql/graphql.ts:36). The reference mounts the route POST-only
 // (routes.go:163); a GET falls through to the static fallback and its gin
@@ -310,6 +344,16 @@ app.UseWhen(
         branch.UseMiddleware<AdminGraphqlAuthMiddleware>();
         branch.UseMiddleware<ProjectIdMiddleware>();
         branch.UseMiddleware<ApiKeyReadOnlyMiddleware>();
+    });
+
+// The OIDC link flow sits on the admin group (routes.go:106,131): the plain
+// user-JWT gate then WithProjectID, with no API-key fallback.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/oidc/link"),
+    static branch =>
+    {
+        branch.UseMiddleware<OidcLinkAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
     });
 
 // The reference mounts WithIPBlocklist + WithAPIKeyConfig on its API group, in
