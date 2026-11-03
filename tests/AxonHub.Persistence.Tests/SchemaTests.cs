@@ -14,8 +14,9 @@ public sealed class SchemaTests(PostgresFixture fixture)
 {
     private static readonly string[] ExpectedTables =
     [
-        "api_keys", "channel_model_price_versions", "channel_model_prices", "channels",
-        "models", "projects", "prompt_protection_rules", "request_executions", "requests",
+        "api_keys", "channel_model_price_versions", "channel_model_prices",
+        "channel_override_templates", "channels", "models", "projects",
+        "prompt_protection_rules", "request_executions", "requests",
         "roles", "systems", "threads", "traces", "usage_logs", "user_projects",
         "user_roles", "users",
     ];
@@ -61,6 +62,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
             "id", "created_at", "updated_at", "channel_id", "model_id", "price",
             "status", "effective_start_at", "effective_end_at", "reference_id",
             "channel_model_price_id",
+        ],
+        ["channel_override_templates"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "name", "description",
+            "override_parameters", "override_headers", "header_override_operations",
+            "body_override_operations", "user_id",
         ],
         ["models"] =
         [
@@ -195,6 +202,14 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["jsonb"] = ["price"],
                 ["character varying"] = ["model_id", "status", "reference_id"],
             },
+            ["channel_override_templates"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "user_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] =
+                    ["override_headers", "header_override_operations", "body_override_operations"],
+                ["character varying"] = ["name", "description", "override_parameters"],
+            },
             ["models"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["bigint"] = ["id", "deleted_at"],
@@ -322,6 +337,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ("channel_model_prices", true, ["reference_id"]),
             ["channel_model_price_versions_reference_id_key"] =
                 ("channel_model_price_versions", true, ["reference_id"]),
+            ["channel_override_templates_by_user_name"] =
+                ("channel_override_templates", true, ["user_id", "name", "deleted_at"]),
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
             ["models_by_name"] = ("models", true, ["name", "deleted_at"]),
             ["models_by_model_id"] = ("models", true, ["model_id", "deleted_at"]),

@@ -991,6 +991,164 @@ public sealed class AdminMutation
         return ChannelMapping.ToGraphQL(channel);
     }
 
+    /// <summary>
+    /// Port of mutationResolver.CreateChannelOverrideTemplate
+    /// (axonhub.resolvers.go:644-652). The resolver checks for a current user
+    /// before calling the service.
+    /// </summary>
+    [GraphQLName("createChannelOverrideTemplate")]
+    public async Task<ChannelOverrideTemplateType> CreateChannelOverrideTemplateAsync(
+        CreateChannelOverrideTemplateInput input,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        var record = await templates.CreateAsync(
+                new CreateChannelOverrideTemplateCommand
+                {
+                    Name = input.Name,
+                    Description = input.Description,
+                    HeaderOverrideOperations = input.HeaderOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                    BodyOverrideOperations = input.BodyOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelOverrideTemplateMapping.ToGraphQL(record);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateChannelOverrideTemplate
+    /// (axonhub.resolvers.go:654-657).
+    /// </summary>
+    [GraphQLName("updateChannelOverrideTemplate")]
+    public async Task<ChannelOverrideTemplateType> UpdateChannelOverrideTemplateAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateChannelOverrideTemplateInput input,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var record = await templates.UpdateAsync(
+                new UpdateChannelOverrideTemplateCommand
+                {
+                    Id = gid.Id,
+                    Name = input.Name,
+                    Description = input.Description,
+                    ClearDescription = input.ClearDescription == true,
+                    HeaderOverrideOperations = input.HeaderOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                    AppendHeaderOverrideOperations = input.AppendHeaderOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                    BodyOverrideOperations = input.BodyOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                    AppendBodyOverrideOperations = input.AppendBodyOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelOverrideTemplateMapping.ToGraphQL(record);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteChannelOverrideTemplate
+    /// (axonhub.resolvers.go:659-666).
+    /// </summary>
+    [GraphQLName("deleteChannelOverrideTemplate")]
+    public async Task<bool> DeleteChannelOverrideTemplateAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        await templates.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ApplyChannelOverrideTemplate
+    /// (axonhub.resolvers.go:668-692). The resolver converts the IDs and adds
+    /// the "failed to apply template: " prefix.
+    /// </summary>
+    [GraphQLName("applyChannelOverrideTemplate")]
+    public async Task<ApplyChannelOverrideTemplatePayloadType> ApplyChannelOverrideTemplateAsync(
+        ApplyChannelOverrideTemplateInput input,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        var command = new ApplyChannelOverrideTemplateCommand
+        {
+            TemplateId = GidValue.Parse(input.TemplateID).Id,
+            ChannelIds = ParseGids(input.ChannelIDs),
+            Mode = input.Mode == OverrideApplyModeValue.Replace
+                ? ChannelOverrideApplyMode.Replace
+                : ChannelOverrideApplyMode.Merge,
+        };
+
+        ChannelOverrideTemplateApplyResult result;
+        try
+        {
+            result = await templates.ApplyAsync(command, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to apply template: " + ex.Message,
+                ex);
+        }
+
+        return new ApplyChannelOverrideTemplatePayloadType
+        {
+            Success = result.Success,
+            Updated = result.Updated,
+            Channels = result.Channels.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ClearChannelOverrideTemplates
+    /// (axonhub.resolvers.go:694-708). The resolver converts the IDs and adds
+    /// the "failed to clear templates: " prefix.
+    /// </summary>
+    [GraphQLName("clearChannelOverrideTemplates")]
+    public async Task<ClearChannelOverrideTemplatesPayloadType> ClearChannelOverrideTemplatesAsync(
+        ClearChannelOverrideTemplatesInput input,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        ChannelOverrideTemplateApplyResult result;
+        try
+        {
+            result = await templates.ClearAsync(
+                    ParseGids(input.ChannelIDs),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to clear templates: " + ex.Message,
+                ex);
+        }
+
+        return new ClearChannelOverrideTemplatesPayloadType
+        {
+            Success = result.Success,
+            Updated = result.Updated,
+            Channels = result.Channels.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
     private static List<long> ParseGids(IReadOnlyList<string> ids)
     {
         var result = new List<long>(ids.Count);

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AxonHub.Abstractions;
 using AxonHub.Llm.Json;
 using AxonHub.Persistence;
@@ -47,6 +48,48 @@ public static class ChannelWriteSerialization
         PruneGoOmitEmpty(settings);
         return settings;
     }
+
+    /// <summary>
+    /// Decodes stored settings for the override-template Apply path. The
+    /// reference copies the ent-scanned settings and its
+    /// getHeaderOverrideOperations / getBodyOverrideOperations helpers test the
+    /// operation slices against nil, so an explicitly stored empty array wins
+    /// over the legacy fields. <see cref="ParseSettings"/> prunes empty lists
+    /// for the re-marshal omitempty behaviour, so their presence is restored
+    /// here for the two operation fields only.
+    /// </summary>
+    /// <exception cref="System.Text.Json.JsonException">The stored JSON is malformed.</exception>
+    public static ChannelSettingsDraft? ParseSettingsForOverrideApply(string? raw)
+    {
+        var settings = ParseSettings(raw);
+        if (settings is null
+            || string.IsNullOrWhiteSpace(raw)
+            || string.Equals(raw, "null", StringComparison.Ordinal))
+        {
+            return settings;
+        }
+
+        using var document = JsonDocument.Parse(raw);
+        if (document.RootElement.ValueKind == JsonValueKind.Object)
+        {
+            if (IsEmptyArray(document.RootElement, "headerOverrideOperations"))
+            {
+                settings.HeaderOverrideOperations = [];
+            }
+
+            if (IsEmptyArray(document.RootElement, "bodyOverrideOperations"))
+            {
+                settings.BodyOverrideOperations = [];
+            }
+        }
+
+        return settings;
+    }
+
+    private static bool IsEmptyArray(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.Array
+            && value.GetArrayLength() == 0;
 
     /// <summary>
     /// Decodes a stored credentials column into the write draft. Go unmarshals

@@ -200,6 +200,13 @@ builder.Services.AddScoped<ChannelModelSyncService>();
 builder.Services.AddScoped<IChannelModelPriceStore, ChannelModelPriceStore>();
 builder.Services.AddScoped<ChannelModelPriceService>();
 
+// Channel override templates (channel_override_template.go): CRUD under the
+// ent privacy rules plus the apply/clear settings rewrites. The management
+// identity defaults to the owner account until admin login is ported (C161).
+builder.Services.AddScoped<IChannelOverrideTemplateStore, ChannelOverrideTemplateStore>();
+builder.Services.AddScoped<IManagementIdentity, OwnerManagementIdentity>();
+builder.Services.AddScoped<ChannelOverrideTemplateService>();
+
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
 // (routes.go:163). The first slice exposes the static scope catalog; the
 // reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported

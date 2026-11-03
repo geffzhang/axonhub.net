@@ -154,6 +154,41 @@ public sealed class AdminQuery
         return ManagementMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>
+    /// Port of queryResolver.ChannelOverrideTemplates (ent.resolvers.go:383-397).
+    /// </summary>
+    [GraphQLName("channelOverrideTemplates")]
+    public async Task<ChannelOverrideTemplateConnectionType> ChannelOverrideTemplatesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ChannelOverrideTemplateOrder? orderBy,
+        ChannelOverrideTemplateWhereInput? where,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ChannelOverrideTemplateMapping.ToSortField(orderBy);
+        var page = await templates.ListAsync(
+                new ChannelOverrideTemplateListQuery
+                {
+                    Where = ChannelOverrideTemplateMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ChannelOverrideTemplateMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelOverrideTemplateMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>Port of queryResolver.Channels (ent.resolvers.go:372-381).</summary>
     [GraphQLName("channels")]
     public Task<ChannelConnectionType> ChannelsAsync(

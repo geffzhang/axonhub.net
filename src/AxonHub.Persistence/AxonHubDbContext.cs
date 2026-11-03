@@ -28,6 +28,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<ChannelModelPriceVersionRecord> ChannelModelPriceVersions => Set<ChannelModelPriceVersionRecord>();
 
+    public DbSet<ChannelOverrideTemplateRecord> ChannelOverrideTemplates => Set<ChannelOverrideTemplateRecord>();
+
     public DbSet<ModelRecord> Models => Set<ModelRecord>();
 
     public DbSet<RequestRecord> Requests => Set<RequestRecord>();
@@ -80,6 +82,7 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureChannel(modelBuilder.Entity<ChannelRecord>());
         ConfigureChannelModelPrice(modelBuilder.Entity<ChannelModelPriceRecord>());
         ConfigureChannelModelPriceVersion(modelBuilder.Entity<ChannelModelPriceVersionRecord>());
+        ConfigureChannelOverrideTemplate(modelBuilder.Entity<ChannelOverrideTemplateRecord>());
         ConfigureModel(modelBuilder.Entity<ModelRecord>());
         ConfigureRequest(modelBuilder.Entity<RequestRecord>());
         ConfigureRequestExecution(modelBuilder.Entity<RequestExecutionRecord>());
@@ -447,6 +450,50 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
             .IsUnique();
         builder.HasIndex(price => price.ReferenceId)
             .HasDatabaseName("channel_model_prices_reference_id_key")
+            .IsUnique();
+    }
+
+    private static void ConfigureChannelOverrideTemplate(
+        EntityTypeBuilder<ChannelOverrideTemplateRecord> builder)
+    {
+        builder.ToTable("channel_override_templates");
+        builder.HasKey(template => template.Id);
+        builder.Property(template => template.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(template => template.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(template => template.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(template => template.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(template => template.Name)
+            .HasColumnName("name")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(template => template.Description)
+            .HasColumnName("description")
+            .HasColumnType("varchar");
+        builder.Property(template => template.OverrideParameters)
+            .HasColumnName("override_parameters")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(template => template.OverrideHeaders)
+            .HasColumnName("override_headers")
+            .HasColumnType("jsonb")
+            .IsRequired();
+        builder.Property(template => template.HeaderOverrideOperations)
+            .HasColumnName("header_override_operations")
+            .HasColumnType("jsonb");
+        builder.Property(template => template.BodyOverrideOperations)
+            .HasColumnName("body_override_operations")
+            .HasColumnType("jsonb");
+        builder.Property(template => template.UserId).HasColumnName("user_id");
+
+        builder.HasIndex(template => new { template.UserId, template.Name, template.DeletedAt })
+            .HasDatabaseName("channel_override_templates_by_user_name")
             .IsUnique();
     }
 

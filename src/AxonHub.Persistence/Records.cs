@@ -113,6 +113,49 @@ public sealed class ChannelModelPriceVersionRecord
 }
 
 /// <summary>
+/// Row of the reference <c>channel_override_templates</c> table
+/// (internal/ent/schema/channel_override_template.go). A template stores the
+/// override operations a user can apply to many channels at once; the legacy
+/// <see cref="OverrideParameters"/>/<see cref="OverrideHeaders"/> columns are
+/// kept for rows written before the operation-list migration.
+/// </summary>
+public sealed class ChannelOverrideTemplateRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string? Description { get; set; }
+
+    /// <summary>Legacy objects.OverrideParameters JSON; ent default "{}".</summary>
+    public string OverrideParameters { get; set; } = "{}";
+
+    /// <summary>Legacy []objects.HeaderEntry JSON; ent default "[]".</summary>
+    public string OverrideHeaders { get; set; } = "[]";
+
+    /// <summary>[]objects.OverrideOperation JSON; nil marshals to JSON null.</summary>
+    public string? HeaderOverrideOperations { get; set; }
+
+    /// <summary>[]objects.OverrideOperation JSON; nil marshals to JSON null.</summary>
+    public string? BodyOverrideOperations { get; set; }
+
+    /// <summary>
+    /// Owner user. The schema leaves it optional, but UserOwnedQueryRule /
+    /// UserOwnedMutationRule only expose a row to the user it names (the owner
+    /// account bypasses the restriction), so a NULL row is invisible to
+    /// non-owners.
+    /// </summary>
+    public long? UserId { get; set; }
+}
+
+/// <summary>
 /// Row of the reference <c>models</c> table (internal/ent/schema/model.go). The
 /// model library supplies the automatic channel prices: each enabled or
 /// disabled model's <see cref="ModelCard"/> carries the per-token costs.

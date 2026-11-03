@@ -336,7 +336,11 @@ public static class ChannelInputMapping
         };
     }
 
-    private static OverrideOperationDraft ToOperation(OverrideOperationInput input)
+    /// <summary>
+    /// Maps the GraphQL input into the Go-compatible draft; empty optional
+    /// strings become absent, matching the ent marshal's omitempty.
+    /// </summary>
+    public static OverrideOperationDraft ToOperation(OverrideOperationInput input)
         => new()
         {
             Op = input.Op,
