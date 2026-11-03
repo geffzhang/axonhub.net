@@ -21,6 +21,8 @@ namespace AxonHub.Api.Tests;
 public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
 {
     private readonly FakeSystemStore _store = new();
+    private readonly AdminGraphqlGateServices _gate = new();
+
     private WebApplication _app = null!;
     private HttpClient _client = null!;
 
@@ -29,13 +31,15 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
+        _gate.Register(builder.Services);
         builder.Services.AddScoped<ISystemSettingsAdminService>(
             _ => new SystemSettingsAdminService(_store));
 
         _app = builder.Build();
-        _app.MapGraphQL("/admin/graphql");
+        _app.MapAdminGraphql();
         await _app.StartAsync();
         _client = _app.GetTestClient();
+        _gate.Authorize(_client);
     }
 
     public async Task DisposeAsync()

@@ -24,9 +24,9 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
     private static readonly string[] Channel10Ids = ["gid://axonhub/Channel/10"];
 
     private readonly FakeChannelOverrideTemplateStore _templates = new();
-    private readonly FakeManagementIdentity _identity = new(new ManagementUser(9, IsOwner: false));
     private readonly RecordingModelSyncReloadHook _reload = new();
     private readonly FakeUserStore _users = new();
+    private readonly AdminGraphqlGateServices _gate = new(isOwner: false);
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -36,16 +36,31 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
+        _gate.Register(builder.Services);
         builder.Services.AddSingleton<IChannelOverrideTemplateStore>(_templates);
-        builder.Services.AddSingleton<IManagementIdentity>(_identity);
         builder.Services.AddSingleton<IChannelModelSyncReloadHook>(_reload);
         builder.Services.AddSingleton<ChannelOverrideTemplateService>();
+
+        // The fixture's own user store wins over the gate's default, so the
+        // gate user the JWT resolves to (id 9, non-owner - the template
+        // viewer this suite locks) lives here. The template rows share the id
+        // and the user{id email} resolver reads this row.
         builder.Services.AddSingleton<IUserStore>(_users);
+        _users.Rows.Add(new UserRecord
+        {
+            Id = 9,
+            Email = "owner@example.com",
+            Status = "activated",
+            PreferLanguage = "en",
+            Password = "hashed",
+            IsOwner = false,
+        });
 
         _app = builder.Build();
-        _app.MapGraphQL("/admin/graphql");
+        _app.MapAdminGraphql();
         await _app.StartAsync();
         _client = _app.GetTestClient();
+        _gate.Authorize(_client);
     }
 
     public async Task DisposeAsync()
@@ -57,17 +72,6 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
     [Fact]
     public async Task TemplatesQueryReturnsTheFrontendFieldsAndLegacyFallbacks()
     {
-        // FakeUserStore.Add assigns its own id, so seed the row directly with
-        // the id the templates point at.
-        _users.Rows.Add(new UserRecord
-        {
-            Id = 9,
-            Email = "owner@example.com",
-            Status = "activated",
-            PreferLanguage = "en",
-            Password = "hashed",
-            IsOwner = true,
-        });
         _templates.Templates.Add(Template(
             id: 1,
             name: "Operations",
@@ -297,9 +301,14 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
     [Fact]
     public async Task TemplatesQueryWithoutAUserReturnsThePrivacyDenial()
     {
-        _identity.User = null;
+        // A service-account API key reaches the resolvers with no user in
+        // context; the template privacy rule then denies the read.
+        _gate.AddServiceAccountKey();
+        using var client = _app.GetTestClient();
+        AdminGraphqlGateServices.Authorize(client, "sk-service-account");
 
         var errors = await QueryErrorsAsync(
+            client,
             "{ channelOverrideTemplates(first: 10) { edges { node { id } } } }");
 
         Assert.Equal(
@@ -369,11 +378,17 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task CreateMutationWithoutAUserFailsLikeTheResolver()
+    public async Task CreateMutationWithoutAUserIsRefusedAsReadOnly()
     {
-        _identity.User = null;
+        // A service-account API key has no user in context, but the read-only
+        // rule (apiKeyReadOnly) runs before the resolver chain, so the mutation
+        // never reaches the "user not found in context" branch.
+        _gate.AddServiceAccountKey();
+        using var client = _app.GetTestClient();
+        AdminGraphqlGateServices.Authorize(client, "sk-service-account");
 
         var errors = await MutateErrorsAsync(
+            client,
             """
             mutation Create($input: CreateChannelOverrideTemplateInput!) {
               createChannelOverrideTemplate(input: $input) { id }
@@ -382,7 +397,7 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
             new { input = new { name = "Headers" } });
 
         Assert.Equal(
-            "user not found in context",
+            "service account API keys are read-only",
             errors[0].GetProperty("message").GetString());
         Assert.Empty(_templates.Templates);
     }
@@ -688,8 +703,14 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
     private async Task<JsonElement[]> QueryErrorsAsync(
         string query,
         object? variables = null)
+        => await QueryErrorsAsync(_client, query, variables);
+
+    private async Task<JsonElement[]> QueryErrorsAsync(
+        HttpClient client,
+        string query,
+        object? variables = null)
     {
-        var root = await ExecuteAsync(query, variables);
+        var root = await ExecuteAsync(client, query, variables);
         Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
         return errors.EnumerateArray().Select(static error => error.Clone()).ToArray();
     }
@@ -698,12 +719,24 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
         => await QueryDataAsync(query, variables);
 
     private async Task<JsonElement[]> MutateErrorsAsync(string query, object? variables)
-        => await QueryErrorsAsync(query, variables);
+        => await QueryErrorsAsync(_client, query, variables);
+
+    private async Task<JsonElement[]> MutateErrorsAsync(
+        HttpClient client,
+        string query,
+        object? variables)
+        => await QueryErrorsAsync(client, query, variables);
 
     private async Task<JsonElement> ExecuteAsync(string query, object? variables)
+        => await ExecuteAsync(_client, query, variables);
+
+    private async Task<JsonElement> ExecuteAsync(
+        HttpClient client,
+        string query,
+        object? variables)
     {
         var payload = JsonSerializer.Serialize(new { query, variables, operationName = (string?)null });
-        using var response = await _client.PostAsync(
+        using var response = await client.PostAsync(
             "/admin/graphql",
             new StringContent(payload, Encoding.UTF8, "application/json"));
 

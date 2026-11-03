@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using AxonHub.Abstractions;
+using AxonHub.Api.Auth;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
 using AxonHub.Api.Orchestration;
@@ -84,6 +85,7 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
     private readonly FakeChannelWriteStore _channels = new();
     private readonly FakeSystemStore _systems = new();
     private readonly ScriptedExecutor _executor = new();
+    private readonly AdminGraphqlGateServices _gate = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -93,6 +95,7 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
+        _gate.Register(builder.Services);
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
         builder.Services.AddSingleton<ISystemStore>(_systems);
         builder.Services.AddSingleton<IExecutor>(_executor);
@@ -111,10 +114,16 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
         builder.Services.AddScoped<ChatCompletionOrchestrator>();
         builder.Services.AddScoped<ChannelTestService>();
 
+        // The fixture's own systems store wins over the gate's default, so the
+        // JWT secret must live there and the token must be signed against it.
+        _systems.Add(ManagementAuthService.SecretKeyKey, AdminGraphqlGateServices.Secret);
+        var jwt = AdminGraphqlGateServices.IssueJwtWith(_gate.Users, _systems, _gate.Owner);
+
         _app = builder.Build();
-        _app.MapGraphQL("/admin/graphql");
+        _app.MapAdminGraphql();
         await _app.StartAsync();
         _client = _app.GetTestClient();
+        AdminGraphqlGateServices.Authorize(_client, jwt);
     }
 
     public async Task DisposeAsync()

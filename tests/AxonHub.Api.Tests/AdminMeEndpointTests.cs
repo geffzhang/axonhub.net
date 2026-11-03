@@ -24,8 +24,8 @@ public sealed class AdminMeEndpointTests : IAsyncLifetime
     private static readonly DateTime UpdatedAt = new(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc);
 
     private readonly FakeUserProfileStore _store = new();
-    private readonly FakeManagementIdentity _identity = new(new ManagementUser(9, IsOwner: true));
     private readonly FakePasswordHasher _passwords = new();
+    private readonly AdminGraphqlGateServices _gate = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -35,15 +35,16 @@ public sealed class AdminMeEndpointTests : IAsyncLifetime
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
+        _gate.Register(builder.Services);
         builder.Services.AddSingleton<IUserProfileStore>(_store);
-        builder.Services.AddSingleton<IManagementIdentity>(_identity);
         builder.Services.AddSingleton<IPasswordHasher>(_passwords);
         builder.Services.AddSingleton<UserProfileService>();
 
         _app = builder.Build();
-        _app.MapGraphQL("/admin/graphql");
+        _app.MapAdminGraphql();
         await _app.StartAsync();
         _client = _app.GetTestClient();
+        _gate.Authorize(_client);
     }
 
     public async Task DisposeAsync()
@@ -161,11 +162,15 @@ public sealed class AdminMeEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MeRequiresAUserInContext()
+    public async Task MeReturnsUserNotFoundForAnApiKeyPrincipal()
     {
-        _identity.User = null;
+        // A service-account API key reaches the resolvers without a user
+        // (contexts.GetUser is nil on an API-key request).
+        _gate.AddServiceAccountKey();
+        using var client = _app.GetTestClient();
+        AdminGraphqlGateServices.Authorize(client, "sk-service-account");
 
-        var errors = await QueryErrorsAsync("{ me { id } }");
+        var errors = await QueryErrorsAsync(client, "{ me { id } }");
 
         Assert.Equal(
             "user not found in context",
@@ -344,8 +349,14 @@ public sealed class AdminMeEndpointTests : IAsyncLifetime
     private async Task<JsonElement[]> QueryErrorsAsync(
         string query,
         object? variables = null)
+        => await QueryErrorsAsync(_client, query, variables);
+
+    private async Task<JsonElement[]> QueryErrorsAsync(
+        HttpClient client,
+        string query,
+        object? variables = null)
     {
-        var root = await ExecuteAsync(query, variables);
+        var root = await ExecuteAsync(client, query, variables);
         Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
         return errors.EnumerateArray().Select(static error => error.Clone()).ToArray();
     }
@@ -357,9 +368,15 @@ public sealed class AdminMeEndpointTests : IAsyncLifetime
         => await QueryErrorsAsync(query, variables);
 
     private async Task<JsonElement> ExecuteAsync(string query, object? variables)
+        => await ExecuteAsync(_client, query, variables);
+
+    private async Task<JsonElement> ExecuteAsync(
+        HttpClient client,
+        string query,
+        object? variables)
     {
         var payload = JsonSerializer.Serialize(new { query, variables, operationName = (string?)null });
-        using var response = await _client.PostAsync(
+        using var response = await client.PostAsync(
             "/admin/graphql",
             new StringContent(payload, Encoding.UTF8, "application/json"));
 

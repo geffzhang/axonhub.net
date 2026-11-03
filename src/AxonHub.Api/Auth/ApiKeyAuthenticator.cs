@@ -48,6 +48,16 @@ public interface IApiKeyAuthenticator
         HttpRequest request,
         string key,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// WithAdminGraphqlAuth's direct AuthService.AuthenticateAPIKey call
+    /// (auth.go:220): the strict lookup without the allowed_ips check. The
+    /// gate performs the type and IP checks itself, in the reference's order
+    /// (type first, then IPs), so it needs the raw row.
+    /// </summary>
+    Task<ApiKeyRecord> AuthenticateAdminKeyAsync(
+        string key,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -103,7 +113,7 @@ public sealed class ApiKeyAuthenticator(
 
         apiKey ??= await AuthenticateNoAuthAsync(cancellationToken).ConfigureAwait(false);
 
-        CheckAllowedIps(request, apiKey);
+        CheckAllowedIps(request, apiKey, options.TrustedProxies);
 
         return new RequestIdentity(apiKey.ProjectId, apiKey.Id);
     }
@@ -123,10 +133,22 @@ public sealed class ApiKeyAuthenticator(
 
         var apiKey = await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false);
 
-        CheckAllowedIps(request, apiKey);
+        CheckAllowedIps(request, apiKey, options.TrustedProxies);
 
         return new RequestIdentity(apiKey.ProjectId, apiKey.Id);
     }
+
+    /// <summary>
+    /// Port of the WithAdminGraphqlAuth lookup (auth.go:220): strict
+    /// authentication, no allowed_ips check. A lookup or validation failure
+    /// is <see cref="InvalidApiKeyException"/> (the reference's ent.IsNotFound
+    /// / ErrInvalidAPIKey branch); every other failure propagates to the
+    /// caller's 500 branch.
+    /// </summary>
+    public Task<ApiKeyRecord> AuthenticateAdminKeyAsync(
+        string key,
+        CancellationToken cancellationToken = default)
+        => AuthenticateApiKeyAsync(key, cancellationToken);
 
     /// <summary>Port of AuthService.AuthenticateAPIKey.</summary>
     private async Task<ApiKeyRecord> AuthenticateApiKeyAsync(string key, CancellationToken cancellationToken)
@@ -217,8 +239,15 @@ public sealed class ApiKeyAuthenticator(
         return apiKey;
     }
 
-    /// <summary>Port of middleware.WithAPIKeyConfig's allowed_ips check.</summary>
-    private void CheckAllowedIps(HttpRequest request, ApiKeyRecord apiKey)
+    /// <summary>
+    /// Port of the reference's allowed_ips checks (WithAPIKeyConfig,
+    /// WithGeminiKeyAuth and WithAdminGraphqlAuth). The gate calls this itself
+    /// because the reference checks the key type before the IP list.
+    /// </summary>
+    public static void CheckAllowedIps(
+        HttpRequest request,
+        ApiKeyRecord apiKey,
+        IReadOnlyList<string> trustedProxies)
     {
         var allowed = ParseAllowedIps(apiKey.AllowedIps);
         if (allowed.Length == 0)
@@ -226,7 +255,7 @@ public sealed class ApiKeyAuthenticator(
             return;
         }
 
-        var clientIp = ClientAddress.Resolve(request, options.TrustedProxies);
+        var clientIp = ClientAddress.Resolve(request, trustedProxies);
         var candidates = clientIp.Length == 0 ? Array.Empty<string>() : [clientIp];
         if (!ClientAddress.IsAnyAllowedIp(candidates, allowed))
         {

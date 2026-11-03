@@ -1,5 +1,6 @@
 using System.Text;
 using AxonHub.Api.Auth;
+using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -109,6 +110,15 @@ public sealed class ApiKeyAuthMiddlewareTests
             _ = key;
             _ = cancellationToken;
             return Task.FromResult(authenticate(request));
+        }
+
+        public Task<ApiKeyRecord> AuthenticateAdminKeyAsync(
+            string key,
+            CancellationToken cancellationToken = default)
+        {
+            _ = key;
+            _ = cancellationToken;
+            throw new NotSupportedException();
         }
     }
 

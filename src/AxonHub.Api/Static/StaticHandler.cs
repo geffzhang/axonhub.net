@@ -140,7 +140,7 @@ public sealed class StaticHandler
     }
 
     /// <summary>Port of <c>serveAPINotFound</c> (gin AbortWithStatusJSON).</summary>
-    private static async Task WriteApiNotFoundAsync(HttpContext context, string path)
+    public static async Task WriteApiNotFoundAsync(HttpContext context, string path)
     {
         var body = GoJson.Marshal(new ErrorResponse(
             new ErrorBody("Not Found", "path not found: " + path)));

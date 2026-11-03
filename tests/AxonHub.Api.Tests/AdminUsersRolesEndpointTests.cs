@@ -29,6 +29,8 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     private readonly FakeUserAdminStore _users = new();
     private readonly FakeRoleStore _roles = new();
 
+    private readonly AdminGraphqlGateServices _gate = new();
+
     private WebApplication _app = null!;
     private HttpClient _client = null!;
 
@@ -37,6 +39,7 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
+        _gate.Register(builder.Services);
         builder.Services.AddSingleton<IUserAdminStore>(_users);
         builder.Services.AddSingleton<IRoleStore>(_roles);
         builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
@@ -44,9 +47,10 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<RoleManagementService>();
 
         _app = builder.Build();
-        _app.MapGraphQL("/admin/graphql");
+        _app.MapAdminGraphql();
         await _app.StartAsync();
         _client = _app.GetTestClient();
+        _gate.Authorize(_client);
     }
 
     public async Task DisposeAsync()

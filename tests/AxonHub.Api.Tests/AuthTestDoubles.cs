@@ -13,6 +13,8 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
 
     public List<ApiKeyRecord> Rows { get; } = [];
 
+    public Exception? GetByKeyFailure { get; set; }
+
     public Task<long> CreateAsync(ApiKeyRecord apiKey, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
@@ -30,6 +32,11 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
     public Task<ApiKeyRecord?> GetByKeyAsync(string key, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
+        if (GetByKeyFailure is not null)
+        {
+            return Task.FromException<ApiKeyRecord?>(GetByKeyFailure);
+        }
+
         return Task.FromResult(Rows.SingleOrDefault(row => row.Key == key && row.DeletedAt == 0));
     }
 
@@ -44,9 +51,22 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
             ProjectId = 1,
         };
         configure?.Invoke(row);
-        row.Id = _nextId++;
+        AssignId(row);
         Rows.Add(row);
         return row;
+    }
+
+    /// <summary>
+    /// Seeds rows keep a preset Id (the admin GraphQL gate fixtures key on
+    /// fixed ids); otherwise the next auto id is assigned.
+    /// </summary>
+    private void AssignId(ApiKeyRecord row)
+    {
+        row.Id = row.Id > 0 ? row.Id : _nextId++;
+        if (row.Id >= _nextId)
+        {
+            _nextId = row.Id + 1;
+        }
     }
 }
 
@@ -86,7 +106,12 @@ internal sealed class FakeProjectStore : IProjectStore
             Status = "active",
         };
         configure?.Invoke(row);
-        row.Id = _nextId++;
+        row.Id = row.Id > 0 ? row.Id : _nextId++;
+        if (row.Id >= _nextId)
+        {
+            _nextId = row.Id + 1;
+        }
+
         Rows.Add(row);
         return row;
     }
@@ -155,7 +180,12 @@ internal sealed class FakeUserStore : IUserStore
             IsOwner = true,
         };
         configure?.Invoke(row);
-        row.Id = _nextId++;
+        row.Id = row.Id > 0 ? row.Id : _nextId++;
+        if (row.Id >= _nextId)
+        {
+            _nextId = row.Id + 1;
+        }
+
         Rows.Add(row);
         return row;
     }

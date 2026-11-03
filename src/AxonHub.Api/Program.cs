@@ -25,6 +25,7 @@ using AxonHub.Llm.Transformer.OpenAI.Decisions;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.TypeSafe;
 using AxonHub.Persistence;
+using Microsoft.AspNetCore.Http;
 using Orleans.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -202,10 +203,16 @@ builder.Services.AddScoped<ChannelModelPriceService>();
 
 // Channel override templates (channel_override_template.go): CRUD under the
 // ent privacy rules plus the apply/clear settings rewrites. The management
-// identity defaults to the owner account until admin login is ported (C161).
+// identity is the caller authenticated by the admin GraphQL gate
+// (middleware.WithAdminGraphqlAuth); the owner default was a stand-in while
+// the endpoint was open (C161).
 builder.Services.AddScoped<IChannelOverrideTemplateStore, ChannelOverrideTemplateStore>();
-builder.Services.AddScoped<IManagementIdentity, OwnerManagementIdentity>();
 builder.Services.AddScoped<ChannelOverrideTemplateService>();
+
+// Management identity: the gate middleware writes the authenticated caller
+// into HttpContext.Items; the scoped seam reads it back for the resolvers.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IManagementIdentity, HttpContextManagementIdentity>();
 
 // Self-service (me.graphql): me / myProjects / updateMe / updateMyPassword /
 // unlinkOIDCIdentity read the current user's edges (roles, project users, OIDC
@@ -221,9 +228,8 @@ builder.Services.AddSingleton<IOidcLoginOnlyProviders, EmptyOidcLoginOnlyProvide
 builder.Services.AddScoped<ManagementAuthService>();
 
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
-// (routes.go:163). The first slice exposes the static scope catalog; the
-// reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported
-// yet, so the endpoint is open until the admin auth slice lands (C014).
+// (routes.go:163). The endpoint exposes the ported SDL slices; the reference's
+// WithAdminGraphqlAuth / WithProjectID gate is wired below.
 builder.Services.AddAxonHubGraphQL();
 
 builder.Host.UseOrleans(silo =>
@@ -242,18 +248,47 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-// Unauthenticated admin auth (routes.go:97-98). The admin GraphQL gate itself
-// still waits for the JWT middleware slice (C014).
+// Unauthenticated admin auth (routes.go:97-98): signin and refresh sit on the
+// unSecureAdminGroup, so they stay outside the gate below.
 app.MapPost("/admin/auth/signin", ManagementAuthHandlers.SignInAsync);
 app.MapPost("/admin/auth/refresh", ManagementAuthHandlers.RefreshAsync);
 
 // The management GraphQL endpoint the frontend calls
-// (frontend/src/gql/graphql.ts:36).
-app.MapGraphQL("/admin/graphql");
+// (frontend/src/gql/graphql.ts:36). The reference mounts the route POST-only
+// (routes.go:163); a GET falls through to the static fallback and its gin
+// 404 envelope.
+app.MapGraphQL("/admin/graphql")
+    .WithOptions(static options => options.EnableGetRequests = false)
+    .WithMetadata(new HttpMethodMetadata([HttpMethods.Post]));
 
 // Global request tracing (routes.go:63): every request gets an ar-<uuid> id
 // echoed in the configured response header and published for error bodies.
 app.UseMiddleware<RequestTracingMiddleware>();
+
+// routes.go:163 mounts POST only, so a non-POST /admin/graphql never matches
+// the route and gin's NoRoute hands it to static.Handler, whose API-prefix
+// branch answers the JSON 404 envelope. HotChocolate's endpoint would match
+// other methods and answer 405, so short-circuit them before it (C116).
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/graphql")
+        && !HttpMethods.IsPost(context.Request.Method),
+    static branch => branch.Run(context =>
+        StaticHandler.WriteApiNotFoundAsync(context, context.Request.Path.Value ?? "/")));
+
+// The admin GraphQL gate (routes.go:161-168): WithAdminGraphqlAuth then
+// WithProjectID, plus the service-account read-only wrapper the reference
+// installs as a gqlgen AroundOperations hook (gql/graphql.go:187-204). The
+// reference mounts these on the POST route group, so a GET /admin/graphql
+// never sees them; the port branches on the method to match.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/graphql")
+        && HttpMethods.IsPost(context.Request.Method),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminGraphqlAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+        branch.UseMiddleware<ApiKeyReadOnlyMiddleware>();
+    });
 
 // The reference mounts WithIPBlocklist + WithAPIKeyConfig on its API group, in
 // that order. The slice applies both to every ported API surface: the openai,
