@@ -50,6 +50,52 @@ public static class ChannelModelEntries
         return Build(channel).TryGetValue(key, out var entry) ? entry.ActualModel : null;
     }
 
+    /// <summary>
+    /// Port of <c>biz.Channel.GetDirectModelEntries</c>
+    /// (channel_llm.go:1614-1633): the raw supported models, ignoring every
+    /// settings-driven alias and the HideOriginalModels filter. The channel
+    /// tester reads this when a model is not a request-facing entry.
+    /// </summary>
+    public static Dictionary<string, ChannelModelEntry> BuildDirect(ChannelDescriptor channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        var entries = new Dictionary<string, ChannelModelEntry>(StringComparer.Ordinal);
+        foreach (var model in ParseSupportedModels(channel))
+        {
+            entries.TryAdd(model, new ChannelModelEntry(model, model, SourceDirect));
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Port of <c>biz.Channel.ForcedAPIFormats</c>
+    /// (channel_endpoint.go:448-463): the first enabled modelProtocols override
+    /// matching <paramref name="model"/>, or an empty list.
+    /// </summary>
+    public static IReadOnlyList<string> ForcedApiFormats(ChannelDescriptor channel, string model)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(model);
+
+        if (model.Length == 0)
+        {
+            return [];
+        }
+
+        var settings = ParseSettings(channel);
+        foreach (var protocol in settings?.ModelProtocols ?? [])
+        {
+            if (protocol.Model == model && protocol.IsEnabled)
+            {
+                return protocol.ApiFormats ?? [];
+            }
+        }
+
+        return [];
+    }
+
     public static Dictionary<string, ChannelModelEntry> Build(ChannelDescriptor channel)
     {
         var supportedModels = ParseSupportedModels(channel);
@@ -197,6 +243,8 @@ public static class ChannelModelEntries
         public bool HideMappedModels { get; set; }
 
         public bool LowercaseModelId { get; set; }
+
+        public ModelProtocol[]? ModelProtocols { get; set; }
     }
 
     private sealed class ModelMapping
@@ -204,5 +252,18 @@ public static class ChannelModelEntries
         public string? From { get; set; }
 
         public string? To { get; set; }
+    }
+
+    /// <summary>Mirror of <c>objects.ModelProtocol</c> (internal/objects/channel.go:135-146).</summary>
+    private sealed class ModelProtocol
+    {
+        public string? Model { get; set; }
+
+        public string[]? ApiFormats { get; set; }
+
+        public bool? Enabled { get; set; }
+
+        /// <summary>Missing enabled values default to true (backwards compatibility).</summary>
+        public bool IsEnabled => Enabled != false;
     }
 }

@@ -175,6 +175,13 @@ builder.Services.AddScoped<ChannelLifecycleService>();
 // built from the channel type's primary outbound and generic peers.
 builder.Services.AddScoped<ChannelEndpointDetectService>();
 
+// Channel connectivity tests (testChannel / testChannelAPIKeys /
+// testChannelAPIKey): the tester reuses the chat pipeline with a specified
+// channel and reads the test prompts from the system_channel_settings row
+// (biz.SystemService.ChannelTestPrompts).
+builder.Services.AddScoped<IChannelTestPromptsProvider, SystemChannelSettingsService>();
+builder.Services.AddScoped<ChannelTestService>();
+
 // Channel price writes (saveChannelModelPrices): the ordered action plan and
 // its active/archived version history run in one store transaction
 // (channel_price.go:374-508).

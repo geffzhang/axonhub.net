@@ -4,6 +4,8 @@ using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Security;
 using AxonHub.Api.Settings;
+using AxonHub.Llm.Http;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.GraphQL;
@@ -716,6 +718,133 @@ public sealed class AdminMutation
         {
             Success = result.Success,
             Message = result.Message,
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TestChannel (axonhub.resolvers.go:305-325). A
+    /// not-found upstream URL gets its own message; every other failure carries
+    /// the resolver's prefix.
+    /// </summary>
+    [GraphQLName("testChannel")]
+    public async Task<TestChannelPayloadType> TestChannelAsync(
+        TestChannelInput input,
+        [Service] ChannelTestService tester,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(input.ChannelID);
+
+        TestChannelResult result;
+        try
+        {
+            result = await tester
+                .TestChannelAsync(gid.Id, input.ModelID, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (GoErrors.As<HttpClientError>(ex) is { StatusCode: 404 })
+            {
+                throw new InvalidOperationException(
+                    "URL not found, please check if the URL is correct and try again",
+                    ex);
+            }
+
+            throw new InvalidOperationException("failed to test channel: " + ex.Message, ex);
+        }
+
+        return new TestChannelPayloadType
+        {
+            Latency = result.Latency,
+            Success = result.Success,
+            Message = result.Message,
+            Error = result.Error,
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TestChannelAPIKeys
+    /// (axonhub.resolvers.go:327-354). The resolver runs a test per configured
+    /// key and maps every result one to one, in order.
+    /// </summary>
+    [GraphQLName("testChannelAPIKeys")]
+    public async Task<TestChannelApiKeysPayloadType> TestChannelApiKeysAsync(
+        [GraphQLType(typeof(NonNullType<IdType>))] string channelID,
+        [GraphQLName("modelID")] string? modelID,
+        [Service] ChannelTestService tester,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        TestChannelApiKeysResult result;
+        try
+        {
+            result = await tester
+                .TestChannelApiKeysAsync(gid.Id, modelID, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to test channel API keys: " + ex.Message,
+                ex);
+        }
+
+        return new TestChannelApiKeysPayloadType
+        {
+            ChannelID = new GidValue("Channel", result.ChannelId).ToString(),
+            Total = result.Total,
+            SuccessCount = result.SuccessCount,
+            FailedCount = result.FailedCount,
+            Results = result.Results
+                .Select(static item => new TestApiKeyResultType
+                {
+                    KeyPrefix = item.KeyPrefix,
+                    Success = item.Success,
+                    Latency = item.Latency,
+                    Error = item.Error,
+                    Disabled = item.Disabled,
+                })
+                .ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TestChannelAPIKey
+    /// (axonhub.resolvers.go:356-372): test one key that must belong to the
+    /// channel.
+    /// </summary>
+    [GraphQLName("testChannelAPIKey")]
+    public async Task<TestApiKeyResultType> TestChannelApiKeyAsync(
+        [GraphQLType(typeof(NonNullType<IdType>))] string channelID,
+        string key,
+        [GraphQLName("modelID")] string? modelID,
+        [Service] ChannelTestService tester,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        TestApiKeyResult result;
+        try
+        {
+            result = await tester
+                .TestSingleApiKeyAsync(gid.Id, key, modelID, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to test channel API key: " + ex.Message,
+                ex);
+        }
+
+        return new TestApiKeyResultType
+        {
+            KeyPrefix = result.KeyPrefix,
+            Success = result.Success,
+            Latency = result.Latency,
+            Error = result.Error,
+            Disabled = result.Disabled,
         };
     }
 

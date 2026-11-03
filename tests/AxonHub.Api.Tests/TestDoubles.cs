@@ -16,23 +16,28 @@ namespace AxonHub.Api.Tests;
 /// </summary>
 internal sealed class ScriptedExecutor : IExecutor
 {
+    // testChannelAPIKeys fans out (bounded by 8), so recording must be safe to
+    // call concurrently; the handlers themselves still run outside the lock.
+    private readonly object _gate = new();
+    private int _calls;
+
     public Func<int, HttpRequestData, CancellationToken, HttpResponseData>? OnDo { get; set; }
 
     public Func<int, HttpRequestData, CancellationToken, IStream<StreamEvent>>? OnStream { get; set; }
 
     public List<HttpRequestData> Requests { get; } = [];
 
-    public int Calls { get; private set; }
+    public int Calls => Volatile.Read(ref _calls);
 
     public HttpResponseData Do(CancellationToken cancellationToken, HttpRequestData request)
     {
-        Requests.Add(request);
+        var call = Record(request);
         if (OnDo is not { } handler)
         {
             throw new InvalidOperationException("OnDo is not configured");
         }
 
-        var response = handler(Calls++, request, cancellationToken);
+        var response = handler(call, request, cancellationToken);
 
         // HttpExecutor attaches the request it sent; response transformers read
         // Request.ApiFormat to choose a protocol-specific decoder (images).
@@ -42,15 +47,27 @@ internal sealed class ScriptedExecutor : IExecutor
 
     public IStream<StreamEvent> DoStream(CancellationToken cancellationToken, HttpRequestData request)
     {
-        Requests.Add(request);
+        var call = Record(request);
         return OnStream is { } handler
-            ? handler(Calls++, request, cancellationToken)
+            ? handler(call, request, cancellationToken)
             : throw new InvalidOperationException("OnStream is not configured");
+    }
+
+    private int Record(HttpRequestData request)
+    {
+        lock (_gate)
+        {
+            Requests.Add(request);
+            return _calls++;
+        }
     }
 }
 
 internal sealed class RecordingMetricsRecorder : IChannelMetricsRecorder
 {
+    // The tester's API-key batch records metrics from concurrent attempts.
+    private readonly object _gate = new();
+
     public List<long> Selections { get; } = [];
 
     public List<long> Successes { get; } = [];
@@ -60,19 +77,28 @@ internal sealed class RecordingMetricsRecorder : IChannelMetricsRecorder
     public void RecordSelection(long channelId, DateTimeOffset selectedAt)
     {
         _ = selectedAt;
-        Selections.Add(channelId);
+        lock (_gate)
+        {
+            Selections.Add(channelId);
+        }
     }
 
     public void RecordSuccess(long channelId, DateTimeOffset completedAt)
     {
         _ = completedAt;
-        Successes.Add(channelId);
+        lock (_gate)
+        {
+            Successes.Add(channelId);
+        }
     }
 
     public void RecordFailure(long channelId, DateTimeOffset completedAt)
     {
         _ = completedAt;
-        Failures.Add(channelId);
+        lock (_gate)
+        {
+            Failures.Add(channelId);
+        }
     }
 }
 

@@ -256,53 +256,62 @@ public static class ChannelOutboundFactory
             candidate.DisabledApiKeys,
             now);
 
-        var oauthCapableChannel = candidate.Type is CodexChannelType
-            or FennoChannelType
-            or ClaudeCodeChannelType;
-
-        // channel_llm.go:662-665: codex and claudecode channels accept OAuth
-        // credentials in place of api keys; every other channel type still
-        // needs a key.
-        //
-        // channel_llm.go:666-669: github_copilot and xai_subscription are
-        // OAuth-only; an api key without an oauth object is rejected with its
-        // own message before the generic key check runs.
-        var oauthRequiredChannel = candidate.Type
-            is GithubCopilotChannelType or XaiSubscriptionChannelType;
-
+        // channel_llm.go:655-658: the channel key test flow's forced key is
+        // trimmed once and then wins over every configured key.
+        var overrideApiKey = (candidate.ApiKeyOverride ?? string.Empty).Trim();
         var isOAuth = ChannelCredentials.IsOAuth(candidate.Credentials);
-        if (oauthRequiredChannel && !isOAuth)
+
+        // channel_llm.go:660-693: fail fast without constructing HTTP clients.
+        // The fake and GCP channel types use no API keys; Ollama may run
+        // keyless; Command Code accepts a test override.
+        switch (candidate.Type)
         {
-            throw new InvalidOperationException(
-                "missing oauth credentials for channel " + candidate.ChannelName);
-        }
+            case CodexChannelType or ClaudeCodeChannelType:
+                if (!isOAuth && enabledKeys.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "missing credentials: oauth or api key required for channel " + candidate.ChannelName);
+                }
 
-        var oauth = (oauthCapableChannel || oauthRequiredChannel) && isOAuth;
+                break;
+            case GithubCopilotChannelType or XaiSubscriptionChannelType:
+                if (!isOAuth)
+                {
+                    throw new InvalidOperationException(
+                        "missing oauth credentials for channel " + candidate.ChannelName);
+                }
 
-        // channel_llm.go:677-682: Ollama runs locally without a key, and
-        // anthropic_gcp uses the credentials' gcp object instead of API keys.
-        var keylessChannel = candidate.Type is OllamaChannelType
-            or OllamaAnthropicChannelType
-            or AnthropicGcpChannelType;
+                break;
+            case AntigravityChannelType:
+                if (ChannelCredentials.GetLegacyApiKey(candidate.Credentials).Trim().Length == 0)
+                {
+                    throw new InvalidOperationException(
+                        "missing api key for channel " + candidate.ChannelName);
+                }
 
-        // channel_llm.go:670-674: antigravity consumes the single legacy APIKey
-        // field (refreshToken|projectID) directly; enabled key lists do not
-        // apply, so it leaves the generic key check to its own branch below.
-        var antigravityChannel = candidate.Type == AntigravityChannelType;
+                break;
+            case AnthropicGcpChannelType or "anthropic_fake" or "openai_fake":
+                // anthropic_gcp uses GCP credentials; *_fake are test-only.
+                break;
+            case OllamaChannelType or OllamaAnthropicChannelType:
+                // Often run locally without keys; an override may supply one.
+                break;
+            case CommandcodeChannelType or CommandcodeAnthropicChannelType:
+                if (enabledKeys.Count == 0 && overrideApiKey.Length == 0)
+                {
+                    throw new InvalidOperationException(
+                        "missing api key for channel " + candidate.ChannelName);
+                }
 
-        if (enabledKeys.Count == 0 && !oauth && !keylessChannel && !antigravityChannel)
-        {
-            throw new InvalidOperationException(
-                oauthCapableChannel
-                    ? "missing credentials: oauth or api key required for channel " + candidate.ChannelName
-                    : "missing api key for channel " + candidate.ChannelName);
-        }
+                break;
+            default:
+                if (enabledKeys.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "missing api key for channel " + candidate.ChannelName);
+                }
 
-        if (antigravityChannel
-            && ChannelCredentials.GetLegacyApiKey(candidate.Credentials).Trim().Length == 0)
-        {
-            throw new InvalidOperationException(
-                "missing api key for channel " + candidate.ChannelName);
+                break;
         }
 
         // channel_llm.go:640-647, 705-711: both Command Code channel types
@@ -322,47 +331,60 @@ public static class ChannelOutboundFactory
             }
         }
 
-        // WithTrace publishes the resolved trace id as the shared session id
-        // (shared.WithSessionID), which the endpoint threads onto the wire
+        var allKeys = ChannelCredentials.GetAllApiKeys(candidate.Credentials);
+
+        // getAPIKeyProvider (channel_llm.go:169-184): the override is a static
+        // key; otherwise the enabled set chooses between static, trace-sticky
+        // rendezvous and random. WithTrace publishes the resolved trace id as
+        // the shared session id, which the endpoint threads onto the wire
         // request; the reference provider reads it back from the request context
-        // with contexts.GetTrace. No trace id means the untraced random branch.
-        var provider = new ChannelApiKeyProvider(
-            enabledKeys,
-            ChannelCredentials.GetAllApiKeys(candidate.Credentials),
-            request.RawRequest?.SessionId);
+        // with contexts.GetTrace.
+        var provider = overrideApiKey.Length > 0
+            ? ChannelApiKeyProvider.ForOverride(overrideApiKey, allKeys)
+            : new ChannelApiKeyProvider(
+                enabledKeys,
+                allKeys,
+                request.RawRequest?.SessionId);
 
         // The reference keys each channel's outbounds by API format (the channel
-        // endpoint map). The slice's candidates carry one base URL, so dispatch
-        // on the inbound API format instead: a Responses request to an openai
-        // channel uses the Responses transformer, everything else the chat one.
+        // endpoint map) and picks the map entry the candidate selected
+        // (outbound.go:450-462). A candidate selected by the channel tester
+        // carries that choice; pool-selected candidates leave it null and the
+        // slice dispatches on the inbound format instead: a Responses request to
+        // an openai channel uses the Responses transformer, everything else the
+        // chat one.
+        var apiFormat = string.IsNullOrEmpty(candidate.ApiFormat)
+            ? request.ApiFormat
+            : candidate.ApiFormat;
+
         return candidate.Type switch
         {
             // channel_llm.go:454/465/497: codex responses, alpha search and the
             // image tool all run through the codex outbound. Fenno shares the
             // responses and image branches but not alpha search.
-            CodexChannelType when request.ApiFormat is ApiFormats.OpenAIResponse
+            CodexChannelType when apiFormat is ApiFormats.OpenAIResponse
                 or ApiFormats.OpenAIAlphaSearch
                 or ApiFormats.OpenAIImageGeneration
                 or ApiFormats.OpenAIImageEdit
                 => CreateCodexOutbound(candidate, request, provider, tokenRefreshExecutor),
-            FennoChannelType when request.ApiFormat is ApiFormats.OpenAIResponse
+            FennoChannelType when apiFormat is ApiFormats.OpenAIResponse
                 or ApiFormats.OpenAIImageGeneration
                 or ApiFormats.OpenAIImageEdit
                 => CreateCodexOutbound(candidate, request, provider, tokenRefreshExecutor),
-            OpenAiChannelType when request.ApiFormat
+            OpenAiChannelType when apiFormat
                 is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
                 => ResponsesOutboundTransformer.Create(
                     candidate.BaseUrl ?? string.Empty,
                     provider,
                     provider.KeyIndex),
-            OpenAiChannelType when request.ApiFormat == ApiFormats.OpenAIDecisions
+            OpenAiChannelType when apiFormat == ApiFormats.OpenAIDecisions
                 => DecisionsOutboundTransformer.Create(
                     candidate.BaseUrl ?? string.Empty,
                     provider,
                     provider.KeyIndex),
             // channel_llm.go:445: the legacy /completions outbound shares the
             // openai channel's credentials but targets its own path.
-            OpenAiChannelType when request.ApiFormat == ApiFormats.OpenAICompletion
+            OpenAiChannelType when apiFormat == ApiFormats.OpenAICompletion
                 => CompletionOutboundTransformer.Create(
                     candidate.BaseUrl ?? string.Empty,
                     provider,
@@ -588,7 +610,7 @@ public static class ChannelOutboundFactory
             // reasoning_content and an empty-delta stream filter. The channel
             // also owns a peer responses endpoint (channel_endpoint.go:292-296),
             // served by the Responses transformer (channel_llm.go:437-455).
-            XaiChannelType when request.ApiFormat is ApiFormats.OpenAIResponse
+            XaiChannelType when apiFormat is ApiFormats.OpenAIResponse
                 or ApiFormats.OpenAIResponseCompact
                 => ResponsesOutboundTransformer.Create(
                     candidate.BaseUrl ?? string.Empty,
@@ -609,13 +631,15 @@ public static class ChannelOutboundFactory
                 ChannelApiKeyIndex = provider.KeyIndex,
             }),
             // channel_llm.go:1392-1405: the provider is only installed when the
-            // channel has enabled keys, so a keyless or fully-disabled channel
-            // sends no Authorization header at all.
+            // channel has enabled keys or a key-test override, so a keyless or
+            // fully-disabled channel sends no Authorization header at all.
             OllamaChannelType => new OllamaOutboundTransformer(new OllamaOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
-                ApiKeyProvider = enabledKeys.Count > 0 ? provider : null,
-                ChannelApiKeyIndex = enabledKeys.Count > 0 ? provider.KeyIndex : null,
+                ApiKeyProvider = enabledKeys.Count > 0 || overrideApiKey.Length > 0 ? provider : null,
+                ChannelApiKeyIndex = enabledKeys.Count > 0 || overrideApiKey.Length > 0
+                    ? provider.KeyIndex
+                    : null,
             }),
             // channel_llm.go:1406-1428: Anthropic Messages wire format against
             // Ollama, with Bearer auth instead of x-api-key.
@@ -623,8 +647,10 @@ public static class ChannelOutboundFactory
             {
                 Type = AnthropicPlatformType.Ollama,
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
-                ApiKeyProvider = enabledKeys.Count > 0 ? provider : null,
-                ChannelApiKeyIndex = enabledKeys.Count > 0 ? provider.KeyIndex : null,
+                ApiKeyProvider = enabledKeys.Count > 0 || overrideApiKey.Length > 0 ? provider : null,
+                ChannelApiKeyIndex = enabledKeys.Count > 0 || overrideApiKey.Length > 0
+                    ? provider.KeyIndex
+                    : null,
             }),
             // channel_llm.go:582-589: zai/zhipu chat runs through the Zai
             // outbound (GLM thinking ladder, user_id rules) on the v4 route.
@@ -635,7 +661,7 @@ public static class ChannelOutboundFactory
             // channel_llm.go:1029-1052: the *Anthropic channel types serve
             // anthropic/messages through the anthropic outbound and, for a
             // chat-format endpoint, the family chat outbound.
-            ZaiAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+            ZaiAnthropicChannelType when apiFormat == ApiFormats.AnthropicMessage
                 => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
                 {
                     Type = AnthropicPlatformType.Zai,
@@ -644,7 +670,7 @@ public static class ChannelOutboundFactory
                     ChannelApiKeyIndex = provider.KeyIndex,
                 }),
             ZaiAnthropicChannelType => CreateZaiOutbound(candidate, request, provider, "v4"),
-            ZhipuAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+            ZhipuAnthropicChannelType when apiFormat == ApiFormats.AnthropicMessage
                 => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
                 {
                     Type = AnthropicPlatformType.Zhipu,
@@ -655,7 +681,7 @@ public static class ChannelOutboundFactory
             ZhipuAnthropicChannelType => CreateZaiOutbound(candidate, request, provider, "v4"),
             // channel_llm.go:898: xiaomi_anthropic and minimax_anthropic use the
             // plain Anthropic direct platform.
-            XiaomiAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+            XiaomiAnthropicChannelType when apiFormat == ApiFormats.AnthropicMessage
                 => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
                 {
                     Type = AnthropicPlatformType.Direct,
@@ -672,7 +698,7 @@ public static class ChannelOutboundFactory
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
             }),
-            MinimaxAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+            MinimaxAnthropicChannelType when apiFormat == ApiFormats.AnthropicMessage
                 => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
                 {
                     Type = AnthropicPlatformType.Direct,
@@ -750,7 +776,7 @@ public static class ChannelOutboundFactory
             // channel_llm.go:1003-1015: doubao_anthropic speaks Anthropic
             // Messages through the Doubao platform; the family chat outbound
             // serves the other endpoints (channel_llm.go:598-604).
-            DoubaoAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+            DoubaoAnthropicChannelType when apiFormat == ApiFormats.AnthropicMessage
                 => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
                 {
                     Type = AnthropicPlatformType.Doubao,
@@ -761,7 +787,7 @@ public static class ChannelOutboundFactory
             DoubaoAnthropicChannelType => CreateDoubaoOutbound(candidate, provider),
             // channel_llm.go:898: volcengine_anthropic uses the plain Anthropic
             // direct platform for Messages.
-            VolcengineAnthropicChannelType when request.ApiFormat == ApiFormats.AnthropicMessage
+            VolcengineAnthropicChannelType when apiFormat == ApiFormats.AnthropicMessage
                 => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
                 {
                     Type = AnthropicPlatformType.Direct,
@@ -777,12 +803,12 @@ public static class ChannelOutboundFactory
             // (C082).
             ZenmuxChannelType or ZenmuxResponsesChannelType
                 or ZenmuxAnthropicChannelType or ZenmuxVideoChannelType
-                when request.ApiFormat == ApiFormats.ZenmuxVideo
+                when apiFormat == ApiFormats.ZenmuxVideo
                 => CreateZenmuxOutbound(candidate, provider),
             // channel_llm.go:1269-1279: a plain ZenMux channel's primary
             // outbound is the shared OpenAI one; a responses-format request is
             // served by the Responses outbound, like the openai channel type.
-            ZenmuxChannelType when request.ApiFormat
+            ZenmuxChannelType when apiFormat
                 is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
                 => ResponsesOutboundTransformer.Create(
                     ZenmuxBaseUrl(candidate),
@@ -930,9 +956,15 @@ public static class ChannelOutboundFactory
             }
         }
 
-        var provider = new ChannelApiKeyProvider(
-            ChannelCredentials.GetEnabledApiKeys(candidate.Credentials, candidate.DisabledApiKeys, now),
-            ChannelCredentials.GetAllApiKeys(candidate.Credentials));
+        var overrideApiKey = (candidate.ApiKeyOverride ?? string.Empty).Trim();
+        var enabledKeys = ChannelCredentials.GetEnabledApiKeys(
+            candidate.Credentials,
+            candidate.DisabledApiKeys,
+            now);
+        var allKeys = ChannelCredentials.GetAllApiKeys(candidate.Credentials);
+        var provider = overrideApiKey.Length > 0
+            ? ChannelApiKeyProvider.ForOverride(overrideApiKey, allKeys)
+            : new ChannelApiKeyProvider(enabledKeys, allKeys);
 
         switch (apiFormat)
         {

@@ -122,7 +122,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         {
             CreatedAt = now.UtcDateTime,
             UpdatedAt = now.UtcDateTime,
-            Source = "api",
+            Source = _identity.Source,
             ModelId = request.Model,
             ReasoningEffort = string.IsNullOrEmpty(request.ReasoningEffort)
                 ? null
@@ -917,7 +917,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             CompletionReasoningTokens = usage.CompletionTokensDetails?.ReasoningTokens,
             CompletionAcceptedPredictionTokens = usage.CompletionTokensDetails?.AcceptedPredictionTokens,
             CompletionRejectedPredictionTokens = usage.CompletionTokensDetails?.RejectedPredictionTokens,
-            Source = "api",
+            Source = _identity.Source,
             Format = _format,
             TotalCost = cost?.TotalCost,
 

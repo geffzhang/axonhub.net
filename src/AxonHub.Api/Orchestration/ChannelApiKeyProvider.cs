@@ -64,6 +64,30 @@ public sealed class ChannelApiKeyProvider : IApiKeyProvider
         KeyIndex = IndexOf(allKeys, _key);
     }
 
+    /// <summary>
+    /// The reference's apiKeyOverride branch: every attempt uses the forced
+    /// key regardless of the enabled set or trace, while the audit index is
+    /// still derived from the channel's stored keys.
+    /// </summary>
+    private ChannelApiKeyProvider(string overrideKey, IReadOnlyList<string> allKeys)
+    {
+        _key = overrideKey;
+        KeyIndex = IndexOf(allKeys, overrideKey);
+    }
+
+    /// <summary>
+    /// Port of <c>getAPIKeyProvider</c>'s non-empty <c>apiKeyOverride</c>
+    /// branch (channel_llm.go:169-172). The key is expected to be trimmed by the
+    /// caller, exactly like <c>buildChannelWithTransformer</c>.
+    /// </summary>
+    public static ChannelApiKeyProvider ForOverride(string key, IReadOnlyList<string> allKeys)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(allKeys);
+
+        return new ChannelApiKeyProvider(key, allKeys);
+    }
+
     /// <summary>The channel key this attempt sends upstream.</summary>
     public string Key => _key;
 

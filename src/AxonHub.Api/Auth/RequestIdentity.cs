@@ -12,11 +12,24 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     /// <summary>Key used to carry the identity through <c>HttpContext.Items</c>.</summary>
     public const string HttpContextItemKey = "AxonHub.RequestIdentity";
 
+    /// <summary>Port of contexts.SourceAPI (internal/contexts/source.go): client traffic.</summary>
+    public const string SourceApi = "api";
+
+    /// <summary>Port of contexts.SourceTest: the channel tester's synthetic requests.</summary>
+    public const string SourceTest = "test";
+
     /// <summary>
     /// The persisted trace row id resolved by <c>TraceMiddleware</c>, or null
     /// when the request has no trace. This is the reference's contexts.Trace.
     /// </summary>
     public long? TraceId { get; init; }
+
+    /// <summary>
+    /// Port of contexts.GetSourceOrDefault(ctx, contexts.SourceAPI): the
+    /// requests.source column records client traffic unless a caller marks the
+    /// request as a channel test.
+    /// </summary>
+    public string Source { get; init; } = SourceApi;
 
     /// <summary>
     /// Identity used when no authentication middleware ran (internal callers and

@@ -44,6 +44,12 @@ public sealed record ChannelDescriptor
     public string? Settings { get; init; }
 
     /// <summary>
+    /// Raw <c>endpoints</c> jsonb text ([]objects.ChannelEndpoint). Resolved
+    /// against the built-in defaults by <c>ChannelEndpoints.Resolve</c>.
+    /// </summary>
+    public string? Endpoints { get; init; }
+
+    /// <summary>
     /// Ent <c>default_test_model</c>. Codex channels use it as the main model of
     /// the image-generation tool (biz.buildCodexOutbound).
     /// </summary>

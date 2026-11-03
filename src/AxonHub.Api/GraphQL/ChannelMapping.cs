@@ -33,170 +33,6 @@ public static class ChannelMapping
     private static readonly Dictionary<ChannelStatusValue, string> ChannelStatusWires =
         ChannelStatusesByWire.ToDictionary(static pair => pair.Value, static pair => pair.Key);
 
-    private static readonly ChannelEndpointType[] OpenAICompatibleDefaultEndpoints =
-    [
-        Endpoint(ApiFormats.OpenAIChatCompletion),
-        Endpoint(ApiFormats.OpenAIEmbedding),
-        Endpoint(ApiFormats.OpenAIImageGeneration),
-        Endpoint(ApiFormats.OpenAIImageEdit),
-        Endpoint(ApiFormats.OpenAIImageVariation),
-        Endpoint(ApiFormats.OpenAIVideo),
-        Endpoint(ApiFormats.OpenAIModeration),
-    ];
-
-    private static readonly ChannelEndpointType[] OpenAIFullDefaultEndpoints =
-    [
-        .. OpenAICompatibleDefaultEndpoints,
-        Endpoint(ApiFormats.OpenAISpeech),
-        Endpoint(ApiFormats.OpenAITranscription),
-        Endpoint(ApiFormats.OpenAITranslation),
-    ];
-
-    private static readonly ChannelEndpointType[] OpenAIChatOnlyDefaultEndpoints =
-    [
-        Endpoint(ApiFormats.OpenAIChatCompletion),
-    ];
-
-    private static readonly ChannelEndpointType[] AnthropicDefaultEndpoints =
-    [
-        Endpoint(ApiFormats.AnthropicMessage),
-    ];
-
-    private static readonly ChannelEndpointType[] GeminiDefaultEndpoints =
-    [
-        Endpoint(ApiFormats.GeminiContents),
-        Endpoint(ApiFormats.GeminiEmbedding),
-    ];
-
-    private static readonly Dictionary<string, ChannelEndpointType[]> DefaultEndpointsByType =
-        new(StringComparer.Ordinal)
-        {
-            ["openai"] = OpenAIFullDefaultEndpoints,
-            ["zenmux"] = OpenAIFullDefaultEndpoints,
-            ["openai_responses"] = [Endpoint(ApiFormats.OpenAIResponse)],
-            ["zenmux_responses"] = [Endpoint(ApiFormats.OpenAIResponse)],
-            ["atlascloud"] = OpenAICompatibleDefaultEndpoints,
-            ["qiniu"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["qiniu_anthropic"] = AnthropicDefaultEndpoints,
-            ["cline"] = OpenAIChatOnlyDefaultEndpoints,
-            ["codex"] =
-            [
-                Endpoint(ApiFormats.OpenAIResponse),
-                Endpoint(ApiFormats.OpenAIResponseWebSocket),
-                Endpoint(ApiFormats.OpenAIAlphaSearch),
-                Endpoint(ApiFormats.OpenAIImageGeneration),
-                Endpoint(ApiFormats.OpenAIImageEdit),
-            ],
-            ["fenno"] = [Endpoint(ApiFormats.OpenAIResponse)],
-            ["vercel"] = OpenAICompatibleDefaultEndpoints,
-            ["anthropic"] = AnthropicDefaultEndpoints,
-            ["zenmux_anthropic"] = AnthropicDefaultEndpoints,
-            ["anthropic_aws"] = AnthropicDefaultEndpoints,
-            ["anthropic_gcp"] = AnthropicDefaultEndpoints,
-            ["gemini_openai"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["gemini"] = GeminiDefaultEndpoints,
-            ["zenmux_gemini"] = GeminiDefaultEndpoints,
-            ["zenmux_video"] = [Endpoint(ApiFormats.ZenmuxVideo)],
-            ["gemini_vertex"] = GeminiDefaultEndpoints,
-            ["deepseek"] =
-            [
-                Endpoint(ApiFormats.OpenAIChatCompletion),
-                Endpoint(ApiFormats.OpenAICompletion),
-            ],
-            ["deepseek_anthropic"] = AnthropicDefaultEndpoints,
-            ["deepinfra"] = OpenAICompatibleDefaultEndpoints,
-            ["fireworks"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["doubao"] =
-            [
-                Endpoint(ApiFormats.OpenAIChatCompletion),
-                Endpoint(ApiFormats.SeedanceVideo),
-            ],
-            ["doubao_anthropic"] = AnthropicDefaultEndpoints,
-            ["moonshot"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["moonshot_anthropic"] = AnthropicDefaultEndpoints,
-            ["zhipu"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["zai"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["zhipu_anthropic"] = AnthropicDefaultEndpoints,
-            ["zai_anthropic"] = AnthropicDefaultEndpoints,
-            ["anthropic_fake"] = AnthropicDefaultEndpoints,
-            ["openai_fake"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["openrouter"] =
-            [
-                Endpoint(ApiFormats.OpenAIChatCompletion),
-                Endpoint(ApiFormats.OpenAISpeech),
-                Endpoint(ApiFormats.OpenAITranscription),
-                Endpoint(ApiFormats.OpenAITranslation),
-            ],
-            ["xiaomi"] = OpenAIChatOnlyDefaultEndpoints,
-            ["xiaomi_anthropic"] = AnthropicDefaultEndpoints,
-            ["xai"] =
-            [
-                Endpoint(ApiFormats.OpenAIChatCompletion),
-                Endpoint(ApiFormats.OpenAIResponse),
-            ],
-            ["xai_responses"] = [Endpoint(ApiFormats.OpenAIResponse)],
-            ["xai_subscription"] = [Endpoint(ApiFormats.OpenAIResponse)],
-            ["ppio"] = OpenAICompatibleDefaultEndpoints,
-            ["siliconflow"] = OpenAICompatibleDefaultEndpoints,
-            ["volcengine"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["volcengine_anthropic"] = AnthropicDefaultEndpoints,
-            ["longcat"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["longcat_anthropic"] = AnthropicDefaultEndpoints,
-            ["minimax"] =
-            [
-                Endpoint(ApiFormats.OpenAIChatCompletion),
-                Endpoint(ApiFormats.OpenAIImageGeneration),
-            ],
-            ["minimax_anthropic"] = AnthropicDefaultEndpoints,
-            ["aihubmix"] = OpenAICompatibleDefaultEndpoints,
-            ["aihubmix_anthropic"] = AnthropicDefaultEndpoints,
-            ["burncloud"] = OpenAICompatibleDefaultEndpoints,
-            ["modelscope"] =
-            [
-                Endpoint(ApiFormats.OpenAIChatCompletion),
-                Endpoint(ApiFormats.ModelScopeImage),
-            ],
-            ["bailian"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["bailian_responses"] = [Endpoint(ApiFormats.OpenAIResponse)],
-            ["bailian_anthropic"] = AnthropicDefaultEndpoints,
-            ["moonshot_coding"] = AnthropicDefaultEndpoints,
-            ["jina"] =
-            [
-                Endpoint(ApiFormats.JinaRerank),
-                Endpoint(ApiFormats.JinaEmbedding),
-            ],
-            ["github"] = OpenAICompatibleDefaultEndpoints,
-            ["github_copilot"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["claudecode"] = AnthropicDefaultEndpoints,
-            ["cerebras"] = [Endpoint(ApiFormats.OpenAIChatCompletion)],
-            ["antigravity"] = [Endpoint(ApiFormats.GeminiContents)],
-            ["nanogpt"] = OpenAIFullDefaultEndpoints,
-            ["nanogpt_responses"] = [Endpoint(ApiFormats.OpenAIResponse)],
-            ["opencode_go"] = OpenAIChatOnlyDefaultEndpoints,
-            ["opencode_go_anthropic"] = AnthropicDefaultEndpoints,
-            ["ollama"] = [Endpoint(ApiFormats.OllamaChat)],
-            ["ollama_anthropic"] = AnthropicDefaultEndpoints,
-            ["evolink"] = OpenAICompatibleDefaultEndpoints,
-            ["evolink_anthropic"] = AnthropicDefaultEndpoints,
-            ["groq"] =
-            [
-                Endpoint(ApiFormats.OpenAIChatCompletion),
-                Endpoint(ApiFormats.OpenAISpeech),
-                Endpoint(ApiFormats.OpenAITranscription),
-                Endpoint(ApiFormats.OpenAITranslation),
-            ],
-            ["commandcode"] = OpenAIChatOnlyDefaultEndpoints,
-            ["commandcode_anthropic"] = AnthropicDefaultEndpoints,
-            ["typesafe"] = [Endpoint(ApiFormats.TypeSafeSystemOne)],
-
-            // Live-tree extension used by the migrated management frontend (C139).
-            ["cloudflare"] =
-            [
-                Endpoint(ApiFormats.OpenAIChatCompletion),
-                Endpoint(ApiFormats.OpenAIEmbedding),
-            ],
-        };
-
     private static readonly DateTime ZeroTime = new(1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
     public static ChannelType ToGraphQL(ChannelRecord record)
@@ -252,6 +88,7 @@ public static class ChannelMapping
             SupportedModels = record.SupportedModels,
             Settings = record.Settings,
             DefaultTestModel = record.DefaultTestModel,
+            Endpoints = record.Endpoints,
         };
     }
 
@@ -351,9 +188,14 @@ public static class ChannelMapping
 
     /// <summary>Port of channelResolver.DefaultEndpoints.</summary>
     public static IReadOnlyList<ChannelEndpointType> DefaultEndpoints(string channelType)
-        => DefaultEndpointsByType.TryGetValue(channelType, out var endpoints)
-            ? endpoints
-            : [];
+        => [.. ChannelEndpoints.DefaultsForChannelType(channelType)
+            .Select(static endpoint => new ChannelEndpointType
+            {
+                ApiFormat = endpoint.ApiFormat,
+                Path = endpoint.Path,
+                BaseUrl = endpoint.BaseUrl,
+                Transport = endpoint.Transport,
+            })];
 
     /// <summary>Port of channelResolver.AllModelEntries.</summary>
     public static IReadOnlyList<ChannelModelEntryType> AllModelEntries(ChannelType channel)
@@ -539,14 +381,6 @@ public static class ChannelMapping
     public static string ToWire(ChannelTypeValue value) => ChannelTypeWires[value];
 
     public static string ToWire(ChannelStatusValue value) => ChannelStatusWires[value];
-
-    private static ChannelEndpointType Endpoint(string apiFormat) => new()
-    {
-        ApiFormat = apiFormat,
-        Path = string.Empty,
-        BaseUrl = string.Empty,
-        Transport = string.Empty,
-    };
 
     private static CursorValue ToCursor(ChannelRecord record, ChannelSortField sortField) => new(
         record.Id,

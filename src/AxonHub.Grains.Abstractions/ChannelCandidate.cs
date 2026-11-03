@@ -68,4 +68,21 @@ public sealed class ChannelCandidate
     /// </summary>
     [Id(13)]
     public string DefaultTestModel { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The outbound API format selected from the channel's resolved endpoints
+    /// (<c>ChannelModelsCandidate.APIFormat</c>); null for pool-selected
+    /// candidates, where the factory dispatches on the request format.
+    /// </summary>
+    [Id(14)]
+    public string? ApiFormat { get; set; }
+
+    /// <summary>
+    /// Forces every attempt to authenticate with this key instead of selecting
+    /// from the channel's enabled keys (the reference's
+    /// <c>buildChannelWithTransformer(apiKeyOverride)</c> used by the channel
+    /// key test flow).
+    /// </summary>
+    [Id(15)]
+    public string? ApiKeyOverride { get; set; }
 }

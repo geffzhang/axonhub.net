@@ -242,6 +242,96 @@ public sealed class ChatCompletionOrchestrator
             throw TransformerErrors.InvalidModel(model);
         }
 
+        return await RunPipelineAsync(
+                _inbound,
+                request,
+                candidates,
+                identity,
+                onRequestCreated,
+                retryPolicy,
+                passThroughSettings,
+                includeRateLimits: true,
+                ensureUsage: false,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Port of the tester's per-request ChatCompletionOrchestrator.Process call
+    /// (internal/server/orchestrator/tester.go): the same orchestrator with a
+    /// <c>SpecifiedChannelSelector</c>, the tester's inbound transformer and
+    /// <c>stream.EnsureUsage</c> as a global middleware.
+    /// </summary>
+    /// <remarks>
+    /// The reference's selector is an inbound middleware, so its errors (channel
+    /// lookup failures, unsupported models) surface through the same
+    /// <c>inbound.TransformError</c> path as pipeline failures; the port runs the
+    /// same factory before the pipeline and lets its exceptions propagate to the
+    /// caller, which applies the same transform. The factory is asynchronous
+    /// because the tester's selector re-reads the channel from the store on
+    /// every attempt (candidates.go:SpecifiedChannelSelector.Select).
+    /// </remarks>
+    public async Task<ChatCompletionResult> ProcessSpecifiedAsync(
+        IInboundTransformer inbound,
+        HttpRequestData request,
+        Func<LlmRequest, CancellationToken, Task<ChannelCandidate?>> candidateFactory,
+        RequestIdentity identity,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(inbound);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(candidateFactory);
+        ArgumentNullException.ThrowIfNull(identity);
+
+        var llmRequest = inbound.TransformRequest(request);
+
+        // Same reads as ProcessAsync: one policy and one pass-through snapshot
+        // per request.
+        var retryPolicy = await _retryPolicyProvider
+            .GetRetryPolicyAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var passThroughSettings = await _passThroughSettings
+            .GetAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var candidate = await candidateFactory(llmRequest, cancellationToken)
+            .ConfigureAwait(false);
+        if (candidate is null)
+        {
+            // select_candidates.go: the selector's empty list becomes
+            // ErrInvalidModel wrapped with the request model.
+            throw TransformerErrors.InvalidModel(llmRequest.Model);
+        }
+
+        // The tester's processor leaves the rate limit tracker nil, so
+        // withRateLimitAdmission/withRateLimitTracking are no-ops there; the
+        // concurrency limiter and the rest of the chain still run.
+        return await RunPipelineAsync(
+                inbound,
+                request,
+                [candidate],
+                identity,
+                onRequestCreated: null,
+                retryPolicy,
+                passThroughSettings,
+                includeRateLimits: false,
+                ensureUsage: true,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<ChatCompletionResult> RunPipelineAsync(
+        IInboundTransformer inbound,
+        HttpRequestData request,
+        ChannelCandidate[] candidates,
+        RequestIdentity identity,
+        Action<long>? onRequestCreated,
+        RetryPolicy retryPolicy,
+        PassThroughSettings passThroughSettings,
+        bool includeRateLimits,
+        bool ensureUsage,
+        CancellationToken cancellationToken)
+    {
         // Codex OAuth channels refresh their token through the shared executor;
         // the reference uses the channel's proxy-aware HTTP client instead
         // (proxy configuration is not ported, C094).
@@ -277,11 +367,19 @@ public sealed class ChatCompletionOrchestrator
         // same per-attempt record (PersistenceState.Perf in the reference).
         var performance = new ChannelPerformanceState();
 
+        // processor.Middlewares run before the orchestrator's inbound chain
+        // (orchestrator.go:244); the tester's only global middleware is
+        // stream.EnsureUsage.
+        if (ensureUsage)
+        {
+            options.Middlewares.Add(new EnsureUsageMiddleware());
+        }
+
         // Inbound-phase middleware: registered first so it runs before the
         // outbound chain, matching the reference's inbound/outbound split.
         options.Middlewares.Add(new ProtectPromptsMiddleware(
             outbound,
-            _inbound,
+            inbound,
             promptProtecter));
         options.Middlewares.Add(new ChannelMetricsMiddleware(
             outbound,
@@ -324,7 +422,7 @@ public sealed class ChatCompletionOrchestrator
             persistence = new RequestChainPersistenceMiddleware(
                 _requestChainRecorder,
                 outbound,
-                _inbound,
+                inbound,
                 request,
                 _timeProvider,
                 cancellationToken,
@@ -343,8 +441,11 @@ public sealed class ChatCompletionOrchestrator
             outbound,
             _channelLimiterManager,
             cancellationToken));
-        options.Middlewares.Add(new RateLimitAdmissionMiddleware(outbound, _rateLimitTracker));
-        options.Middlewares.Add(new RateLimitTrackingMiddleware(outbound, _rateLimitTracker, _timeProvider));
+        if (includeRateLimits)
+        {
+            options.Middlewares.Add(new RateLimitAdmissionMiddleware(outbound, _rateLimitTracker));
+            options.Middlewares.Add(new RateLimitTrackingMiddleware(outbound, _rateLimitTracker, _timeProvider));
+        }
 
         // Response pass-through capture middlewares must be last so they run
         // first in reverse order, before any other outbound response/stream
@@ -355,7 +456,7 @@ public sealed class ChatCompletionOrchestrator
             passThroughSettings,
             cancellationToken));
 
-        var pipeline = new Pipeline(_executor, _inbound, outbound, options);
+        var pipeline = new Pipeline(_executor, inbound, outbound, options);
 
         PipelineResult result;
         try
