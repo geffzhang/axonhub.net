@@ -6,18 +6,12 @@ namespace AxonHub.Api.Auth;
 /// <summary>
 /// The OIDC login-only flag of the configured providers, as consulted by
 /// OIDCService.IsUserRestrictedToOIDC (internal/server/biz/oidc.go:464-504).
-/// The OIDC provider configuration is not ported yet, so the default registry
-/// has no providers and only the password placeholder restricts a user (C014).
+/// The production implementation reads the <c>oidc.providers</c> configuration
+/// (OidcLoginOnlyProviders); test hosts substitute their own registry.
 /// </summary>
 public interface IOidcLoginOnlyProviders
 {
     bool IsLoginOnly(string issuer);
-}
-
-/// <inheritdoc cref="IOidcLoginOnlyProviders"/>
-public sealed class EmptyOidcLoginOnlyProviders : IOidcLoginOnlyProviders
-{
-    public bool IsLoginOnly(string issuer) => false;
 }
 
 /// <summary>The result of AuthService.RefreshJWTToken: an empty token means "do not renew".</summary>
@@ -32,9 +26,8 @@ public readonly record struct JwtRefreshResult(string? Token, bool Renewed);
 /// <remarks>
 /// AuthService runs every lookup under authz.RunWithSystemBypass because the
 /// sign-in path has no viewer yet; the port has no ent privacy layer, so the
-/// store reads are already unprivileged. The OIDC provider config is not
-/// ported: a linked identity only restricts local login when its provider is
-/// registered as OIDC_LOGIN_ONLY (C014).
+/// store reads are already unprivileged. A linked identity restricts local
+/// login when its provider is configured with OIDC_LOGIN_ONLY (C014).
 /// </remarks>
 public sealed class ManagementAuthService(
     IUserStore users,

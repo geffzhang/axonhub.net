@@ -1,5 +1,6 @@
 using AxonHub.Abstractions;
 using AxonHub.Api.Auth;
+using AxonHub.Api.Auth.Oidc;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.GraphQL;
@@ -220,11 +221,22 @@ builder.Services.AddScoped<IManagementIdentity, HttpContextManagementIdentity>()
 builder.Services.AddScoped<IUserProfileStore, UserProfileStore>();
 builder.Services.AddScoped<UserProfileService>();
 
+// OIDC providers (oidc.providers): the registry reproduces NewOIDCService's
+// startup checks (normalization, duplicate ids, discovery, manual endpoints,
+// icon inlining). The reference fails startup on a bad provider list; the
+// hosted service keeps that timing (C014/C168).
+var oidcProviders = OidcProviderConfig.Load(builder.Configuration.GetSection("Oidc"));
+builder.Services.AddSingleton(oidcProviders);
+builder.Services.AddSingleton<IOidcHttpClient>(
+    static _ => new OidcHttpClient(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
+builder.Services.AddSingleton<OidcProviderRegistry>();
+builder.Services.AddHostedService<OidcInitializationHostedService>();
+builder.Services.AddScoped<OidcService>();
+
 // Management login (biz.AuthService): signin/refresh issue HS256 tokens signed
-// with the systems.system_jwt_secret_key row. The OIDC provider registry is
-// empty until the OIDC slice lands, so only the OIDC-only password placeholder
-// restricts local login (C014).
-builder.Services.AddSingleton<IOidcLoginOnlyProviders, EmptyOidcLoginOnlyProviders>();
+// with the systems.system_jwt_secret_key row. The linked-provider check now
+// reads the configured oidc_login_only flags.
+builder.Services.AddSingleton<IOidcLoginOnlyProviders, OidcLoginOnlyProviders>();
 builder.Services.AddScoped<ManagementAuthService>();
 
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
@@ -252,6 +264,16 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 // unSecureAdminGroup, so they stay outside the gate below.
 app.MapPost("/admin/auth/signin", ManagementAuthHandlers.SignInAsync);
 app.MapPost("/admin/auth/refresh", ManagementAuthHandlers.RefreshAsync);
+
+// OIDC public surface (routes.go:101-104): the login page lists the configured
+// providers before any credentials exist; the optional bearer only decorates
+// the list with the caller's linked identities.
+RequestDelegate oidcProvidersHandler = context => OidcHandlers.GetProvidersAsync(
+    context,
+    context.RequestServices.GetRequiredService<OidcService>(),
+    context.RequestServices.GetRequiredService<ManagementAuthService>(),
+    context.RequestAborted);
+app.MapGet("/oauth/oidc/providers", oidcProvidersHandler);
 
 // The management GraphQL endpoint the frontend calls
 // (frontend/src/gql/graphql.ts:36). The reference mounts the route POST-only
