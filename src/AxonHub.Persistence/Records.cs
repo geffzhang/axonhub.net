@@ -558,6 +558,31 @@ public sealed class UserProjectRecord
     public long ProjectId { get; set; }
 }
 
+/// <summary>Row of the reference <c>oidc_identities</c> table.</summary>
+public sealed class OidcIdentityRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Issuer { get; set; } = string.Empty;
+
+    public string Subject { get; set; } = string.Empty;
+
+    public string? Email { get; set; }
+
+    public string? IdpName { get; set; }
+
+    public DateTime? LastLoginAt { get; set; }
+
+    public long UserId { get; set; }
+}
+
 /// <summary>Row of the reference <c>usage_logs</c> table.</summary>
 public sealed class UsageLogRecord
 {

@@ -3606,6 +3606,54 @@ Cursor 标量与既有管理面一致，重复名错误携带
 C163（Apply/Clear 通道顺序确定化）；更新 C158（Apply/Clear 同样调用
 reloadChannelsAfterCommit，端口为 no-op）与覆盖缺口表。
 
+## 79. 管理面自助身份切片（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity，41 例，2026-11-03）
+
+`oidc_identities` 表按 `internal/ent/schema/oidc_identity.go` 落地：`id bigint`、
+`created_at / updated_at timestamptz`、`deleted_at bigint`、`issuer / subject varchar`、
+`email / idp_name varchar NULL`、`last_login_at timestamptz NULL`、`user_id bigint`；
+删除为软删，唯一索引 `oidc_identities_by_issuer_subject_deleted_at` 覆盖
+`(issuer, subject, deleted_at)`，另有 `oidc_identities_by_user_id`。EF Core 写侧模型与
+幂等 DDL 同步扩展，表 / 索引断言原地更新为 19 表 / 45 索引。
+
+`UserProfileService` 按 `me.resolvers.go` 与 `user.go` 的自助半程逐分支移植。五个入口
+都先经 IManagementIdentity 取当前用户，缺用户返回 `user not found in context`（C161）。
+`me` 经 GetUserByID 一并读取用户、角色、user_projects 与 oidc_identities，任何失败都带
+`failed to get user details: failed to get user: ` 两级前缀，缺行返回
+`...: ent: user not found`；ConvertUserToUserInfo 以 `project_id` 为 null 或 0 判定
+系统角色（不看 level 标签），UserInfo.scopes 为用户自身 scopes 与系统角色 scopes 的并集，
+项目角色按 project_id 分组挂到对应 UserProjectInfo，effectiveScopes 为成员 scopes 与该
+项目角色 scopes 的并集，`avatar` 来自用户字符串地址因此永不返回 null，`hasPassword`
+由密码是否等于 `!OIDC_SSO_ONLY!` 派生。`myProjects` 查询 `HasUsersWith(user)` 且
+`status = active`，忽略归档、软删与非成员项目。`updateMe` 走 UpdateOwnProfile：
+firstName / lastName / preferLanguage / avatar 仅在提供时写入（空 avatar 写入空串，
+缺少 avatar 不清空），失败带 `failed to update user profile: `。`updateMyPassword`
+对 OIDC-only 账号跳过旧密码校验，其余账号缺旧密码返回 `current password is required`，
+任何 VerifyPassword 失败折叠为 `incorrect old password`；HashPassword 的失败不包装，
+写入失败带 `failed to update user profile: `。`unlinkOIDCIdentity` 依次执行取行
+（`failed to get identity: `）、所有权检查（`permission denied: this identity does not
+belong to you`）、OIDC-only 最后身份保护
+（`please set a local password before unlinking your last OIDC identity`，计数失败带
+`failed to count identities: `）、软删（`failed to unlink identity: `）。
+
+GraphQL 契约按 me.graphql 接入：`UserInfo` / `RoleInfo` / `UserProjectInfo` /
+`OIDCIdentityInfo` 与 `Project`（仅标量，边与 profiles 为 C165）、`ProjectStatus` 枚举、
+`UpdateMeInput` / `UpdateMyPasswordInput`，查询 `me`、`myProjects` 与三个变更；
+id 一律为 `gid://axonhub/{Type}/{Id}`，时间走 Time 标量。参照的无序集合
+（`lo.Keys` 的 scope 映射、eager-load 边、myProjects）在端口按确定性顺序返回（C164）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 自助存储：角色 join 的软删过滤与角色 id 顺序、user_projects / OIDC 身份按 id 顺序、myProjects 的成员 / 状态 / 软删过滤、UpdateOwnProfile 仅写提供字段与 updated_at、OIDC 取行 / 计数 / 软删、`(issuer, subject, deleted_at)` 唯一性 | `tests/AxonHub.Persistence.Tests/UserProfileStoreTests.cs` | 6 |
+| 自助服务：UserInfo 投影（系统角色判定、scope 并集、项目角色分组、effectiveScopes、avatar 与 hasPassword）、五个入口的缺用户 / 前缀 / 缺行、updateMe 字段直传、updateMyPassword 的 OIDC-only / 旧密码缺失 / 校验失败折叠 / 哈希失败不包装、unlink 的完整守卫链 | `tests/AxonHub.Api.Tests/UserProfileServiceTests.cs` | 26 |
+| GraphQL 契约：me 的完整线形与 gid / Time、空 avatar 为空串、myProjects 的 Project 标量与状态枚举、updateMe 的 User 载荷、updateMyPassword、unlinkOIDCIdentity 的 gid 解析与错误文案 | `tests/AxonHub.Api.Tests/AdminMeEndpointTests.cs` | 9 |
+
+`AxonHub.Api.Tests` 由 1743 增至 1778（+35），`AxonHub.Persistence.Tests` 由 171
+增至 177（+6），`AxonHub.Llm.Tests` 保持 3020，`AxonHub.Grains.Tests` 保持 92；
+四个项目合计 5026 增至 5067，0 失败 0 跳过。
+
+差异：新增 C164（未定义顺序集合的确定性排序）与 C165（Project 仅标量）；C161 补记
+自助入口同样经 IManagementIdentity 取用户。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -3618,13 +3666,13 @@ reloadChannelsAfterCommit，端口为 no-op）与覆盖缺口表。
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，但鉴权 / 超时与其余 SDL 成员（me、user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，但鉴权 / 超时与其余 SDL 成员（user / role 单实体查询、projects / apiKeys、pricing、traces、backups、invitations 等）未移植，前端 project-users 用到的 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更同样未接线；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），通道测试由 §76 接入，模型同步由 §77 接入，覆盖模板的 `channel_override_templates` 表、`channelOverrideTemplates` 查询与 create/update/delete/apply/clear 五个变更由 §78 接入（隐私作用域 C161、where 子集 C162、通道顺序 C163），其余通道写操作（C037）未移植 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
-| 持久化（channels / projects / users / api_keys / channel_model_prices / channel_override_templates / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
+| 持久化（channels / projects / users / api_keys / channel_model_prices / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
 | usage 成本管理面：`channel_model_prices` 自动定价与读取边 | 写入面已由 §73 接入（`saveChannelModelPrices`、create/update/skip/delete 计划、reference id 轮换、`channel_model_price_versions` 版本行与 GraphQL 定价类型，68 例）；自动定价由 §74 接入（`models` 表、模型卡换算、createChannel / updateChannel 事务内补价，20 例）；ent 的 `channelModelPrices` / versions 读取边与进程内缓存刷新未移植（C048） | 低 | 随读取边切片落地 |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）与 JWT/OIDC/角色未接入 | 中 | 管理面随 GraphQL/前端里程碑 |
-| 其余 Ent 表（data_storages / prompts / invitations 等） | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74，供自动定价读取；管理面 CRUD 未移植）与 `channel_override_templates`（§78）已落；`invitations`、`data_storages`、`prompts` 等其余表未移植 | 中 | 随对应功能落地 |
+| 其余 Ent 表（data_storages / prompts / invitations 等） | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74，供自动定价读取；管理面 CRUD 未移植）、`channel_override_templates`（§78）与 `oidc_identities`（§79）已落；`invitations`、`data_storages`、`prompts` 等其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随管理面 / 权限切片落地 |
 | 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
 | 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口已有 `models` 表（§74，自动定价读取用）但没有 Model 管理面与 profile，模型列表仍恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随管理面 / 权限切片落地 |

@@ -1159,4 +1159,44 @@ public sealed class AdminMutation
 
         return result;
     }
+
+    /// <summary>Port of mutationResolver.UpdateMe (me.resolvers.go:22-38).</summary>
+    [GraphQLName("updateMe")]
+    public async Task<UserType> UpdateMeAsync(
+        UpdateMeInput input,
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+        => ManagementMapping.ToGraphQL(
+            await profiles.UpdateMeAsync(
+                    new UpdateMeCommand
+                    {
+                        FirstName = input.FirstName,
+                        LastName = input.LastName,
+                        PreferLanguage = input.PreferLanguage,
+                        Avatar = input.Avatar,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateMyPassword (me.resolvers.go:41-66).</summary>
+    [GraphQLName("updateMyPassword")]
+    public Task<bool> UpdateMyPasswordAsync(
+        UpdateMyPasswordInput input,
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+        => profiles.UpdateMyPasswordAsync(
+            new UpdateMyPasswordCommand
+            {
+                OldPassword = input.OldPassword,
+                NewPassword = input.NewPassword,
+            },
+            cancellationToken);
+
+    /// <summary>Port of mutationResolver.UnlinkOIDCIdentity (me.resolvers.go:69-107).</summary>
+    [GraphQLName("unlinkOIDCIdentity")]
+    public Task<bool> UnlinkOidcIdentityAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+        => profiles.UnlinkOidcIdentityAsync(GidValue.Parse(id).Id, cancellationToken);
 }

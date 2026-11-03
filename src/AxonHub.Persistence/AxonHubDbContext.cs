@@ -58,6 +58,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<UserProjectRecord> UserProjects => Set<UserProjectRecord>();
 
+    public DbSet<OidcIdentityRecord> OidcIdentities => Set<OidcIdentityRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -97,6 +99,49 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureRole(modelBuilder.Entity<RoleRecord>());
         ConfigureUserRole(modelBuilder.Entity<UserRoleRecord>());
         ConfigureUserProject(modelBuilder.Entity<UserProjectRecord>());
+        ConfigureOidcIdentity(modelBuilder.Entity<OidcIdentityRecord>());
+    }
+
+    private static void ConfigureOidcIdentity(EntityTypeBuilder<OidcIdentityRecord> builder)
+    {
+        builder.ToTable("oidc_identities");
+        builder.HasKey(identity => identity.Id);
+        builder.Property(identity => identity.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(identity => identity.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(identity => identity.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(identity => identity.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(identity => identity.Issuer)
+            .HasColumnName("issuer")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(identity => identity.Subject)
+            .HasColumnName("subject")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(identity => identity.Email).HasColumnName("email").HasColumnType("varchar");
+        builder.Property(identity => identity.IdpName).HasColumnName("idp_name").HasColumnType("varchar");
+        builder.Property(identity => identity.LastLoginAt)
+            .HasColumnName("last_login_at")
+            .HasColumnType("timestamptz");
+        builder.Property(identity => identity.UserId).HasColumnName("user_id").IsRequired();
+
+        builder.HasIndex(identity => new
+            {
+                identity.Issuer,
+                identity.Subject,
+                identity.DeletedAt,
+            })
+            .HasDatabaseName("oidc_identities_by_issuer_subject_deleted_at")
+            .IsUnique();
+        builder.HasIndex(identity => identity.UserId)
+            .HasDatabaseName("oidc_identities_by_user_id");
     }
 
     private static void ConfigureRole(EntityTypeBuilder<RoleRecord> builder)

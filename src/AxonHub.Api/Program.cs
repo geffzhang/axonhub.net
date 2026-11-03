@@ -207,6 +207,12 @@ builder.Services.AddScoped<IChannelOverrideTemplateStore, ChannelOverrideTemplat
 builder.Services.AddScoped<IManagementIdentity, OwnerManagementIdentity>();
 builder.Services.AddScoped<ChannelOverrideTemplateService>();
 
+// Self-service (me.graphql): me / myProjects / updateMe / updateMyPassword /
+// unlinkOIDCIdentity read the current user's edges (roles, project users, OIDC
+// identities) and reproduce UserService.UpdateOwnProfile (user.go:169-220).
+builder.Services.AddScoped<IUserProfileStore, UserProfileStore>();
+builder.Services.AddScoped<UserProfileService>();
+
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
 // (routes.go:163). The first slice exposes the static scope catalog; the
 // reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported

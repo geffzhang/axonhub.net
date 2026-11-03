@@ -15,8 +15,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
     private static readonly string[] ExpectedTables =
     [
         "api_keys", "channel_model_price_versions", "channel_model_prices",
-        "channel_override_templates", "channels", "models", "projects",
-        "prompt_protection_rules", "request_executions", "requests",
+        "channel_override_templates", "channels", "models", "oidc_identities",
+        "projects", "prompt_protection_rules", "request_executions", "requests",
         "roles", "systems", "threads", "traces", "usage_logs", "user_projects",
         "user_roles", "users",
     ];
@@ -74,6 +74,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
             "id", "created_at", "updated_at", "deleted_at", "developer", "model_id",
             "type", "name", "icon", "group", "model_card", "settings", "status",
             "remark",
+        ],
+        ["oidc_identities"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "issuer", "subject",
+            "email", "idp_name", "last_login_at", "user_id",
         ],
         ["prompt_protection_rules"] =
         [
@@ -228,6 +233,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["jsonb"] = ["settings"],
                 ["character varying"] = ["name", "description", "pattern", "status"],
             },
+            ["oidc_identities"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "user_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at", "last_login_at"],
+                ["character varying"] = ["issuer", "subject", "email", "idp_name"],
+            },
             ["channels"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["bigint"] = ["id", "deleted_at", "ordering_weight"],
@@ -342,6 +353,9 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
             ["models_by_name"] = ("models", true, ["name", "deleted_at"]),
             ["models_by_model_id"] = ("models", true, ["model_id", "deleted_at"]),
+            ["oidc_identities_by_issuer_subject_deleted_at"] =
+                ("oidc_identities", true, ["issuer", "subject", "deleted_at"]),
+            ["oidc_identities_by_user_id"] = ("oidc_identities", false, ["user_id"]),
             ["projects_by_name"] = ("projects", true, ["name", "deleted_at"]),
             ["user_email_deleted_at"] = ("users", true, ["email", "deleted_at"]),
             ["api_keys_by_user_id"] = ("api_keys", false, ["user_id"]),

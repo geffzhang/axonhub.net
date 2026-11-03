@@ -249,4 +249,23 @@ public sealed class AdminQuery
         [Service] ChannelQueryService channels,
         CancellationToken cancellationToken)
         => channels.CountChannelsByTypeAsync(input, cancellationToken);
+
+    /// <summary>Port of queryResolver.Me (me.resolvers.go:112-125).</summary>
+    [GraphQLName("me")]
+    public async Task<UserInfoType> MeAsync(
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+        => UserProfileMapping.ToGraphQL(
+            await profiles.GetMeAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Port of queryResolver.MyProjects (me.resolvers.go:127-140).</summary>
+    [GraphQLName("myProjects")]
+    public async Task<IReadOnlyList<ProjectType>> MyProjectsAsync(
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+    {
+        var projects = await profiles.GetMyProjectsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return [.. projects.Select(UserProfileMapping.ToGraphQL)];
+    }
 }
