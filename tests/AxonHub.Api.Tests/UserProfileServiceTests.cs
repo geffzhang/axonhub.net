@@ -624,6 +624,8 @@ internal sealed class FakeUserProfileStore : IUserProfileStore
 
     public Exception? ListRolesError { get; set; }
 
+    public Exception? ListOidcIdentitiesError { get; set; }
+
     public Exception? GetOidcIdentityError { get; set; }
 
     public Exception? CountError { get; set; }
@@ -669,6 +671,11 @@ internal sealed class FakeUserProfileStore : IUserProfileStore
         CancellationToken cancellationToken = default)
     {
         Calls.Add(nameof(ListOidcIdentitiesAsync));
+        if (ListOidcIdentitiesError is not null)
+        {
+            throw ListOidcIdentitiesError;
+        }
+
         return Task.FromResult<IReadOnlyList<OidcIdentityRecord>>(OidcIdentities);
     }
 

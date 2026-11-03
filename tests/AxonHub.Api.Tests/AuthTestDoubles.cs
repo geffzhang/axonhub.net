@@ -98,6 +98,10 @@ internal sealed class FakeUserStore : IUserStore
 
     public List<UserRecord> Rows { get; } = [];
 
+    public Exception? GetByIdFailure { get; set; }
+
+    public Exception? GetActivatedByEmailFailure { get; set; }
+
     public Task<long> CreateAsync(UserRecord user, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
@@ -109,7 +113,26 @@ internal sealed class FakeUserStore : IUserStore
     public Task<UserRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
+        if (GetByIdFailure is not null)
+        {
+            return Task.FromException<UserRecord?>(GetByIdFailure);
+        }
+
         return Task.FromResult(Rows.SingleOrDefault(row => row.Id == id && row.DeletedAt == 0));
+    }
+
+    public Task<UserRecord?> GetActivatedByEmailAsync(
+        string email,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        if (GetActivatedByEmailFailure is not null)
+        {
+            return Task.FromException<UserRecord?>(GetActivatedByEmailFailure);
+        }
+
+        return Task.FromResult(Rows.SingleOrDefault(
+            row => row.DeletedAt == 0 && row.Status == "activated" && row.Email == email));
     }
 
     public Task<UserRecord?> FindOwnerAsync(CancellationToken cancellationToken = default)

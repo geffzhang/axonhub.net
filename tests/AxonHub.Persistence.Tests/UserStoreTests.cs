@@ -112,6 +112,37 @@ public sealed class UserStoreTests(PostgresFixture fixture)
         Assert.True(reusedId > firstId);
     }
 
+    [Fact]
+    public async Task GetActivatedByEmailMatchesTheExactLiveActivatedRow()
+    {
+        // AuthService.AuthenticateUser queries EmailEQ(email) AND
+        // StatusEQ(activated); Both predicates are part of the lookup.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserStore(context);
+
+        var active = NewUser();
+        active.Email = "active@example.com";
+        var activeId = await store.CreateAsync(active);
+
+        var deactivated = NewUser();
+        deactivated.Email = "inactive@example.com";
+        deactivated.Status = "deactivated";
+        await store.CreateAsync(deactivated);
+
+        var deleted = NewUser();
+        deleted.Email = "deleted@example.com";
+        deleted.DeletedAt = 1_700_000_000;
+        await store.CreateAsync(deleted);
+
+        Assert.Equal(activeId, (await store.GetActivatedByEmailAsync("active@example.com"))?.Id);
+        Assert.Null(await store.GetActivatedByEmailAsync("inactive@example.com"));
+        Assert.Null(await store.GetActivatedByEmailAsync("deleted@example.com"));
+        Assert.Null(await store.GetActivatedByEmailAsync("Active@example.com"));
+        Assert.Null(await store.GetActivatedByEmailAsync("missing@example.com"));
+    }
+
     private static UserRecord NewUser() => new()
     {
         CreatedAt = CreatedAt,

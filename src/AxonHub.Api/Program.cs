@@ -213,6 +213,13 @@ builder.Services.AddScoped<ChannelOverrideTemplateService>();
 builder.Services.AddScoped<IUserProfileStore, UserProfileStore>();
 builder.Services.AddScoped<UserProfileService>();
 
+// Management login (biz.AuthService): signin/refresh issue HS256 tokens signed
+// with the systems.system_jwt_secret_key row. The OIDC provider registry is
+// empty until the OIDC slice lands, so only the OIDC-only password placeholder
+// restricts local login (C014).
+builder.Services.AddSingleton<IOidcLoginOnlyProviders, EmptyOidcLoginOnlyProviders>();
+builder.Services.AddScoped<ManagementAuthService>();
+
 // Management GraphQL (HotChocolate 16): the admin UI posts to /admin/graphql
 // (routes.go:163). The first slice exposes the static scope catalog; the
 // reference's WithAdminGraphqlAuth / WithProjectID middlewares are not ported
@@ -234,6 +241,11 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+// Unauthenticated admin auth (routes.go:97-98). The admin GraphQL gate itself
+// still waits for the JWT middleware slice (C014).
+app.MapPost("/admin/auth/signin", ManagementAuthHandlers.SignInAsync);
+app.MapPost("/admin/auth/refresh", ManagementAuthHandlers.RefreshAsync);
 
 // The management GraphQL endpoint the frontend calls
 // (frontend/src/gql/graphql.ts:36).

@@ -326,7 +326,7 @@ public sealed class UserProfileService(
         return true;
     }
 
-    private static UserProfileInfo BuildUserInfo(
+    internal static UserProfileInfo BuildUserInfo(
         UserRecord user,
         IReadOnlyList<RoleRecord> roles,
         IReadOnlyList<UserProjectRecord> userProjects,
