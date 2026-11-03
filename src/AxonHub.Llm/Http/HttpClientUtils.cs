@@ -1,4 +1,5 @@
 using System.Text;
+using AxonHub.Llm.Json;
 
 namespace AxonHub.Llm.Http;
 
@@ -407,6 +408,131 @@ public static class HttpClientUtils
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Port of <c>(url.URL).Query()</c> — the URL's query decoded by
+    /// <c>url.ParseQuery</c>, with every parse error discarded (Go's Query
+    /// ignores them). Pairs with an invalid escape or a semicolon separator are
+    /// dropped, exactly like the reference's loop.
+    /// </summary>
+    public static Dictionary<string, List<string>> ParseQuery(string query)
+        => ParseQuery(query, out _);
+
+    /// <summary>
+    /// Port of <c>url.ParseQuery</c> (net/url/url.go:1026-1075); the error is
+    /// the first one the reference would have reported.
+    /// </summary>
+    public static Dictionary<string, List<string>> ParseQuery(string query, out string? error)
+    {
+        var values = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        error = null;
+
+        while (query.Length > 0)
+        {
+            string part;
+            var amp = query.IndexOf('&', StringComparison.Ordinal);
+            if (amp < 0)
+            {
+                part = query;
+                query = string.Empty;
+            }
+            else
+            {
+                part = query[..amp];
+                query = query[(amp + 1)..];
+            }
+
+            if (part.Contains(';', StringComparison.Ordinal))
+            {
+                error ??= "invalid semicolon separator in query";
+                continue;
+            }
+
+            if (part.Length == 0)
+            {
+                continue;
+            }
+
+            var equals = part.IndexOf('=', StringComparison.Ordinal);
+            var rawKey = equals < 0 ? part : part[..equals];
+            var rawValue = equals < 0 ? string.Empty : part[(equals + 1)..];
+
+            if (!TryQueryUnescape(rawKey, out var key, out var keyError))
+            {
+                error ??= keyError;
+                continue;
+            }
+
+            if (!TryQueryUnescape(rawValue, out var value, out var valueError))
+            {
+                error ??= valueError;
+                continue;
+            }
+
+            if (!values.TryGetValue(key, out var list))
+            {
+                list = [];
+                values[key] = list;
+            }
+
+            list.Add(value);
+        }
+
+        return values;
+    }
+
+    /// <summary>Port of <c>url.QueryUnescape</c> (net/url/url.go:131-165).</summary>
+    public static bool TryQueryUnescape(string input, out string value, out string? error)
+    {
+        value = string.Empty;
+        error = null;
+
+        var bytes = Encoding.UTF8.GetBytes(input);
+        var output = new byte[bytes.Length];
+        var length = 0;
+        for (var index = 0; index < bytes.Length; index++)
+        {
+            switch (bytes[index])
+            {
+                case (byte)'+':
+                    output[length++] = (byte)' ';
+                    break;
+                case (byte)'%':
+                    if (index + 2 >= bytes.Length
+                        || !IsHexDigit(bytes[index + 1])
+                        || !IsHexDigit(bytes[index + 2]))
+                    {
+                        var end = Math.Min(index + 3, bytes.Length);
+                        error = "invalid URL escape "
+                            + GoCast.GoQuote(Encoding.UTF8.GetString(bytes, index, end - index));
+                        return false;
+                    }
+
+                    output[length++] = (byte)((HexDigitValue(bytes[index + 1]) << 4)
+                        | HexDigitValue(bytes[index + 2]));
+                    index += 2;
+                    break;
+                default:
+                    output[length++] = bytes[index];
+                    break;
+            }
+        }
+
+        value = Encoding.UTF8.GetString(output, 0, length);
+        return true;
+    }
+
+    private static bool IsHexDigit(byte value)
+        => value is >= (byte)'0' and <= (byte)'9'
+            or >= (byte)'a' and <= (byte)'f'
+            or >= (byte)'A' and <= (byte)'F';
+
+    private static int HexDigitValue(byte value) => value switch
+    {
+        >= (byte)'0' and <= (byte)'9' => value - '0',
+        >= (byte)'a' and <= (byte)'f' => value - 'a' + 10,
+        _ => value - 'A' + 10,
+    };
 
     /// <summary>Port of url.QueryEscape.</summary>
     public static string QueryEscape(string value)

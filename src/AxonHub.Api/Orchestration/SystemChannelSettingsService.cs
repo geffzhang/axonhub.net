@@ -20,6 +20,28 @@ public interface IChannelTestPromptsProvider
 }
 
 /// <summary>
+/// Read side of the reference's SystemService.ChannelSettingOrDefault for the
+/// model-sync cadence (internal/server/biz/channel_internal.go:23-31).
+/// </summary>
+public interface IChannelAutoSyncFrequencyProvider
+{
+    /// <summary>
+    /// The effective auto-sync frequency. The reference's JSON unmarshal and
+    /// interval switch both collapse every unknown value to one hour.
+    /// </summary>
+    Task<AutoSyncFrequency> GetAutoSyncFrequencyAsync(
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Port of biz.AutoSyncFrequency (system.go:507-573).</summary>
+public enum AutoSyncFrequency
+{
+    OneHour,
+    SixHours,
+    OneDay,
+}
+
+/// <summary>
 /// Reads and normalizes the <c>system_channel_settings</c> system setting
 /// (internal/server/biz/system.go:1317-1338). A missing row, a lookup failure
 /// or malformed JSON falls back to the defaults, mirroring
@@ -27,7 +49,7 @@ public interface IChannelTestPromptsProvider
 /// defaults exactly like normalizeSystemChannelSettings.
 /// </summary>
 public sealed class SystemChannelSettingsService(ISystemStore systems)
-    : IChannelTestPromptsProvider
+    : IChannelTestPromptsProvider, IChannelAutoSyncFrequencyProvider
 {
     /// <summary>biz.SystemKeyChannelSettings.</summary>
     public const string ChannelSettingsKey = "system_channel_settings";
@@ -54,6 +76,93 @@ public sealed class SystemChannelSettingsService(ISystemStore systems)
         }
 
         return ChannelTestPromptsCodec.Deserialize(row.Value);
+    }
+
+    public async Task<AutoSyncFrequency> GetAutoSyncFrequencyAsync(
+        CancellationToken cancellationToken = default)
+    {
+        SystemRecord? row;
+        try
+        {
+            row = await systems.GetByKeyAsync(ChannelSettingsKey, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // ChannelSettingOrDefault logs every lookup error and falls back.
+            return AutoSyncFrequency.OneHour;
+        }
+
+        if (row is null)
+        {
+            return AutoSyncFrequency.OneHour;
+        }
+
+        return ChannelAutoSyncFrequencyCodec.Deserialize(row.Value);
+    }
+}
+
+/// <summary>
+/// Port of the <c>auto_sync.frequency</c> read in internal/server/biz/system.go
+/// (AutoSyncFrequency.UnmarshalJSON plus the default setting): every value the
+/// reference does not normalize to six hours or one day falls back to one hour.
+/// </summary>
+public static class ChannelAutoSyncFrequencyCodec
+{
+    public static AutoSyncFrequency Deserialize(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return AutoSyncFrequency.OneHour;
+            }
+
+            var autoSync = FindMember(document.RootElement, "auto_sync");
+            if (autoSync is not { ValueKind: JsonValueKind.Object } autoSyncObject)
+            {
+                // A missing or null auto_sync leaves the zero value, which the
+                // interval switch treats as one hour; any other JSON type makes
+                // the whole settings unmarshal fail and also falls back.
+                return AutoSyncFrequency.OneHour;
+            }
+
+            var frequency = FindMember(autoSyncObject, "frequency");
+            if (frequency is not { ValueKind: JsonValueKind.String } frequencyValue)
+            {
+                return AutoSyncFrequency.OneHour;
+            }
+
+            return frequencyValue.GetString() switch
+            {
+                "6h" or "SIX_HOURS" => AutoSyncFrequency.SixHours,
+                "1d" or "ONE_DAY" => AutoSyncFrequency.OneDay,
+                _ => AutoSyncFrequency.OneHour,
+            };
+        }
+        catch (JsonException)
+        {
+            return AutoSyncFrequency.OneHour;
+        }
+    }
+
+    /// <summary>
+    /// encoding/json matches struct tags case-insensitively and keeps the last
+    /// occurrence of a repeated member.
+    /// </summary>
+    private static JsonElement? FindMember(JsonElement root, string name)
+    {
+        JsonElement? found = null;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                found = property.Value;
+            }
+        }
+
+        return found;
     }
 }
 

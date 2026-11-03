@@ -1,4 +1,5 @@
 using System.Text;
+using AxonHub.Api.Management;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
@@ -85,6 +86,90 @@ internal static class ChannelOverrideApplier
         foreach (var operation in operations)
         {
             ApplyHeaderOperation(request.Headers, operation, renderContext);
+        }
+    }
+
+    /// <summary>
+    /// Port of ApplyModelFetchHeaderOverrides (channel_override.go:313-365):
+    /// model probing runs outside the LLM pipeline, so conditions and templated
+    /// values are skipped and only literal operations apply.
+    /// </summary>
+    public static void ApplyModelFetchHeaderOverrides(
+        Dictionary<string, List<string>> headers,
+        IReadOnlyList<OverrideOperationDraft>? operations)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+
+        if (operations is null || operations.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var operation in operations)
+        {
+            if (!string.IsNullOrEmpty(operation.Condition))
+            {
+                continue;
+            }
+
+            var path = operation.Path ?? string.Empty;
+            var from = operation.From ?? string.Empty;
+            var to = operation.To ?? string.Empty;
+            var value = operation.Value ?? string.Empty;
+
+            switch (operation.Op)
+            {
+                case ChannelOverrideOps.Set:
+                    if (value.Contains("{{", StringComparison.Ordinal))
+                    {
+                        // A templated value cannot be rendered without an LLM
+                        // request context; sending the raw template would
+                        // corrupt the probe request.
+                        continue;
+                    }
+
+                    if (string.Equals(value, ChannelOverrideOps.ClearDirective, StringComparison.Ordinal))
+                    {
+                        HttpClientUtils.HeaderDel(headers, path);
+                        continue;
+                    }
+
+                    HttpClientUtils.HeaderSet(headers, path, value);
+                    break;
+
+                case ChannelOverrideOps.Delete:
+                    HttpClientUtils.HeaderDel(headers, path);
+                    break;
+
+                case ChannelOverrideOps.Rename:
+                {
+                    var values = HeaderValues(headers, from);
+                    if (values.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    HttpClientUtils.HeaderDel(headers, from);
+                    foreach (var headerValue in values)
+                    {
+                        HttpClientUtils.HeaderAdd(headers, to, headerValue);
+                    }
+
+                    break;
+                }
+
+                case ChannelOverrideOps.Copy:
+                    foreach (var headerValue in HeaderValues(headers, from))
+                    {
+                        HttpClientUtils.HeaderAdd(headers, to, headerValue);
+                    }
+
+                    break;
+
+                default:
+                    // Unknown header operations are ignored.
+                    break;
+            }
         }
     }
 

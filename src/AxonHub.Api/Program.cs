@@ -179,8 +179,20 @@ builder.Services.AddScoped<ChannelEndpointDetectService>();
 // testChannelAPIKey): the tester reuses the chat pipeline with a specified
 // channel and reads the test prompts from the system_channel_settings row
 // (biz.SystemService.ChannelTestPrompts).
-builder.Services.AddScoped<IChannelTestPromptsProvider, SystemChannelSettingsService>();
+builder.Services.AddScoped<SystemChannelSettingsService>();
+builder.Services.AddScoped<IChannelTestPromptsProvider>(
+    static services => services.GetRequiredService<SystemChannelSettingsService>());
+builder.Services.AddScoped<IChannelAutoSyncFrequencyProvider>(
+    static services => services.GetRequiredService<SystemChannelSettingsService>());
 builder.Services.AddScoped<ChannelTestService>();
+
+// Channel model sync (syncChannelModels): the per-channel fetch/merge/price
+// transaction and the hourly schedule guard (channel_model_sync.go). The
+// reference's channel-cache reload becomes a no-op until the cache is ported
+// (C158).
+builder.Services.AddScoped<IChannelModelSyncStore, ChannelModelSyncStore>();
+builder.Services.AddSingleton<IChannelModelSyncReloadHook, NullChannelModelSyncReloadHook>();
+builder.Services.AddScoped<ChannelModelSyncService>();
 
 // Channel price writes (saveChannelModelPrices): the ordered action plan and
 // its active/archived version history run in one store transaction

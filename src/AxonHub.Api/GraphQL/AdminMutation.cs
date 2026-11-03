@@ -889,6 +889,43 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.SyncChannelModels
+    /// (axonhub.resolvers.go:710-729; biz channel_model_sync.go:203-219). The
+    /// resolver returns biz errors unchanged; manual_models is normalized to an
+    /// empty list because the payload field is non-null.
+    /// </summary>
+    [GraphQLName("syncChannelModels")]
+    public async Task<SyncChannelModelsPayloadType> SyncChannelModelsAsync(
+        [GraphQLType(typeof(NonNullType<IdType>))] string channelID,
+        string? pattern,
+        [Service] ChannelModelSyncService modelSync,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        ChannelModelSyncResult result;
+        try
+        {
+            result = await modelSync
+                .SyncChannelModelsAsync(gid.Id, pattern, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+
+        return new SyncChannelModelsPayloadType
+        {
+            // The reference marshals back the parsed GUID, including whatever
+            // type segment the caller sent.
+            ChannelID = gid.ToString(),
+            SupportedModels = result.SupportedModels,
+            ManualModels = result.ManualModels,
+        };
+    }
+
+    /// <summary>
     /// Port of mutationResolver.BulkCreateChannels
     /// (axonhub.resolvers.go:183-186; biz channel_bulk.go:67-161).
     /// </summary>

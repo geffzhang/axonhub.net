@@ -1184,6 +1184,13 @@ internal sealed class FakeChannelModelPriceStore : IChannelModelPriceStore
 
     public StoreFailureException? EnsureFailure { get; set; }
 
+    /// <summary>
+    /// Whether the ensure call reports a price change. The model-sync tests use
+    /// it to drive the sync's <c>changed</c> flag; the lifecycle tests keep the
+    /// default false.
+    /// </summary>
+    public bool EnsureResult { get; set; }
+
     public StoreFailureException? ResolveFailure { get; set; }
 
     public StoreFailureException? ApplyFailure { get; set; }
@@ -1205,7 +1212,7 @@ internal sealed class FakeChannelModelPriceStore : IChannelModelPriceStore
         }
 
         EnsureCalls.Add((channelId, modelIds.ToArray()));
-        return Task.FromResult(false);
+        return Task.FromResult(EnsureResult);
     }
 
     public Task<IReadOnlyList<ChannelModelPriceTemplate>> ResolveAutoPriceTemplatesAsync(

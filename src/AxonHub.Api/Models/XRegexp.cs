@@ -45,6 +45,59 @@ public static class XRegexp
     }
 
     /// <summary>
+    /// Port of xregexp.Filter: an empty or uncompilable pattern matches nothing,
+    /// <c>*</c> matches everything, a metacharacter-free pattern is exact
+    /// equality, and anything else is an anchored regex. First-seen order is
+    /// preserved.
+    /// </summary>
+    public static List<string> Filter(IReadOnlyList<string> items, string pattern)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(pattern);
+
+        var matched = new List<string>(items.Count);
+        if (pattern.Length == 0)
+        {
+            return matched;
+        }
+
+        if (pattern == "*")
+        {
+            matched.AddRange(items);
+            return matched;
+        }
+
+        if (pattern.AsSpan().IndexOfAny(MetaCharacters) < 0)
+        {
+            foreach (var item in items)
+            {
+                if (string.Equals(pattern, item, StringComparison.Ordinal))
+                {
+                    matched.Add(item);
+                }
+            }
+
+            return matched;
+        }
+
+        var regex = Cache.GetOrAdd(pattern, static cached => Compile(cached));
+        if (regex is null)
+        {
+            return matched;
+        }
+
+        foreach (var item in items)
+        {
+            if (regex.IsMatch(item))
+            {
+                matched.Add(item);
+            }
+        }
+
+        return matched;
+    }
+
+    /// <summary>
     /// Port of xregexp.ValidateRegex: an empty pattern is valid, and a pattern
     /// that failed to compile reports the raw pattern unquoted.
     /// </summary>
