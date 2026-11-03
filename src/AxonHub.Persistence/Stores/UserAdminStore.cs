@@ -86,6 +86,17 @@ public sealed record UserUpdate
 }
 
 /// <summary>
+/// A user loaded with the edges the permission validator reads: the reference
+/// middleware loads the current user via UserService.GetUserByID
+/// (WithRoles/WithProjectUsers) and CanEditUserPermissions loads its target
+/// with the same edges (C161).
+/// </summary>
+public sealed record PermissionUser(
+    UserRecord User,
+    IReadOnlyList<RoleRecord> Roles,
+    IReadOnlyList<UserProjectRecord> ProjectUsers);
+
+/// <summary>
 /// Management persistence seam for users and their relation tables. Kept apart
 /// from <see cref="IUserStore"/> so the authentication slice's fake stays small.
 /// </summary>
@@ -97,6 +108,11 @@ public interface IUserAdminStore
         CancellationToken cancellationToken = default);
 
     Task<UserRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>Port of ent <c>User.Query().WithRoles().WithProjectUsers().Only()</c>.</summary>
+    Task<PermissionUser?> GetPermissionUserAsync(
+        long id,
+        CancellationToken cancellationToken = default);
 
     Task<ListPage<UserRecord>> ListAsync(
         UserListQuery query,
@@ -184,6 +200,39 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
                 new { Id = id },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<PermissionUser?> GetPermissionUserAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        if (user is null)
+        {
+            return null;
+        }
+
+        // Ent's WithRoles/WithProjectUsers edge loaders query the join tables
+        // for live rows only (SoftDeleteMixin on the edges).
+        var roleIds = await db.UserRoles
+            .Where(row => row.UserId == id)
+            .Select(row => row.RoleId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var roles = roleIds.Count == 0
+            ? []
+            : await db.Roles
+                .Where(row => row.DeletedAt == 0 && roleIds.Contains(row.Id))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+        var projectUsers = await db.UserProjects
+            .Where(row => row.UserId == id)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return new PermissionUser(user, roles, projectUsers);
     }
 
     public async Task<ListPage<UserRecord>> ListAsync(

@@ -57,12 +57,11 @@ public sealed record UpdateUserCommand
 /// <summary>
 /// Port of the management methods of biz.UserService
 /// (internal/server/biz/user.go:62-642) over <see cref="IUserAdminStore"/>.
-/// The GraphQL permission validator is not ported yet (C014), so the service
-/// only carries the persistence behaviour and the reference error strings.
 /// </summary>
 public sealed class UserManagementService(
     IUserAdminStore users,
-    IPasswordHasher passwords)
+    IPasswordHasher passwords,
+    PermissionValidator validator)
 {
     /// <summary>Port of UserService.CreateUser.</summary>
     public async Task<UserRecord> CreateAsync(
@@ -107,12 +106,54 @@ public sealed class UserManagementService(
             ?? throw new InvalidOperationException("failed to get created user: ent: user not found");
     }
 
-    /// <summary>Port of UserService.UpdateUser (minus the permission checks).</summary>
+    /// <summary>Port of UserService.UpdateUser (user.go:87-166).</summary>
     public async Task<UserRecord> UpdateAsync(
         UpdateUserCommand command,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
+
+        // Validate permissions before updating (user.go:88-107).
+        try
+        {
+            await validator.CanEditUserPermissionsAsync(command.Id, null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw PermissionDenied(ex);
+        }
+
+        // Validate scope grants if scopes are being updated.
+        if (command.Scopes is not null)
+        {
+            try
+            {
+                await validator.CanGrantScopesAsync(command.Scopes, null, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw PermissionDenied(ex);
+            }
+        }
+
+        // Validate role grants if roles are being added.
+        if (command.AddRoleIds is not null)
+        {
+            foreach (var roleId in command.AddRoleIds)
+            {
+                try
+                {
+                    await validator.CanEditRoleAsync(roleId, null, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    throw PermissionDenied(ex);
+                }
+            }
+        }
 
         string? hashedPassword = null;
         if (command.Password is not null)
@@ -183,9 +224,19 @@ public sealed class UserManagementService(
             ?? throw new InvalidOperationException("failed to update user status: ent: user not found");
     }
 
-    /// <summary>Port of UserService.DeleteUser (minus the permission check).</summary>
+    /// <summary>Port of UserService.DeleteUser (user.go:590-642).</summary>
     public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
     {
+        // Validate permissions before deleting (user.go:591-594).
+        try
+        {
+            await validator.CanDeleteUserAsync(id, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw PermissionDenied(ex);
+        }
+
         UserRecord? user;
         try
         {
@@ -236,4 +287,8 @@ public sealed class UserManagementService(
         UserListQuery query,
         CancellationToken cancellationToken = default)
         => users.ListAsync(query, cancellationToken);
+
+    /// <summary>The reference wraps every validator failure in "permission denied: %w".</summary>
+    private static InvalidOperationException PermissionDenied(Exception inner)
+        => new("permission denied: " + inner.Message, inner);
 }

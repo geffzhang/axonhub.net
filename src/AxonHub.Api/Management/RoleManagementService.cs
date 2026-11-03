@@ -32,7 +32,9 @@ public sealed record UpdateRoleCommand
 /// (internal/server/biz/role.go:46-312) over <see cref="IRoleStore"/>.
 /// Role-invitation revocation is a no-op until the invitations table is ported.
 /// </summary>
-public sealed class RoleManagementService(IRoleStore roles)
+public sealed class RoleManagementService(
+    IRoleStore roles,
+    PermissionValidator validator)
 {
     public const string LevelSystem = "system";
 
@@ -40,12 +42,25 @@ public sealed class RoleManagementService(IRoleStore roles)
 
     public const string DefaultRoleName = "Developer";
 
-    /// <summary>Port of RoleService.CreateRole (minus the scope grant check).</summary>
+    /// <summary>Port of RoleService.CreateRole (role.go:44-114).</summary>
     public async Task<RoleRecord> CreateAsync(
         CreateRoleCommand command,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
+
+        // Validate that the current user can grant these scopes (role.go:45-53);
+        // ent's CreateRoleInput.Scopes is a plain slice, nil means none.
+        try
+        {
+            await validator
+                .CanGrantScopesAsync(command.Scopes ?? [], command.ProjectId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw PermissionDenied(ex);
+        }
 
         string level;
         long projectIdValue;
@@ -136,12 +151,60 @@ public sealed class RoleManagementService(IRoleStore roles)
             ?? throw new InvalidOperationException("failed to get created role: ent: role not found");
     }
 
-    /// <summary>Port of RoleService.UpdateRole (minus the permission checks).</summary>
+    /// <summary>Port of RoleService.UpdateRole (role.go:117-177).</summary>
     public async Task<RoleRecord> UpdateAsync(
         UpdateRoleCommand command,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
+
+        // First check if the user can edit this role (role.go:118-121).
+        try
+        {
+            await validator.CanEditRoleAsync(command.Id, null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw PermissionDenied(ex);
+        }
+
+        // Validate new scopes if being updated (role.go:123-138).
+        if (command.Scopes is not null)
+        {
+            RoleRecord? role;
+            try
+            {
+                role = await roles.GetByIdAsync(command.Id, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("failed to get role: " + ex.Message, ex);
+            }
+
+            if (role is null)
+            {
+                throw new InvalidOperationException(
+                    "failed to get role: " + PermissionValidator.RoleNotFound);
+            }
+
+            long? projectId = null;
+            if (!role.IsSystemRole)
+            {
+                projectId = role.ProjectId;
+            }
+
+            try
+            {
+                await validator.CanGrantScopesAsync(command.Scopes, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw PermissionDenied(ex);
+            }
+        }
 
         if (command.Name is not null)
         {
@@ -325,6 +388,10 @@ public sealed class RoleManagementService(IRoleStore roles)
 
     public static bool IsValidLevel(string level)
         => level is LevelSystem or LevelProject;
+
+    /// <summary>The reference wraps every validator failure in "permission denied: %w".</summary>
+    private static InvalidOperationException PermissionDenied(Exception inner)
+        => new("permission denied: " + inner.Message, inner);
 
     /// <summary>Port of xerrors.DuplicateNameError("role", name).</summary>
     private static CodedException DuplicateName(string name) => new(

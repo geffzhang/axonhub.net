@@ -160,6 +160,7 @@ builder.Services.AddScoped<ChatCompletionOrchestrator>();
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddScoped<IUserAdminStore, UserAdminStore>();
 builder.Services.AddScoped<IRoleStore, RoleStore>();
+builder.Services.AddScoped<PermissionValidator>();
 builder.Services.AddScoped<UserManagementService>();
 builder.Services.AddScoped<RoleManagementService>();
 

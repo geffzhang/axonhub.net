@@ -43,8 +43,10 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IUserAdminStore>(_users);
         builder.Services.AddSingleton<IRoleStore>(_roles);
         builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
-        builder.Services.AddSingleton<UserManagementService>();
-        builder.Services.AddSingleton<RoleManagementService>();
+        builder.Services.AddScoped<PermissionValidator>();
+        builder.Services.AddScoped<UserManagementService>();
+        builder.Services.AddScoped<RoleManagementService>();
+        _users.RolesSource = _roles;
 
         _app = builder.Build();
         _app.MapAdminGraphql();
@@ -612,15 +614,34 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
 internal sealed class FakeUserAdminStore : IUserAdminStore
 {
     private readonly List<UserRecord> _rows = [];
+    private readonly List<UserProjectRecord> _userProjects = [];
     private long _nextId = 1;
 
     public List<UserListQuery> Queries { get; } = [];
+
+    /// <summary>Resolves the user_roles join for GetPermissionUserAsync (C161).</summary>
+    public IRoleStore? RolesSource { get; set; }
 
     /// <summary>When set, UpdateStatusAsync throws it like a failed key disable would.</summary>
     public Exception? UpdateStatusFailure { get; set; }
 
     /// <summary>When set, DeleteAsync throws it like a failed key archive would.</summary>
     public Exception? DeleteFailure { get; set; }
+
+    public void AssignProject(
+        long userId,
+        long projectId,
+        bool isOwner = false,
+        IReadOnlyList<string>? scopes = null)
+    {
+        _userProjects.Add(new UserProjectRecord
+        {
+            UserId = userId,
+            ProjectId = projectId,
+            IsOwner = isOwner,
+            Scopes = scopes is null ? null : JsonSerializer.Serialize(scopes),
+        });
+    }
 
     public Task<long> CreateAsync(
         UserRecord user,
@@ -634,6 +655,29 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
 
     public Task<UserRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => Task.FromResult(Live(id));
+
+    public async Task<PermissionUser?> GetPermissionUserAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var user = Live(id);
+        if (user is null)
+        {
+            return null;
+        }
+
+        IReadOnlyList<RoleRecord> roleRows = [];
+        if (RolesSource is not null)
+        {
+            var page = await RolesSource
+                .ListAsync(new RoleListQuery { UserId = id, First = 10_000 }, cancellationToken)
+                .ConfigureAwait(false);
+            roleRows = page.Nodes;
+        }
+
+        var projects = _userProjects.Where(up => up.UserId == id).ToList();
+        return new PermissionUser(user, roleRows, projects);
+    }
 
     public Task<ListPage<UserRecord>> ListAsync(
         UserListQuery query,

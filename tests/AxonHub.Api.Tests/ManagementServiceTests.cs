@@ -13,22 +13,30 @@ public sealed class ManagementServiceTests
 {
     private readonly FakeUserAdminStore _users = new();
     private readonly FakeRoleStore _roles = new();
+    private readonly FakeManagementIdentity _identity = new(new ManagementUser(9, IsOwner: true));
+    private readonly PermissionValidator _validator;
     private readonly UserManagementService _userService;
     private readonly RoleManagementService _roleService;
 
     public ManagementServiceTests()
     {
-        _userService = new UserManagementService(_users, new PasswordHasher());
-        _roleService = new RoleManagementService(_roles);
+        _validator = new PermissionValidator(_identity, _users, _roles);
+        _userService = new UserManagementService(_users, new PasswordHasher(), _validator);
+        _roleService = new RoleManagementService(_roles, _validator);
     }
 
     [Fact]
-    public async Task UpdateUserReturnsTheEntNotFoundError()
+    public async Task UpdateUserFailsThePermissionCheckBeforeTheUpdate()
     {
+        // The reference checks permissions before touching the mutation, so a
+        // missing target surfaces as the validator's fetch error, not the
+        // mutation's (user.go:88-91).
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => _userService.UpdateAsync(new UpdateUserCommand { Id = 42 }));
 
-        Assert.Equal("failed to update user: ent: user not found", error.Message);
+        Assert.Equal(
+            "permission denied: failed to get target user: ent: user not found",
+            error.Message);
     }
 
     [Fact]
@@ -169,6 +177,127 @@ public sealed class ManagementServiceTests
             () => _userService.DeleteAsync(user.Id));
 
         Assert.Equal("failed to archive user personal API keys: boom", error.Message);
+    }
+
+    [Fact]
+    public async Task UpdateUserDeniesScopesTheCallerLacks()
+    {
+        var (service, _, _, _) = NonOwnerServices();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.UpdateAsync(new UpdateUserCommand
+            {
+                Id = 2,
+                Scopes = ["write_users"],
+            }));
+
+        Assert.Equal(
+            "permission denied: insufficient permissions: cannot grant scope "
+                + "'write_users' that you don't possess",
+            error.Message);
+    }
+
+    [Fact]
+    public async Task DeleteUserRejectsTheCallerThemselves()
+    {
+        var (service, identity, _, _) = NonOwnerServices();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.DeleteAsync(identity.User!.Id));
+
+        Assert.Equal("permission denied: cannot delete yourself", error.Message);
+    }
+
+    [Fact]
+    public async Task DeleteUserRequiresSystemOwners()
+    {
+        var (service, _, _, _) = NonOwnerServices();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.DeleteAsync(2));
+
+        Assert.Equal(
+            "permission denied: insufficient permissions: only system owners can delete users",
+            error.Message);
+    }
+
+    [Fact]
+    public async Task CreateRoleDeniesScopesTheCallerLacks()
+    {
+        var (_, _, roleService, _) = NonOwnerServices();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => roleService.CreateAsync(new CreateRoleCommand
+            {
+                Name = "Power Users",
+                Scopes = ["write_users"],
+            }));
+
+        Assert.Equal(
+            "permission denied: insufficient permissions: cannot grant scope "
+                + "'write_users' that you don't possess",
+            error.Message);
+    }
+
+    [Fact]
+    public async Task UpdateRoleDeniesScopesTheCallerLacks()
+    {
+        var (userService, identity, roleService, roles) = NonOwnerServices();
+        // Give the caller read_users, then point it at a role that needs more.
+        (await userService.GetByIdAsync(identity.User!.Id))!.Scopes = """["read_users"]""";
+        var role = new RoleRecord
+        {
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            Name = "Power Users",
+            Level = RoleManagementService.LevelSystem,
+            ProjectId = 0,
+            Scopes = """["read_users","write_users"]""",
+        };
+        await roles.CreateAsync(role);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => roleService.UpdateAsync(new UpdateRoleCommand
+            {
+                Id = role.Id,
+                Scopes = ["read_users", "write_users"],
+            }));
+
+        Assert.Equal(
+            "permission denied: insufficient permissions: cannot grant scope "
+                + "'write_users' that you don't possess",
+            error.Message);
+    }
+
+    /// <summary>
+    /// Fresh services with a non-owner current user (id 1) and a target user
+    /// (id 2), both without scopes.
+    /// </summary>
+    private static (
+        UserManagementService UserService,
+        FakeManagementIdentity Identity,
+        RoleManagementService RoleService,
+        FakeRoleStore Roles) NonOwnerServices()
+    {
+        var users = new FakeUserAdminStore();
+        var roles = new FakeRoleStore();
+        var identity = new FakeManagementIdentity(new ManagementUser(1, IsOwner: false));
+        var validator = new PermissionValidator(identity, users, roles);
+        var userService = new UserManagementService(users, new PasswordHasher(), validator);
+        var roleService = new RoleManagementService(roles, validator);
+
+        users.CreateAsync(new UserRecord
+        {
+            Email = "me@example.com",
+            Status = "activated",
+        }, null).GetAwaiter().GetResult();
+        users.CreateAsync(new UserRecord
+        {
+            Email = "target@example.com",
+            Status = "activated",
+        }, null).GetAwaiter().GetResult();
+
+        return (userService, identity, roleService, roles);
     }
 
     private async Task<UserRecord> CreateUserAsync()
