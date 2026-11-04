@@ -2,6 +2,7 @@ using HotChocolate;
 using HotChocolate.Types;
 using Microsoft.Extensions.DependencyInjection;
 using AxonHub.Api.Management;
+using AxonHub.Api.Models;
 using AxonHub.Api.Scopes;
 using AxonHub.Api.Settings;
 using AxonHub.Persistence;
@@ -223,6 +224,105 @@ public sealed class AdminQuery
     }
 
     /// <summary>
+    /// Port of queryResolver.Models (ent.resolvers.go:416-424).
+    /// </summary>
+    /// <remarks>
+    /// The reference resolver does not call validatePaginationArgs or
+    /// validateFirstLast, so the port does not either. A CREATED_AT order is
+    /// rewritten to the default (id) sort field.
+    /// </remarks>
+    [GraphQLName("models")]
+    public async Task<ModelConnectionType> ModelsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ModelOrder? orderBy,
+        ModelWhereInput? where,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        var sortField = ModelMapping.ToSortField(orderBy);
+        var page = await models.ListAsync(
+                new ModelListQuery
+                {
+                    Where = ModelMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ModelMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ModelMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.QueryModels (model.resolvers.go:160-227).</summary>
+    [GraphQLName("queryModels")]
+    public async Task<IReadOnlyList<ModelIdentityWithStatusType>> QueryModelsAsync(
+        QueryModelsInput input,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        var identities = await models.QueryModelsAsync(
+                ModelMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. identities.Select(ModelMapping.ToGraphQL)];
+    }
+
+    /// <summary>
+    /// Port of queryResolver.QueryModelChannelConnections
+    /// (model.resolvers.go:229-231).
+    /// </summary>
+    [GraphQLName("queryModelChannelConnections")]
+    public async Task<IReadOnlyList<ModelChannelConnectionType>>
+        QueryModelChannelConnectionsAsync(
+            IReadOnlyList<ModelAssociationInput> associations,
+            [Service] ModelManagementService models,
+            CancellationToken cancellationToken)
+    {
+        var connections = await models.QueryModelChannelConnectionsAsync(
+                [.. associations.Select(static association =>
+                    (ModelAssociation?)SystemSettingsMapping.ToDomain(association))],
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. connections.Select(ModelMapping.ToGraphQL)];
+    }
+
+    /// <summary>
+    /// Port of queryResolver.QueryUnassociatedChannels
+    /// (model.resolvers.go:233-235).
+    /// </summary>
+    [GraphQLName("queryUnassociatedChannels")]
+    public async Task<IReadOnlyList<UnassociatedChannelType>> QueryUnassociatedChannelsAsync(
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        var channels = await models.QueryUnassociatedChannelsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. channels.Select(ModelMapping.ToGraphQL)];
+    }
+
+    /// <summary>Port of queryResolver.FetchModels (model.resolvers.go:126-152).</summary>
+    [GraphQLName("fetchModels")]
+    public async Task<FetchModelsPayloadType> FetchModelsAsync(
+        FetchModelsInputType input,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+        => ModelMapping.ToGraphQL(
+            await models.FetchModelsAsync(
+                    ModelMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
     /// Port of queryResolver.ChannelOverrideTemplates (ent.resolvers.go:383-397).
     /// </summary>
     [GraphQLName("channelOverrideTemplates")]
@@ -340,8 +440,8 @@ public sealed class AdminQuery
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves only Project, User and APIKey so far and reports every
-    /// other type as "unknown node type: %s" (C165).
+    /// port resolves only Project, User, APIKey and Model so far and reports
+    /// every other type as "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -382,6 +482,14 @@ public sealed class AdminQuery
                 var apiKey = await apiKeys.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return ApiKeyMapping.ToGraphQL(apiKey);
+            }
+
+            case "Model":
+            {
+                var models = services.GetRequiredService<ModelManagementService>();
+                var model = await models.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return ModelMapping.ToGraphQL(model);
             }
 
             default:

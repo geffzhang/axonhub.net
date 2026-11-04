@@ -89,6 +89,7 @@ public static class ChannelMapping
             Settings = record.Settings,
             DefaultTestModel = record.DefaultTestModel,
             Endpoints = record.Endpoints,
+            Tags = record.Tags,
         };
     }
 

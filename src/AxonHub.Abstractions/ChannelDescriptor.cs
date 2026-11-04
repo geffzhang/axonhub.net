@@ -54,4 +54,10 @@ public sealed record ChannelDescriptor
     /// the image-generation tool (biz.buildCodexOutbound).
     /// </summary>
     public string DefaultTestModel { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Raw <c>tags</c> jsonb text ([]string). The model association matcher
+    /// reads them for the channel-tags rules and for exclude rules.
+    /// </summary>
+    public string? Tags { get; init; }
 }

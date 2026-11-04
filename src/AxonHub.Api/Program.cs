@@ -235,6 +235,18 @@ builder.Services.AddScoped<ChannelOverrideTemplateService>();
 builder.Services.AddScoped<ApiKeyPrivacy>();
 builder.Services.AddScoped<ApiKeyManagementService>();
 
+// Models (biz.ModelService): models / queryModels / the association helpers /
+// node(Model) and the create/update/status/delete/bulk mutations under the
+// Model privacy policy (identical to the Channel policy). The model fetcher
+// reuses the channel model catalog read by channel model sync.
+builder.Services.AddScoped<IModelStore, ModelStore>();
+builder.Services.AddScoped<ModelPrivacy>();
+builder.Services.AddScoped<AuthorizationScope>();
+builder.Services.AddScoped<IChannelModelCatalogStore>(
+    static services => services.GetRequiredService<IChannelModelSyncStore>());
+builder.Services.AddScoped<ModelFetcher>();
+builder.Services.AddScoped<ModelManagementService>();
+
 // Management identity: the gate middleware writes the authenticated caller
 // into HttpContext.Items; the scoped seam reads it back for the resolvers.
 builder.Services.AddHttpContextAccessor();

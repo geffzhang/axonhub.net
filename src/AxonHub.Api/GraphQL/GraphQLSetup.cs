@@ -33,6 +33,7 @@ public static class GraphQLSetup
                 descriptor => descriptor.Name("BulkImportChannelItem")))
             .AddTypeExtension<ProjectTypeExtensions>()
             .AddTypeExtension<UserTypeExtensions>()
+            .AddTypeExtension<ModelTypeExtensions>()
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
 }

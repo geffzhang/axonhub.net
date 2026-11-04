@@ -1515,4 +1515,118 @@ public sealed class AdminMutation
             .ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>Port of mutationResolver.CreateModel (model.resolvers.go:27-29).</summary>
+    [GraphQLName("createModel")]
+    public async Task<ModelType> CreateModelAsync(
+        CreateModelInput input,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+        => ModelMapping.ToGraphQL(
+            await models.CreateAsync(ModelMapping.ToCommand(input), cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.BulkCreateModels (model.resolvers.go:31-33).</summary>
+    [GraphQLName("bulkCreateModels")]
+    public async Task<IReadOnlyList<ModelType>> BulkCreateModelsAsync(
+        IReadOnlyList<CreateModelInput> inputs,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        var created = await models.BulkCreateAsync(
+                [.. inputs.Select(ModelMapping.ToCommand)],
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. created.Select(ModelMapping.ToGraphQL)];
+    }
+
+    /// <summary>Port of mutationResolver.UpdateModel (model.resolvers.go:35-37).</summary>
+    [GraphQLName("updateModel")]
+    public async Task<ModelType> UpdateModelAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateModelInput input,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+        => ModelMapping.ToGraphQL(
+            await models.UpdateAsync(
+                    ModelMapping.ToCommand(id, input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.DeleteModel (model.resolvers.go:39-45).</summary>
+    [GraphQLName("deleteModel")]
+    public async Task<bool> DeleteModelAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UpdateModelStatus (model.resolvers.go:47-54).</summary>
+    [GraphQLName("updateModelStatus")]
+    public async Task<bool> UpdateModelStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        ModelStatusValue status,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.UpdateStatusAsync(
+                GidValue.Parse(id).Id,
+                ModelMapping.ToWireStatus(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkArchiveModels (model.resolvers.go:56-66).</summary>
+    [GraphQLName("bulkArchiveModels")]
+    public async Task<bool> BulkArchiveModelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.BulkArchiveAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkDisableModels (model.resolvers.go:68-78).</summary>
+    [GraphQLName("bulkDisableModels")]
+    public async Task<bool> BulkDisableModelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.BulkDisableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkEnableModels (model.resolvers.go:80-90).</summary>
+    [GraphQLName("bulkEnableModels")]
+    public async Task<bool> BulkEnableModelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.BulkEnableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkDeleteModels (model.resolvers.go:92-102).</summary>
+    [GraphQLName("bulkDeleteModels")]
+    public async Task<bool> BulkDeleteModelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.BulkDeleteAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
 }

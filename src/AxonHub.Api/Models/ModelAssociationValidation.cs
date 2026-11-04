@@ -17,6 +17,49 @@ public sealed class ModelSettingsValidationException(string message) : Exception
 public static class ModelAssociationValidation
 {
     /// <summary>
+    /// Port of <c>validateModelSettings</c> (internal/server/biz/model.go:49-76)
+    /// for the per-model settings column. The reference mutates the pointer
+    /// (NormalizeRoutingPolicy) and the caller then persists the same pointer,
+    /// so the returned record carries the normalized routing policy values.
+    /// </summary>
+    /// <returns>
+    /// <paramref name="settings"/> unchanged when it is null, otherwise the
+    /// normalized record.
+    /// </returns>
+    /// <exception cref="ModelSettingsValidationException">
+    /// The routing policy or an association rule is invalid.
+    /// </exception>
+    public static ModelEntitySettings? ValidateEntitySettings(ModelEntitySettings? settings)
+    {
+        if (settings is null)
+        {
+            return null;
+        }
+
+        var normalized = settings.NormalizeRoutingPolicy();
+        if (!RoutingPolicy.IsValidLoadBalancerStrategy(normalized.LoadBalancerStrategy))
+        {
+            throw new ModelSettingsValidationException(
+                "invalid load balancer strategy "
+                + GoCast.GoQuote(normalized.LoadBalancerStrategy));
+        }
+
+        if (!RoutingPolicy.IsValidTraceStickyMode(normalized.TraceStickyMode))
+        {
+            throw new ModelSettingsValidationException(
+                "invalid trace sticky mode "
+                + GoCast.GoQuote(normalized.TraceStickyMode));
+        }
+
+        if (normalized.Associations is { Count: > 0 })
+        {
+            ValidateModelSettingsAssociations(normalized.Associations);
+        }
+
+        return normalized;
+    }
+
+    /// <summary>
     /// Port of <c>validateDeveloperAssociations</c>
     /// (internal/server/biz/model_settings_inheritance.go:73-95): only
     /// channel_model / channel_tags_model are allowed, then every association

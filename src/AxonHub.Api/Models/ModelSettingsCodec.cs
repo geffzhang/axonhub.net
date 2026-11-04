@@ -219,6 +219,96 @@ public static class ModelSettingsCodec
     }
 
     /// <summary>
+    /// Port of ent scanning <c>models.settings</c> into
+    /// <c>*objects.ModelSettings</c> (internal/ent/model.go:147-153) and
+    /// <c>objects.ModelSettings.UnmarshalJSON</c> (internal/objects/routing.go:62-77).
+    /// </summary>
+    /// <remarks>
+    /// ent skips the unmarshal for a NULL or empty column, so the field stays
+    /// nil; a JSON <c>null</c> likewise sets the pointer to nil. Any other
+    /// document decodes over a struct seeded with <c>"default"</c> routing
+    /// policies and is normalized afterwards.
+    /// </remarks>
+    /// <exception cref="JsonException">The document cannot be decoded.</exception>
+    public static ModelEntitySettings? DeserializeEntitySettings(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+
+        var root = value.AsSpan().Trim();
+        if (root.IsEmpty)
+        {
+            throw new JsonException("unexpected end of JSON input");
+        }
+
+        if (root.SequenceEqual("null"))
+        {
+            return null;
+        }
+
+        if (root[0] != '{')
+        {
+            throw new JsonException(
+                "failed to unmarshal model settings: json: cannot unmarshal "
+                + GoKindName(root[0])
+                + " into Go value of type objects.modelSettingsAlias");
+        }
+
+        ModelEntitySettingsJson? stored;
+        try
+        {
+            stored = JsonSerializer.Deserialize<ModelEntitySettingsJson>(value, ReadOptions);
+        }
+        catch (JsonException ex)
+        {
+            throw new JsonException(
+                "failed to unmarshal model settings: " + ex.Message,
+                ex);
+        }
+
+        if (stored is null)
+        {
+            return null;
+        }
+
+        return new ModelEntitySettings
+        {
+            DisableDeveloperSettingsInheritance =
+                stored.DisableDeveloperSettingsInheritance ?? false,
+            Associations = stored.Associations?
+                .Select(static association => association is null
+                    ? null
+                    : ToModelAssociation(association))
+                .ToList(),
+            LoadBalancerStrategy = stored.LoadBalancerStrategy ?? RoutingPolicy.Default,
+            TraceStickyMode = stored.TraceStickyMode ?? RoutingPolicy.Default,
+        }.NormalizeRoutingPolicy();
+    }
+
+    /// <summary>Port of <c>json.Marshal(objects.ModelSettings)</c>.</summary>
+    public static string SerializeEntitySettings(ModelEntitySettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var write = new ModelEntitySettingsWriteJson
+        {
+            DisableDeveloperSettingsInheritance = settings.DisableDeveloperSettingsInheritance,
+            Associations = settings.Associations?
+                .Select(static association => association is null
+                    ? null
+                    : ToAssociationWrite(association))
+                .ToList(),
+            LoadBalancerStrategy = settings.LoadBalancerStrategy,
+            TraceStickyMode = settings.TraceStickyMode,
+        };
+
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(write, WriteOptions);
+        return Encoding.UTF8.GetString(GoJson.Escape(bytes));
+    }
+
+    /// <summary>
     /// Port of <c>normalizeJSONNumberValue</c> (internal/objects/condition.go:294):
     /// decoder numbers become int64 when integral, float64 otherwise, and
     /// strings when neither parse succeeds. Object keys are sorted because Go
@@ -632,6 +722,37 @@ public static class ModelSettingsCodec
                     return;
             }
         }
+    }
+
+    /// <summary>objects.ModelSettings for the per-model column.</summary>
+    private sealed class ModelEntitySettingsJson
+    {
+        [JsonPropertyName("disableDeveloperSettingsInheritance")]
+        public bool? DisableDeveloperSettingsInheritance { get; set; }
+
+        [JsonPropertyName("associations")]
+        public List<ModelAssociationJson?>? Associations { get; set; }
+
+        [JsonPropertyName("loadBalancerStrategy")]
+        public string? LoadBalancerStrategy { get; set; }
+
+        [JsonPropertyName("traceStickyMode")]
+        public string? TraceStickyMode { get; set; }
+    }
+
+    private sealed class ModelEntitySettingsWriteJson
+    {
+        [JsonPropertyName("disableDeveloperSettingsInheritance")]
+        public bool DisableDeveloperSettingsInheritance { get; init; }
+
+        [JsonPropertyName("associations")]
+        public List<ModelAssociationWriteJson?>? Associations { get; init; }
+
+        [JsonPropertyName("loadBalancerStrategy")]
+        public string LoadBalancerStrategy { get; init; } = RoutingPolicy.Default;
+
+        [JsonPropertyName("traceStickyMode")]
+        public string TraceStickyMode { get; init; } = RoutingPolicy.Default;
     }
 
     private sealed class ModelSettingsJson
