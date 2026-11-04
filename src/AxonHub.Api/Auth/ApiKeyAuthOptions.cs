@@ -8,9 +8,13 @@ namespace AxonHub.Api.Auth;
 /// </summary>
 public sealed record ApiKeyAuthOptions(
     bool AllowNoAuth,
-    IReadOnlyList<string> TrustedProxies)
+    IReadOnlyList<string> TrustedProxies,
+    string KeyPrefix = "ah")
 {
-    /// <summary>Reference defaults: allow_no_auth = false, trusted_proxies = [].</summary>
+    /// <summary>
+    /// Reference defaults: allow_no_auth = false, trusted_proxies = [],
+    /// server.api.auth.key_prefix = "ah" (conf/conf.go:257).
+    /// </summary>
     public static ApiKeyAuthOptions Default { get; } = new(
         AllowNoAuth: false,
         TrustedProxies: Array.Empty<string>());

@@ -49,6 +49,18 @@ public sealed class AxonHubGraphQLErrorFilter : IErrorFilter
         var coded = FindCoded(error.Exception);
         if (coded is null)
         {
+            // Port of the privacy.Deny branch (graphql.go:181-190): any error
+            // wrapping the sentinel becomes "permission denied" with only the
+            // FORBIDDEN code in its extensions. The presenter checks the coded
+            // error first, exactly like the reference.
+            if (FindPrivacyDeny(error.Exception) is not null)
+            {
+                return ErrorBuilder.FromError(error)
+                    .SetMessage("permission denied")
+                    .SetExtension("code", CodedException.Forbidden)
+                    .Build();
+            }
+
             // graphql.DefaultErrorPresenter reports err.Error() for every
             // resolver error; HotChocolate would otherwise hide the message
             // behind "Unexpected Execution Error".
@@ -80,6 +92,20 @@ public sealed class AxonHubGraphQLErrorFilter : IErrorFilter
             if (current is CodedException coded)
             {
                 return coded;
+            }
+        }
+
+        return null;
+    }
+
+    private static AxonHub.Api.Management.PrivacyDenyException? FindPrivacyDeny(
+        Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is AxonHub.Api.Management.PrivacyDenyException deny)
+            {
+                return deny;
             }
         }
 

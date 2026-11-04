@@ -521,7 +521,12 @@ public sealed class RoleRecord
     /// <summary>Project ID; 0 for system roles (Ent's nullable column).</summary>
     public long? ProjectId { get; set; }
 
-    public bool IsSystemRole => Level == "system";
+    /// <summary>
+    /// Port of ent's generated <c>Role.IsSystemRole()</c>
+    /// (internal/ent/extra.go:8-10): <c>ProjectID == nil || *ProjectID == 0</c>.
+    /// The reference ignores the <c>level</c> string for this decision.
+    /// </summary>
+    public bool IsSystemRole => ProjectId is null or 0;
 }
 
 /// <summary>Row of the reference <c>user_roles</c> join table.</summary>

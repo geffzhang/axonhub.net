@@ -108,7 +108,20 @@ var trustedProxies = builder.Configuration.GetSection("Server:TrustedProxies").G
     ?? [];
 ClientAddress.ValidateTrustedProxies(trustedProxies);
 
-builder.Services.AddSingleton(new ApiKeyAuthOptions(allowNoAuth, trustedProxies));
+// server.api.auth.key_prefix (conf/conf.go:257) defaults to "ah"; Viper's
+// AutomaticEnv accepts AXONHUB_SERVER_API_AUTH_KEY_PREFIX as the override.
+var keyPrefix = builder.Configuration["Server:Api:Auth:KeyPrefix"];
+if (string.IsNullOrEmpty(keyPrefix))
+{
+    keyPrefix = builder.Configuration["AXONHUB_SERVER_API_AUTH_KEY_PREFIX"];
+}
+
+if (string.IsNullOrEmpty(keyPrefix))
+{
+    keyPrefix = "ah";
+}
+
+builder.Services.AddSingleton(new ApiKeyAuthOptions(allowNoAuth, trustedProxies, keyPrefix));
 builder.Services.AddScoped<AxonHubDbContext>(static services =>
     services.GetRequiredService<IAxonHubDbContextFactory>().CreateDbContext());
 builder.Services.AddScoped<IProjectStore, ProjectStore>();
@@ -215,6 +228,12 @@ builder.Services.AddScoped<ChannelModelPriceService>();
 // the endpoint was open (C161).
 builder.Services.AddScoped<IChannelOverrideTemplateStore, ChannelOverrideTemplateStore>();
 builder.Services.AddScoped<ChannelOverrideTemplateService>();
+
+// API keys (biz.APIKeyService): apiKeys / node(APIKey) and the create/update/
+// status/profiles/rotate/bulk mutations under the APIKey privacy policy. The
+// reference's ent cache invalidation is not ported (C176).
+builder.Services.AddScoped<ApiKeyPrivacy>();
+builder.Services.AddScoped<ApiKeyManagementService>();
 
 // Management identity: the gate middleware writes the authenticated caller
 // into HttpContext.Items; the scoped seam reads it back for the resolvers.

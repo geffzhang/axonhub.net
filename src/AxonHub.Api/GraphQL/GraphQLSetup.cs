@@ -20,6 +20,7 @@ public static class GraphQLSetup
             .AddType<GoTimeType>()
             .AddType<MapScalarType>()
             .AddType<ChannelTagsMatchModeType>()
+            .AddType<GoDecimalType>()
 
             // HotChocolate infers input-object names from the CLR type; the
             // gqlgen SDL calls these ChannelOrderingItem and

@@ -20,4 +20,16 @@ public interface IManagementIdentity
 {
     /// <summary>The current management user, or null when there is none.</summary>
     Task<ManagementUser?> GetCurrentUserAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The API key principal, or null when the caller is not an API key
+    /// (contexts.GetAPIKey). API-key callers have no user.
+    /// </summary>
+    AxonHub.Persistence.ApiKeyRecord? GetCurrentApiKey() => null;
+
+    /// <summary>
+    /// The project selected by X-Project-ID, or null when the request has no
+    /// project context (contexts.GetProjectID).
+    /// </summary>
+    long? GetCurrentProjectId() => null;
 }

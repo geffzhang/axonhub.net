@@ -85,6 +85,154 @@ public sealed class PermissionValidator(
         CancellationToken cancellationToken = default)
         => CanGrantScopesAsync(roleScopes, projectId, cancellationToken);
 
+    public Task CanAccessProjectScopeAsync(
+        string scope,
+        long projectId,
+        CancellationToken cancellationToken = default)
+        => CanGrantScopesAsync([scope], projectId, cancellationToken);
+
+    /// <summary>
+    /// Port of CanGrantScopes for an already loaded user
+    /// (permission_validator.go:96-131). APIKeyService.requireProjectAdmin
+    /// loads the creator through a system bypass and validates that snapshot
+    /// instead of the context user (biz/api_key.go:396-411).
+    /// </summary>
+    internal static void CanGrantScopesForUser(
+        PermissionUser? currentUser,
+        IReadOnlyList<string> scopesToGrant,
+        long? projectId)
+    {
+        ArgumentNullException.ThrowIfNull(scopesToGrant);
+
+        if (currentUser is null)
+        {
+            throw new InvalidOperationException(UserNotFoundInContext);
+        }
+
+        if (projectId is { } ownerProjectId
+            && UserIsProjectOwner(currentUser, ownerProjectId))
+        {
+            return;
+        }
+
+        var userScopeSet = new HashSet<string>(
+            GetUserScopes(currentUser, projectId),
+            StringComparer.Ordinal);
+        foreach (var scope in scopesToGrant)
+        {
+            if (!userScopeSet.Contains(scope))
+            {
+                throw new InvalidOperationException(
+                    "insufficient permissions: cannot grant scope '"
+                    + scope
+                    + "' that you don't possess");
+            }
+        }
+    }
+
+    /// <summary>Port of scopes.HasSystemScope (internal/scopes/rule.go:45-60).</summary>
+    internal static bool HasSystemScope(PermissionUser? user, string requiredScope)
+    {
+        if (user is null)
+        {
+            return false;
+        }
+
+        // Owner has all permissions.
+        if (user.User.IsOwner)
+        {
+            return true;
+        }
+
+        if (ParseScopes(user.User.Scopes).Contains(requiredScope, StringComparer.Ordinal))
+        {
+            return true;
+        }
+
+        // System-role scopes: Ent's Role.IsSystemRole() is project_id nil/0.
+        foreach (var role in user.Roles)
+        {
+            if (role.ProjectId is null or 0
+                && ParseScopes(role.Scopes).Contains(requiredScope, StringComparer.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Port of scopes.userHasProjectScope
+    /// (internal/scopes/rule_user_project_scope.go:15-45).
+    /// </summary>
+    internal static bool UserHasProjectScope(
+        PermissionUser? user,
+        long projectId,
+        string requiredScope)
+    {
+        if (user is null)
+        {
+            return false;
+        }
+
+        if (user.User.IsOwner)
+        {
+            return true;
+        }
+
+        // Only the first matching membership is consulted, like lo.Find.
+        var membership = user.ProjectUsers
+            .FirstOrDefault(projectUser => projectUser.ProjectId == projectId);
+        if (membership is null)
+        {
+            return false;
+        }
+
+        if (membership.IsOwner)
+        {
+            return true;
+        }
+
+        if (ParseScopes(membership.Scopes).Contains(requiredScope, StringComparer.Ordinal))
+        {
+            return true;
+        }
+
+        foreach (var role in user.Roles)
+        {
+            if (role.ProjectId == projectId
+                && ParseScopes(role.Scopes).Contains(requiredScope, StringComparer.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Port of scopes.userIsProjectOwner (rule_user_project_scope.go:47-62).</summary>
+    internal static bool UserIsProjectOwner(PermissionUser? user, long projectId)
+    {
+        if (user is null)
+        {
+            return false;
+        }
+
+        if (user.User.IsOwner)
+        {
+            return true;
+        }
+
+        return user.ProjectUsers.Any(
+            membership => membership.ProjectId == projectId && membership.IsOwner);
+    }
+
+    public async Task<PermissionUser?> GetPermissionUserAsync(
+        long userId,
+        CancellationToken cancellationToken = default)
+        => await users.GetPermissionUserAsync(userId, cancellationToken).ConfigureAwait(false);
+
     /// <summary>Port of CanEditUserPermissions (permission_validator.go:140-214).</summary>
     public async Task CanEditUserPermissionsAsync(
         long targetUserId,
@@ -254,7 +402,7 @@ public sealed class PermissionValidator(
     /// system-role scopes, then — when a project is in scope — the matching
     /// project-user scopes and project-role scopes.
     /// </summary>
-    private static List<string> GetUserScopes(PermissionUser? user, long? projectId)
+    internal static List<string> GetUserScopes(PermissionUser? user, long? projectId)
     {
         var scopes = new List<string>();
         if (user is null)
@@ -311,7 +459,7 @@ public sealed class PermissionValidator(
     }
 
     /// <summary>Ent stores scopes as a JSON string array; nil means none.</summary>
-    private static List<string> ParseScopes(string? json)
+    internal static List<string> ParseScopes(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
         {

@@ -128,8 +128,10 @@ public sealed class PricingType
 {
     public PricingModeValue Mode { get; init; }
 
+    [GraphQLType(typeof(GoDecimalType))]
     public decimal? FlatFee { get; init; }
 
+    [GraphQLType(typeof(GoDecimalType))]
     public decimal? UsagePerUnit { get; init; }
 
     public TieredPricingType? UsageTiered { get; init; }
@@ -148,6 +150,7 @@ public sealed class PriceTierType
 {
     public int? UpTo { get; init; }
 
+    [GraphQLType(typeof(GoDecimalType))]
     public decimal PricePerUnit { get; init; }
 }
 
@@ -251,8 +254,10 @@ public sealed class PricingInput
 {
     public PricingModeValue Mode { get; init; }
 
+    [GraphQLType(typeof(GoDecimalType))]
     public decimal? FlatFee { get; init; }
 
+    [GraphQLType(typeof(GoDecimalType))]
     public decimal? UsagePerUnit { get; init; }
 
     public TieredPricingInput? UsageTiered { get; init; }
@@ -267,6 +272,7 @@ public sealed class PriceTierInput
 {
     public int? UpTo { get; init; }
 
+    [GraphQLType(typeof(GoDecimalType))]
     public decimal PricePerUnit { get; init; }
 }
 

@@ -16,8 +16,13 @@ public sealed class HttpContextManagementIdentity(IHttpContextAccessor accessor)
         CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
-        return Task.FromResult(
-            (accessor.HttpContext?.Items[AdminGraphqlIdentity.ContextKey]
-                as AdminGraphqlIdentity)?.User);
+        return Task.FromResult(Identity?.User);
     }
+
+    public AxonHub.Persistence.ApiKeyRecord? GetCurrentApiKey() => Identity?.ApiKey;
+
+    public long? GetCurrentProjectId() => Identity?.ProjectId;
+
+    private AdminGraphqlIdentity? Identity =>
+        accessor.HttpContext?.Items[AdminGraphqlIdentity.ContextKey] as AdminGraphqlIdentity;
 }

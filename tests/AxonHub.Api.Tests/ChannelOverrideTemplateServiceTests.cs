@@ -1275,7 +1275,17 @@ internal sealed class FakeManagementIdentity(ManagementUser? user) : IManagement
 {
     public ManagementUser? User { get; set; } = user;
 
+    /// <summary>X-Project-ID context; null mirrors a request without the header.</summary>
+    public long? ProjectId { get; set; }
+
+    /// <summary>API key principal; null when the caller is a user or anonymous.</summary>
+    public AxonHub.Persistence.ApiKeyRecord? ApiKey { get; set; }
+
     public Task<ManagementUser?> GetCurrentUserAsync(
         CancellationToken cancellationToken = default)
         => Task.FromResult(User);
+
+    public AxonHub.Persistence.ApiKeyRecord? GetCurrentApiKey() => ApiKey;
+
+    public long? GetCurrentProjectId() => ProjectId;
 }

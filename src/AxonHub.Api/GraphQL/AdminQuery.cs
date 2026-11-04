@@ -1,5 +1,6 @@
 using HotChocolate;
 using HotChocolate.Types;
+using Microsoft.Extensions.DependencyInjection;
 using AxonHub.Api.Management;
 using AxonHub.Api.Scopes;
 using AxonHub.Api.Settings;
@@ -188,6 +189,39 @@ public sealed class AdminQuery
         return ProjectMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>Port of queryResolver.APIKeys (ent.resolvers.go:340-354).</summary>
+    [GraphQLName("apiKeys")]
+    public async Task<ApiKeyConnectionType> ApiKeysAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ApiKeyOrder? orderBy,
+        ApiKeyWhereInput? where,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ApiKeyMapping.ToSortField(orderBy);
+        var page = await apiKeys.ListAsync(
+                new ApiKeyListQuery
+                {
+                    Where = ApiKeyMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ApiKeyMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ApiKeyMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>
     /// Port of queryResolver.ChannelOverrideTemplates (ent.resolvers.go:383-397).
     /// </summary>
@@ -306,14 +340,15 @@ public sealed class AdminQuery
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves only Project and User so far and reports every other type
-    /// as "unknown node type: %s" (C165).
+    /// port resolves only Project, User and APIKey so far and reports every
+    /// other type as "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
         [GraphQLType(typeof(IdType))] string id,
         [Service] IProjectStore projects,
         [Service] IUserAdminStore users,
+        [Service] IServiceProvider services,
         CancellationToken cancellationToken)
     {
         var gid = GidValue.Parse(id);
@@ -336,6 +371,17 @@ public sealed class AdminQuery
                 return user is null
                     ? throw new InvalidOperationException("ent: user not found")
                     : ManagementMapping.ToGraphQL(user);
+            }
+
+            case "APIKey":
+            {
+                // Resolved lazily so node(Project|User) and unknown-type
+                // reporting do not require the API key slice's services; the
+                // production host always registers them.
+                var apiKeys = services.GetRequiredService<ApiKeyManagementService>();
+                var apiKey = await apiKeys.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return ApiKeyMapping.ToGraphQL(apiKey);
             }
 
             default:

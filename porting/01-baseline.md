@@ -4090,6 +4090,86 @@ SDL 成员仍缺）；新增 C174（项目缓存失效为 no-op）；新增 C175
 （ChannelTagsMatchMode 为字符串标量，SDL kind 与枚举字面量语法差异）；
 C153 沿用（user_projects 唯一冲突的存储文案）。
 
+## 87. API key 管理切片（apiKeys 查询、node 与八个变更，39 例，2026-11-04）
+
+参照 `internal/server/biz/api_key.go` 的 CreateAPIKey、UpdateAPIKey、
+UpdateAPIKeyStatus、UpdateAPIKeyProfiles、RotateAPIKey、BulkDisableAPIKeys /
+BulkEnableAPIKeys / BulkArchiveAPIKeys 与 QueryAPIKeys，
+`internal/server/gql/ent.resolvers.go` 的 apiKeys 查询与 node APIKey 分支，
+`internal/server/gql/axonhub.resolvers.go` 的八个变更，以及生成的 APIKey
+SDL；端口新增 `IApiKeyStore`（EF 写 + Dapper 读）、`ApiKeyManagementService`、
+`ApiKeyProfilesCodec`、GraphQL `APIKeyWhereInput` / `ApiKeyOrder` /
+`APIKeyConnection` / `APIKey`（INode）与全部输入类型，接线 apiKeys /
+node(APIKey) 与 createAPIKey / updateAPIKey / updateAPIKeyStatus /
+updateAPIKeyProfiles / rotateAPIKey / bulkDisableAPIKeys / bulkEnableAPIKeys /
+bulkArchiveAPIKeys，对齐前端 api-keys.ts 的实际查询与变更：
+
+- CreateAPIKey：先取当前用户（缺失 `user not found in context`），再拒
+  `noauth`（`noauth type API key is reserved`），仅 user 类型要求项目管理员
+  （`permission denied: project API keys require project admin permissions`）；
+  GenerateAPIKey 为 `<prefix>-` + 32 随机字节的小写 hex；事务内锁项目、过
+  privacy 与插入（两处错误均包 `failed to create API key: %w`），随后按
+  Name + ProjectID + (TypeNEQ(personal) OR UserIDEQ(当前用户)) 计数，大于 1
+  抛 `xerrors.DuplicateNameError("API Key", name)`（`API Key name '<name>'
+  already exists` + resource/field/value 扩展）并回滚插入。
+  user 默认作用域 `["read_channels","write_requests"]`，service_account 未给
+  作用域为 `[]`，profiles 默认 `{"activeProfile":"","profiles":null}`，
+  allowedIps 默认 `[]`。
+- UpdateAPIKey：先按目标行的类型拒 scope 变更（`user type API key cannot
+  update scopes` / `personal type ...`），再拒 noauth（`noauth type API key
+  cannot be updated`），再检查 personal 所有权（`personal API key can only be
+  modified by its creator or a system owner`）；读取失败包
+  `failed to get API key: %w`；改名先查重（`failed to check API key name
+  uniqueness: %w`），写入失败包 `failed to update API key: %w`，成功后再次
+  查重。ent 的 json Append 覆盖同列的 Set，追加基于更新前的值。
+- UpdateAPIKeyStatus：拒绝 noauth（`noauth type API key status cannot be
+  updated`）、检查 personal 所有权；读取 / 写入错误包 `failed to update API
+  key status: %w`，privacy deny 也包进该前缀。
+- UpdateAPIKeyProfiles：拒绝 noauth（`noauth type API key profiles cannot be
+  updated`），读取后经 `ApiKeyProfilesCodec` 校验（名称 Trim/ToLower 空、
+  重复、matchMode、active profile 存在性）、按模板当前值决定是否脱钩，失败
+  `failed to update API key profiles: %w`；JSON 字段顺序为 activeProfile /
+  profiles，profile 内 name、templateID、templateName、modelMappings、
+  quota（仅非 nil）、loadBalanceStrategy、traceStickyMode、channelIDs、
+  channelTags、channelTagsMatchMode、modelIDs，配额 cost 以 JSON 字符串
+  输出、period 按 type 只带对应字段；查询侧 templateName 经 gqlgen 的
+  optional string marshaller 输出 `""`。
+- RotateAPIKey：拒绝 noauth（`noauth type API key cannot be rotated`）、检查
+  personal 所有权（`personal API key can only be rotated by its creator or a
+  system owner`），生成新 key 写回；错误包 `failed to rotate API key: %w`。
+- 批量 disable / enable / archive：先按 ID 集合读取（数量不符
+  `expected to find %d API keys, but found %d`），再拒 noauth（`noauth type
+  API key cannot be bulk %sd`），再逐个检查 personal 所有权（`personal API
+  key "<name>" can only be %sed by its creator or a system owner`）；空 ID
+  列表为 no-op；archive 只写 status=archived，不写 deleted_at。写失败包
+  `failed to <action> API keys: %w`。
+- apiKeys 查询：项目作用域 + privacy 过滤，CREATED_AT 改写为 id 排序并保留
+  direction，UPDATED_AT / NAME 走对应列；游标值只在 UPDATED_AT / NAME 携带；
+  node(APIKey) 缺失报 `ent: api_key not found`，隐私拒绝为
+  `ent/privacy: deny rule`。
+- APIKey 输出：`id` / `key` / `name` / `type` / `status` / `scopes` /
+  `profiles` / `allowedIps` / `userID` / `projectID` / `user` / `project` /
+  `createdAt` / `updatedAt`；`userID` 恒为 `gid://axonhub/User/<UserID>`，
+  user_id 为空时即 `gid://axonhub/User/0`；user 边经 privacy 解析，缺失与
+  deny 均为 null；project 边缺失或不可见报 `ent: project not found`，
+  deny 报 `permission denied`。
+- 读取缓存失效在端口为 no-op（C026 / C173 / C174 同型），每个写方法自开
+  事务（C142 同型）；`APIKeyWhereInput` 只建模前端使用的谓词（C135 同型）；
+  枚举输出对未知存储值报错（C176），旋转已实现。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 服务语义：创建默认值 / 密钥生成 / 项目管理员门槛 / noauth / allowedIps 校验 / 重名回滚；更新 scope 限制与 append；状态 privacy 包裹与 personal 所有权；profiles 模板脱钩与校验顺序；旋转；批量计数 / noauth / 所有权 / 空列表；列表与 node 隐私 | `tests/AxonHub.Api.Tests/ApiKeyManagementServiceTests.cs` | 19（新增） |
+| 存储语义：按 ID 与 key 读取、软删可见性、key 跨软删唯一、archived 状态不软删、列表 / 游标 / 总数、重复名与 key 谓词、clear / replace / append 更新、项目谓词、批量状态只影响目标行 | `tests/AxonHub.Persistence.Tests/ApiKeyStoreTests.cs` | 9（重写，净 +5） |
+| 端点线形：apiKeys 连接形状（profiles / quota / 空 templateName / 空 mode / User 与 Project 边 / 游标）、过滤与 NAME 排序、无创建者输出 User/0 与 null 边、node 查询与缺失错误、创建默认值与前缀、service_account 的 scopes / allowedIps、重名 DUPLICATE_NAME 扩展、更新改名与 scope 拒绝、状态与旋转、profiles JSON 往返、批量 disable / enable / archive 与计数错误 | `tests/AxonHub.Api.Tests/AdminApiKeysEndpointTests.cs` | 11（新增） |
+
+`AxonHub.Persistence.Tests` 由 195 增至 200（+5），`AxonHub.Api.Tests` 由
+2147 增至 2177（+30）；四个项目合计 5454 增至 5489，0 失败 0 跳过。
+
+差异：新增 C176（API key 管理切片的已接受差异与真实缺口）；C165 更新
+（node(APIKey) 已接入，其余 ent 类型仍缺）；C142（事务边界）、C135（where
+子集）、C026 / C173 / C174（无读取缓存）沿用。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

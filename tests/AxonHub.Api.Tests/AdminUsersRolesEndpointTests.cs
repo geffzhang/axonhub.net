@@ -988,7 +988,14 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
         IReadOnlyList<long>? roleIds,
         CancellationToken cancellationToken = default)
     {
-        user.Id = _nextId++;
+        // Seeded rows may pin the id the gate fixtures key on (e.g. the JWT
+        // user id 9); fresh rows take the next auto id.
+        user.Id = user.Id > 0 ? user.Id : _nextId++;
+        if (user.Id >= _nextId)
+        {
+            _nextId = user.Id + 1;
+        }
+
         _rows.Add(user);
         return Task.FromResult(user.Id);
     }

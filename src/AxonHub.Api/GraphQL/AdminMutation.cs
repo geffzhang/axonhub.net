@@ -1397,4 +1397,122 @@ public sealed class AdminMutation
         [Service] UserProfileService profiles,
         CancellationToken cancellationToken)
         => profiles.UnlinkOidcIdentityAsync(GidValue.Parse(id).Id, cancellationToken);
+
+    /// <summary>Port of mutationResolver.CreateAPIKey (axonhub.resolvers.go:464-467).</summary>
+    [GraphQLName("createAPIKey")]
+    public async Task<ApiKeyType> CreateApiKeyAsync(
+        CreateApiKeyInput input,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.CreateAsync(
+                    new CreateApiKeyCommand
+                    {
+                        Name = input.Name,
+                        ProjectId = GidValue.Parse(input.ProjectID).Id,
+                        Type = input.Type is null
+                            ? null
+                            : ApiKeyMapping.ToWireType(input.Type.Value),
+                        Scopes = input.Scopes,
+                        AllowedIps = input.AllowedIps,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateAPIKey (axonhub.resolvers.go:469-472).</summary>
+    [GraphQLName("updateAPIKey")]
+    public async Task<ApiKeyType> UpdateApiKeyAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateApiKeyInput input,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.UpdateAsync(
+                    new UpdateApiKeyCommand
+                    {
+                        Id = GidValue.Parse(id).Id,
+                        Name = input.Name,
+                        Scopes = input.Scopes,
+                        AppendScopes = input.AppendScopes,
+                        ClearScopes = input.ClearScopes == true,
+                        AllowedIps = input.AllowedIps,
+                        AppendAllowedIps = input.AppendAllowedIps,
+                        ClearAllowedIps = input.ClearAllowedIps == true,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateAPIKeyStatus (axonhub.resolvers.go:474-477).</summary>
+    [GraphQLName("updateAPIKeyStatus")]
+    public async Task<ApiKeyType> UpdateApiKeyStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        ApiKeyStatusValue status,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.UpdateStatusAsync(
+                    GidValue.Parse(id).Id,
+                    ApiKeyMapping.ToWireStatus(status),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateAPIKeyProfiles (axonhub.resolvers.go:479-482).</summary>
+    [GraphQLName("updateAPIKeyProfiles")]
+    public async Task<ApiKeyType> UpdateApiKeyProfilesAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateApiKeyProfilesInput input,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.UpdateProfilesAsync(
+                    GidValue.Parse(id).Id,
+                    ApiKeyMapping.ToModel(input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.RotateAPIKey (axonhub.resolvers.go:484-487).</summary>
+    [GraphQLName("rotateAPIKey")]
+    public async Task<ApiKeyType> RotateApiKeyAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.RotateAsync(GidValue.Parse(id).Id, cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.BulkDisableAPIKeys (axonhub.resolvers.go:489-499).</summary>
+    [GraphQLName("bulkDisableAPIKeys")]
+    public async Task<bool> BulkDisableApiKeysAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+    {
+        await apiKeys.BulkDisableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkEnableAPIKeys (axonhub.resolvers.go:501-511).</summary>
+    [GraphQLName("bulkEnableAPIKeys")]
+    public async Task<bool> BulkEnableApiKeysAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+    {
+        await apiKeys.BulkEnableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkArchiveAPIKeys (axonhub.resolvers.go:513-523).</summary>
+    [GraphQLName("bulkArchiveAPIKeys")]
+    public async Task<bool> BulkArchiveApiKeysAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+    {
+        await apiKeys.BulkArchiveAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
 }

@@ -14,7 +14,8 @@ public sealed record AdminGraphqlIdentity(
     ManagementUser? User,
     long? ApiKeyId,
     long? ProjectId,
-    bool IsApiKey)
+    bool IsApiKey,
+    AxonHub.Persistence.ApiKeyRecord? ApiKey = null)
 {
     /// <summary>The HttpContext.Items key written by the gate middleware.</summary>
     public static readonly object ContextKey = new();

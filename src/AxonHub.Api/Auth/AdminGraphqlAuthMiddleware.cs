@@ -164,7 +164,8 @@ public sealed class AdminGraphqlAuthMiddleware(
             User: null,
             ApiKeyId: apiKey.Id,
             ProjectId: apiKey.ProjectId,
-            IsApiKey: true);
+            IsApiKey: true,
+            ApiKey: apiKey);
         await next(context).ConfigureAwait(false);
     }
 
