@@ -59,3 +59,4 @@ python -I C:\Users\geffz\.claude\skills\cross-lang-porting\scripts\reference_loc
 |---|---|---|---|---|
 | 2026-10-30 | — | `b8bb3421`（v1.0.0-beta11） | 初始基线 | 锁定 |
 | 2026-11-05 | `b8bb3421` | `2851a192`（仅 analytics 切片） | analytics SDL 与解析器 / 助手：`startTime` / `endTime` 由日期字符串改为 `Time`（RFC3339），`AnalyticsMetadata.earliestDate` 改为 `earliestTime`，日统计改用 `startOfDay` 语义（ba84cab8 的 tok/s 与 TTFT 指标同属该切片） | 局部跟进：端口前端已随上游 HEAD 拷贝，按 2851a192 实现；其余子系统仍以 `b8bb3421` 为基线，差异登记为 C194 |
+| 2026-11-05 | `b8bb3421` | `f272549f`（仅 dashboard 切片） | 新增 `internal/server/gql/dashboard_cache.go`（进程内缓存、按 key 单飞、2 分钟 detached 计算）；`dashboard.resolvers.go` / `dashboard_helpers.go` / `dashboard_usage_aggregates.go` 的解析器语义随 532a8032（perf(dashboard): reduce aggregate load，#2755）与 dc68318c（#2780）改变：聚合结果缓存、fastest 排名的 PostgreSQL DISTINCT ON、`channel_probes` 分支。`dashboard.graphql` 与基线逐字节相同（`cmp` 验证） | 局部跟进：§105 的 21 个根字段按 f272549f 实现；其余子系统仍以 `b8bb3421` 为基线，差异登记为 C195 |

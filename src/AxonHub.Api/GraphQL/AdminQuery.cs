@@ -1,4 +1,5 @@
 using HotChocolate;
+using HotChocolate.Resolvers;
 using HotChocolate.Types;
 using Microsoft.Extensions.DependencyInjection;
 using AxonHub.Api.Management;
@@ -766,5 +767,284 @@ public sealed class AdminQuery
                 cancellationToken)
             .ConfigureAwait(false);
         return stats.Select(AnalyticsMapping.ToGraphQL).ToList();
+    }
+
+    // -------------------------------------------------------- dashboard (§105)
+
+    /// <summary>Port of queryResolver.DashboardOverview (dashboard.resolvers.go:42-93).</summary>
+    [GraphQLName("dashboardOverview")]
+    public async Task<DashboardOverviewType> DashboardOverviewAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var overview = await dashboard.GetDashboardOverviewAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return DashboardMapping.ToGraphQL(overview);
+    }
+
+    /// <summary>Port of queryResolver.RequestStats (dashboard.resolvers.go:99-148).</summary>
+    [GraphQLName("requestStats")]
+    public async Task<RequestStatsType> RequestStatsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetRequestStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return DashboardMapping.ToGraphQL(stats);
+    }
+
+    /// <summary>Port of queryResolver.RequestStatsByChannel (dashboard.resolvers.go:153-171).</summary>
+    [GraphQLName("requestStatsByChannel")]
+    public async Task<IReadOnlyList<RequestStatsByChannelType>> RequestStatsByChannelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetRequestStatsByChannelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.RequestStatsByModel (dashboard.resolvers.go:176-194).</summary>
+    [GraphQLName("requestStatsByModel")]
+    public async Task<IReadOnlyList<RequestStatsByModelType>> RequestStatsByModelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetRequestStatsByModelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.RequestStatsByAPIKey (dashboard.resolvers.go:199-218).</summary>
+    [GraphQLName("requestStatsByAPIKey")]
+    public async Task<IReadOnlyList<RequestStatsByApiKeyType>> RequestStatsByApiKeyAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetRequestStatsByApiKeyAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.TokenStatsByAPIKey (dashboard.resolvers.go:223-246).</summary>
+    [GraphQLName("tokenStatsByAPIKey")]
+    public async Task<IReadOnlyList<TokenStatsByApiKeyType>> TokenStatsByApiKeyAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetTokenStatsByApiKeyAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.APIKeyTokenUsageStats (dashboard.resolvers.go:250-340).</summary>
+    [GraphQLName("apiKeyTokenUsageStats")]
+    public async Task<IReadOnlyList<ApiKeyTokenUsageStatsType>> ApiKeyTokenUsageStatsAsync(
+        ApiKeyTokenUsageStatsInput? input,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        DashboardApiKeyTokenUsageInput? model = null;
+        if (input is not null)
+        {
+            model = new DashboardApiKeyTokenUsageInput(
+                input.ApiKeyIds?.Select(GidValue.Parse).ToList() ?? [],
+                input.CreatedAtGTE,
+                input.CreatedAtLTE);
+        }
+
+        var stats = await dashboard.GetApiKeyTokenUsageStatsAsync(model, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.DailyRequestStats (dashboard.resolvers.go:345-447).</summary>
+    [GraphQLName("dailyRequestStats")]
+    public async Task<IReadOnlyList<DailyRequestStatsType>> DailyRequestStatsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetDailyRequestStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.TopRequestsProjects (dashboard.resolvers.go:449-512).</summary>
+    [GraphQLName("topRequestsProjects")]
+    public async Task<IReadOnlyList<TopRequestsProjectsType>> TopRequestsProjectsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var projects = await dashboard.GetTopRequestsProjectsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return projects.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>
+    /// Port of queryResolver.TokenStats (dashboard.resolvers.go:517-718). A
+    /// failed synchronous all-time aggregation reports a non-terminating field
+    /// error and keeps the zero defaults, exactly like graphql.AddError.
+    /// </summary>
+    [GraphQLName("tokenStats")]
+    public async Task<TokenStatsType> TokenStatsAsync(
+        IResolverContext context,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetTokenStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (stats.AllTimeFailed)
+        {
+            context.ReportError(
+                ErrorBuilder.New()
+                    .SetMessage("Failed to aggregate all-time token statistics")
+                    .SetExtension("code", "TOKEN_STATS_ALL_TIME_AGG_FAILED")
+                    .Build());
+        }
+
+        return DashboardMapping.ToGraphQL(stats);
+    }
+
+    /// <summary>Port of queryResolver.ChannelSuccessRates (dashboard.resolvers.go:724-870).</summary>
+    [GraphQLName("channelSuccessRates")]
+    public async Task<IReadOnlyList<ChannelSuccessRateType>> ChannelSuccessRatesAsync(
+        string? timeWindow,
+        int? limit,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var rates = await dashboard.GetChannelSuccessRatesAsync(
+                timeWindow,
+                limit,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return rates.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.FastestChannels (dashboard.resolvers.go:875-1019).</summary>
+    [GraphQLName("fastestChannels")]
+    public async Task<IReadOnlyList<FastestChannelType>> FastestChannelsAsync(
+        FastestChannelsInput input,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var channels = await dashboard.GetFastestChannelsAsync(
+                new DashboardFastestChannelsInput(input.TimeWindow, input.Limit ?? 5),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return channels.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.FastestModels (dashboard.resolvers.go:1024-1168).</summary>
+    [GraphQLName("fastestModels")]
+    public async Task<IReadOnlyList<FastestModelType>> FastestModelsAsync(
+        FastestChannelsInput input,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var models = await dashboard.GetFastestModelsAsync(
+                new DashboardFastestChannelsInput(input.TimeWindow, input.Limit ?? 5),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return models.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.ModelPerformanceStats (dashboard.resolvers.go:1173-1325).</summary>
+    [GraphQLName("modelPerformanceStats")]
+    public async Task<IReadOnlyList<ModelPerformanceStatType>> ModelPerformanceStatsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetModelPerformanceStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.ChannelPerformanceStats (dashboard.resolvers.go:1328-1374).</summary>
+    [GraphQLName("channelPerformanceStats")]
+    public async Task<IReadOnlyList<ChannelPerformanceStatType>> ChannelPerformanceStatsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetChannelPerformanceStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.TokenStatsByChannel (dashboard.resolvers.go:1377-1401).</summary>
+    [GraphQLName("tokenStatsByChannel")]
+    public async Task<IReadOnlyList<TokenStatsByChannelType>> TokenStatsByChannelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetTokenStatsByChannelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.TokenStatsByModel (dashboard.resolvers.go:1403-1426).</summary>
+    [GraphQLName("tokenStatsByModel")]
+    public async Task<IReadOnlyList<TokenStatsByModelType>> TokenStatsByModelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetTokenStatsByModelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.CostStatsByChannel (dashboard.resolvers.go:1428-1447).</summary>
+    [GraphQLName("costStatsByChannel")]
+    public async Task<IReadOnlyList<CostStatsByChannelType>> CostStatsByChannelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetCostStatsByChannelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.CostStatsByModel (dashboard.resolvers.go:1449-1468).</summary>
+    [GraphQLName("costStatsByModel")]
+    public async Task<IReadOnlyList<CostStatsByModelType>> CostStatsByModelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetCostStatsByModelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.CostStatsByAPIKey (dashboard.resolvers.go:1470-1490).</summary>
+    [GraphQLName("costStatsByAPIKey")]
+    public async Task<IReadOnlyList<CostStatsByApiKeyType>> CostStatsByApiKeyAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetCostStatsByApiKeyAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.UsageStatsByUser (dashboard.resolvers.go:1492-1620).</summary>
+    [GraphQLName("usageStatsByUser")]
+    public async Task<IReadOnlyList<UsageStatsByUserType>> UsageStatsByUserAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetUsageStatsByUserAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
     }
 }

@@ -23,6 +23,10 @@ public static class GraphQLSetup
             .AddType<GoDecimalType>()
             .AddType<JsonRawMessageType>()
 
+            // Defined by dashboard.graphql but never reached from a root field;
+            // registering it keeps the same named type in the schema.
+            .AddType<HourlyRequestStatsType>()
+
             // HotChocolate infers input-object names from the CLR type; the
             // gqlgen SDL calls these ChannelOrderingItem, BulkImportChannelItem
             // and AnalyticsFilter. Registering the descriptors explicitly fixes

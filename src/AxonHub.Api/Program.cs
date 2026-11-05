@@ -97,6 +97,12 @@ builder.Services.AddSingleton<ChannelLimiterManager>();
 builder.Services.AddSingleton<IPreviousChannelProvider>(static services
     => new PreviousChannelCache(services.GetRequiredService<TimeProvider>()));
 
+// Dashboard aggregates live in process-local caches in the reference
+// (gql/dashboard_cache.go, gql/dashboard_helpers.go): a shared TTL cache with
+// single-flight computation and the all-time token stats snapshot.
+builder.Services.AddSingleton<DashboardCache>();
+builder.Services.AddSingleton<DashboardTokenStatsCache>();
+
 // API key authentication (server.api.auth): the reference reads allow_no_auth
 // from config.yml and the AXONHUB_* environment; both spellings are accepted.
 var allowNoAuth = bool.TryParse(
@@ -178,6 +184,7 @@ builder.Services.AddScoped<IRequestStore, RequestStore>();
 builder.Services.AddScoped<IRequestExecutionStore, RequestExecutionStore>();
 builder.Services.AddScoped<IUsageLogStore, UsageLogStore>();
 builder.Services.AddScoped<IAnalyticsStore, AnalyticsStore>();
+builder.Services.AddScoped<IDashboardStore, DashboardStore>();
 builder.Services.AddScoped<VideoService>();
 
 // The orchestrator's enforceQuota middleware (biz.QuotaService): API key
@@ -294,6 +301,7 @@ builder.Services.AddScoped<RequestManagementService>();
 builder.Services.AddScoped<RequestQueryService>();
 builder.Services.AddScoped<UsageLogManagementService>();
 builder.Services.AddScoped<AnalyticsService>();
+builder.Services.AddScoped<DashboardService>();
 
 // Management identity: the gate middleware writes the authenticated caller
 // into HttpContext.Items; the scoped seam reads it back for the resolvers.
