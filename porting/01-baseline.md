@@ -4431,6 +4431,41 @@ Llm 3020、Persistence 207；四个项目合计由 5627 增至 5643，0 失败 0
 差异：新增 C181（previous-channel 缓存为进程内实现，参照经 xcache 可配置 Redis；单实例
 行为等价，多实例不共享）；C179 的实时读取与 C012 残余沿用。
 
+## 92. 项目 / API key profile 的候选过滤切片（SelectedChannels / ChannelTags，12 例，2026-11-05）
+
+参照 `internal/server/orchestrator/select_candidates.go` 的选候选中间件前半程（27-51）、
+`candidates.go` 的 SelectedChannelsSelector（633-671）与 TagsFilterSelector（988-1024）、
+`internal/objects/apikey.go` 的 MatchChannelTags / OrDefault（46-94）与
+`ent/extra.go` 的 Project.GetActiveProfile / APIKey.GetActiveProfile（16-42）；
+端口新增 `ProfileFilters`（激活 profile 解析 + 候选过滤）与 `ChannelCandidate.Tags`，
+在 `ChatCompletionOrchestrator` 里于基础选择器产出之后、粘性 / 负载均衡排序之前应用，
+对齐可观察行为：
+
+- 作用顺序：项目 profile（上界）先过滤，API key 自己的激活 profile 再在其中收窄；
+  两者都是交集。项目 profile 只在请求带 API key 时生效（参照从 `APIKey.Edges.Project`
+  读项目），没有 key 时即使上下文里有 project 也不过滤。
+- 空过滤器：`ChannelIDs` 为 nil / 空、`ChannelTags` 为 nil / 空时该维度是 no-op；
+  profile 名与 `activeProfile` 不匹配、`activeProfile` 为空时没有激活 profile。
+- 标签匹配：`all` 要求通道包含全部允许标签；`none` 要求通道不含任何允许标签；
+  `any`、空串、非法值都按 `any`（有交集即匹配）；无标签通道在 allow list 下永不匹配，
+  在 `none` 下通过。
+- 适用面：过滤包住所有基础选择器，模型关联候选与无模型行的通道回退都受约束；
+  tester 的指定通道候选同样过一遍过滤。
+- 过滤后为空：抛出 `TransformerException`，文案 `model not found: <model>`（无引号），
+  与参照的 `ErrInvalidModel` 一致；不会向上游发请求。
+- 复用：`ModelService` 的公开模型列表改用同一组激活 profile 解析函数，行为不变；
+  `ChannelCandidate.Tags` 是新增的 Orleans 字段（Id 23），默认 null。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| key profile 的 ChannelIDs 过滤、空过滤器 no-op、项目与 key 交集、无 key 忽略项目、标签 any / 未知模式按 any / all / none、同 profile 内 IDs 与标签交集、无标签不匹配 allow list、legacy 通道回退、tester 指定候选 | `tests/AxonHub.Api.Tests/ProfileFilterSelectionTests.cs` | 12 |
+
+`AxonHub.Api.Tests` 由 2321 增至 2333（+12），Llm 3020、Grains 95、Persistence 207；
+四个项目合计由 5643 增至 5655，0 失败 0 跳过。
+
+差异：不新增编号；C179 的真实缺口 (b) 由本节闭合（该条目已就地更新），畸形 profile
+JSON 的失败关闭口径沿用 C178。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4455,3 +4490,4 @@ Llm 3020、Persistence 207；四个项目合计由 5627 增至 5643，0 失败 0
 | 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |
 | 模型关联路由与多模型重试 | 已由 §90 闭合：DefaultSelector 的模型行查询 / privacy / 关联匹配（六种 kind 与排除规则）/ When 条件 / 聚合 / 逐模型 API 格式、模型级 routing policy、模型卡 DefaultMaxTokens、无模型行回退通道、多模型同通道重试与 tester 路径排序（59 例）；残余差异与真实缺口登记为 C179，四个未移植的通道变换选项登记为 C180 | 中 | 完成（C179 / C180） |
 | trace / thread 通道粘性路由 | 已由 §91 闭合：prefer_previous_channel 的生效策略优先级、trace → thread 作用域解析、命中仅限候选池、priority 最小候选置首与同通道 fallback 去重、只记账粘性候选、写回条件与 trace 行 thread 优先、30 分钟 TTL（15 + 1 例）；进程内缓存的多实例限制登记为 C181 | — | 完成（C181） |
+| 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |

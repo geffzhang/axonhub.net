@@ -987,6 +987,7 @@ public sealed class ChannelTestService(
             DefaultTestModel = ResolveDefaultTestModel(descriptor),
             ApiFormat = apiFormat,
             ApiKeyOverride = string.IsNullOrEmpty(apiKeyOverride) ? null : apiKeyOverride,
+            Tags = descriptor.Tags,
         };
     }
 

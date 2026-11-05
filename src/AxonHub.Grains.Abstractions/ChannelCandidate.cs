@@ -141,6 +141,13 @@ public sealed class ChannelCandidate
     /// </summary>
     [Id(22)]
     public bool TraceSticky { get; set; }
+
+    /// <summary>
+    /// Raw <c>tags</c> jsonb text ([]string). The project / API key profile
+    /// filters read it exactly like the reference's <c>candidate.Channel.Tags</c>.
+    /// </summary>
+    [Id(23)]
+    public string? Tags { get; set; }
 }
 
 /// <summary>

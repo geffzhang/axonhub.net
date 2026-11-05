@@ -71,7 +71,8 @@ public sealed class ModelService(
         if (apiKey is not null)
         {
             // Project-level profile filtering (upper boundary).
-            var projectProfile = ActiveProjectProfile(identity.GetCurrentProject());
+            var projectProfile = ProfileFilters.ActiveProjectProfile(
+                identity.GetCurrentProject());
             if (projectProfile is not null)
             {
                 if (projectProfile.ChannelIDs is { Count: > 0 } projectChannelIds)
@@ -91,7 +92,7 @@ public sealed class ModelService(
             }
 
             // Key-level profile filtering (narrows further within project scope).
-            var profile = ActiveApiKeyProfile(apiKey);
+            var profile = ProfileFilters.ActiveApiKeyProfile(apiKey);
             if (profile is not null)
             {
                 if (profile.ChannelIDs is { Count: > 0 } channelIds)
@@ -316,32 +317,4 @@ public sealed class ModelService(
         return false;
     }
 
-    /// <summary>Port of Project.GetActiveProfile (ent/extra.go:16-28).</summary>
-    private static ProjectProfileModel? ActiveProjectProfile(ProjectRecord? project)
-    {
-        if (project is null)
-        {
-            return null;
-        }
-
-        var profiles = ProjectProfilesCodec.Deserialize(project.Profiles);
-        if (profiles.ActiveProfile.Length == 0)
-        {
-            return null;
-        }
-
-        foreach (var profile in profiles.Profiles ?? [])
-        {
-            if (string.Equals(profile.Name, profiles.ActiveProfile, StringComparison.Ordinal))
-            {
-                return profile;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>Port of APIKey.GetActiveProfile (ent/extra.go:30-42).</summary>
-    private static ApiKeyProfileModel? ActiveApiKeyProfile(ApiKeyRecord apiKey)
-        => ApiKeyProfilesCodec.ActiveProfile(apiKey.Profiles);
 }

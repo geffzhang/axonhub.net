@@ -597,6 +597,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
             DefaultMaxTokens = defaultMaxTokens,
             Settings = channel.Settings,
             Endpoints = channel.Endpoints,
+            Tags = channel.Tags,
         };
 
         foreach (var entry in models)
@@ -626,6 +627,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         DisabledApiKeys = candidate.DisabledApiKeys,
         Settings = candidate.Settings,
         Endpoints = candidate.Endpoints,
+        Tags = candidate.Tags,
     };
 
     /// <summary>

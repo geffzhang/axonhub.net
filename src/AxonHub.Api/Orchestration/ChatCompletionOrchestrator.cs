@@ -10,6 +10,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
 using Orleans;
+using ProfileFilters = AxonHub.Api.Models.ProfileFilters;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -257,12 +258,19 @@ public sealed class ChatCompletionOrchestrator
             identity.ApiKey,
             selection.RoutingPolicy);
 
+        // select_candidates.go:27-51: the project profile (upper boundary) and
+        // the API key profile narrow the base selector's candidates before the
+        // load-balanced selector runs.
+        var scopedCandidates = ProfileFilters.ApplyToCandidates(
+            selection.Candidates,
+            identity);
+
         ChannelCandidate[] candidates = [];
-        if (selection.Candidates.Count > 0)
+        if (scopedCandidates.Count > 0)
         {
             candidates = await SortCandidatesAsync(
                     model,
-                    selection.Candidates,
+                    scopedCandidates,
                     identity,
                     effectivePolicy,
                     requiredCount,
@@ -337,6 +345,16 @@ public sealed class ChatCompletionOrchestrator
             // ErrInvalidModel wrapped with the request model.
             throw TransformerErrors.InvalidModel(llmRequest.Model);
         }
+
+        // The tester's processor runs the same selectCandidates middleware, so
+        // a project / key profile can filter out the specified channel too.
+        var scoped = ProfileFilters.ApplyToCandidates([candidate], identity);
+        if (scoped.Count == 0)
+        {
+            throw TransformerErrors.InvalidModel(llmRequest.Model);
+        }
+
+        candidate = scoped[0];
 
         // tester.go:306-312 installs the same three load balancers as the
         // server, so selectCandidates still wraps the SpecifiedChannelSelector
