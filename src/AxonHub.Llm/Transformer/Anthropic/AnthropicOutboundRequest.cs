@@ -17,6 +17,14 @@ public static class AnthropicOutboundRequest
     /// <summary>Standard function name that maps to the native tool.</summary>
     public const string WebSearchFunctionName = "web_search";
 
+    /// <summary>
+    /// Port of <c>anthropic.TransformerMetadataKeyOutputConfigEffort</c>
+    /// (tool_blocks.go:16): the client's native <c>output_config.effort</c>,
+    /// kept so the outbound rebuilds it after the unified effort is mapped.
+    /// </summary>
+    public const string TransformerMetadataKeyOutputConfigEffort =
+        AnthropicJson.KeyOutputConfigEffort;
+
     private const long DefaultAnthropicMaxTokens = 8192;
 
     private static readonly Dictionary<string, long> DefaultReasoningEffortMapping = new(StringComparer.Ordinal)

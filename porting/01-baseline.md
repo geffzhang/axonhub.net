@@ -4589,6 +4589,48 @@ GraphQL 配额面）未移植，登记为 C182（真实缺口）；启动数据�
 allowedChannelIDs 改写 / 迁移标记）未执行，登记为 C183。C179 的真实缺口 (e) 由本节闭合
 （该条目已就地更新）。
 
+## 96. 通道变换选项与流策略强制（applyTransformOptions / reasoning effort / custom tool 过滤 / force streaming，43 + 9 例，2026-11-05）
+
+参照 `internal/server/orchestrator/transform_options.go` 的 applyTransformOptions（16-44）、
+applyReasoningEffortMapping（76-104）与 replaceDeveloperRoleWithSystem（107-129），
+`internal/server/orchestrator/outbound.go` 的 TransformRequest 请求整形（552-583）、
+filterResponseCustomToolMessagesForNonResponsesOutbound（597-613，含 isResponsesFormat 与
+containsResponseCustomToolMessages）与 shouldForceStreamingForCandidate（434-450），
+以及 `llm/transformer/shared/messages.go`
+的 FilterOutResponseCustomToolMessages / shouldDropMessageAfterToolFiltering。端口新增
+`ChannelTransformOptions.cs`、`AxonHub.Llm/Transformer/Shared/Messages.cs`，在
+`PersistentOutboundTransformer.TransformRequest` 的 provider 变换之前按参照顺序应用，
+对齐可观察行为：
+
+- 变换选项：三项开关全关时原样返回；ForceArrayInstructions / ForceArrayInputs 写入
+  TransformOptions 的独立副本（Go 的内联结构体复制语义），保留既有 DefaultMaxTokens；
+  ReplaceDeveloperRoleWithSystem 按 OrdinalIgnoreCase 匹配 developer 并把匹配消息复制后
+  改为 system，未命中时返回原列表。
+- reasoning effort 映射：空映射 / 空 effort / 未命中时原样返回；首个 From 命中项生效；
+  命中时浅拷贝请求，若 TransformerMetadata 含 Anthropic output_config.effort 标记则先复制
+  字典再写入映射值，原请求的元数据不变。
+- custom tool 过滤：仅当入站为 Responses / ResponsesCompact 且出站不是这两种格式且消息含
+  Responses custom tool 调用时，浅拷贝请求并过滤：移除 custom tool 调用、记录其 Id 与
+  CallId、移除对应 tool 结果消息；失去全部 tool call 且无内容 / 拒绝 / 推理 / 音频的消息
+  整条丢弃。
+- Anthropic 流意图归一化：出站为 anthropic/messages 且 Stream 为 nil 时置为 false，使
+  provider 体显式携带 `"stream": false`（该步骤位于同一函数，原 C180 描述未单列）。
+- 强制流式：通道 stream 策略为 require、客户端未要求流式、且请求类型支持自动聚合时，
+  置 Stream=true 与 StreamOptions.IncludeUsage=true；同样的置位同步到 state 请求
+  （CurrentLlmRequest），供 pipeline 走聚合路径；OriginalRequestStream 仍保留客户端原始
+  意图供 pass-through 比较。
+- 通道 settings 按原始 jsonb 读取；非法 JSON 视为未配置（与 C157 的宽松读取一致）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 变换选项（替换 / 数组化 / 保留既有值 / 不修改原请求）、reasoning 映射与元数据同步、Responses custom tool 过滤、Anthropic 显式 `stream:false`、require-streaming 强制与 state 同步、默认配置原样透传 | `tests/AxonHub.Api.Tests/ChannelTransformOptionsTests.cs` | 43 |
+| 共享消息过滤：custom tool 调用 / 结果移除、空消息丢弃、内容与推理等载荷保留、CallId 去重 | `tests/AxonHub.Llm.Tests/SharedMessageFilterTests.cs` | 9 |
+
+`AxonHub.Api.Tests` 由 2405 增至 2448（+43），Llm 由 3023 增至 3032（+9），Grains 95、
+Persistence 207；四个项目合计由 5730 增至 5782，0 失败 0 跳过。
+
+差异：C180 由本节闭合（该条目已就地更新为 accepted）；无新增差异。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4611,9 +4653,10 @@ allowedChannelIDs 改写 / 迁移标记）未执行，登记为 C183。C179 的�
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随 trace 管理面切片落地 |
 | 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
 | 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |
-| 模型关联路由与多模型重试 | 已由 §90 闭合：DefaultSelector 的模型行查询 / privacy / 关联匹配（六种 kind 与排除规则）/ When 条件 / 聚合 / 逐模型 API 格式、模型级 routing policy、模型卡 DefaultMaxTokens、无模型行回退通道、多模型同通道重试与 tester 路径排序（59 例）；残余差异与真实缺口登记为 C179，四个未移植的通道变换选项登记为 C180 | 中 | 完成（C179 / C180） |
+| 模型关联路由与多模型重试 | 已由 §90 闭合：DefaultSelector 的模型行查询 / privacy / 关联匹配（六种 kind 与排除规则）/ When 条件 / 聚合 / 逐模型 API 格式、模型级 routing policy、模型卡 DefaultMaxTokens、无模型行回退通道、多模型同通道重试与 tester 路径排序（59 例）；残余差异与真实缺口登记为 C179，通道变换选项与流策略强制由 §96 闭合（C180） | 中 | 完成（C179 / C180） |
 | trace / thread 通道粘性路由 | 已由 §91 闭合：prefer_previous_channel 的生效策略优先级、trace → thread 作用域解析、命中仅限候选池、priority 最小候选置首与同通道 fallback 去重、只记账粘性候选、写回条件与 trace 行 thread 优先、30 分钟 TTL（15 + 1 例）；进程内缓存的多实例限制登记为 C181 | — | 完成（C181） |
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
 | 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；供应商配额采集子系统（checkers / ProviderQuotaService / provider_quota_status / GraphQL 配额面）与启动数据迁移未移植（C182 / C183），null provider 下与参照「通道无配额状态」可观察等价 | 中 | 闸门完成；采集与迁移随 C182 / C183 切片落地 |
+| 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |

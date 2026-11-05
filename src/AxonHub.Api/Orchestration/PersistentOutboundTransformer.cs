@@ -231,7 +231,37 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             outboundFormat = candidate.ApiFormat;
         }
 
-        var outboundRequest = ApplyModelDefaultMaxTokens(request, candidate, outboundFormat);
+        // outbound.go:550-563 — channel transform options and the reasoning
+        // effort mapping shape the unified request before the provider
+        // transformer renders it.
+        var settings = ChannelTransformOptions.SettingsOf(candidate);
+        var outboundRequest = ChannelTransformOptions.Apply(request, settings);
+        outboundRequest = ChannelTransformOptions.ApplyReasoningEffortMapping(outboundRequest, settings);
+        outboundRequest = ApplyModelDefaultMaxTokens(outboundRequest, candidate, outboundFormat);
+        outboundRequest = ChannelTransformOptions.FilterResponseCustomToolMessagesForNonResponsesOutbound(
+            outboundRequest,
+            outboundFormat);
+
+        // outbound.go:565-567 — a messages-protocol round is never left with an
+        // ambiguous stream intent.
+        if (outboundRequest.Stream is null && outboundFormat == ApiFormats.AnthropicMessage)
+        {
+            outboundRequest.Stream = false;
+        }
+
+        // outbound.go:569-585 — require-streaming channels serve aggregatable
+        // non-streaming requests by forcing the upstream stream and syncing the
+        // state request the pipeline reads afterwards.
+        if (ChannelTransformOptions.ShouldForceStreamingForCandidate(candidate, outboundRequest))
+        {
+            outboundRequest.Stream = true;
+            outboundRequest.StreamOptions ??= new StreamOptions();
+            outboundRequest.StreamOptions.IncludeUsage = true;
+
+            request.Stream = true;
+            request.StreamOptions ??= new StreamOptions();
+            request.StreamOptions.IncludeUsage = true;
+        }
 
         return _current.TransformRequest(outboundRequest);
     }

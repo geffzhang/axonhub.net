@@ -92,9 +92,10 @@ public static class StreamPolicySelector
     /// <summary>
     /// Port of <c>supportsAutoAggregateRequest</c>: chat and completion formats
     /// can be aggregated after a streaming upstream, so a require-streaming
-    /// channel remains usable for a non-streaming client.
+    /// channel remains usable for a non-streaming client. Shared with the
+    /// per-candidate forced-streaming check in <see cref="ChannelTransformOptions"/>.
     /// </summary>
-    private static bool SupportsAutoAggregateRequest(LlmRequest request)
+    internal static bool SupportsAutoAggregateRequest(LlmRequest request)
     {
         switch (request.RequestType)
         {
