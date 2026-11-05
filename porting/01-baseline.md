@@ -4991,6 +4991,62 @@ node(UsageLog)。
 
 差异：C193 登记显式隐私求值 / SQL 子查询表达与反向边、where 子集缺口（承接 C165 / C192）。
 
+## 104. Analytics 页 GraphQL（四个根字段，10 + 4 例，2026-11-05）
+
+参照 `2851a192`（局部基线跟进，见 00-reference.md 漂移记录与 C194）：
+`internal/server/gql/analytics.graphql`（AnalyticsFilter / AnalyticsMetadata /
+AnalyticsOverview / AnalyticsDailyStat / AnalyticsDimensionStat 与四个根字段）、
+`analytics.resolvers.go`（四个解析器）、`analytics_helpers.go`（buildAnalyticsWhere /
+resolveFilterAPIKeyIDs / startOfDay / 维度名称合成）、`internal/authz/scope.go`
+（WithScopeDecision / HasScope）、`internal/server/biz/performance.go`
+（MinLatencyMs = 10 与生成延迟）、`internal/server/biz/system.go:1499-1546`
+（TimeLocation 解析）。
+
+新增 `Persistence/Stores/AnalyticsStore.cs`（Dapper 聚合与维度 / 性能查询）、
+`Api/Settings/SystemTimeLocations.cs`（共享时区解析，配额切片 C186 复用同一实现）、
+`Api/Management/AnalyticsService.cs`（作用域决策、过滤解析、名称合成、日桶补零）、
+`Api/GraphQL/AnalyticsTypes.cs`（输入 / 输出类型与映射），在 `GraphQLSetup` 显式注册
+`AnalyticsFilter` 的线缆名（HotChocolate 对解析器参数推断的输入对象按 CLR 类型命名、
+忽略 `[GraphQLName]`），在 `AdminQuery` 接线四个根字段。
+
+- 过滤器与边界：startTime / endTime 为 RFC3339 `Time`，下界 `>=`、上界 `<=`
+  （毫秒精度）；projectIDs / channelIDs / apiKeyIDs / userIDs 按 GID 解析，
+  modelIDs 原样；显式 apiKeyIDs 与 userIDs 同时存在时取交集（保留显式顺序）；
+  userIDs 经 `api_keys.user_id` 解析（不过滤 deleted_at），解析失败吞掉并按
+  「用户过滤未命中任何 key」处理（SQL FALSE）；无过滤条件时不加谓词。
+- 作用域：overview / daily / dimension 在查询前按 `read_dashboard` 求值——
+  测试 Principal 放行、API key 按 scopes 判断、无用户 `no user in context`、
+  owner / 系统角色 scope 放行、项目级 scope 需显式项目头、其余 `default deny`，
+  统一附加 `ent/privacy: deny rule` 并映射 `extensions.code = FORBIDDEN`；
+  被允许的调用绕过 UsageLog 隐私链（无项目过滤）。metadata 不做 scope 决策，
+  走 `TracePrivacy.EvaluateUsageLogQueryAsync`（项目作用域 + 逐行可见性）。
+- 日统计：按配置时区的本地日历日
+  `to_char(created_at AT TIME ZONE <name>, 'YYYY-MM-DD')` 分组，服务层用
+  startOfDay 补零（缺省今天 - 29 天到今天的本地日）；时区缺失 / 畸形 / 未知
+  回退 UTC，`Local` 映射 TimeZoneInfo.Local 且名称为 "Local"；时区名以参数
+  绑定（C194）。
+- 维度：channel（join channels 且 deleted_at = 0）、model（id = name = model_id）、
+  apiKey（api_key_id 非空，名称按未过滤删除的 api_keys 读取，缺失回退
+  `API Key #<id>`）、user（join api_keys deleted_at = 0 与 users，名称
+  `TrimSpace(first + " " + last)`，空则 email）；均按 total_tokens DESC 排序。
+- 性能：request_executions join requests 的 request_id 与 channel_id，取每个
+  (request, channel) 最新的 completed 尝试（metrics_latency_ms > 0）；生成延迟 =
+  流式且有 TTFT ? latency - ttft : latency，下限 10ms；tokensPerSecond =
+  SUM(completion_tokens) * 1000 / SUM(生成延迟)，ttftMs = 流式且 ttft > 0 的均值；
+  无样本时两者为 null。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 四个根字段线形、过滤器映射与交集、最早时间与隐私链、空用户过滤 FALSE、时区日桶与缺省 30 天、维度名称合成与性能合并、未知维度文案、read_dashboard 拒绝 FORBIDDEN、存储失败前缀 | `tests/AxonHub.Api.Tests/AdminAnalyticsEndpointTests.cs` | 10 |
+| 边界含毫秒与上界闭区间、空聚合零值、维度 join（活跃通道 / 活 key / 用户名称）、apiKey 名称与用户 key 解析、性能最新 completed 尝试与 10ms 下限 | `tests/AxonHub.Persistence.Tests/AnalyticsStoreTests.cs` | 4 |
+
+`AxonHub.Api.Tests` 由 2643 增至 2653（+10），Llm 3032、Grains 95、
+`AxonHub.Persistence.Tests` 由 240 增至 244（+4）；四个项目合计由 6010 增至 6024，
+0 失败 0 跳过。
+
+差异：C194 登记 analytics 切片的局部基线跟进（2851a192）、直接 Dapper SQL 渲染、
+Postgres-only 日期分支、时区名参数绑定与 `::text` / `checked` 截断。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -5003,7 +5059,7 @@ node(UsageLog)。
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、invitations、analytics / dashboard、系统设置类查询等）未移植（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入）；前端实际调用的 215 个根字段中 111 个已接入（约 52%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 18 个 ent 类型见 C165）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、invitations、dashboard、系统设置类查询等）未移植（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入）；前端实际调用的 215 个根字段中 115 个已接入（约 53%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 18 个 ent 类型见 C165）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），通道测试由 §76 接入，模型同步由 §77 接入，覆盖模板的 `channel_override_templates` 表、`channelOverrideTemplates` 查询与 create/update/delete/apply/clear 五个变更由 §78 接入（隐私作用域 C161、where 子集 C162、通道顺序 C163），其余通道写操作（C037）未移植 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / models / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`models` 管理存储由 §88 的 7 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
@@ -5027,3 +5083,4 @@ node(UsageLog)。
 | 追踪与线程管理面（GraphQL） | 已由 §101 闭合：traces / threads 根查询、`node()` 的 Trace / Thread 分支、Trace / Thread 完整类型与边、八个 archive / unarchive / retain / unretain 变更、TracePrivacy 查询与变更策略、段构建（OpenAI / Anthropic / Gemini / 图片 / moderation / alpha search）、用量聚合与 thread 级联状态变更（23 + 15 例）；残余差异（隐私显式求值、Int 截断与零值 GID、顺序加载 / 无对象存储）登记为 C189–C191（accepted），GC / 保留策略仍见 C095 | — | 完成（C189–C191） |
 | 请求管理面（GraphQL） | 已由 §102 闭合：requests 根查询、`node()` 的 Request 分支、RequestExecution / UsageLog 完整类型与嵌套连接、正文与 chunk 加载规则、四个 order 输入、三个 where 输入、成本明细与隐私边（5 + 3 例）；残余差异（where 输入子集、缺失 dataStorage 边、stream + processing 实时预览）登记为 C192（accepted） | — | 完成（C192） |
 | 用量日志管理面（GraphQL） | 已由 §103 闭合：usageLogs 根查询、`node()` 的 UsageLog 分支、项目作用域与逐行可见性谓词、CREATED_AT→id 排序重写（8 + 1 例）；残余差异（显式隐私求值 / SQL 表达式、反向边、where 子集）登记为 C193（accepted，承接 C165 / C192） | — | 完成（C193） |
+| Analytics 页（GraphQL） | 已由 §104 闭合：四个根字段、过滤器解析与显式 / 用户 key 交集、read_dashboard 作用域与 FORBIDDEN 扩展、metadata 的 UsageLog 隐私链、本地日桶补零（缺省 30 天）、四个维度的 join 与名称合成、tokensPerSecond / ttftMs 与 10ms 下限（10 + 4 例）；残余差异（仅 analytics 切片局部跟进 2851a192、直接 Dapper SQL、Postgres-only 日期分支、时区名参数绑定、`::text` / `checked` 截断）登记为 C194（accepted） | — | 完成（C194） |

@@ -177,6 +177,7 @@ builder.Services.AddScoped<IChannelStore, ChannelStore>();
 builder.Services.AddScoped<IRequestStore, RequestStore>();
 builder.Services.AddScoped<IRequestExecutionStore, RequestExecutionStore>();
 builder.Services.AddScoped<IUsageLogStore, UsageLogStore>();
+builder.Services.AddScoped<IAnalyticsStore, AnalyticsStore>();
 builder.Services.AddScoped<VideoService>();
 
 // The orchestrator's enforceQuota middleware (biz.QuotaService): API key
@@ -292,6 +293,7 @@ builder.Services.AddScoped<ThreadManagementService>();
 builder.Services.AddScoped<RequestManagementService>();
 builder.Services.AddScoped<RequestQueryService>();
 builder.Services.AddScoped<UsageLogManagementService>();
+builder.Services.AddScoped<AnalyticsService>();
 
 // Management identity: the gate middleware writes the authenticated caller
 // into HttpContext.Items; the scoped seam reads it back for the resolvers.

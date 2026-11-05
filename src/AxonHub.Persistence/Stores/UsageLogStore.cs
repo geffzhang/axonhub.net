@@ -366,9 +366,10 @@ public sealed class UsageLogStore(AxonHubDbContext db) : IUsageLogStore
     /// <summary>
     /// Port of the project predicate and the UsageLogFilter visibility branch
     /// of UserProjectScopeReadRequestsRule
-    /// (internal/scopes/rule_user_project_scope_requests.go:36-72).
+    /// (internal/scopes/rule_user_project_scope_requests.go:36-72). Shared with
+    /// the analytics metadata query, which runs the same UsageLog query policy.
     /// </summary>
-    private static void AppendScopes(
+    internal static void AppendScopes(
         StringBuilder sql,
         SqlArguments args,
         long? projectScope,

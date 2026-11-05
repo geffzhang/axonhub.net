@@ -24,14 +24,16 @@ public static class GraphQLSetup
             .AddType<JsonRawMessageType>()
 
             // HotChocolate infers input-object names from the CLR type; the
-            // gqlgen SDL calls these ChannelOrderingItem and
-            // BulkImportChannelItem. Registering the descriptors explicitly
-            // fixes the wire names (axonhub.graphql:409, 445); the CLR suffix
-            // is only there to avoid clashing with the biz item type.
+            // gqlgen SDL calls these ChannelOrderingItem, BulkImportChannelItem
+            // and AnalyticsFilter. Registering the descriptors explicitly fixes
+            // the wire names (axonhub.graphql:409, 445; analytics.graphql:7);
+            // the CLR suffix is only there to avoid clashing with a biz type.
             .AddType(new InputObjectType<ChannelOrderingItemInput>(
                 descriptor => descriptor.Name("ChannelOrderingItem")))
             .AddType(new InputObjectType<BulkImportChannelItemInput>(
                 descriptor => descriptor.Name("BulkImportChannelItem")))
+            .AddType(new InputObjectType<AnalyticsFilterInput>(
+                descriptor => descriptor.Name("AnalyticsFilter")))
             .AddTypeExtension<ProjectTypeExtensions>()
             .AddTypeExtension<UserTypeExtensions>()
             .AddTypeExtension<ModelTypeExtensions>()

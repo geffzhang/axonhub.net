@@ -712,4 +712,59 @@ public sealed class AdminQuery
                 throw new InvalidOperationException("unknown node type: " + gid.Type);
         }
     }
+
+    /// <summary>Port of queryResolver.AnalyticsMetadata (analytics.resolvers.go:24-40).</summary>
+    [GraphQLName("analyticsMetadata")]
+    public async Task<AnalyticsMetadataType> AnalyticsMetadataAsync(
+        [Service] AnalyticsService analytics,
+        CancellationToken cancellationToken)
+    {
+        var earliest = await analytics.GetEarliestTimeAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return new AnalyticsMetadataType { EarliestTime = earliest };
+    }
+
+    /// <summary>Port of queryResolver.AnalyticsOverview (analytics.resolvers.go:42-88).</summary>
+    [GraphQLName("analyticsOverview")]
+    public async Task<AnalyticsOverviewType> AnalyticsOverviewAsync(
+        AnalyticsFilterInput? filter,
+        [Service] AnalyticsService analytics,
+        CancellationToken cancellationToken)
+    {
+        var overview = await analytics.GetOverviewAsync(
+                filter is null ? null : AnalyticsMapping.ToModel(filter),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return AnalyticsMapping.ToGraphQL(overview);
+    }
+
+    /// <summary>Port of queryResolver.AnalyticsDailyStats (analytics.resolvers.go:90-194).</summary>
+    [GraphQLName("analyticsDailyStats")]
+    public async Task<IReadOnlyList<AnalyticsDailyStatType>> AnalyticsDailyStatsAsync(
+        AnalyticsFilterInput? filter,
+        [Service] AnalyticsService analytics,
+        CancellationToken cancellationToken)
+    {
+        var stats = await analytics.GetDailyStatsAsync(
+                filter is null ? null : AnalyticsMapping.ToModel(filter),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(AnalyticsMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.AnalyticsDimensionStats (analytics.resolvers.go:196-242).</summary>
+    [GraphQLName("analyticsDimensionStats")]
+    public async Task<IReadOnlyList<AnalyticsDimensionStatType>> AnalyticsDimensionStatsAsync(
+        AnalyticsFilterInput? filter,
+        string dimension,
+        [Service] AnalyticsService analytics,
+        CancellationToken cancellationToken)
+    {
+        var stats = await analytics.GetDimensionStatsAsync(
+                filter is null ? null : AnalyticsMapping.ToModel(filter),
+                dimension,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(AnalyticsMapping.ToGraphQL).ToList();
+    }
 }

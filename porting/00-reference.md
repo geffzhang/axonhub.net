@@ -58,3 +58,4 @@ python -I C:\Users\geffz\.claude\skills\cross-lang-porting\scripts\reference_loc
 | 日期 | 从 | 到 | 影响范围 | 处置 |
 |---|---|---|---|---|
 | 2026-10-30 | — | `b8bb3421`（v1.0.0-beta11） | 初始基线 | 锁定 |
+| 2026-11-05 | `b8bb3421` | `2851a192`（仅 analytics 切片） | analytics SDL 与解析器 / 助手：`startTime` / `endTime` 由日期字符串改为 `Time`（RFC3339），`AnalyticsMetadata.earliestDate` 改为 `earliestTime`，日统计改用 `startOfDay` 语义（ba84cab8 的 tok/s 与 TTFT 指标同属该切片） | 局部跟进：端口前端已随上游 HEAD 拷贝，按 2851a192 实现；其余子系统仍以 `b8bb3421` 为基线，差异登记为 C194 |

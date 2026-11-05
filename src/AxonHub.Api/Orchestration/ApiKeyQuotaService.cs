@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Text.Json;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Management;
+using AxonHub.Api.Settings;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.Orchestration;
@@ -45,7 +45,7 @@ public sealed class ApiKeyQuotaService(
     TimeProvider timeProvider) : IApiKeyQuotaChecker
 {
     /// <summary>biz.SystemKeyGeneralSettings (internal/server/biz/system.go:96).</summary>
-    public const string GeneralSettingsKey = "system_general_settings";
+    public const string GeneralSettingsKey = SystemTimeLocations.GeneralSettingsKey;
 
     public async Task<QuotaCheckResult> CheckApiKeyQuotaAsync(
         long apiKeyId,
@@ -122,122 +122,17 @@ public sealed class ApiKeyQuotaService(
     }
 
     /// <summary>
-    /// Port of SystemService.TimeLocation (internal/server/biz/system.go:1499-1542)
-    /// minus the process-wide cache: a missing row, a lookup failure, malformed
-    /// JSON, an empty timezone or an unknown zone all resolve to UTC.
+    /// Port of SystemService.TimeLocation (internal/server/biz/system.go:1499-1546)
+    /// minus the process-wide cache (C186), shared with the analytics daily
+    /// statistics through <see cref="SystemTimeLocations"/>.
     /// </summary>
     private async Task<TimeZoneInfo> ReadTimeZoneAsync(CancellationToken cancellationToken)
-    {
-        SystemRecord? row;
-        try
-        {
-            row = await systems.GetByKeyAsync(GeneralSettingsKey, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            return TimeZoneInfo.Utc;
-        }
+        => (await SystemTimeLocations.ResolveAsync(systems, cancellationToken)
+            .ConfigureAwait(false)).Zone;
 
-        if (row is null)
-        {
-            // GeneralSettings returns defaultGeneralSettings {Timezone: "UTC"}.
-            return TimeZoneInfo.Utc;
-        }
-
-        string timezone;
-        try
-        {
-            timezone = GeneralSettingsTimezone(row.Value);
-        }
-        catch (JsonException)
-        {
-            return TimeZoneInfo.Utc;
-        }
-
-        if (timezone.Length == 0)
-        {
-            return TimeZoneInfo.Utc;
-        }
-
-        // time.LoadLocation("Local") returns the process's local location.
-        if (string.Equals(timezone, "Local", StringComparison.Ordinal))
-        {
-            return TimeZoneInfo.Local;
-        }
-
-        try
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById(timezone);
-        }
-        catch (Exception)
-        {
-            return TimeZoneInfo.Utc;
-        }
-    }
-
-    /// <summary>
-    /// Port of <c>json.Unmarshal</c> into biz.SystemGeneralSettings
-    /// (internal/server/biz/system.go:138-142): both fields carry string types,
-    /// a JSON null document leaves the zero value, and a non-string member makes
-    /// the whole document invalid.
-    /// </summary>
+    /// <summary>Kept for the JsonUnmarshal tests; the decoder lives in SystemTimeLocations.</summary>
     internal static string GeneralSettingsTimezone(string? json)
-    {
-        using var document = JsonDocument.Parse(json ?? string.Empty);
-        var root = document.RootElement;
-
-        if (root.ValueKind == JsonValueKind.Null)
-        {
-            return string.Empty;
-        }
-
-        if (root.ValueKind != JsonValueKind.Object)
-        {
-            throw new JsonException(
-                "json: cannot unmarshal " + root.ValueKind
-                + " into Go value of type biz.SystemGeneralSettings");
-        }
-
-        // Decode both known members so a mistyped currency_code invalidates the
-        // document exactly like the reference's struct unmarshal.
-        _ = ReadStringMember(root, "currency_code");
-        return ReadStringMember(root, "timezone");
-    }
-
-    private static string ReadStringMember(JsonElement root, string name)
-    {
-        JsonElement? matched = null;
-        if (root.TryGetProperty(name, out var exact))
-        {
-            matched = exact;
-        }
-        else
-        {
-            foreach (var property in root.EnumerateObject())
-            {
-                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    matched = property.Value;
-                    break;
-                }
-            }
-        }
-
-        if (matched is null)
-        {
-            return string.Empty;
-        }
-
-        return matched.Value.ValueKind switch
-        {
-            JsonValueKind.String => matched.Value.GetString() ?? string.Empty,
-            JsonValueKind.Null => string.Empty,
-            _ => throw new JsonException(
-                "json: cannot unmarshal " + matched.Value.ValueKind
-                + " into Go struct field SystemGeneralSettings." + name + " of type string"),
-        };
-    }
+        => SystemTimeLocations.GeneralSettingsTimezone(json);
 }
 
 /// <summary>
