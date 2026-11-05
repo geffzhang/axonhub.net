@@ -6,6 +6,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
 using AxonHub.Llm.Transformer.OpenAI;
 
 namespace AxonHub.Api.Orchestration;
@@ -238,6 +239,22 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         var outboundRequest = ChannelTransformOptions.Apply(request, settings);
         outboundRequest = ChannelTransformOptions.ApplyReasoningEffortMapping(outboundRequest, settings);
         outboundRequest = ApplyModelDefaultMaxTokens(outboundRequest, candidate, outboundFormat);
+
+        // orchestrator.go:245,556-562 + claude_code.go:30-43: the Claude Code
+        // billing system messages injected by the CLI are only meaningful to the
+        // official OAuth claudecode channel; every other candidate strips them
+        // before the provider transformer renders the body. The returned copy
+        // replaces the per-attempt request, so the shared pipeline request is
+        // never mutated.
+        if (!(string.Equals(
+                candidate.Type,
+                ChannelOutboundFactory.ClaudeCodeChannelType,
+                StringComparison.Ordinal)
+            && ChannelCredentials.IsOAuth(candidate.Credentials)))
+        {
+            outboundRequest = ClaudeCodeUtils.RemoveBillingSystemMessages(outboundRequest);
+        }
+
         outboundRequest = ChannelTransformOptions.FilterResponseCustomToolMessagesForNonResponsesOutbound(
             outboundRequest,
             outboundFormat);

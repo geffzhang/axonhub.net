@@ -1,3 +1,4 @@
+using AxonHub.Api.Http;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
 
@@ -41,6 +42,13 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     public long? TraceThreadId { get; init; }
 
     /// <summary>
+    /// Port of contexts.GetRequestID: the <c>ar-&lt;uuid&gt;</c> id minted by
+    /// <c>RequestTracingMiddleware</c>, filled in from <c>HttpContext.Items</c>
+    /// by <see cref="FromHttpContext"/>. Empty when no tracing middleware ran.
+    /// </summary>
+    public string? RequestId { get; init; }
+
+    /// <summary>
     /// Port of contexts.GetSourceOrDefault(ctx, contexts.SourceAPI): the
     /// requests.source column records client traffic unless a caller marks the
     /// request as a channel test.
@@ -76,7 +84,7 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
 
         return context.Items.TryGetValue(HttpContextItemKey, out var item)
             && item is RequestIdentity identity
-                ? identity
+                ? WithRequestId(identity, RequestIds.FromHttpContext(context))
                 : Default;
     }
 
@@ -93,11 +101,16 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
         if (context.Items.TryGetValue(HttpContextItemKey, out var item)
             && item is RequestIdentity found)
         {
-            identity = found;
+            identity = WithRequestId(found, RequestIds.FromHttpContext(context));
             return true;
         }
 
         identity = Default;
         return false;
     }
+
+    private static RequestIdentity WithRequestId(RequestIdentity identity, string? requestId)
+        => string.IsNullOrEmpty(requestId) || !string.IsNullOrEmpty(identity.RequestId)
+            ? identity
+            : identity with { RequestId = requestId };
 }

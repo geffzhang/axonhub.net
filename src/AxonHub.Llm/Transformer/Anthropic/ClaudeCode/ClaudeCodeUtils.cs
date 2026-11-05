@@ -310,11 +310,12 @@ public static class ClaudeCodeUtils
     }
 
     /// <summary>
-    /// Port of <c>RemoveBillingSystemMessages</c>. The reference invokes this
-    /// from an orchestrator middleware (internal/server/orchestrator/claude_code.go)
-    /// that has no port pipeline hook yet, so the utility is ported and tested
-    /// but not wired (difference C096). The returned request is a copy when
-    /// anything is removed, so retries do not mutate the shared request.
+    /// Port of <c>RemoveBillingSystemMessages</c>. The orchestrator's billing
+    /// middleware (internal/server/orchestrator/claude_code.go) invokes this on
+    /// every outbound attempt except the official OAuth claudecode channel; the
+    /// port wires it inside <c>PersistentOutboundTransformer.TransformRequest</c>.
+    /// The returned request is a copy when anything is removed, so retries do
+    /// not mutate the shared request.
     /// </summary>
     public static LlmRequest RemoveBillingSystemMessages(LlmRequest llmRequest)
     {

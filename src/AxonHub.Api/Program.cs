@@ -169,7 +169,12 @@ builder.Services.AddScoped<IThreadStore, ThreadStore>();
 builder.Services.AddScoped<IChannelStore, ChannelStore>();
 builder.Services.AddScoped<IRequestStore, RequestStore>();
 builder.Services.AddScoped<IRequestExecutionStore, RequestExecutionStore>();
+builder.Services.AddScoped<IUsageLogStore, UsageLogStore>();
 builder.Services.AddScoped<VideoService>();
+
+// The orchestrator's enforceQuota middleware (biz.QuotaService): API key
+// profile quotas aggregated from usage_logs in the general-settings timezone.
+builder.Services.AddScoped<IApiKeyQuotaChecker, ApiKeyQuotaService>();
 
 // The orchestrator reads the retry policy through the scoped system store and
 // resolves candidates through the model-association selector

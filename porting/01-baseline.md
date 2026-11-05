@@ -4666,6 +4666,54 @@ pipeline 的第二次入站变换走参照的「恢复 OriginalModel」分支：
 入站中间件的真实缺口：enforceQuota / applyAutoReasoningEffort /
 checkApiKeyModelAccess / Claude Code 计费消息）。
 
+## 98. orchestrator 其余入站中间件（enforceQuota / auto reasoning / model access / 计费消息，2026-11-05）
+
+参照 `internal/server/orchestrator/orchestrator.go:241-312` 的入站注册顺序（全局中间件 →
+enforceQuota → applyAutoReasoningEffort → checkApiKeyModelAccess → applyModelMapping →
+selectCandidates → injectPrompts → protectPrompts → 响应/流透传 → persistRequest），§97 已闭合
+映射，本节闭合其余四项：
+
+- enforceQuota（`biz/quota.go`、`orchestrator/quota.go:14-66`）：active profile 带 quota 时按
+  requests / total_tokens / cost 聚合 `usage_logs`。窗口：all_time（Start 为空、End=now、闭区间）；
+  past_duration（now−d、闭区间，minute/hour/day，int64 纳秒按假想溢出回绕）；calendar_duration
+  （系统时区本地零点、End 开区间，day/month；DST 春季缺口按分钟前移，歧义零点取转换前偏移）。
+  聚合 `COALESCE(SUM(...), 0)`，成本以 float 扫描后按 `decimal.NewFromFloat` 的最短往返表示转
+  decimal。超限抛 403 `quota_exceeded_error` 信封（code=`quota_exceeded`、message 为
+  `requests quota exceeded: n/n` / `total_tokens quota exceeded: n/n` /
+  `cost quota exceeded: x/x`、request_id 取身份且为空时省略）。拒绝发生在 persistRequest 之前：
+  不产生请求 / 执行 / 用量行，也不调用上游。
+- applyAutoReasoningEffort（`auto_reasoning_effort.go`）：设置开启时拆分末尾
+  `-max|-xhigh|-high|-medium|-low`（大小写不敏感；最后一个 `-` 必须在 0 之后且不在末尾），
+  写入 ReasoningEffort 并覆盖显式值；Qwen max 模型（Trim/ToLower 后以 `-max` 结尾且最后一个
+  `/` 之后以 `qwen` 开头）豁免。
+- checkApiKeyModelAccess（`model_access.go`）：null key / 无 profiles / 无 active profile /
+  空 ModelIDs 放行；否则按 ordinal 精确匹配 active profile 的 ModelIDs，拒绝抛 invalid-model
+  （`model not found: <model>`）；空模型先报 `model not found: request model is empty`。
+- billingSystemMessageMiddleware（`claude_code.go:30-43`、`ClaudeCodeUtils`）：仅候选
+  type == `claudecode` 且凭据为 OAuth 时保留 `x-anthropic-billing-header` 系统消息；其余候选
+  删除（含多段 content 中的计费段），作用于出站副本，共享请求不被修改。
+
+接线：`ProcessAsync` 在入站变换之后、候选选择之前依次执行配额 → 读取模型设置 → auto effort →
+model access → model mapping；前三项的异常直接冒出（HTTP 层按既有错误信封渲染），映射后的模型
+供选择器与覆盖模板使用。`AutoReasoningEffortMiddleware` 同时注册在 pipeline 的 `modelMapping`
+之前，pipeline 的第二次入站变换因此幂等。`ProcessSpecifiedAsync`（tester）执行 auto / access /
+mapping 而不执行配额：参照 tester 不设置 QuotaService 且身份不带 API key，两者可观察等价。
+计费消息判定位于 `PersistentOutboundTransformer.TransformRequest` 的
+`ApplyModelDefaultMaxTokens` 之后。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 三类配额窗口、校验文案、聚合与 COALESCE、时区解析与回退、GeneralSettings 解码、GoFloatDecimal | `tests/AxonHub.Api.Tests/ApiKeyQuotaTests.cs` | 28 |
+| split 的 8 种输入与补充拼写、Qwen 判定、中间件 6 例、model access 8 例、顺序、pipeline 改写、拒绝不落库、403 信封、分钟配额首放次拒 | `tests/AxonHub.Api.Tests/InboundMiddlewareTests.cs` | 15 |
+| 非 claudecode 删除 / OAuth 保留 / apiKey 删除 / 无计费消息原样 / 分片删除 | `tests/AxonHub.Api.Tests/BillingSystemMessageTests.cs` | 5 |
+| CountByApiKey 窗口谓词、Aggregate 的 COALESCE 与列裁剪、空结果 | `tests/AxonHub.Persistence.Tests/UsageLogStoreTests.cs` | 4 |
+
+`AxonHub.Api.Tests` 由 2456 增至 2504（+48），`AxonHub.Persistence.Tests` 由 207 增至 211（+4），
+Llm 3032、Grains 95；四个项目合计由 5790 增至 5842，0 失败 0 跳过。
+
+差异：C185 由本节闭合（resolved）；C096 第 (4) 项（计费消息中间件未接线）随之关闭，其余残余
+缺口不变；C186 登记配额时区按请求读取与参照进程内缓存的差异（accepted）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4696,3 +4744,4 @@ checkApiKeyModelAccess / Claude Code 计费消息）。
 | 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；供应商配额采集子系统（checkers / ProviderQuotaService / provider_quota_status / GraphQL 配额面）与启动数据迁移未移植（C182 / C183），null provider 下与参照「通道无配额状态」可观察等价 | 中 | 闸门完成；采集与迁移随 C182 / C183 切片落地 |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
+| orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |

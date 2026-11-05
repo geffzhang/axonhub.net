@@ -90,6 +90,132 @@ public sealed class UsageLogStoreTests(PostgresFixture fixture)
         Assert.Equal(8_000_000_001, actual.TotalTokens);
     }
 
+    [Fact]
+    public async Task CountByApiKeyScopesToTheKeyAndWindow()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UsageLogStore(context);
+
+        await store.CreateAsync(Log(3, CreatedAt, 10, 0.1, 701));
+        await store.CreateAsync(Log(3, CreatedAt.AddSeconds(1), 20, 0.2, 702));
+        await store.CreateAsync(Log(4, CreatedAt.AddSeconds(1), 30, 0.3, 703));
+        await store.CreateAsync(Log(3, CreatedAt.AddSeconds(-1), 40, 0.4, 704));
+
+        Assert.Equal(3L, await store.CountByApiKeyAsync(3, null, null, endInclusive: true));
+        Assert.Equal(
+            2L,
+            await store.CountByApiKeyAsync(
+                3,
+                CreatedAt,
+                CreatedAt.AddSeconds(1),
+                endInclusive: true));
+        Assert.Equal(
+            1L,
+            await store.CountByApiKeyAsync(
+                3,
+                CreatedAt,
+                CreatedAt.AddSeconds(1),
+                endInclusive: false));
+    }
+
+    [Fact]
+    public async Task AggregateByApiKeySumsTokensAndCostWithCoalesce()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UsageLogStore(context);
+
+        await store.CreateAsync(Log(3, CreatedAt, 10, 0.125, 711));
+        await store.CreateAsync(Log(3, CreatedAt.AddSeconds(1), 20, 0.25, 712));
+        await store.CreateAsync(Log(3, CreatedAt.AddSeconds(2), 30, null, 713));
+        await store.CreateAsync(Log(4, CreatedAt.AddSeconds(1), 90, 9.0, 714));
+
+        var usage = await store.AggregateByApiKeyAsync(
+            3,
+            null,
+            null,
+            endInclusive: true,
+            needTokens: true,
+            needCost: true);
+
+        Assert.Equal(60L, usage.TotalTokens);
+        Assert.Equal(0.375, usage.TotalCost, precision: 10);
+
+        // A NULL total_cost is coalesced to zero, like the reference query.
+        var tokensOnly = await store.AggregateByApiKeyAsync(
+            3,
+            CreatedAt.AddSeconds(2),
+            null,
+            endInclusive: true,
+            needTokens: true,
+            needCost: true);
+        Assert.Equal(30L, tokensOnly.TotalTokens);
+        Assert.Equal(0.0, tokensOnly.TotalCost, precision: 10);
+    }
+
+    [Fact]
+    public async Task AggregateByApiKeyReturnsZeroWithoutRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UsageLogStore(context);
+
+        var usage = await store.AggregateByApiKeyAsync(
+            404,
+            null,
+            null,
+            endInclusive: true,
+            needTokens: true,
+            needCost: true);
+
+        Assert.Equal(0L, usage.TotalTokens);
+        Assert.Equal(0.0, usage.TotalCost);
+        Assert.Equal(0L, await store.CountByApiKeyAsync(404, null, null, endInclusive: true));
+    }
+
+    [Fact]
+    public async Task AggregateByApiKeySkipsUnrequestedColumns()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UsageLogStore(context);
+
+        await store.CreateAsync(Log(3, CreatedAt, 10, 0.5, 721));
+
+        var usage = await store.AggregateByApiKeyAsync(
+            3,
+            null,
+            null,
+            endInclusive: true,
+            needTokens: false,
+            needCost: false);
+
+        Assert.Equal(0L, usage.TotalTokens);
+        Assert.Equal(0.0, usage.TotalCost);
+    }
+
+    private static UsageLogRecord Log(
+        long apiKeyId,
+        DateTime createdAt,
+        long totalTokens,
+        double? totalCost,
+        long requestId)
+        => new()
+        {
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            ApiKeyId = apiKeyId,
+            ModelId = "gpt-4o",
+            TotalTokens = totalTokens,
+            TotalCost = totalCost,
+            RequestId = requestId,
+        };
+
     private static UsageLogRecord NewUsageLog(long requestId) => new()
     {
         CreatedAt = CreatedAt,

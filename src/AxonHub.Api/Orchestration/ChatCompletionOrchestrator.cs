@@ -10,6 +10,8 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
 using Orleans;
+using IModelSettingsProvider = AxonHub.Api.Models.IModelSettingsProvider;
+using ModelSettings = AxonHub.Api.Models.ModelSettings;
 using ProfileFilters = AxonHub.Api.Models.ProfileFilters;
 
 namespace AxonHub.Api.Orchestration;
@@ -45,6 +47,8 @@ public sealed class ChatCompletionOrchestrator
     private readonly IPreviousChannelProvider? _previousChannels;
     private readonly IProviderQuotaStatusProvider? _quotaStatusProvider;
     private readonly IQuotaRoutingSettingsProvider? _quotaRoutingSettings;
+    private readonly IModelSettingsProvider? _modelSettingsProvider;
+    private readonly IApiKeyQuotaChecker? _quotaChecker;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -63,7 +67,9 @@ public sealed class ChatCompletionOrchestrator
         IPromptProtectionRuleProvider? promptProtectionRules = null,
         IPreviousChannelProvider? previousChannels = null,
         IProviderQuotaStatusProvider? quotaStatusProvider = null,
-        IQuotaRoutingSettingsProvider? quotaRoutingSettings = null)
+        IQuotaRoutingSettingsProvider? quotaRoutingSettings = null,
+        IModelSettingsProvider? modelSettings = null,
+        IApiKeyQuotaChecker? quotaChecker = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -112,6 +118,15 @@ public sealed class ChatCompletionOrchestrator
         // gate a no-op exactly like the reference's nil ProviderQuotaStatusProvider.
         _quotaStatusProvider = quotaStatusProvider;
         _quotaRoutingSettings = quotaRoutingSettings;
+
+        // Without a model-settings provider the reference's SystemService is
+        // absent and ModelSettingsOrDefault is never called; the tester and
+        // direct constructions then behave as AutoReasoningEffort = false.
+        _modelSettingsProvider = modelSettings;
+
+        // Production passes biz.QuotaService; a null checker makes enforceQuota
+        // a no-op exactly like the reference's nil QuotaService (the tester).
+        _quotaChecker = quotaChecker;
     }
 
     /// <summary>The inbound transformer, used by the endpoint to map failures.</summary>
@@ -144,7 +159,9 @@ public sealed class ChatCompletionOrchestrator
             _promptProtectionRules,
             _previousChannels,
             _quotaStatusProvider,
-            _quotaRoutingSettings);
+            _quotaRoutingSettings,
+            _modelSettingsProvider,
+            _quotaChecker);
     }
 
     /// <summary>
@@ -239,11 +256,20 @@ public sealed class ChatCompletionOrchestrator
         // middleware does: after the inbound transform, before any retry.
         var llmRequest = _inbound.TransformRequest(request);
 
-        // orchestrator.go:250-255 registers applyModelMapping after the API key
-        // access checks and before selectCandidates. The port applies the same
-        // middleware before selection so routing uses the profile-mapped model,
-        // then mounts the instance in the pipeline so its inbound state and
-        // response hooks see the same request.
+        // orchestrator.go:250-255 registers enforceQuota, applyAutoReasoningEffort
+        // and checkApiKeyModelAccess before applyModelMapping and selectCandidates.
+        // The port runs the same stages here, before the candidate list is built,
+        // so their rejections never create a request row and the selector sees
+        // the normalized model.
+        await EnforceQuotaAsync(identity, cancellationToken).ConfigureAwait(false);
+        var modelSettings = await ReadModelSettingsAsync(cancellationToken).ConfigureAwait(false);
+        AutoReasoningEffort.Apply(llmRequest, modelSettings);
+        ApiKeyModelAccess.Check(identity.ApiKey, llmRequest);
+
+        // The mapping stage runs before selectCandidates; the port applies the
+        // same middleware before selection so routing uses the profile-mapped
+        // model, then mounts the instance in the pipeline so its inbound state
+        // and response hooks see the same request.
         var modelMapping = new ApiKeyModelMappingMiddleware(identity.ApiKey);
         modelMapping.TransformInboundLlmRequest(llmRequest);
         var model = llmRequest.Model;
@@ -338,6 +364,7 @@ public sealed class ChatCompletionOrchestrator
                 onRequestCreated,
                 retryPolicy,
                 passThroughSettings,
+                modelSettings,
                 modelMapping,
                 includeRateLimits: true,
                 ensureUsage: false,
@@ -375,7 +402,14 @@ public sealed class ChatCompletionOrchestrator
         var llmRequest = inbound.TransformRequest(request);
 
         // The tester's processor mounts the same orchestrator inbound chain, so
-        // applyModelMapping runs before the SpecifiedChannelSelector too.
+        // auto reasoning effort and the model-access check run before the
+        // SpecifiedChannelSelector too. The tester has no QuotaService
+        // (tester.go:296-316), so enforceQuota is absent here; its identity
+        // carries no API key, which makes the access check a no-op anyway.
+        var modelSettings = await ReadModelSettingsAsync(cancellationToken).ConfigureAwait(false);
+        AutoReasoningEffort.Apply(llmRequest, modelSettings);
+        ApiKeyModelAccess.Check(identity.ApiKey, llmRequest);
+
         var modelMapping = new ApiKeyModelMappingMiddleware(identity.ApiKey);
         modelMapping.TransformInboundLlmRequest(llmRequest);
 
@@ -450,12 +484,74 @@ public sealed class ChatCompletionOrchestrator
                 onRequestCreated: null,
                 retryPolicy,
                 passThroughSettings,
+                modelSettings,
                 modelMapping,
                 includeRateLimits: false,
                 ensureUsage: true,
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Port of orchestrator.enforceQuota (internal/server/orchestrator/quota.go:14-66):
+    /// a nil checker or key, a key without an active profile, or a profile
+    /// without a quota allows the request. A tripped quota throws the
+    /// reference's 403 <c>quota_exceeded</c> envelope before any request row is
+    /// created (the reference's quota middleware runs before persistRequest).
+    /// </summary>
+    private async Task EnforceQuotaAsync(
+        RequestIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        if (_quotaChecker is null)
+        {
+            return;
+        }
+
+        var apiKey = identity.ApiKey;
+        if (apiKey is null)
+        {
+            return;
+        }
+
+        var profile = ApiKeyProfilesCodec.ActiveProfile(apiKey.Profiles);
+        if (profile?.Quota is null)
+        {
+            return;
+        }
+
+        var result = await _quotaChecker
+            .CheckApiKeyQuotaAsync(apiKey.Id, profile.Quota, cancellationToken)
+            .ConfigureAwait(false);
+        if (result.Allowed)
+        {
+            return;
+        }
+
+        throw new ResponseError
+        {
+            StatusCode = 403,
+            Detail = new ErrorDetail
+            {
+                Code = "quota_exceeded",
+                Message = result.Message,
+                Type = "quota_exceeded_error",
+                RequestId = string.IsNullOrEmpty(identity.RequestId) ? null : identity.RequestId,
+            },
+        };
+    }
+
+    /// <summary>
+    /// Port of SystemService.ModelSettingsOrDefault as read by the
+    /// auto-reasoning-effort middleware. Without a provider the reference's
+    /// SystemService is absent and the defaults apply.
+    /// </summary>
+    private async Task<ModelSettings> ReadModelSettingsAsync(CancellationToken cancellationToken)
+        => _modelSettingsProvider is null
+            ? ModelSettings.Default
+            : await _modelSettingsProvider
+                .GetModelSettingsOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
 
     private async Task<ChatCompletionResult> RunPipelineAsync(
         IInboundTransformer inbound,
@@ -465,6 +561,7 @@ public sealed class ChatCompletionOrchestrator
         Action<long>? onRequestCreated,
         RetryPolicy retryPolicy,
         PassThroughSettings passThroughSettings,
+        ModelSettings modelSettings,
         ApiKeyModelMappingMiddleware modelMapping,
         bool includeRateLimits,
         bool ensureUsage,
@@ -512,6 +609,14 @@ public sealed class ChatCompletionOrchestrator
         {
             options.Middlewares.Add(new EnsureUsageMiddleware());
         }
+
+        // The pipeline parses the raw body again, so the pre-selection auto
+        // reasoning effort must run here as well: the same settings snapshot is
+        // applied to the freshly parsed request, and the model-mapping restore
+        // branch below overwrites the routing model either way (the suffix is
+        // already gone on the second pass, so the double application is
+        // idempotent). orchestrator.go:252-254.
+        options.Middlewares.Add(new AutoReasoningEffortMiddleware(modelSettings));
 
         // orchestrator.go:254: applyModelMapping runs before injectPrompts and
         // protectPrompts on the inbound pass, so the response hook also runs
