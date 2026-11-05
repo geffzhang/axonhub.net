@@ -92,6 +92,65 @@ public static class GoogleToolFilter
     }
 }
 
+/// <summary>
+/// Port of the Anthropic-native tool helpers
+/// (llm/transformer/anthropic/tools.go:11-56). A tool is native when its type
+/// is already <c>web_search</c> or <c>web_search_20250305</c>; a function merely
+/// named <c>web_search</c> is not native.
+/// </summary>
+public static class AnthropicToolFilter
+{
+    /// <summary>Native Anthropic web search tool type (Beta).</summary>
+    public const string ToolTypeWebSearch20250305 = "web_search_20250305";
+
+    /// <summary>Port of <c>anthropic.ContainsAnthropicNativeTools</c>.</summary>
+    public static bool ContainsAnthropicNativeTools(IEnumerable<Tool>? tools)
+    {
+        if (tools is null)
+        {
+            return false;
+        }
+
+        foreach (var tool in tools)
+        {
+            if (IsAnthropicNativeTool(tool))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Port of <c>anthropic.IsAnthropicNativeTool</c>.</summary>
+    public static bool IsAnthropicNativeTool(Tool tool)
+        => tool.Type is ToolTypes.WebSearch or ToolTypeWebSearch20250305;
+
+    /// <summary>
+    /// Port of <c>anthropic.FilterOutAnthropicNativeTools</c>. The input list is
+    /// returned unchanged when it is null or empty; otherwise a freshly built
+    /// list without the native tools is returned (which may be empty).
+    /// </summary>
+    public static List<Tool>? FilterOutAnthropicNativeTools(List<Tool>? tools)
+    {
+        if (tools is null || tools.Count == 0)
+        {
+            return tools;
+        }
+
+        var filtered = new List<Tool>(tools.Count);
+        foreach (var tool in tools)
+        {
+            if (!IsAnthropicNativeTool(tool))
+            {
+                filtered.Add(tool);
+            }
+        }
+
+        return filtered;
+    }
+}
+
 /// <summary>Port of llm.Function.</summary>
 public sealed class Function
 {

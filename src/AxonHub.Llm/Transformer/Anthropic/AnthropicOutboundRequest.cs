@@ -12,7 +12,7 @@ namespace AxonHub.Llm.Transformer.Anthropic;
 public static class AnthropicOutboundRequest
 {
     /// <summary>Native Anthropic web search tool type (tools.go).</summary>
-    public const string ToolTypeWebSearch20250305 = "web_search_20250305";
+    public const string ToolTypeWebSearch20250305 = AnthropicToolFilter.ToolTypeWebSearch20250305;
 
     /// <summary>Standard function name that maps to the native tool.</summary>
     public const string WebSearchFunctionName = "web_search";

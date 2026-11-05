@@ -4466,6 +4466,42 @@ Llm 3020、Persistence 207；四个项目合计由 5627 增至 5643，0 失败 0
 差异：不新增编号；C179 的真实缺口 (b) 由本节闭合（该条目已就地更新），畸形 profile
 JSON 的失败关闭口径沿用 C178。
 
+## 93. 原生工具候选过滤切片（Google / Anthropic，13 例，2026-11-05）
+
+参照 `internal/server/orchestrator/select_candidates.go` 的原生工具装饰器安装位（53-61）、
+`candidates_google.go`（12-57）、`candidates_anthropic.go`（13-64）、
+`internal/ent/channel/type.go` 的能力判定（29-44）、`llm/tools.go` 的
+ContainsGoogleNativeTools / IsGoogleNativeTool（241-252）与
+`llm/transformer/anthropic/tools.go` 的 ContainsAnthropicNativeTools /
+IsAnthropicNativeTool / FilterOutAnthropicNativeTools（11-56）；
+端口新增 `AnthropicToolFilter`、`ChannelTypeCapabilities` 与 `NativeToolFilters`，
+在 profile 过滤之后、粘性 / 负载均衡排序之前应用，对齐可观察行为：
+
+- 安装门：Google 过滤只在入站 API 格式为 `gemini/contents` 时安装，Anthropic 过滤只在
+  `anthropic/messages` 时安装；其他格式即使带 `google_*` / `web_search` 工具也不过滤。
+- 触发条件：Google 侧存在任一 `google_` 前缀工具（`google_search` /
+  `google_url_context` / `google_code_execution` 等任意前缀）时触发；Anthropic 侧工具
+  `type` 为 `web_search` 或 `web_search_20250305` 时触发，仅函数名为 `web_search` 的
+  `function` 工具不算原生。
+- 兼容集合：Google 只保留 `gemini` 与 `gemini_vertex`，排除 `gemini_openai` 与
+  `zenmux_gemini`；Anthropic 只保留 `anthropic`、`anthropic_aws`、`anthropic_gcp`、
+  `claudecode` 与 `deepseek_anthropic`，其余 `*_anthropic` 变体排除。
+- 回退：兼容候选为空时返回原候选列表，交给下游回退逻辑，不产生 invalid-model。
+- 适用面：普通请求与 tester 的指定通道候选都经过同一过滤；无原生工具或格式不匹配时
+  是 no-op。
+- 复用：`AnthropicToolFilter.ToolTypeWebSearch20250305` 成为出站请求常量的唯一来源；
+  选候选的 debug / warn 日志沿用既有切片口径不移植。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| Anthropic 原生类型判定、包含性与过滤保留 function 列表 | `tests/AxonHub.Llm.Tests/AnthropicNativeToolFilterTests.cs` | 3 |
+| Google 兼容集合与多工具、无工具 no-op、无兼容回退、格式门；Anthropic 兼容集合、function 名不算原生、无兼容回退、格式门；orchestrator 只路由兼容通道 | `tests/AxonHub.Api.Tests/NativeToolSelectionTests.cs` | 10 |
+
+`AxonHub.Llm.Tests` 由 3020 增至 3023（+3），`AxonHub.Api.Tests` 由 2333 增至 2343
+（+10），Grains 95、Persistence 207；四个项目合计由 5655 增至 5668，0 失败 0 跳过。
+
+差异：不新增编号；C179 的真实缺口 (c) 由本节闭合（该条目已就地更新）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4491,3 +4527,4 @@ JSON 的失败关闭口径沿用 C178。
 | 模型关联路由与多模型重试 | 已由 §90 闭合：DefaultSelector 的模型行查询 / privacy / 关联匹配（六种 kind 与排除规则）/ When 条件 / 聚合 / 逐模型 API 格式、模型级 routing policy、模型卡 DefaultMaxTokens、无模型行回退通道、多模型同通道重试与 tester 路径排序（59 例）；残余差异与真实缺口登记为 C179，四个未移植的通道变换选项登记为 C180 | 中 | 完成（C179 / C180） |
 | trace / thread 通道粘性路由 | 已由 §91 闭合：prefer_previous_channel 的生效策略优先级、trace → thread 作用域解析、命中仅限候选池、priority 最小候选置首与同通道 fallback 去重、只记账粘性候选、写回条件与 trace 行 thread 优先、30 分钟 TTL（15 + 1 例）；进程内缓存的多实例限制登记为 C181 | — | 完成（C181） |
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
+| Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
