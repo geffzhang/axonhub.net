@@ -34,6 +34,12 @@ public sealed class ThreadMiddlewareTests
         Assert.True(nextCalled);
         Assert.Equal(new ThreadCall(ProjectId, "thread-create"), Assert.Single(store.Calls));
         Assert.Equal(42L, ThreadContext.GetThreadId(context));
+
+        // contexts.WithThread also publishes the loaded thread on the request
+        // context; the trace sticky selector reads its id from the identity.
+        Assert.Equal(
+            42L,
+            RequestIdentity.FromHttpContext(context).ThreadId);
     }
 
     [Fact]

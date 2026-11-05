@@ -88,6 +88,26 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
     }
 
     [Fact]
+    public async Task TrackingCountsOnlyTheFinalTopCandidateAcrossPriorityGroups()
+    {
+        // candidates_sticky_test.go
+        // "TestLoadBalancedSelector_TracksOnlyFinalTopCandidateAcrossPriorityGroups":
+        // the sorted result keeps priority order, but only the first candidate
+        // of the assembled result increments its selection counter.
+        var result = await Sort(
+            "priority-track-model",
+            [Candidate(1221), Candidate(1222, priority: 1), Candidate(1223, priority: 1)],
+            requiredCount: 3,
+            LoadBalancerStrategies.RoundRobin,
+            trackSelection: true);
+
+        Assert.Equal([1221L, 1222L, 1223L], result.Select(candidate => candidate.ChannelId).ToArray());
+        Assert.Equal(1, (await Channel(1221).GetMetricsAsync(Now)).RequestCount);
+        Assert.Equal(0, (await Channel(1222).GetMetricsAsync(Now)).RequestCount);
+        Assert.Equal(0, (await Channel(1223).GetMetricsAsync(Now)).RequestCount);
+    }
+
+    [Fact]
     public async Task RecentlyFailingChannelMovesBehindHealthyChannels()
     {
         for (var attempt = 0; attempt < 3; attempt++)

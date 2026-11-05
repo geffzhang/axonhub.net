@@ -46,6 +46,12 @@ public sealed class ThreadMiddleware(RequestDelegate next, TracingOptions option
                 .GetOrCreateAsync(identity.ProjectId, threadId, context.RequestAborted)
                 .ConfigureAwait(false);
             ThreadContext.SetThreadId(context, thread.Id);
+
+            // Port of contexts.WithThread: the reference publishes the loaded
+            // thread on the request context, where the trace sticky selector
+            // reads it after the trace middleware.
+            context.Items[RequestIdentity.HttpContextItemKey] =
+                identity with { ThreadId = thread.Id };
         }
         catch (Exception)
         {

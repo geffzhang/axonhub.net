@@ -44,6 +44,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     private readonly Action<long>? _onRequestCreated;
     private readonly ChannelPerformanceState? _performance;
     private readonly RequestIdentity _identity;
+    private readonly IPreviousChannelProvider? _previousChannels;
 
     /// <summary>Per-request stream state shared by the inbound and outbound streams.</summary>
     private readonly RequestStreamState _streamState = new();
@@ -77,7 +78,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         Action<long>? onRequestCreated = null,
         ChannelPerformanceState? performance = null,
         RequestIdentity? identity = null,
-        IUsageCostService? usageCostService = null)
+        IUsageCostService? usageCostService = null,
+        IPreviousChannelProvider? previousChannels = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -95,6 +97,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         _onRequestCreated = onRequestCreated;
         _performance = performance;
         _identity = identity ?? RequestIdentity.Default;
+        _previousChannels = previousChannels;
         _requestTerminalTracker = new StreamTerminalTracker(
             ExpectedStreamChoices.FromRequestBody(rawRequest.Body));
     }
@@ -210,7 +213,14 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
 
         if (attempt.ChannelId != 0 && _requestChannelId != attempt.ChannelId)
         {
+            // RequestService.UpdateRequestChannelID persists the channel and then
+            // caches it for trace/thread sticky routing (request.go:1353-1366);
+            // the cache write only happens after the row update succeeds.
             _recorder.UpdateRequestChannel(_requestId, attempt.ChannelId);
+            _previousChannels?.Remember(
+                _identity.TraceId ?? 0,
+                _identity.TraceThreadId,
+                attempt.ChannelId);
             _requestChannelId = attempt.ChannelId;
         }
 

@@ -89,6 +89,12 @@ builder.Services.AddSingleton(static services => new ChannelRequestTracker(
     services.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<ChannelLimiterManager>();
 
+// The reference's RequestService owns the previous-channel cache consumed by
+// trace sticky routing (request.go:1733-1801); one singleton serves the
+// orchestrator's selector reads and the persistence middleware's writes.
+builder.Services.AddSingleton<IPreviousChannelProvider>(static services
+    => new PreviousChannelCache(services.GetRequiredService<TimeProvider>()));
+
 // API key authentication (server.api.auth): the reference reads allow_no_auth
 // from config.yml and the AXONHUB_* environment; both spellings are accepted.
 var allowNoAuth = bool.TryParse(

@@ -133,8 +133,16 @@ public sealed class TraceMiddleware(RequestDelegate next, TracingOptions options
 
         // The reference reads the trace back from the request context in
         // persistRequest; the port's context container is HttpContext.Items, so
-        // the row id rides on the identity the endpoint already reads.
-        context.Items[RequestIdentity.HttpContextItemKey] = identity with { TraceId = trace.Id };
+        // the row id rides on the identity the endpoint already reads. The
+        // trace row's own thread id is kept separately: the previous-channel
+        // cache writes the thread scope from it (request.go:1768-1774), while
+        // the selector reads the current request's thread first
+        // (candidates.go:843-849).
+        context.Items[RequestIdentity.HttpContextItemKey] = identity with
+        {
+            TraceId = trace.Id,
+            TraceThreadId = trace.ThreadId,
+        };
 
         // Let provider transformers use the trace id as the session id.
         TraceContext.SetSessionId(context, traceId);

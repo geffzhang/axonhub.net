@@ -132,6 +132,15 @@ public sealed class ChannelCandidate
     /// </summary>
     [Id(21)]
     public string? Endpoints { get; set; }
+
+    /// <summary>
+    /// True when trace sticky routing pinned this candidate ahead of the
+    /// load-balanced order (the reference's <c>ChannelModelsCandidate.TraceSticky</c>).
+    /// Nothing downstream branches on it; it is carried for parity with the
+    /// selector's output.
+    /// </summary>
+    [Id(22)]
+    public bool TraceSticky { get; set; }
 }
 
 /// <summary>

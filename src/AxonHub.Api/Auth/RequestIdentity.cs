@@ -26,6 +26,21 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     public long? TraceId { get; init; }
 
     /// <summary>
+    /// The thread row id published by <c>ThreadMiddleware</c> (the reference's
+    /// contexts.GetThread). Trace sticky routing falls back to the thread scope
+    /// when the trace has no cached channel.
+    /// </summary>
+    public long? ThreadId { get; init; }
+
+    /// <summary>
+    /// The thread id stored on the resolved trace row, when a trace was
+    /// persisted. Sticky routing reads the current thread first and falls back
+    /// to this value; the previous-channel cache writes the thread scope from
+    /// this value only (request.go:1768-1774).
+    /// </summary>
+    public long? TraceThreadId { get; init; }
+
+    /// <summary>
     /// Port of contexts.GetSourceOrDefault(ctx, contexts.SourceAPI): the
     /// requests.source column records client traffic unless a caller marks the
     /// request as a channel test.

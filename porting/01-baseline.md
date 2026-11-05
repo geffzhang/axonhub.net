@@ -4389,6 +4389,48 @@ CanRetry（766-818）与 NextChannel / PrepareForRetry（823-856）、`select_ca
 变换选项 / 流策略强制，真实缺口）；C149（实时读取）、C177（连接内模型顺序）与 C012
 残余（延迟 / 熔断中性分）沿用。
 
+## 91. trace / thread 通道粘性路由切片（prefer_previous_channel 与 previous-channel 缓存，16 例，2026-11-05）
+
+参照 `internal/server/orchestrator/candidates.go` 的 LoadBalancedSelector 粘性半程（738-905：
+resolveStickyChannelID / extractStickyCandidate / sortCandidates 的 track 分支）、
+`internal/server/biz/request.go` 的 UpdateRequestChannelID（1353-1366）与
+cachePreviousChannelForRequest（1733-1801）、`retry.go` 的 deriveRoutingPolicy 中
+TraceStickyMode 的优先级、`system.go` 的归一化与 `system_default.go` 的默认值；
+端口新增 `PreviousChannelCache` / `IPreviousChannelProvider`、`RequestIdentity.ThreadId` /
+`TraceThreadId`、`ChannelCandidate.TraceSticky`，把 `ChatCompletionOrchestrator` 的候选排序
+拆成 `SortCandidatesAsync`，对齐可观察行为：
+
+- 生效策略：TraceStickyMode 按 profile → model routing policy → RetryPolicy 逐级覆盖；
+  `default` / `system_default` 与非法值视为未设置，继续沿用下层；RetryPolicy 缺省为
+  `prefer_previous_channel`。
+- 粘性解析：仅当生效 mode 恰为 `prefer_previous_channel` 时解析；先查 trace 作用域，
+  未命中再查 thread 作用域（当前请求 thread（ThreadMiddleware 发布）优先，回退 trace 行的
+  `thread_id`）；缓存命中但该通道已不在候选池时忽略，绝不选中不可用通道；`disabled` 时
+  完全走普通优先级排序。
+- 粘性装配：取该通道中 priority 最小的候选置于首位并标记 `TraceSticky`，该通道的其余候选
+  全部从 fallback 移除；剩余候选按正常策略排序且不记账；最后只对粘性候选记账一次
+  （ChannelGrain 的 selection 计数），fallback 不记账；跨通道重试关闭时
+  requiredCount = 1，粘性候选没有 fallback。
+- 写回：每次尝试切换到新通道（attempt.ChannelId != 0 且与上一次不同）时先持久化
+  requests.channel_id，再写 previous-channel 缓存；要求 traceId != 0 且 channelId != 0；
+  trace 键总是写，thread 键仅在 trace 行的 thread_id != 0 时写；thread 作用域取 trace 行的
+  thread_id（request.go:1768-1774），而不是当前请求的 thread 头；TTL 30 分钟；读缓存未命中
+  返回 0，不查询历史请求。
+- 缓存后端：键形状 `axonhub:routing:previous-channel:v1:trace|thread:<id>` 与参照一致，
+  进程内字典实现，多实例不共享（C181）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 粘性选择：trace 覆盖 priority 与 fallback 去重、thread 作用域回退、disabled 顺序、无跨通道重试单候选、trace/thread 写回、trace 行 thread 优先、无 trace 不写、策略优先级 | `tests/AxonHub.Api.Tests/StickyChannelSelectionTests.cs` | 9 |
+| previous-channel 缓存：trace/thread 写入、按作用域覆盖、未命中不查历史、零值忽略、null thread 仅 trace、30 分钟边界 | `tests/AxonHub.Api.Tests/PreviousChannelCacheTests.cs` | 6 |
+| 跨优先级分组只记账最终首候选 | `tests/AxonHub.Grains.Tests/ChannelSelectionTests.cs` | 1（新增） |
+
+`AxonHub.Api.Tests` 由 2306 增至 2321（+15），`AxonHub.Grains.Tests` 由 94 增至 95（+1），
+Llm 3020、Persistence 207；四个项目合计由 5627 增至 5643，0 失败 0 跳过。
+
+差异：新增 C181（previous-channel 缓存为进程内实现，参照经 xcache 可配置 Redis；单实例
+行为等价，多实例不共享）；C179 的实时读取与 C012 残余沿用。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4412,3 +4454,4 @@ CanRetry（766-818）与 NextChannel / PrepareForRetry（823-856）、`select_ca
 | 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
 | 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |
 | 模型关联路由与多模型重试 | 已由 §90 闭合：DefaultSelector 的模型行查询 / privacy / 关联匹配（六种 kind 与排除规则）/ When 条件 / 聚合 / 逐模型 API 格式、模型级 routing policy、模型卡 DefaultMaxTokens、无模型行回退通道、多模型同通道重试与 tester 路径排序（59 例）；残余差异与真实缺口登记为 C179，四个未移植的通道变换选项登记为 C180 | 中 | 完成（C179 / C180） |
+| trace / thread 通道粘性路由 | 已由 §91 闭合：prefer_previous_channel 的生效策略优先级、trace → thread 作用域解析、命中仅限候选池、priority 最小候选置首与同通道 fallback 去重、只记账粘性候选、写回条件与 trace 行 thread 优先、30 分钟 TTL（15 + 1 例）；进程内缓存的多实例限制登记为 C181 | — | 完成（C181） |

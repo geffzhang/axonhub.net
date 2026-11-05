@@ -41,6 +41,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IPromptProtectionRuleProvider? _promptProtectionRules;
     private readonly ChannelRequestTracker _rateLimitTracker;
     private readonly ChannelLimiterManager _channelLimiterManager;
+    private readonly IPreviousChannelProvider? _previousChannels;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -56,7 +57,8 @@ public sealed class ChatCompletionOrchestrator
         ChannelLimiterManager? channelLimiterManager = null,
         IUsageCostService? usageCostService = null,
         IPassThroughSettingsProvider? passThroughSettings = null,
-        IPromptProtectionRuleProvider? promptProtectionRules = null)
+        IPromptProtectionRuleProvider? promptProtectionRules = null,
+        IPreviousChannelProvider? previousChannels = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -93,6 +95,12 @@ public sealed class ChatCompletionOrchestrator
         // constructions in tests.
         _rateLimitTracker = rateLimitTracker ?? new ChannelRequestTracker(timeProvider);
         _channelLimiterManager = channelLimiterManager ?? new ChannelLimiterManager();
+
+        // Production passes the RequestService equivalent so the persistence
+        // middleware can cache the previous channel and the selector can pin it.
+        // Direct test constructions leave it null, like the reference's
+        // selector without a PreviousChannelProvider.
+        _previousChannels = previousChannels;
     }
 
     /// <summary>The inbound transformer, used by the endpoint to map failures.</summary>
@@ -122,7 +130,8 @@ public sealed class ChatCompletionOrchestrator
             _channelLimiterManager,
             _usageCostService,
             _passThroughSettings,
-            _promptProtectionRules);
+            _promptProtectionRules,
+            _previousChannels);
     }
 
     /// <summary>
@@ -251,14 +260,12 @@ public sealed class ChatCompletionOrchestrator
         ChannelCandidate[] candidates = [];
         if (selection.Candidates.Count > 0)
         {
-            candidates = await _grainFactory
-                .GetGrain<IChannelPoolGrain>(model)
-                .SortAsync(
-                    [.. selection.Candidates],
-                    _timeProvider.GetUtcNow(),
-                    trackSelection: true,
+            candidates = await SortCandidatesAsync(
+                    model,
+                    selection.Candidates,
+                    identity,
+                    effectivePolicy,
                     requiredCount,
-                    effectivePolicy.LoadBalancerStrategy,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -484,7 +491,8 @@ public sealed class ChatCompletionOrchestrator
                 onRequestCreated,
                 performance,
                 identity,
-                _usageCostService);
+                _usageCostService,
+                _previousChannels);
             options.Middlewares.Add(persistence);
         }
 
@@ -532,12 +540,165 @@ public sealed class ChatCompletionOrchestrator
     }
 
     /// <summary>
+    /// The port of LoadBalancedSelector.Select's sticky half
+    /// (candidates.go:738-791): when the effective policy prefers the previous
+    /// channel, the highest-priority candidate for that channel is pinned ahead
+    /// of the load-balanced order and every duplicate of it is removed from the
+    /// fallback set. The fallback sort does not track a selection; the pinned
+    /// candidate is tracked exactly once, after the fallback list is assembled.
+    /// </summary>
+    private async Task<ChannelCandidate[]> SortCandidatesAsync(
+        string model,
+        IReadOnlyList<ChannelCandidate> source,
+        RequestIdentity identity,
+        RetryPolicy effectivePolicy,
+        int requiredCount,
+        CancellationToken cancellationToken)
+    {
+        ChannelCandidate? sticky = null;
+        IReadOnlyList<ChannelCandidate> remaining = source;
+
+        if (effectivePolicy.TraceStickyMode == RetryPolicy.TraceStickyPreferPreviousChannel)
+        {
+            var (stickyId, found) = ResolveStickyChannelId(_previousChannels, identity, source);
+            if (found)
+            {
+                (sticky, remaining) = ExtractStickyCandidate(source, stickyId);
+            }
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        var grain = _grainFactory.GetGrain<IChannelPoolGrain>(model);
+        var strategy = effectivePolicy.LoadBalancerStrategy;
+
+        if (sticky is null)
+        {
+            return await grain
+                .SortAsync(
+                    [.. source],
+                    now,
+                    trackSelection: true,
+                    requiredCount,
+                    strategy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        sticky.TraceSticky = true;
+
+        // requiredCount is 1 + MaxChannelRetries, so the pinned candidate
+        // consumes one slot and the fallbacks share the rest.
+        var fallbackCount = Math.Max(requiredCount - 1, 0);
+        ChannelCandidate[] fallback = [];
+        if (fallbackCount > 0)
+        {
+            fallback = await grain
+                .SortAsync(
+                    [.. remaining],
+                    now,
+                    trackSelection: false,
+                    fallbackCount,
+                    strategy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // LoadBalancer.TrackSelection(stickyCandidate): a single-candidate sort
+        // short-circuits to the same counter increment the reference performs.
+        _ = await grain
+            .SortAsync(
+                [sticky],
+                now,
+                trackSelection: true,
+                requiredCount: 1,
+                strategy,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return [sticky, .. fallback];
+    }
+
+    /// <summary>
+    /// Port of resolveStickyChannelID (candidates.go:815-870): the trace scope
+    /// wins when its cached channel is still among the candidates; otherwise the
+    /// thread scope is tried. Both scopes only count when a candidate exists, so
+    /// a stale cache entry never selects a channel the model cannot use.
+    /// </summary>
+    private static (long ChannelId, bool Found) ResolveStickyChannelId(
+        IPreviousChannelProvider? previousChannels,
+        RequestIdentity identity,
+        IReadOnlyList<ChannelCandidate> candidates)
+    {
+        if (previousChannels is null || candidates.Count == 0)
+        {
+            return (0, false);
+        }
+
+        var hasCandidate = (long channelId) =>
+            channelId != 0
+            && candidates.Any(candidate => candidate.ChannelId == channelId);
+
+        if (identity.TraceId is > 0)
+        {
+            var channelId = previousChannels.GetPreviousChannelId(identity.TraceId.Value);
+            if (hasCandidate(channelId))
+            {
+                return (channelId, true);
+            }
+        }
+
+        var threadId = identity.ThreadId ?? identity.TraceThreadId;
+        if (threadId is not > 0)
+        {
+            return (0, false);
+        }
+
+        var threadChannelId = previousChannels.GetPreviousChannelIdByThread(threadId.Value);
+        return hasCandidate(threadChannelId)
+            ? (threadChannelId, true)
+            : (0, false);
+    }
+
+    /// <summary>
+    /// Port of extractStickyCandidate (candidates.go:876-905): returns the
+    /// lowest-priority-value candidate for the channel and removes every
+    /// candidate of that channel from the fallback list, so the pinned channel
+    /// cannot receive another retry budget through a duplicate association.
+    /// </summary>
+    private static (ChannelCandidate? Sticky, List<ChannelCandidate> Remaining)
+        ExtractStickyCandidate(IReadOnlyList<ChannelCandidate> candidates, long channelId)
+    {
+        if (channelId == 0)
+        {
+            return (null, [.. candidates]);
+        }
+
+        ChannelCandidate? sticky = null;
+        var remaining = new List<ChannelCandidate>(candidates.Count);
+        foreach (var candidate in candidates)
+        {
+            if (candidate.ChannelId != channelId)
+            {
+                remaining.Add(candidate);
+                continue;
+            }
+
+            if (sticky is null || candidate.Priority < sticky.Priority)
+            {
+                sticky = candidate;
+            }
+        }
+
+        return sticky is null ? (null, [.. candidates]) : (sticky, remaining);
+    }
+
+    /// <summary>
     /// Port of deriveRoutingPolicy (retry.go:102-142): a non-default
     /// valid model policy overrides the retry policy, then the API key's active
     /// profile overrides both. An absent profile, or one whose field is null,
     /// leaves the earlier value untouched.
     /// </summary>
-    private static RetryPolicy DeriveRoutingPolicy(
+    internal static RetryPolicy DeriveRoutingPolicy(
         RetryPolicy retryPolicy,
         AxonHub.Persistence.ApiKeyRecord? apiKey,
         ModelRoutingPolicy? modelPolicy)
