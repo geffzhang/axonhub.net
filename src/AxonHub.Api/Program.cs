@@ -284,6 +284,14 @@ builder.Services.AddScoped<ModelManagementService>();
 builder.Services.AddScoped<PromptPrivacy>();
 builder.Services.AddScoped<PromptManagementService>();
 
+// Data storages (biz.DataStorageService management surface): dataStorages /
+// node(DataStorage) and the create/update mutations under the DataStorage
+// privacy policy. The filesystem/object-store backends and the 30-minute
+// ID/primary caches are not ported (C192/C196).
+builder.Services.AddScoped<IDataStorageStore, DataStorageStore>();
+builder.Services.AddScoped<DataStoragePrivacy>();
+builder.Services.AddScoped<DataStorageManagementService>();
+
 // Trace/thread management surface (biz.TraceService / biz.ThreadService admin
 // reads, the status transitions and the trace segment tree). The reference
 // runs every access through an ent client carrying the privacy policy in the

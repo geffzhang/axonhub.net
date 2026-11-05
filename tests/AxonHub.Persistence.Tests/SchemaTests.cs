@@ -15,7 +15,7 @@ public sealed class SchemaTests(PostgresFixture fixture)
     private static readonly string[] ExpectedTables =
     [
         "api_keys", "channel_model_price_versions", "channel_model_prices",
-        "channel_override_templates", "channels", "models", "oidc_identities",
+        "channel_override_templates", "channels", "data_storages", "models", "oidc_identities",
         "projects", "prompt_protection_rules", "prompts", "request_executions",
         "requests", "roles", "systems", "threads", "traces", "usage_logs",
         "user_projects", "user_roles", "users",
@@ -98,6 +98,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
             "tags", "default_test_model", "policies", "settings", "ordering_weight",
             "error_message", "auto_disabled_at", "auto_disable_expires_at", "remark",
             "endpoints",
+        ],
+        ["data_storages"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "name", "description",
+            "primary", "type", "settings", "status",
         ],
         ["requests"] =
         [
@@ -251,6 +256,14 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["timestamp with time zone"] = ["created_at", "updated_at", "last_login_at"],
                 ["character varying"] = ["issuer", "subject", "email", "idp_name"],
             },
+            ["data_storages"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["boolean"] = ["primary"],
+                ["jsonb"] = ["settings"],
+                ["character varying"] = ["name", "description", "type", "status"],
+            },
             ["channels"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["bigint"] = ["id", "deleted_at", "ordering_weight"],
@@ -363,6 +376,7 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["channel_override_templates_by_user_name"] =
                 ("channel_override_templates", true, ["user_id", "name", "deleted_at"]),
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
+            ["data_sources_by_name"] = ("data_storages", true, ["name"]),
             ["models_by_name"] = ("models", true, ["name", "deleted_at"]),
             ["models_by_model_id"] = ("models", true, ["model_id", "deleted_at"]),
             ["oidc_identities_by_issuer_subject_deleted_at"] =

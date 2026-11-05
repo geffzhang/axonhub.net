@@ -299,6 +299,44 @@ public sealed class AdminQuery
         return PromptMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>Port of queryResolver.DataStorages (ent.resolvers.go:400-412).</summary>
+    /// <remarks>
+    /// The reference validates pagination (but not first/last exclusivity) and
+    /// rewrites a CREATED_AT order to ent.DefaultDataStorageOrder's field (id)
+    /// before paginating; the list runs through the DataStorage query policy
+    /// (C196).
+    /// </remarks>
+    [GraphQLName("dataStorages")]
+    public async Task<DataStorageConnectionType> DataStoragesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        DataStorageOrder? orderBy,
+        DataStorageWhereInput? where,
+        [Service] DataStorageManagementService storages,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+
+        var sortField = DataStorageMapping.ToSortField(orderBy);
+        var page = await storages.ListAsync(
+                new DataStorageListQuery
+                {
+                    Where = DataStorageMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = DataStorageMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return DataStorageMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>Port of queryResolver.QueryModels (model.resolvers.go:160-227).</summary>
     [GraphQLName("queryModels")]
     public async Task<IReadOnlyList<ModelIdentityWithStatusType>> QueryModelsAsync(
@@ -616,8 +654,8 @@ public sealed class AdminQuery
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves Project, User, APIKey, Model, Prompt, Trace, Thread,
-    /// Request and UsageLog so far and reports every other type as
+    /// port resolves Project, User, APIKey, Model, Prompt, DataStorage, Trace,
+    /// Thread, Request and UsageLog so far and reports every other type as
     /// "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
@@ -675,6 +713,14 @@ public sealed class AdminQuery
                 var prompt = await prompts.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return PromptMapping.ToGraphQL(prompt);
+            }
+
+            case "DataStorage":
+            {
+                var storages = services.GetRequiredService<DataStorageManagementService>();
+                var storage = await storages.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return DataStorageMapping.ToGraphQL(storage);
             }
 
             case "Trace":

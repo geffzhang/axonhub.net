@@ -48,6 +48,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<PromptRecord> Prompts => Set<PromptRecord>();
 
+    public DbSet<DataStorageRecord> DataStorages => Set<DataStorageRecord>();
+
     public DbSet<PromptProtectionRuleRecord> PromptProtectionRules => Set<PromptProtectionRuleRecord>();
 
     public DbSet<TraceRecord> Traces => Set<TraceRecord>();
@@ -96,6 +98,7 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureApiKey(modelBuilder.Entity<ApiKeyRecord>());
         ConfigureSystem(modelBuilder.Entity<SystemRecord>());
         ConfigurePrompt(modelBuilder.Entity<PromptRecord>());
+        ConfigureDataStorage(modelBuilder.Entity<DataStorageRecord>());
         ConfigurePromptProtectionRule(modelBuilder.Entity<PromptProtectionRuleRecord>());
         ConfigureTrace(modelBuilder.Entity<TraceRecord>());
         ConfigureThread(modelBuilder.Entity<ThreadRecord>());
@@ -318,6 +321,44 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         builder.HasIndex(prompt => prompt.ProjectId).HasDatabaseName("prompts_by_project_id");
         builder.HasIndex(prompt => new { prompt.ProjectId, prompt.Name, prompt.DeletedAt })
             .HasDatabaseName("prompts_by_project_id_name")
+            .IsUnique();
+    }
+
+    private static void ConfigureDataStorage(EntityTypeBuilder<DataStorageRecord> builder)
+    {
+        builder.ToTable("data_storages");
+        builder.HasKey(storage => storage.Id);
+        builder.Property(storage => storage.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(storage => storage.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(storage => storage.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(storage => storage.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(storage => storage.Name).HasColumnName("name").HasColumnType("varchar").IsRequired();
+        builder.Property(storage => storage.Description)
+            .HasColumnName("description")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(storage => storage.Primary).HasColumnName("primary").IsRequired();
+        builder.Property(storage => storage.Type).HasColumnName("type").HasColumnType("varchar").IsRequired();
+        builder.Property(storage => storage.Settings)
+            .HasColumnName("settings")
+            .HasColumnType("jsonb")
+            .IsRequired();
+        builder.Property(storage => storage.Status)
+            .HasColumnName("status")
+            .HasColumnType("varchar")
+            .IsRequired();
+
+        // Ent's index.Fields("name") has no deleted_at column, so a soft-deleted
+        // name stays reserved at the database level.
+        builder.HasIndex(storage => storage.Name)
+            .HasDatabaseName("data_sources_by_name")
             .IsUnique();
     }
 

@@ -674,3 +674,32 @@ public sealed class UsageLogRecord
 
     public long RequestId { get; set; }
 }
+
+/// <summary>Row of the reference <c>data_storages</c> table.</summary>
+public sealed class DataStorageRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>Immutable; only the seeded system database sets it.</summary>
+    public bool Primary { get; set; }
+
+    /// <summary>database, fs, s3, gcs, or webdav.</summary>
+    public string Type { get; set; } = "database";
+
+    /// <summary>objects.DataStorageSettings JSON; Ent stores it as jsonb.</summary>
+    public string Settings { get; set; } = "{}";
+
+    /// <summary>active or archived.</summary>
+    public string Status { get; set; } = "active";
+}

@@ -1820,4 +1820,27 @@ public sealed class AdminMutation
             .ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>Port of mutationResolver.CreateDataStorage (axonhub.resolvers.go:634-637).</summary>
+    [GraphQLName("createDataStorage")]
+    public async Task<DataStorageType> CreateDataStorageAsync(
+        CreateDataStorageInput input,
+        [Service] DataStorageManagementService storages,
+        CancellationToken cancellationToken)
+        => DataStorageMapping.ToGraphQL(
+            await storages.CreateAsync(DataStorageMapping.ToCommand(input), cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateDataStorage (axonhub.resolvers.go:639-642).</summary>
+    [GraphQLName("updateDataStorage")]
+    public async Task<DataStorageType> UpdateDataStorageAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateDataStorageInput input,
+        [Service] DataStorageManagementService storages,
+        CancellationToken cancellationToken)
+        => DataStorageMapping.ToGraphQL(
+            await storages.UpdateAsync(
+                    DataStorageMapping.ToCommand(id, input),
+                    cancellationToken)
+                .ConfigureAwait(false));
 }
