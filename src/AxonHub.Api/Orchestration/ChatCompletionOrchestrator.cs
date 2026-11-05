@@ -43,6 +43,8 @@ public sealed class ChatCompletionOrchestrator
     private readonly ChannelRequestTracker _rateLimitTracker;
     private readonly ChannelLimiterManager _channelLimiterManager;
     private readonly IPreviousChannelProvider? _previousChannels;
+    private readonly IProviderQuotaStatusProvider? _quotaStatusProvider;
+    private readonly IQuotaRoutingSettingsProvider? _quotaRoutingSettings;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -59,7 +61,9 @@ public sealed class ChatCompletionOrchestrator
         IUsageCostService? usageCostService = null,
         IPassThroughSettingsProvider? passThroughSettings = null,
         IPromptProtectionRuleProvider? promptProtectionRules = null,
-        IPreviousChannelProvider? previousChannels = null)
+        IPreviousChannelProvider? previousChannels = null,
+        IProviderQuotaStatusProvider? quotaStatusProvider = null,
+        IQuotaRoutingSettingsProvider? quotaRoutingSettings = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -102,6 +106,12 @@ public sealed class ChatCompletionOrchestrator
         // Direct test constructions leave it null, like the reference's
         // selector without a PreviousChannelProvider.
         _previousChannels = previousChannels;
+
+        // Production passes the provider quota cache and the system settings
+        // reader; direct constructions leave the provider null, which makes the
+        // gate a no-op exactly like the reference's nil ProviderQuotaStatusProvider.
+        _quotaStatusProvider = quotaStatusProvider;
+        _quotaRoutingSettings = quotaRoutingSettings;
     }
 
     /// <summary>The inbound transformer, used by the endpoint to map failures.</summary>
@@ -132,7 +142,9 @@ public sealed class ChatCompletionOrchestrator
             _usageCostService,
             _passThroughSettings,
             _promptProtectionRules,
-            _previousChannels);
+            _previousChannels,
+            _quotaStatusProvider,
+            _quotaRoutingSettings);
     }
 
     /// <summary>
@@ -163,9 +175,8 @@ public sealed class ChatCompletionOrchestrator
 
     /// <summary>
     /// Port of api.transformOrchestratorError (internal/server/api/upstream_error_policy.go:19-33):
-    /// classify a transport failure, apply the upstream error policy, then let the
-    /// inbound transformer build the client envelope. The reference's quota
-    /// conversion has no port yet (quota is C014).
+    /// convert quota exhaustion, classify a transport failure, apply the upstream
+    /// error policy, then let the inbound transformer build the client envelope.
     /// </summary>
     public async Task<HttpResponseData> TransformErrorAsync(
         Exception error,
@@ -173,7 +184,8 @@ public sealed class ChatCompletionOrchestrator
     {
         ArgumentNullException.ThrowIfNull(error);
 
-        var classified = UpstreamTransportErrors.Classify(error);
+        var quotaWrapped = UpstreamErrorPolicyApplier.WrapQuotaExhausted(error)!;
+        var classified = UpstreamTransportErrors.Classify(quotaWrapped);
         var rewritten = await _upstreamErrorPolicy
             .ApplyAsync(classified, cancellationToken)
             .ConfigureAwait(false);
@@ -270,23 +282,43 @@ public sealed class ChatCompletionOrchestrator
                 llmRequest),
             llmRequest);
 
+        // select_candidates.go:80: the quota gate is built per request so its
+        // dropped count belongs to this selection only.
+        var quotaSettings = _quotaRoutingSettings is null
+            ? QuotaRoutingSettings.Default
+            : await _quotaRoutingSettings
+                .GetQuotaRoutingSettingsAsync(cancellationToken)
+                .ConfigureAwait(false);
+        var quotaGate = new QuotaRoutingGate(
+            _quotaStatusProvider,
+            quotaSettings.DefaultMode,
+            _timeProvider);
+
         ChannelCandidate[] candidates = [];
         if (scopedCandidates.Count > 0)
         {
             candidates = await SortCandidatesAsync(
                     model,
+                    llmRequest,
                     scopedCandidates,
                     identity,
                     effectivePolicy,
                     requiredCount,
+                    quotaGate,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        // select_candidates.go: an empty result is ErrInvalidModel with the
+        // select_candidates.go:108-114: an empty result is a quota error when
+        // the gate removed candidates, otherwise ErrInvalidModel with the
         // request model appended unquoted.
         if (candidates.Length == 0)
         {
+            if (quotaGate.DroppedCount > 0)
+            {
+                throw new QuotaExhaustedException(model);
+            }
+
             throw TransformerErrors.InvalidModel(model);
         }
 
@@ -577,22 +609,31 @@ public sealed class ChatCompletionOrchestrator
     /// </summary>
     private async Task<ChannelCandidate[]> SortCandidatesAsync(
         string model,
+        LlmRequest request,
         IReadOnlyList<ChannelCandidate> source,
         RequestIdentity identity,
         RetryPolicy effectivePolicy,
         int requiredCount,
+        QuotaRoutingGate quotaGate,
         CancellationToken cancellationToken)
     {
-        ChannelCandidate? sticky = null;
-        IReadOnlyList<ChannelCandidate> remaining = source;
-
+        long stickyId = 0;
+        var stickyFound = false;
         if (effectivePolicy.TraceStickyMode == RetryPolicy.TraceStickyPreferPreviousChannel)
         {
-            var (stickyId, found) = ResolveStickyChannelId(_previousChannels, identity, source);
-            if (found)
-            {
-                (sticky, remaining) = ExtractStickyCandidate(source, stickyId);
-            }
+            (stickyId, stickyFound) = ResolveStickyChannelId(_previousChannels, identity, source);
+        }
+
+        // candidates.go:769-775: the quota gate runs after the sticky id is
+        // resolved but before the sticky pin. A channel the gate removed can
+        // therefore not be pinned, and the fallback sort sees the filtered list.
+        var gated = quotaGate.Filter(source, request, stickyFound ? stickyId : 0);
+
+        ChannelCandidate? sticky = null;
+        IReadOnlyList<ChannelCandidate> remaining = gated;
+        if (stickyFound)
+        {
+            (sticky, remaining) = ExtractStickyCandidate(gated, stickyId);
         }
 
         var now = _timeProvider.GetUtcNow();
@@ -603,7 +644,7 @@ public sealed class ChatCompletionOrchestrator
         {
             return await grain
                 .SortAsync(
-                    [.. source],
+                    [.. gated],
                     now,
                     trackSelection: true,
                     requiredCount,

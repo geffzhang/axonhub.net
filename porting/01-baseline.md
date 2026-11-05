@@ -222,9 +222,10 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 | SSE 写出：合成的"流不完整"错误不经过策略（参照只对 `stream.Err()` 调用 `upstreamErrorStream.Err`）；注入的变换器改写尾随错误事件字节 | `SseStreamWriterTests.cs` | 2 |
 
 非流与流式的不对称是参照的真实行为而非缺陷：非流路径的分类发生在策略之前且产出裸 `ResponseError`，
-因此 hidden/custom 对传输错误无效果；流式路径先分类再由策略包装，502 与 code 得以保留。残余差异为
-`quota_exhausted` 的包装来源（`QuotaExhaustedError` → `wrapQuotaExhaustedAsResponseError`）仍随限流/配额里程碑
-（C014）；gjson 与 System.Text.Json 的报文解析差异登记为 C033。
+因此 hidden/custom 对传输错误无效果；流式路径先分类再由策略包装，502 与 code 得以保留。
+`quota_exhausted` 的包装来源（`QuotaExhaustedError` → `wrapQuotaExhaustedAsResponseError`）
+已由 §95 接入（非流 503 与流式 envelope，43 例）；gjson 与 System.Text.Json 的报文解析差异
+登记为 C033。
 
 ## 8.4 通道级请求改写（134 例）
 
@@ -4534,6 +4535,60 @@ IsAnthropicNativeTool / FilterOutAnthropicNativeTools（11-56）；
 
 差异：不新增编号；C179 的真实缺口 (d) 由本节闭合（该条目已就地更新）。
 
+## 95. 配额路由闸门切片（QuotaRoutingGate / ProviderQuotaRouting / 设置映射，43 例，2026-11-05）
+
+参照 `internal/server/orchestrator/candidates_quota.go`（QuotaRoutingGate，14-166）、
+`internal/server/biz/provider_quota/routing.go`（EvaluateQuotaRouting 42-118、routingGroups
+120-168）、`types.go` 的 RequestModality / IsBalanceLimit / ElapsedRatio、
+`internal/server/biz/quota_routing_migration.go`（quotaRoutingModeFromLegacy 128-142）、
+`internal/server/biz/system.go` 的 QuotaRoutingSettingsOrDefault（1819-1867）、
+`objects.QuotaRoutingMode`、`orchestrator/errors.go` 的 QuotaExhaustedError，以及
+`api/chat.go` 的 wrapQuotaExhaustedAsResponseError（855-875）、FormatStreamError 配额分支
+（786-795）与 streamErrorStatus；端口新增 `ProviderQuotaStatus.cs`、`QuotaRoutingGate.cs`、
+`SystemQuotaRoutingSettingsService.cs`，在 `SortCandidatesAsync` 中解析 sticky 之后、钉住
+之前应用，并接入非流 / 流式 / 二进制三处错误映射，对齐可观察行为：
+
+- 路由决策（`EvaluateQuotaRouting`）：整体状态 `exhausted` 直接返回 exhausted；`limits`
+  按 `availabilityGroup` 分组（仅当组名来自本请求 modality 的限制时才纳入其它类型），未分组
+  的窗口合并为一组、未分组的余额合并为一组；组可用性按组语义（有组名任一未耗尽即可用，
+  无组名的窗口组全部未耗尽才可用）；全部组耗尽 → exhausted（空 limitations 时按整体
+  状态 available/warning → open，否则 unknown）；窗口全耗尽且余额可用 →
+  sticky_only `window_exhausted_balance_fallback`；任一有活动窗口的未耗尽窗口使用率
+  超过时间进度 → sticky_only `window_pressure`；否则 open。
+- 两阶段过滤：第一阶段保留 keepPhaseOne；第一阶段为空时改用 keepPhaseTwo；`DroppedCount`
+  始终为 `原候选数 - 最终候选数`。backpressure 下第一阶段保留 open / unknown 与命中
+  sticky id 的 sticky_only，第二阶段仅保留 sticky_only；remove_on_exhausted 保留所有
+  非 exhausted；ignore_quota 全部保留。空候选列表与 nil provider 原样返回。
+- 模式解析：通道 `settings.quotaRoutingMode` 非空则覆盖系统默认；未知 / inherit 值
+  fail-closed 为 remove_on_exhausted；系统默认来自 `quota_routing_settings.defaultMode`
+  （空值 → remove_on_exhausted），新键缺失时即时映射 legacy
+  `quota_enforcement_settings`（`!enabled` → ignore_quota；exhaustedOnly 或
+  `EXHAUSTED_ONLY`/`exhausted_only` → remove_on_exhausted；dePrioritize 或
+  `DE_PRIORITIZE`/`de_prioritize` → backpressure；其余 remove_on_exhausted），任何读取 /
+  解码 / 非法模式错误都回退默认设置。
+- 请求 modality：`request.image != nil` 使用 `image` 限制，否则 `token`；无配额状态的
+  通道在两个阶段都保留。
+- 错误面：最终候选为空且 `DroppedCount > 0` → QuotaExhaustedException
+  “all channels quota exhausted for model <model>”（否则仍是 `model not found: <model>`）；
+  非流映射为 503 ResponseError，body 为
+  `{"error":{"code":"quota_exhausted","message":...,"type":"quota_exhausted"}}`；流式
+  FormatStreamError 返回同形状 envelope 且不带外层 request_id；二进制 writer 的状态码为
+  503。
+- 接缝：生产装配暂不注册 `IProviderQuotaStatusProvider`（null），对应参照中通道尚无配额
+  状态的 nil 指针分支；tester 路径沿用参照的无配额 provider 选择器，不经过闸门。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 路由决策表 16 条、IsBalanceLimit / ElapsedRatio、两阶段过滤与 dropped count、通道覆盖与 fail-closed、modality、nil provider / 空列表、设置与 legacy 映射及回退、orchestrator 的 QuotaExhausted / sticky 钉住与放弃 / 并发独立 dropped count / invalid-model、非流 503 信封、流式与二进制配额 envelope | `tests/AxonHub.Api.Tests/QuotaRoutingSelectionTests.cs` | 43 |
+
+`AxonHub.Api.Tests` 由 2362 增至 2405（+43），Llm 3023、Grains 95、Persistence 207；
+四个项目合计由 5687 增至 5730，0 失败 0 跳过。
+
+差异：供应商配额采集子系统（checkers / ProviderQuotaService / provider_quota_status /
+GraphQL 配额面）未移植，登记为 C182（真实缺口）；启动数据迁移（legacy 设置复制 /
+allowedChannelIDs 改写 / 迁移标记）未执行，登记为 C183。C179 的真实缺口 (e) 由本节闭合
+（该条目已就地更新）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4561,3 +4616,4 @@ IsAnthropicNativeTool / FilterOutAnthropicNativeTools（11-56）；
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；供应商配额采集子系统（checkers / ProviderQuotaService / provider_quota_status / GraphQL 配额面）与启动数据迁移未移植（C182 / C183），null provider 下与参照「通道无配额状态」可观察等价 | 中 | 闸门完成；采集与迁移随 C182 / C183 切片落地 |

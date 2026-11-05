@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using AxonHub.Api.Orchestration;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
@@ -21,6 +22,13 @@ public static class StreamErrorFormatter
     public static byte[] Format(Exception error)
     {
         ArgumentNullException.ThrowIfNull(error);
+
+        // chat.go:786-795: the quota branch returns its own envelope without a
+        // request_id, unlike every other error path.
+        if (GoErrors.As<QuotaExhaustedException>(error) is { } quotaError)
+        {
+            return QuotaEnvelope(quotaError.Message);
+        }
 
         if (GoErrors.As<ResponseError>(error) is { } responseError)
         {
@@ -131,6 +139,28 @@ public static class StreamErrorFormatter
             writer.WriteString("type", type);
             writer.WriteEndObject();
             writer.WriteString("request_id", requestId);
+            writer.WriteEndObject();
+        }
+
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// chat.go:788-795: <c>{"error":{"code":"quota_exhausted","message":...,
+    /// "type":"quota_exhausted"}}</c> — no outer request_id.
+    /// </summary>
+    private static byte[] QuotaEnvelope(string message)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("error");
+            writer.WriteStartObject();
+            writer.WriteString("code", "quota_exhausted");
+            writer.WriteString("message", message);
+            writer.WriteString("type", "quota_exhausted");
+            writer.WriteEndObject();
             writer.WriteEndObject();
         }
 

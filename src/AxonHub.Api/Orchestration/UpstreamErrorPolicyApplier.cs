@@ -98,6 +98,30 @@ public sealed class UpstreamErrorPolicyApplier : IUpstreamErrorPolicyApplier
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Port of api.wrapQuotaExhaustedAsResponseError (chat.go:855-875): the
+    /// selector's quota exhaustion becomes a 503 ResponseError before the
+    /// transport classifier and the upstream error policy run.
+    /// </summary>
+    internal static Exception? WrapQuotaExhausted(Exception? error)
+    {
+        if (error is not QuotaExhaustedException quotaError)
+        {
+            return error;
+        }
+
+        return new ResponseError
+        {
+            StatusCode = 503,
+            Detail = new ErrorDetail
+            {
+                Message = quotaError.Message,
+                Type = QuotaExhausted,
+                Code = QuotaExhausted,
+            },
+        };
+    }
+
     /// <summary>Port of applyUpstreamErrorPolicy's rewrite (chat quota aside).</summary>
     internal static Exception Apply(Exception error, UpstreamErrorPolicy policy)
     {

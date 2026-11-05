@@ -139,6 +139,7 @@ builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminServi
 builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
 builder.Services.AddScoped<IRetryPolicyProvider, SystemRetryPolicyService>();
 builder.Services.AddScoped<IPassThroughSettingsProvider, SystemPassThroughSettingsService>();
+builder.Services.AddScoped<IQuotaRoutingSettingsProvider, SystemQuotaRoutingSettingsService>();
 
 // Prompt protection (biz.PromptProtectionRuleService): the port reads enabled
 // rules per request instead of the reference's 30-second live cache (C092).

@@ -123,12 +123,14 @@ public static class BinaryStreamWriter
         }
     }
 
-    /// <summary>
-    /// Port of streamErrorStatus (chat.go:759-776). The QuotaExhaustedError
-    /// branch lands with the auth/admin slice (difference C014).
-    /// </summary>
+    /// <summary>Port of streamErrorStatus (chat.go:759-776).</summary>
     private static int StreamErrorStatus(Exception err)
     {
+        if (GoErrors.As<QuotaExhaustedException>(err) is not null)
+        {
+            return StatusCodes.Status503ServiceUnavailable;
+        }
+
         if (GoErrors.As<ResponseError>(err) is { StatusCode: not 0 } respErr)
         {
             return respErr.StatusCode;
