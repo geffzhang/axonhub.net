@@ -10,6 +10,7 @@ using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.PromptProtection;
+using AxonHub.Api.Prompts;
 using AxonHub.Api.Security;
 using AxonHub.Api.Settings;
 using AxonHub.Api.Static;
@@ -145,6 +146,11 @@ builder.Services.AddScoped<IQuotaRoutingSettingsProvider, SystemQuotaRoutingSett
 // rules per request instead of the reference's 30-second live cache (C092).
 builder.Services.AddScoped<IPromptProtectionRuleStore, PromptProtectionRuleStore>();
 builder.Services.AddScoped<IPromptProtectionRuleProvider, PromptProtectionRuleService>();
+
+// Project prompts (biz.PromptService): the port reads enabled prompts per
+// request instead of the reference's per-project one-minute cache (C187).
+builder.Services.AddScoped<IPromptStore, PromptStore>();
+builder.Services.AddScoped<IPromptProvider, PromptService>();
 
 // The models surface (biz.ModelService.ListEnabledModels) reads the
 // system_model_settings row through the same scoped system store.

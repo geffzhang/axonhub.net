@@ -16,9 +16,9 @@ public sealed class SchemaTests(PostgresFixture fixture)
     [
         "api_keys", "channel_model_price_versions", "channel_model_prices",
         "channel_override_templates", "channels", "models", "oidc_identities",
-        "projects", "prompt_protection_rules", "request_executions", "requests",
-        "roles", "systems", "threads", "traces", "usage_logs", "user_projects",
-        "user_roles", "users",
+        "projects", "prompt_protection_rules", "prompts", "request_executions",
+        "requests", "roles", "systems", "threads", "traces", "usage_logs",
+        "user_projects", "user_roles", "users",
     ];
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new(StringComparer.Ordinal)
@@ -84,6 +84,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
         [
             "id", "created_at", "updated_at", "deleted_at", "name", "description",
             "pattern", "status", "settings",
+        ],
+        ["prompts"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "name", "description",
+            "role", "content", "status", "order", "settings", "project_id",
         ],
         ["channels"] =
         [
@@ -233,6 +238,13 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["jsonb"] = ["settings"],
                 ["character varying"] = ["name", "description", "pattern", "status"],
             },
+            ["prompts"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "order", "project_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] = ["settings"],
+                ["character varying"] = ["name", "description", "role", "content", "status"],
+            },
             ["oidc_identities"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["bigint"] = ["id", "deleted_at", "user_id"],
@@ -371,6 +383,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["traces_by_project_id_status"] = ("traces", false, ["project_id", "status"]),
             ["prompt_protection_rules_by_name"] =
                 ("prompt_protection_rules", true, ["name", "deleted_at"]),
+            ["prompts_by_project_id"] = ("prompts", false, ["project_id"]),
+            ["prompts_by_project_id_name"] = ("prompts", true, ["project_id", "name", "deleted_at"]),
             ["requests_by_api_key_id_created_at"] = ("requests", false, ["api_key_id", "created_at"]),
             ["requests_by_project_id_created_at"] = ("requests", false, ["project_id", "created_at"]),
             ["requests_by_project_id_user_id_created_at"] =

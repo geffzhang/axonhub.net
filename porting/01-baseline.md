@@ -4714,6 +4714,55 @@ Llm 3032、Grains 95；四个项目合计由 5790 增至 5842，0 失败 0 跳�
 差异：C185 由本节闭合（resolved）；C096 第 (4) 项（计费消息中间件未接线）随之关闭，其余残余
 缺口不变；C186 登记配额时区按请求读取与参照进程内缓存的差异（accepted）。
 
+## 99. 项目提示词注入（injectPrompts / decisions 提示词，63 + 6 例，2026-11-05）
+
+参照 `internal/server/orchestrator/prompt.go`（injectPrompts 37-87、injectDecisionsPrompts
+89-146、promptScopeMatches 148-150）、`internal/server/biz/prompt_matcher.go`、
+`internal/server/biz/prompt.go` 的启用列表、`internal/objects/prompt.go` 的设置模型、
+`internal/ent/schema/prompt.go` 与 `internal/ent/migrate/schema.go:425-465`（prompts 表、
+两个索引、无外键）、`internal/pkg/xregexp/match.go`。端口新增 `PromptRecord`、`prompts` DDL
+与 EF 映射、`PromptStore`（EF 写 / Dapper 读）、`PromptModels`（设置 JSON 解码）、
+`PromptService` / `IPromptProvider`、`PromptMatcher`、`InjectPromptsMiddleware` /
+`DecisionsPrompts`、`DecisionsRawJson` 与 `RawJsonStringSet`，并接入
+`ChatCompletionOrchestrator`：
+
+- 门控：上下文无项目（端口用 ProjectId<=0）跳过；provider 读取失败记录并跳过（fail open）；
+  启用列表为空或无匹配提示词跳过。tester 路径不提供 provider，与参照的
+  `stubPromptProvider{}` 空列表可观察等价。
+- 匹配：conditions 为 composite 的 AND，composite 为 condition 的 OR；null/空 conditions
+  匹配全部；composite 元素为 null（Go 零值）同样匹配；model_id 需非 nil 且 ordinal 精确
+  相等；model_pattern 需非空并经 XRegexp（`*` 全匹配、无元字符精确比较、其余锚定正则、
+  非法正则恒不匹配）；api_key 需非 nil 且等于调用方 key id；未知或缺失类型不匹配。
+- 应用：按 Order 升序、CreatedAt 稳定次级排序；action.type == `append` 追加到 messages
+  末尾，其余（prepend、空、未知）前插；消息 role / content 取自提示词。
+- API 格式分派：`openai/decisions` 走原始 body 拼接，其余走统一 messages。
+- decisions 字符串 input：不查询角色作用域，逐条前插 / 追加并以 `\n` 连接，经 sjson 语义
+  替换顶层 `input` 值（字节保持）。
+- decisions 数组 input：`input.#` 取元素数（非数组为 0）；缺省 role 视为 user；遍历
+  `input.i.content.#`，首个 `type` 大小写不敏感等于 `input_text` 的分片被改写（promptRole
+  为空、等于 inputRole、或为 system 时参与），替换 `input.i.content.j.text` 后立即返回，
+  后续分片与消息不变。
+- 设置解码：键大小写不敏感、未知键忽略、缺失 / 显式 null 取零值、`conditions: [null]`
+  解码为匹配全部的零 composite；设置 JSON 畸形使 provider 读取失败，注入随即 fail open。
+- 接线：pipeline 中注入中间件注册在 ProtectPrompts 之前（orchestrator.go:244-245），保护
+  阶段因此能看到注入后的提示词；`Program.cs` 注册 `IPromptStore` / `IPromptProvider`；
+  EF 写入失败后 detach，避免同一 scope 的后续写入重试失败行（Ent 客户端没有失败实体状态）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 匹配条件 16 例（null / 空、OR / AND、未知类型、空值）、零 composite 与 `[null]`、MatchPrompt、过滤顺序、ApplyPrompts 6 类与应用排序 | `tests/AxonHub.Api.Tests/PromptInjectionTests.cs`（PromptMatcherTests） | 27 |
+| 注入中间件：空列表、匹配注入、模型条件 3 例、前插 / 追加、api key、decisions 字符串与数组改写、角色作用域、首个 input_text 短路、大小写与缺省 role、不可改写输入 3 例、空 body、非 decisions、scope 6 例 | 同上（InjectPromptsMiddlewareTests） | 24 |
+| 项目门控、失败开放与 provider 入参 | 同上（LoadPromptsTests） | 4 |
+| 记录到设置映射、空 / null 设置 3 例、大小写键、`[null]` 条件、非法 JSON、存储失败 | 同上（PromptServiceTests） | 8 |
+| prompts 表往返、project / status / 软删过滤、空结果、跨项目同名、软删名复用、jsonb 形状 | `tests/AxonHub.Persistence.Tests/PromptStoreTests.cs` | 6 |
+| schema 快照（新增 prompts 表与两个索引）与 EF 模型对齐 | `tests/AxonHub.Persistence.Tests/SchemaTests.cs`、`EfCoreModelTests.cs` | 既有用例扩表（19→20 表、45→47 索引） |
+
+`AxonHub.Api.Tests` 由 2504 增至 2567（+63），`AxonHub.Persistence.Tests` 由 211 增至 217
+（+6），Llm 3032、Grains 95；四个项目合计由 5842 增至 5911，0 失败 0 跳过。
+
+差异：C187 登记每请求读取与参照每项目一分钟缓存的差异（accepted）；C188 登记提示词管理面
+（GraphQL CRUD / 设置校验 / 缓存失效）未移植（gap）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4732,7 +4781,7 @@ Llm 3032、Grains 95；四个项目合计由 5790 增至 5842，0 失败 0 跳�
 | 持久化（channels / projects / users / api_keys / channel_model_prices / models / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`models` 管理存储由 §88 的 7 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
 | usage 成本管理面：`channel_model_prices` 自动定价与读取边 | 写入面已由 §73 接入（`saveChannelModelPrices`、create/update/skip/delete 计划、reference id 轮换、`channel_model_price_versions` 版本行与 GraphQL 定价类型，68 例）；自动定价由 §74 接入（`models` 表、模型卡换算、createChannel / updateChannel 事务内补价，20 例）；ent 的 `channelModelPrices` / versions 读取边与进程内缓存刷新未移植（C048） | 低 | 随读取边切片落地 |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）未接入，角色 / 权限校验由 §84 接入（PermissionValidator 与 users / roles 写入接线，25 例），OIDC 登录流程由 §83 接入（提供方配置与 providers 列表由 §82 接入），JWT 登录 / 刷新由 §80 接入，管理员 GraphQL 的 bearer / service_account 门与只读规则由 §81 接入 | 中 | 管理面随 GraphQL/前端里程碑 |
-| 其余 Ent 表（data_storages / prompts / invitations 等） | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74 供自动定价读取，§88 管理面 CRUD）、`channel_override_templates`（§78）与 `oidc_identities`（§79）已落；`invitations`、`data_storages`、`prompts` 等其余表未移植 | 中 | 随对应功能落地 |
+| 其余 Ent 表（data_storages / invitations 等） | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74 供自动定价读取，§88 管理面 CRUD）、`channel_override_templates`（§78）、`oidc_identities`（§79）与 `prompts`（§99）已落；`invitations`、`data_storages` 等其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随 trace 管理面切片落地 |
 | 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
 | 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |
@@ -4745,3 +4794,4 @@ Llm 3032、Grains 95；四个项目合计由 5790 增至 5842，0 失败 0 跳�
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
+| 项目提示词注入与 decisions 提示词拼接 | 已由 §99 闭合运行时链路：`prompts` 表（EF 写 / Dapper 读、软删与唯一索引）、设置 JSON 解码、条件匹配与 XRegexp 语义、稳定排序与前插 / 追加、ProtectPrompts 之前的 pipeline 接线、decisions 字符串与数组 input 的逐字节改写、项目门控与 fail-open（63 + 6 例）；每请求读取与参照每分钟缓存的差异登记为 C187（accepted），管理面（GraphQL CRUD / 设置校验 / 缓存失效）未移植登记为 C188（gap） | 中 | 注入完成；管理面随 GraphQL 切片（C188） |

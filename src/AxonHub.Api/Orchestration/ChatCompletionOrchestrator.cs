@@ -3,6 +3,7 @@ using AxonHub.Api.Billing;
 using AxonHub.Api.Management;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.PromptProtection;
+using AxonHub.Api.Prompts;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
@@ -49,6 +50,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IQuotaRoutingSettingsProvider? _quotaRoutingSettings;
     private readonly IModelSettingsProvider? _modelSettingsProvider;
     private readonly IApiKeyQuotaChecker? _quotaChecker;
+    private readonly IPromptProvider? _promptProvider;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -69,7 +71,8 @@ public sealed class ChatCompletionOrchestrator
         IProviderQuotaStatusProvider? quotaStatusProvider = null,
         IQuotaRoutingSettingsProvider? quotaRoutingSettings = null,
         IModelSettingsProvider? modelSettings = null,
-        IApiKeyQuotaChecker? quotaChecker = null)
+        IApiKeyQuotaChecker? quotaChecker = null,
+        IPromptProvider? promptProvider = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -127,6 +130,11 @@ public sealed class ChatCompletionOrchestrator
         // Production passes biz.QuotaService; a null checker makes enforceQuota
         // a no-op exactly like the reference's nil QuotaService (the tester).
         _quotaChecker = quotaChecker;
+
+        // Production passes biz.PromptService (through the orchestrator's
+        // PromptProvider state); the tester mounts an empty stub instead, which
+        // is the same as no provider.
+        _promptProvider = promptProvider;
     }
 
     /// <summary>The inbound transformer, used by the endpoint to map failures.</summary>
@@ -161,7 +169,8 @@ public sealed class ChatCompletionOrchestrator
             _quotaStatusProvider,
             _quotaRoutingSettings,
             _modelSettingsProvider,
-            _quotaChecker);
+            _quotaChecker,
+            _promptProvider);
     }
 
     /// <summary>
@@ -366,6 +375,7 @@ public sealed class ChatCompletionOrchestrator
                 passThroughSettings,
                 modelSettings,
                 modelMapping,
+                promptProvider: _promptProvider,
                 includeRateLimits: true,
                 ensureUsage: false,
                 cancellationToken)
@@ -486,6 +496,9 @@ public sealed class ChatCompletionOrchestrator
                 passThroughSettings,
                 modelSettings,
                 modelMapping,
+                // The tester's orchestrator mounts &stubPromptProvider{} (an
+                // empty list), so no prompts are injected there.
+                promptProvider: null,
                 includeRateLimits: false,
                 ensureUsage: true,
                 cancellationToken)
@@ -563,6 +576,7 @@ public sealed class ChatCompletionOrchestrator
         PassThroughSettings passThroughSettings,
         ModelSettings modelSettings,
         ApiKeyModelMappingMiddleware modelMapping,
+        IPromptProvider? promptProvider,
         bool includeRateLimits,
         bool ensureUsage,
         CancellationToken cancellationToken)
@@ -581,11 +595,13 @@ public sealed class ChatCompletionOrchestrator
                 _executor));
 
         // orchestrator.go mounts injectPrompts then protectPrompts as inbound
-        // middlewares; the reference reads the enabled rules from its live
-        // cache there. The port takes the snapshot before building the pipeline
-        // and ProtectPromptsMiddleware applies it inside the inbound phase, so
-        // no provider body is built from unprotected prompts.
+        // middlewares; the reference reads the enabled prompts and rules from
+        // its live caches there. The port takes both snapshots before building
+        // the pipeline and applies them inside the inbound phase, so no
+        // provider body is built from unprotected prompts.
         var promptProtecter = await LoadPromptProtecterAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var prompts = await LoadPromptsAsync(promptProvider, identity, cancellationToken)
             .ConfigureAwait(false);
 
         var options = new PipelineOptions
@@ -625,6 +641,13 @@ public sealed class ChatCompletionOrchestrator
 
         // Inbound-phase middleware: registered first so it runs before the
         // outbound chain, matching the reference's inbound/outbound split.
+        // injectPrompts runs before protectPrompts, so the protection pass sees
+        // the injected prompts (orchestrator.go:244-245).
+        if (prompts is { Count: > 0 })
+        {
+            options.Middlewares.Add(new InjectPromptsMiddleware(prompts, identity.ApiKey?.Id ?? 0));
+        }
+
         options.Middlewares.Add(new ProtectPromptsMiddleware(
             outbound,
             inbound,
@@ -949,6 +972,36 @@ public sealed class ChatCompletionOrchestrator
         }
 
         return policy;
+    }
+
+    /// <summary>
+    /// Port of orchestrator.injectPrompts' provider read (prompt.go:37-87):
+    /// no project in the context skips injection entirely, and a provider
+    /// error is logged there with the request continuing uninjected (fail
+    /// open), which a null snapshot reproduces.
+    /// </summary>
+    internal static async Task<IReadOnlyList<Prompt>?> LoadPromptsAsync(
+        IPromptProvider? promptProvider,
+        RequestIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        // RequestIdentity.ProjectId is non-nullable; 0 (or less) stands for the
+        // reference's "no project ID in the request context".
+        if (promptProvider is null || identity.ProjectId <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await promptProvider
+                .GetEnabledPromptsAsync(identity.ProjectId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>

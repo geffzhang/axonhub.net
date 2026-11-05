@@ -472,6 +472,38 @@ public sealed class SystemRecord
     public string Value { get; set; } = string.Empty;
 }
 
+/// <summary>Row of the reference <c>prompts</c> table.</summary>
+public sealed class PromptRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    public string Role { get; set; } = string.Empty;
+
+    public string Content { get; set; } = string.Empty;
+
+    /// <summary>enabled or disabled.</summary>
+    public string Status { get; set; } = "disabled";
+
+    /// <summary>Insertion order; smaller values are inserted first.</summary>
+    public long Order { get; set; }
+
+    /// <summary>objects.PromptSettings JSON; Ent stores it as jsonb.</summary>
+    public string Settings { get; set; } = "{}";
+
+    public long ProjectId { get; set; } = 1;
+}
+
 /// <summary>Row of the reference <c>prompt_protection_rules</c> table.</summary>
 public sealed class PromptProtectionRuleRecord
 {
