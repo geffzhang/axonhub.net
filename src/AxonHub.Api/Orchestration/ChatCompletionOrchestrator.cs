@@ -238,6 +238,14 @@ public sealed class ChatCompletionOrchestrator
         // Read the requested model the same way the reference's selectCandidates
         // middleware does: after the inbound transform, before any retry.
         var llmRequest = _inbound.TransformRequest(request);
+
+        // orchestrator.go:250-255 registers applyModelMapping after the API key
+        // access checks and before selectCandidates. The port applies the same
+        // middleware before selection so routing uses the profile-mapped model,
+        // then mounts the instance in the pipeline so its inbound state and
+        // response hooks see the same request.
+        var modelMapping = new ApiKeyModelMappingMiddleware(identity.ApiKey);
+        modelMapping.TransformInboundLlmRequest(llmRequest);
         var model = llmRequest.Model;
 
         // orchestrator.Process reads the policy once per request; the load
@@ -330,6 +338,7 @@ public sealed class ChatCompletionOrchestrator
                 onRequestCreated,
                 retryPolicy,
                 passThroughSettings,
+                modelMapping,
                 includeRateLimits: true,
                 ensureUsage: false,
                 cancellationToken)
@@ -364,6 +373,11 @@ public sealed class ChatCompletionOrchestrator
         ArgumentNullException.ThrowIfNull(identity);
 
         var llmRequest = inbound.TransformRequest(request);
+
+        // The tester's processor mounts the same orchestrator inbound chain, so
+        // applyModelMapping runs before the SpecifiedChannelSelector too.
+        var modelMapping = new ApiKeyModelMappingMiddleware(identity.ApiKey);
+        modelMapping.TransformInboundLlmRequest(llmRequest);
 
         // Same reads as ProcessAsync: one policy and one pass-through snapshot
         // per request.
@@ -436,6 +450,7 @@ public sealed class ChatCompletionOrchestrator
                 onRequestCreated: null,
                 retryPolicy,
                 passThroughSettings,
+                modelMapping,
                 includeRateLimits: false,
                 ensureUsage: true,
                 cancellationToken)
@@ -450,6 +465,7 @@ public sealed class ChatCompletionOrchestrator
         Action<long>? onRequestCreated,
         RetryPolicy retryPolicy,
         PassThroughSettings passThroughSettings,
+        ApiKeyModelMappingMiddleware modelMapping,
         bool includeRateLimits,
         bool ensureUsage,
         CancellationToken cancellationToken)
@@ -496,6 +512,11 @@ public sealed class ChatCompletionOrchestrator
         {
             options.Middlewares.Add(new EnsureUsageMiddleware());
         }
+
+        // orchestrator.go:254: applyModelMapping runs before injectPrompts and
+        // protectPrompts on the inbound pass, so the response hook also runs
+        // after theirs in reverse order.
+        options.Middlewares.Add(modelMapping);
 
         // Inbound-phase middleware: registered first so it runs before the
         // outbound chain, matching the reference's inbound/outbound split.

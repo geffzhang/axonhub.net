@@ -4631,6 +4631,41 @@ Persistence 207；四个项目合计由 5730 增至 5782，0 失败 0 跳过。
 
 差异：C180 由本节闭合（该条目已就地更新为 accepted）；无新增差异。
 
+## 97. API key profile 模型映射（applyModelMapping / 响应模型还原，8 例，2026-11-05）
+
+参照 `internal/server/orchestrator/model_mapper.go` 的 applyModelMapping 中间件（18-95）、
+ModelMapper（97-171），以及 `orchestrator.go:250-255` 的注册位置（在入站配额 /
+reasoning effort / model access 检查之后，候选选择与提示词注入之前）。端口新增
+`ModelMapping.cs`（ModelMapper 与 ApiKeyModelMappingMiddleware），在 ProcessAsync /
+ProcessSpecifiedAsync 选择候选之前应用，并把同一实例注册进 pipeline 的入站链，使
+pipeline 的第二次入站变换走参照的「恢复 OriginalModel」分支：
+
+- 空模型：抛 `model not found: request model is empty`（biz.ErrInvalidModel 包装），
+  发生在任何选择或提示词处理之前，且不初始化共享状态。
+- 映射：仅在 API key 存在且 profiles 有命中的 active profile 时生效；首个 `from`
+  命中的映射生效，匹配沿用 XRegexp（无元字符按精确比较、`*` 全匹配、其余按锚定
+  正则、非法正则恒不匹配）；nil key / 无 profiles / 空或未知 active profile /
+  无命中均返回原模型。
+- 共享状态：第一次入站调用保存客户端模型到 RequestModel、映射后的路由模型到
+  OriginalModel；再次调用时恢复 OriginalModel 而不是对已映射模型二次映射（与参照
+  「入站不应调用两次，以防万一恢复」的语义一致）。
+- 响应还原：非空且与客户端模型不同的响应 model 改回客户端模型；空 model 保持为空；
+  LLM 流逐条映射，RequestModel 为空时原样返回流。
+- 接线：映射先于流策略 / 原生工具 / profile 过滤与配额闸门；`.RequestModel` 覆盖
+  模板渲染路由别名，provider body 仍写通道 actual model；tester 的
+  SpecifiedChannelSelector 同样看到映射后的模型。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| MapModel 的 8 种输入、XRegexp 匹配语义（7 子例）、共享状态（8 子例）、空模型拒绝、响应与流还原、pipeline 条件覆盖 parity、tester 前置映射 | `tests/AxonHub.Api.Tests/ModelMappingTests.cs` | 8 |
+
+`AxonHub.Api.Tests` 由 2448 增至 2456（+8），Llm 3032、Grains 95、Persistence 207；
+四个项目合计由 5782 增至 5790，0 失败 0 跳过。
+
+差异：新增 C184（API key profile 模型映射，已由本节闭合）与 C185（orchestrator 其余
+入站中间件的真实缺口：enforceQuota / applyAutoReasoningEffort /
+checkApiKeyModelAccess / Claude Code 计费消息）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4660,3 +4695,4 @@ Persistence 207；四个项目合计由 5730 增至 5782，0 失败 0 跳过。
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
 | 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；供应商配额采集子系统（checkers / ProviderQuotaService / provider_quota_status / GraphQL 配额面）与启动数据迁移未移植（C182 / C183），null provider 下与参照「通道无配额状态」可观察等价 | 中 | 闸门完成；采集与迁移随 C182 / C183 切片落地 |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
+| API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
