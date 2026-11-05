@@ -4761,7 +4761,73 @@ Llm 3032、Grains 95；四个项目合计由 5790 增至 5842，0 失败 0 跳�
 （+6），Llm 3032、Grains 95；四个项目合计由 5842 增至 5911，0 失败 0 跳过。
 
 差异：C187 登记每请求读取与参照每项目一分钟缓存的差异（accepted）；C188 登记提示词管理面
-（GraphQL CRUD / 设置校验 / 缓存失效）未移植（gap）。
+（GraphQL CRUD / 设置校验 / 缓存失效）未移植（gap），随后由 §100 闭合。
+
+## 100. 项目提示词管理面（prompts / 七个变更 / 设置校验，37 + 7 例，2026-11-05）
+
+参照 `internal/server/gql/prompt.graphql`、`prompt.resolvers.go`、
+`ent.resolvers.go:465-478`（Prompts）、`internal/server/gql/gql_pagination.go`
+（DefaultPromptOrder / 排序重写）、`internal/server/biz/prompt.go`
+（CreatePrompt 135-181、UpdatePrompt 183-260、DeletePrompt 262-288、UpdatePromptStatus
+290-321、Bulk* 323-384、ValidatePromptSettings 96-133）、
+`internal/ent/schema/prompt.go:93-106`、`internal/scopes/rule_*.go`、
+`internal/objects/prompt.go` 与 `internal/ent/prompt_update.go:231-286`。端口新增
+`PromptPrivacy`、`PromptSettingsCodec`、`PromptManagementService`、`PromptTypes`，
+扩展 `PromptStore` / `IPromptStore`：
+
+- 查询 `prompts`：validatePaginationArgs（first / last 至少一个，1..1000）→
+  validateFirstLast（不可同时、非负）→ CREATED_AT 重写为 DefaultPromptOrder 的字段
+  `id`；ORDER 按 order 列、UPDATED_AT 按 updated_at，id / CREATED_AT 无排序值；键集
+  游标 Value 为 Go int（ORDER）或 time（UPDATED_AT），与 Cursor 标量一致。
+- 查询隐私：OwnerRule → UserProjectScopeReadRule(read_prompts)（用户 + 上下文项目 +
+  系统或项目 scope → 安装 project_id 谓词，作为 ProjectScope 传入存储）→
+  UserReadScopeRule(read_prompts) → default deny；node(Prompt) 走同一策略，缺失报
+  `ent: prompt not found`。
+- 变更隐私：OwnerRule → UserProjectScopeWriteRule(write_prompts) →
+  UserWriteScopeRule(write_prompts) → default deny；create 的 mutation 项目必须等于
+  上下文项目才由规则放行，其余操作安装同一 project_id 谓词；服务始终显式带 project
+  谓词，隐私只作决策。Prompt 模式没有 API-key 规则，service account 主体得到
+  `no user in context`。
+- 服务顺序与文案：先要求上下文项目（`project id not found in context`），再校验设置；
+  create / update 的重名校验经隐私过滤查询并包裹 `failed to check prompt name
+  uniqueness: `；重复名 `prompt name '<name>' already exists` + DUPLICATE_NAME /
+  resource=prompt / field=name / value；create / update / delete / status / bulk 分别以
+  `failed to create prompt: `、`failed to update prompt: `、`failed to delete prompt: `、
+  `failed to update prompt status: `、`failed to bulk delete/enable/disable prompts: `
+  包裹隐私与存储错误；affected==0 → `prompt not found or not in project`（不包裹）；
+  update / status 成功后按隐私再查询，缺失报 `failed to query updated prompt:
+  ent: prompt not found`（只写用户在此处被查询策略拒绝，写入已提交，与参照一致）。
+- 设置校验（ValidatePromptSettings）：空 / nil conditions 为 no-op；model_pattern
+  非空且经 xregexp.ValidateRegex；model_id 非空；api_key_id 非空且 >0；文案逐字一致
+  （`model_pattern is required when type is model_pattern`、`invalid regex pattern in
+  model_pattern: invalid regex pattern: <pattern>`、`model_id is required when type is
+  model_id`、`api_key_id is required when type is api_key`、`api_key_id must be greater
+  than 0`）。update 仅在 input.settings 非空时校验。
+- 设置为 jsonb：Go struct 序列化语义（action 恒有、conditions omitempty、指针字段
+  omitempty 但指向空串保留、key 顺序），经 `CAST(@ AS jsonb)` 写入；jsonb 归一化键序
+  与空白，字节级差异不可观察。
+- 存储：读取一律 deleted_at=0；Update / UpdateStatus / BulkUpdateStatus 是 aggregate
+  更新，无 deleted_at 谓词（软删行仍被写，随后再查询报 not found）；Delete 转为
+  SoftDeleteMixin 的 update（updated_at + deleted_at=unix 秒，谓词 id + project +
+  deleted_at=0）；BulkDelete 仅活行；空 id 列表 no-op；SET 顺序为 updated_at、name、
+  description、role、content、status、order、settings。
+- 接线：`Program.cs` 注册 `PromptPrivacy` / `PromptManagementService`；
+  `AdminQuery.prompts` 与 node(Prompt)、`AdminMutation` 七个变更（create / update /
+  delete / status / bulk delete / bulk enable / bulk disable）。输入端缺失必填字段在
+  gqlgen 为零值继续（端口由 SDL 拒绝），未知枚举输出在 gqlgen 原样透出（端口抛错），
+  其余差异见 C188。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 查询形状（gid、时间、projectID、settings JSON、project 边）、where + ORDER 键集分页、CREATED_AT 回退、分页校验、create 默认值与设置 JSON、DUPLICATE_NAME extensions、update / status / bulk、软删、node、service_account 拒绝 | `tests/AxonHub.Api.Tests/AdminPromptsEndpointTests.cs` | 10 |
+| 默认值、项目要求、校验顺序与文案、重复名与包裹、只读 / 只写用户、write-only 再查询拒绝与改名先拒、软删状态更新、批量语义与空列表、node 与 API-key 主体、test principal、设置校验 5 例与空列表、序列化 3 例 | `tests/AxonHub.Api.Tests/PromptManagementServiceTests.cs` | 27 |
+| GetById 作用域 / 软删、ExistsByName、List 过滤 + 键集、更新时间排序、Update 无软删谓词与 SET、Delete 软删一次、Bulk 状态 / 删除语义 | `tests/AxonHub.Persistence.Tests/PromptStoreTests.cs` | +7 |
+
+`AxonHub.Api.Tests` 由 2567 增至 2604（+37），`AxonHub.Persistence.Tests` 由 217 增至 224
+（+7），Llm 3032、Grains 95；四个项目合计由 5911 增至 5955，0 失败 0 跳过。
+
+差异：C188 由 gap 改为 accepted，登记剩余六项差异（where 子集、必填输入严格度、未知
+枚举输出、order 列宽、无缓存失效、Project.prompts 反向边归 C165）。
 
 ## 覆盖缺口
 
@@ -4794,4 +4860,5 @@ Llm 3032、Grains 95；四个项目合计由 5790 增至 5842，0 失败 0 跳�
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
-| 项目提示词注入与 decisions 提示词拼接 | 已由 §99 闭合运行时链路：`prompts` 表（EF 写 / Dapper 读、软删与唯一索引）、设置 JSON 解码、条件匹配与 XRegexp 语义、稳定排序与前插 / 追加、ProtectPrompts 之前的 pipeline 接线、decisions 字符串与数组 input 的逐字节改写、项目门控与 fail-open（63 + 6 例）；每请求读取与参照每分钟缓存的差异登记为 C187（accepted），管理面（GraphQL CRUD / 设置校验 / 缓存失效）未移植登记为 C188（gap） | 中 | 注入完成；管理面随 GraphQL 切片（C188） |
+| 项目提示词注入与 decisions 提示词拼接 | 已由 §99 闭合运行时链路：`prompts` 表（EF 写 / Dapper 读、软删与唯一索引）、设置 JSON 解码、条件匹配与 XRegexp 语义、稳定排序与前插 / 追加、ProtectPrompts 之前的 pipeline 接线、decisions 字符串与数组 input 的逐字节改写、项目门控与 fail-open（63 + 6 例）；每请求读取与参照每分钟缓存的差异登记为 C187（accepted）；管理面（GraphQL CRUD / 设置校验）由 §100 闭合，残余差异登记为 C188（accepted） | 中 | 完成（C187 / C188） |
+| 项目提示词管理面（GraphQL CRUD / 设置校验） | 已由 §100 闭合：Prompt 节点 / prompts 连接（过滤、排序、键集分页）、七个变更、ValidatePromptSettings、DUPLICATE_NAME、隐私策略（含无 API-key 规则）、软删与 aggregate 更新语义（37 + 7 例）；残余差异（where 子集、必填输入严格度、未知枚举输出、order 列宽、无缓存失效、Project.prompts 反向边）登记为 C188（accepted） | — | 完成（C188） |

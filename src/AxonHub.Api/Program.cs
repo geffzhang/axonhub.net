@@ -268,6 +268,13 @@ builder.Services.AddScoped<IChannelModelCatalogStore>(
 builder.Services.AddScoped<ModelFetcher>();
 builder.Services.AddScoped<ModelManagementService>();
 
+// Prompts (biz.PromptService management surface): prompts / node(Prompt) and
+// the create/update/delete/status/bulk mutations under the Prompt privacy
+// policy. The reference's asyncReloadPrompts cache refresh is not ported
+// (C187/C188).
+builder.Services.AddScoped<PromptPrivacy>();
+builder.Services.AddScoped<PromptManagementService>();
+
 // Management identity: the gate middleware writes the authenticated caller
 // into HttpContext.Items; the scoped seam reads it back for the resolvers.
 builder.Services.AddHttpContextAccessor();

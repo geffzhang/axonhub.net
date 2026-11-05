@@ -260,6 +260,44 @@ public sealed class AdminQuery
         return ModelMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>Port of queryResolver.Prompts (ent.resolvers.go:465-478).</summary>
+    /// <remarks>
+    /// The reference validates pagination and rewrites a CREATED_AT order to
+    /// ent.DefaultPromptOrder's field (id) before paginating; the list itself
+    /// runs through the Prompt schema's query policy (C188).
+    /// </remarks>
+    [GraphQLName("prompts")]
+    public async Task<PromptConnectionType> PromptsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        PromptOrder? orderBy,
+        PromptWhereInput? where,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = PromptMapping.ToSortField(orderBy);
+        var page = await prompts.ListAsync(
+                new PromptListQuery
+                {
+                    Where = PromptMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = PromptMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return PromptMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>Port of queryResolver.QueryModels (model.resolvers.go:160-227).</summary>
     [GraphQLName("queryModels")]
     public async Task<IReadOnlyList<ModelIdentityWithStatusType>> QueryModelsAsync(
@@ -440,8 +478,8 @@ public sealed class AdminQuery
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves only Project, User, APIKey and Model so far and reports
-    /// every other type as "unknown node type: %s" (C165).
+    /// port resolves only Project, User, APIKey, Model and Prompt so far and
+    /// reports every other type as "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -490,6 +528,14 @@ public sealed class AdminQuery
                 var model = await models.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return ModelMapping.ToGraphQL(model);
+            }
+
+            case "Prompt":
+            {
+                var prompts = services.GetRequiredService<PromptManagementService>();
+                var prompt = await prompts.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return PromptMapping.ToGraphQL(prompt);
             }
 
             default:

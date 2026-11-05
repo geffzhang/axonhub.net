@@ -773,6 +773,58 @@ public sealed class PromptServiceTests
                 ? Task.FromException<IReadOnlyList<PromptRecord>>(Failure)
                 : Task.FromResult<IReadOnlyList<PromptRecord>>(Prompts);
         }
+
+        // The management-surface members are unused here; FakePromptStore
+        // covers them for the service and endpoint tests.
+
+        public Task<PromptRecord?> GetByIdAsync(
+            long id,
+            long? projectScope,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<bool> ExistsByNameAsync(
+            long projectId,
+            string name,
+            long? excludeId,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<ListPage<PromptRecord>> ListAsync(
+            PromptListQuery query,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<int> UpdateAsync(
+            PromptUpdate update,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<int> UpdateStatusAsync(
+            long id,
+            long projectId,
+            string status,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<int> DeleteAsync(
+            long id,
+            long projectId,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<int> BulkDeleteAsync(
+            IReadOnlyList<long> ids,
+            long projectId,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<int> BulkUpdateStatusAsync(
+            IReadOnlyList<long> ids,
+            long projectId,
+            string status,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
     private static PromptRecord Record(long id, string settings, long order = 0)

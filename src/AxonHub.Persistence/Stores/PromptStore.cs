@@ -1,7 +1,104 @@
+using System.Text;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
 
 namespace AxonHub.Persistence;
+
+/// <summary>Ordering fields exposed by the reference PromptOrder type.</summary>
+public enum PromptSortField
+{
+    Id,
+    UpdatedAt,
+    Order,
+}
+
+/// <summary>
+/// Subset of ent.PromptWhereInput used by the management frontend
+/// (id/idIn, projectID/projectIDIn, name/nameContainsFold,
+/// status/statusIn/statusNotIn, and/or/not). Every other ent predicate
+/// (time, description, role, content and order comparisons, prefix/suffix
+/// variants) is not ported in this slice (C188).
+/// </summary>
+public sealed record PromptListFilter
+{
+    public long? Id { get; init; }
+
+    public IReadOnlyList<long>? IdIn { get; init; }
+
+    public long? ProjectId { get; init; }
+
+    public IReadOnlyList<long>? ProjectIdIn { get; init; }
+
+    public string? Name { get; init; }
+
+    public string? NameContainsFold { get; init; }
+
+    public string? Status { get; init; }
+
+    public IReadOnlyList<string>? StatusIn { get; init; }
+
+    public IReadOnlyList<string>? StatusNotIn { get; init; }
+
+    public PromptListFilter? Not { get; init; }
+
+    public IReadOnlyList<PromptListFilter>? And { get; init; }
+
+    public IReadOnlyList<PromptListFilter>? Or { get; init; }
+}
+
+/// <summary>Entgql pagination request for prompts.</summary>
+public sealed record PromptListQuery
+{
+    public PromptListFilter? Where { get; init; }
+
+    /// <summary>
+    /// The project predicate of the Prompt query privacy policy. Null means the
+    /// policy allowed the query without a filter (owner or system scope with no
+    /// project in context).
+    /// </summary>
+    public long? ProjectScope { get; init; }
+
+    public PromptSortField SortField { get; init; } = PromptSortField.Id;
+
+    public SortDirection Direction { get; init; } = SortDirection.Asc;
+
+    public ListCursor? After { get; init; }
+
+    public ListCursor? Before { get; init; }
+
+    public int? First { get; init; }
+
+    public int? Last { get; init; }
+}
+
+/// <summary>
+/// Field set of an ent <c>Prompt.Update()</c> call. The store renders the SET
+/// list in the generated builder's fixed order (updated_at, name, description,
+/// role, content, status, order, settings),
+/// internal/ent/prompt_update.go:231-286.
+/// </summary>
+public sealed record PromptUpdate
+{
+    public required long Id { get; init; }
+
+    /// <summary>prompt.ProjectIDEQ: the reference always adds this predicate.</summary>
+    public required long ProjectId { get; init; }
+
+    public string? Name { get; init; }
+
+    public string? Description { get; init; }
+
+    public string? Role { get; init; }
+
+    public string? Content { get; init; }
+
+    public string? Status { get; init; }
+
+    public long? Order { get; init; }
+
+    /// <summary>objects.PromptSettings JSON (SetSettings).</summary>
+    public string? Settings { get; init; }
+}
 
 /// <summary>
 /// Persistence seam for the reference <c>prompts</c> table
@@ -20,11 +117,80 @@ public interface IPromptStore
     Task<IReadOnlyList<PromptRecord>> ListEnabledByProjectAsync(
         long projectId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// ent <c>Prompt.Query().Where(ID, [ProjectIDEQ]).Only(ctx)</c>: live rows;
+    /// <paramref name="projectScope"/> is the project predicate produced by the
+    /// query privacy policy (null when the policy added none).
+    /// </summary>
+    Task<PromptRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// ent <c>Prompt.Query().Where(ProjectIDEQ, NameEQ[, IDNEQ]).Exist(ctx)</c>
+    /// (live rows).
+    /// </summary>
+    Task<bool> ExistsByNameAsync(
+        long projectId,
+        string name,
+        long? excludeId,
+        CancellationToken cancellationToken = default);
+
+    Task<ListPage<PromptRecord>> ListAsync(
+        PromptListQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Aggregate update in ent's SET order (ent <c>Prompt.Update()</c> with the
+    /// id and project predicates). Aggregate updates have no soft-delete
+    /// predicate and return the affected row count.
+    /// </summary>
+    Task<int> UpdateAsync(PromptUpdate update, CancellationToken cancellationToken = default);
+
+    /// <summary>Aggregate status update (no soft-delete predicate).</summary>
+    Task<int> UpdateStatusAsync(
+        long id,
+        long projectId,
+        string status,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Soft-delete update (ent Delete through the SoftDeleteMixin hook):
+    /// <c>UPDATE prompts SET updated_at = now, deleted_at = unix WHERE id = @id
+    /// AND project_id = @project AND deleted_at = 0</c>. Returns the affected
+    /// row count.
+    /// </summary>
+    Task<int> DeleteAsync(
+        long id,
+        long projectId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Soft-delete update for many ids (ent <c>Prompt.Delete().Where(IDIn,
+    /// ProjectIDEQ)</c>): no-op for an empty id list.
+    /// </summary>
+    Task<int> BulkDeleteAsync(
+        IReadOnlyList<long> ids,
+        long projectId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Status update for many ids (ent <c>Prompt.Update().Where(IDIn,
+    /// ProjectIDEQ).SetStatus</c>): no soft-delete predicate; no-op for an
+    /// empty id list.
+    /// </summary>
+    Task<int> BulkUpdateStatusAsync(
+        IReadOnlyList<long> ids,
+        long projectId,
+        string status,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
-/// Store for the reference <c>prompts</c> table. Writes go through EF Core;
-/// reads use Dapper and honour the SoftDeleteMixin predicate
+/// Store for the reference <c>prompts</c> table. Writes go through EF Core and
+/// Dapper; reads use Dapper and honour the SoftDeleteMixin predicate
 /// (<c>deleted_at = 0</c>).
 /// </summary>
 public sealed class PromptStore(AxonHubDbContext db) : IPromptStore
@@ -37,6 +203,8 @@ public sealed class PromptStore(AxonHubDbContext db) : IPromptStore
     public async Task<long> CreateAsync(PromptRecord prompt, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(prompt);
+
+        ApplyCreateDefaults(prompt);
 
         db.Prompts.Add(prompt);
         try
@@ -76,5 +244,440 @@ public sealed class PromptStore(AxonHubDbContext db) : IPromptStore
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
         return rows.AsList();
+    }
+
+    public async Task<PromptRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new SqlArguments();
+        var sql = new StringBuilder("SELECT ").Append(Columns)
+            .Append(" FROM \"prompts\" WHERE \"id\" = ").Append(args.Add(id))
+            .Append(" AND \"deleted_at\" = 0");
+        if (projectScope is not null)
+        {
+            sql.Append(" AND \"project_id\" = ").Append(args.Add(projectScope.Value));
+        }
+
+        sql.Append(';');
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<PromptRecord>(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<bool> ExistsByNameAsync(
+        long projectId,
+        string name,
+        long? excludeId,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new SqlArguments();
+        var sql = new StringBuilder("SELECT EXISTS (SELECT 1 FROM \"prompts\" WHERE \"project_id\" = ")
+            .Append(args.Add(projectId))
+            .Append(" AND \"name\" = ").Append(args.Add(name))
+            .Append(" AND \"deleted_at\" = 0");
+        if (excludeId is not null)
+        {
+            sql.Append(" AND \"id\" <> ").Append(args.Add(excludeId.Value));
+        }
+
+        sql.Append(");");
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteScalarAsync<bool>(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<ListPage<PromptRecord>> ListAsync(
+        PromptListQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var args = new SqlArguments();
+        var where = BuildFilter(query.Where, "m", args);
+        var conditions = new StringBuilder(" WHERE m.\"deleted_at\" = 0");
+        if (query.ProjectScope is not null)
+        {
+            conditions.Append(" AND m.\"project_id\" = ").Append(args.Add(query.ProjectScope.Value));
+        }
+
+        if (where is not null)
+        {
+            conditions.Append(" AND ").Append(where);
+        }
+
+        var sortColumn = query.SortField switch
+        {
+            PromptSortField.UpdatedAt => "updated_at",
+            PromptSortField.Order => "order",
+            _ => null,
+        };
+        var direction = query.Last is null
+            ? query.Direction
+            : query.Direction == SortDirection.Asc ? SortDirection.Desc : SortDirection.Asc;
+        const string from = " FROM \"prompts\" m";
+        var countSql = "SELECT COUNT(*) " + from + conditions + ";";
+        var nodesSql = new StringBuilder("SELECT ");
+        nodesSql.Append(string.Join(", ", Columns
+            .Split(',')
+            .Select(static column => "m." + column.Trim())));
+        nodesSql.Append(from).Append(conditions);
+        ConnectionSql.AppendCursor(
+            nodesSql,
+            "m",
+            "id",
+            sortColumn,
+            query.After,
+            query.Before,
+            direction,
+            args);
+        nodesSql.Append(" ORDER BY ")
+            .Append(ConnectionSql.OrderBy("m", "id", sortColumn, direction));
+
+        var limit = query.First is not null
+            ? query.First + 1
+            : query.Last is not null ? query.Last + 1 : (int?)null;
+        if (limit is not null)
+        {
+            nodesSql.Append(" LIMIT ").Append(limit.Value);
+        }
+
+        nodesSql.Append(';');
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var count = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(
+                countSql,
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        var nodes = (await connection.QueryAsync<PromptRecord>(
+                new CommandDefinition(
+                    nodesSql.ToString(),
+                    args.Parameters,
+                    transaction: db.CurrentDbTransaction,
+                    cancellationToken: cancellationToken))
+            .ConfigureAwait(false)).AsList();
+
+        var hasNextPage = query.Before is not null;
+        var hasPreviousPage = query.After is not null;
+        if (query.First is not null && query.First + 1 == nodes.Count)
+        {
+            hasNextPage = true;
+            nodes.RemoveAt(nodes.Count - 1);
+        }
+        else if (query.Last is not null && query.Last + 1 == nodes.Count)
+        {
+            hasPreviousPage = true;
+            nodes.RemoveAt(nodes.Count - 1);
+        }
+
+        if (query.Last is not null)
+        {
+            nodes.Reverse();
+        }
+
+        return new ListPage<PromptRecord>(nodes, hasNextPage, hasPreviousPage, count);
+    }
+
+    public async Task<int> UpdateAsync(
+        PromptUpdate update,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        var args = new SqlArguments();
+
+        // Ent's generated sqlSave applies the fields in schema order:
+        // updated_at, name, description, role, content, status, order, settings.
+        var sets = new List<string>(8)
+        {
+            "\"updated_at\" = " + args.Add(DateTime.UtcNow),
+        };
+        if (update.Name is not null)
+        {
+            sets.Add("\"name\" = " + args.Add(update.Name));
+        }
+
+        if (update.Description is not null)
+        {
+            sets.Add("\"description\" = " + args.Add(update.Description));
+        }
+
+        if (update.Role is not null)
+        {
+            sets.Add("\"role\" = " + args.Add(update.Role));
+        }
+
+        if (update.Content is not null)
+        {
+            sets.Add("\"content\" = " + args.Add(update.Content));
+        }
+
+        if (update.Status is not null)
+        {
+            sets.Add("\"status\" = " + args.Add(update.Status));
+        }
+
+        if (update.Order is not null)
+        {
+            sets.Add("\"order\" = " + args.Add(update.Order.Value));
+        }
+
+        if (update.Settings is not null)
+        {
+            sets.Add("\"settings\" = " + JsonCast(args.Add(update.Settings)));
+        }
+
+        var sql = new StringBuilder("UPDATE \"prompts\" SET ")
+            .Append(string.Join(", ", sets))
+            .Append(" WHERE \"id\" = ").Append(args.Add(update.Id))
+            .Append(" AND \"project_id\" = ").Append(args.Add(update.ProjectId))
+            .Append(';');
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<int> UpdateStatusAsync(
+        long id,
+        long projectId,
+        string status,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new SqlArguments();
+
+        // Aggregate updates have no soft-delete predicate (the interceptor only
+        // touches queries) and default updated_at before status.
+        var sql = new StringBuilder("UPDATE \"prompts\" SET \"updated_at\" = ")
+            .Append(args.Add(DateTime.UtcNow))
+            .Append(", \"status\" = ").Append(args.Add(status))
+            .Append(" WHERE \"id\" = ").Append(args.Add(id))
+            .Append(" AND \"project_id\" = ").Append(args.Add(projectId))
+            .Append(';');
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<int> DeleteAsync(
+        long id,
+        long projectId,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new SqlArguments();
+        var sql = new StringBuilder("UPDATE \"prompts\" SET \"updated_at\" = ")
+            .Append(args.Add(DateTime.UtcNow))
+            .Append(", \"deleted_at\" = ").Append(args.Add(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
+            .Append(" WHERE \"id\" = ").Append(args.Add(id))
+            .Append(" AND \"project_id\" = ").Append(args.Add(projectId))
+            .Append(" AND \"deleted_at\" = 0;");
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<int> BulkDeleteAsync(
+        IReadOnlyList<long> ids,
+        long projectId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+        {
+            // prompt.IDIn() with no ids renders an always-false predicate; the
+            // statement still runs, affecting zero rows.
+            return 0;
+        }
+
+        var args = new SqlArguments();
+        var parameters = new string[ids.Count];
+        for (var i = 0; i < ids.Count; i++)
+        {
+            parameters[i] = args.Add(ids[i]);
+        }
+
+        var sql = new StringBuilder("UPDATE \"prompts\" SET \"updated_at\" = ")
+            .Append(args.Add(DateTime.UtcNow))
+            .Append(", \"deleted_at\" = ").Append(args.Add(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
+            .Append(" WHERE \"id\" IN (").Append(string.Join(", ", parameters))
+            .Append(") AND \"project_id\" = ").Append(args.Add(projectId))
+            .Append(" AND \"deleted_at\" = 0;");
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<int> BulkUpdateStatusAsync(
+        IReadOnlyList<long> ids,
+        long projectId,
+        string status,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+        {
+            return 0;
+        }
+
+        var args = new SqlArguments();
+        var parameters = new string[ids.Count];
+        for (var i = 0; i < ids.Count; i++)
+        {
+            parameters[i] = args.Add(ids[i]);
+        }
+
+        var sql = new StringBuilder("UPDATE \"prompts\" SET \"updated_at\" = ")
+            .Append(args.Add(DateTime.UtcNow))
+            .Append(", \"status\" = ").Append(args.Add(status))
+            .Append(" WHERE \"id\" IN (").Append(string.Join(", ", parameters))
+            .Append(") AND \"project_id\" = ").Append(args.Add(projectId))
+            .Append(';');
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    private static void ApplyCreateDefaults(PromptRecord prompt)
+    {
+        if (prompt.CreatedAt == default)
+        {
+            prompt.CreatedAt = DateTime.UtcNow;
+        }
+
+        if (prompt.UpdatedAt == default)
+        {
+            prompt.UpdatedAt = prompt.CreatedAt;
+        }
+
+        // Ent schema defaults: status=disabled; the management path always
+        // supplies the other required fields.
+        prompt.Status = string.IsNullOrEmpty(prompt.Status) ? "disabled" : prompt.Status;
+    }
+
+    private static string JsonCast(string parameter) => "CAST(" + parameter + " AS jsonb)";
+
+    private static string? BuildFilter(PromptListFilter? filter, string alias, SqlArguments args)
+    {
+        if (filter is null)
+        {
+            return null;
+        }
+
+        var predicates = new List<string?>();
+        if (filter.Id is not null)
+        {
+            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
+        }
+
+        if (filter.IdIn is not null)
+        {
+            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+        }
+
+        if (filter.ProjectId is not null)
+        {
+            predicates.Add(alias + ".\"project_id\" = " + args.Add(filter.ProjectId.Value));
+        }
+
+        if (filter.ProjectIdIn is not null)
+        {
+            ConnectionSql.AppendIdIn(predicates, alias, "project_id", filter.ProjectIdIn, args);
+        }
+
+        if (filter.Name is not null)
+        {
+            predicates.Add(alias + ".\"name\" = " + args.Add(filter.Name));
+        }
+
+        if (filter.NameContainsFold is not null)
+        {
+            ConnectionSql.AppendStringFilter(predicates, alias, "name", "LIKE", filter.NameContainsFold, args);
+        }
+
+        if (filter.Status is not null)
+        {
+            predicates.Add(alias + ".\"status\" = " + args.Add(filter.Status));
+        }
+
+        if (filter.StatusIn is not null)
+        {
+            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+        }
+
+        if (filter.StatusNotIn is not null)
+        {
+            if (filter.StatusNotIn.Count == 0)
+            {
+                predicates.Add("TRUE");
+            }
+            else
+            {
+                var parameters = filter.StatusNotIn
+                    .Select(value => args.Add(value))
+                    .ToArray();
+                predicates.Add(
+                    alias + ".\"status\" NOT IN (" + string.Join(", ", parameters) + ")");
+            }
+        }
+
+        if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)
+        {
+            predicates.Add("NOT (" + not + ")");
+        }
+
+        if (filter.And is not null)
+        {
+            var and = filter.And.Select(nested => BuildFilter(nested, alias, args))
+                .Where(static nested => nested is not null).ToArray();
+            if (and.Length > 0)
+            {
+                predicates.Add("(" + string.Join(" AND ", and) + ")");
+            }
+        }
+
+        if (filter.Or is not null)
+        {
+            var or = filter.Or.Select(nested => BuildFilter(nested, alias, args))
+                .Where(static nested => nested is not null).ToArray();
+            predicates.Add(or.Length == 0 ? "FALSE" : "(" + string.Join(" OR ", or) + ")");
+        }
+
+        return ConnectionSql.Combine(predicates);
     }
 }

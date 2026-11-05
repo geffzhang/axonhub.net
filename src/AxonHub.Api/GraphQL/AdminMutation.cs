@@ -1629,4 +1629,99 @@ public sealed class AdminMutation
             .ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>Port of mutationResolver.CreatePrompt (prompt.resolvers.go:15-23).</summary>
+    [GraphQLName("createPrompt")]
+    public async Task<PromptType> CreatePromptAsync(
+        CreatePromptInput input,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+        => PromptMapping.ToGraphQL(
+            await prompts.CreateAsync(PromptMapping.ToCommand(input), cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdatePrompt (prompt.resolvers.go:25-39).</summary>
+    [GraphQLName("updatePrompt")]
+    public async Task<PromptType> UpdatePromptAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdatePromptInput input,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+        => PromptMapping.ToGraphQL(
+            await prompts.UpdateAsync(
+                    PromptMapping.ToCommand(id, input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.DeletePrompt (prompt.resolvers.go:41-50).</summary>
+    [GraphQLName("deletePrompt")]
+    public async Task<bool> DeletePromptAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdatePromptStatus (prompt.resolvers.go:52-67).
+    /// </summary>
+    [GraphQLName("updatePromptStatus")]
+    public async Task<bool> UpdatePromptStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        PromptStatusValue status,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.UpdateStatusAsync(
+                GidValue.Parse(id).Id,
+                PromptMapping.ToWireStatus(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDeletePrompts (prompt.resolvers.go:69-82).
+    /// </summary>
+    [GraphQLName("bulkDeletePrompts")]
+    public async Task<bool> BulkDeletePromptsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.BulkDeleteAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkEnablePrompts (prompt.resolvers.go:84-97).
+    /// </summary>
+    [GraphQLName("bulkEnablePrompts")]
+    public async Task<bool> BulkEnablePromptsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.BulkEnableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDisablePrompts (prompt.resolvers.go:99-112).
+    /// </summary>
+    [GraphQLName("bulkDisablePrompts")]
+    public async Task<bool> BulkDisablePromptsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.BulkDisableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
 }
