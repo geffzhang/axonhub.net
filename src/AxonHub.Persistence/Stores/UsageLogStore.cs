@@ -155,6 +155,20 @@ public sealed record UsageLogListQuery
 {
     public long? RequestScope { get; init; }
 
+    /// <summary>
+    /// The project predicate the UsageLog query policy installs
+    /// (internal/scopes/rule_user_project_scope_requests.go:36-40).
+    /// </summary>
+    public long? ProjectScope { get; init; }
+
+    /// <summary>
+    /// The per-row visibility predicate of the UsageLogFilter branch
+    /// (rule_user_project_scope_requests.go:63-72): a non-owner member sees
+    /// usage logs whose request is a Playground row they created or an API
+    /// request whose key is missing or not another user's personal key.
+    /// </summary>
+    public long? VisibilityUserId { get; init; }
+
     public UsageLogListFilter? Where { get; init; }
 
     public UsageLogSortField SortField { get; init; } = UsageLogSortField.Id;
@@ -175,6 +189,16 @@ public interface IUsageLogStore
 {
     Task<ListPage<UsageLogRecord>> ListAsync(
         UsageLogListQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of the entgql Node lookup for UsageLog: the row must satisfy the
+    /// query policy's project scope and optional visibility predicate.
+    /// </summary>
+    Task<UsageLogRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        long? visibilityUserId,
         CancellationToken cancellationToken = default);
 
     Task<long> CreateAsync(UsageLogRecord usageLog, CancellationToken cancellationToken = default);
@@ -241,6 +265,8 @@ public sealed class UsageLogStore(AxonHubDbContext db) : IUsageLogStore
             conditions.Append(" AND m.\"request_id\" = ")
                 .Append(args.Add(query.RequestScope.Value));
         }
+
+        AppendScopes(conditions, args, query.ProjectScope, query.VisibilityUserId);
 
         if (BuildFilter(query.Where, "m", args) is { } where)
         {
@@ -311,6 +337,60 @@ public sealed class UsageLogStore(AxonHubDbContext db) : IUsageLogStore
         }
 
         return new ListPage<UsageLogRecord>(nodes, hasNextPage, hasPreviousPage, count);
+    }
+
+    public async Task<UsageLogRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        long? visibilityUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new SqlArguments();
+        var sql = new StringBuilder("SELECT ");
+        sql.Append(string.Join(", ", Columns
+            .Split(',')
+            .Select(static column => "m." + column.Trim())));
+        sql.Append(" FROM \"usage_logs\" m WHERE m.\"id\" = ").Append(args.Add(id));
+        AppendScopes(sql, args, projectScope, visibilityUserId);
+        sql.Append(';');
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<UsageLogRecord>(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Port of the project predicate and the UsageLogFilter visibility branch
+    /// of UserProjectScopeReadRequestsRule
+    /// (internal/scopes/rule_user_project_scope_requests.go:36-72).
+    /// </summary>
+    private static void AppendScopes(
+        StringBuilder sql,
+        SqlArguments args,
+        long? projectScope,
+        long? visibilityUserId)
+    {
+        if (projectScope is not null)
+        {
+            sql.Append(" AND m.\"project_id\" = ").Append(args.Add(projectScope.Value));
+        }
+
+        if (visibilityUserId is null)
+        {
+            return;
+        }
+
+        var user = args.Add(visibilityUserId.Value);
+        sql.Append(" AND EXISTS (SELECT 1 FROM \"requests\" r WHERE r.\"id\" = m.\"request_id\"")
+            .Append(" AND ((r.\"source\" = 'playground' AND r.\"user_id\" = ").Append(user)
+            .Append(") OR (r.\"source\" <> 'playground' AND (r.\"api_key_id\" IS NULL")
+            .Append(" OR EXISTS (SELECT 1 FROM \"api_keys\" k WHERE k.\"id\" = r.\"api_key_id\"")
+            .Append(" AND (k.\"type\" <> 'personal' OR k.\"user_id\" = ").Append(user)
+            .Append("))))))");
     }
 
     private static string? BuildFilter(

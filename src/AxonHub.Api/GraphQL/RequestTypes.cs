@@ -979,7 +979,7 @@ public sealed class RequestExecutionConnectionType
 
 /// <summary>Port of the <c>UsageLog</c> type (ent.graphql:6643-6718).</summary>
 [GraphQLName("UsageLog")]
-public sealed class UsageLogType
+public sealed class UsageLogType : INode
 {
     [GraphQLIgnore]
     public UsageLogRecord Record { get; init; } = null!;
@@ -1297,6 +1297,16 @@ public static class RequestMapping
             UsageLogOrderFieldValue.CreatedAt => UsageLogSortField.CreatedAt,
             _ => UsageLogSortField.Id,
         };
+
+    /// <summary>
+    /// Port of the root usageLogs resolver
+    /// (internal/server/gql/ent.resolvers.go:578-580): CREATED_AT falls back to
+    /// ent.DefaultUsageLogOrder's id column; the direction is preserved.
+    /// </summary>
+    public static UsageLogSortField ToRootUsageLogSortField(UsageLogOrder? orderBy)
+        => orderBy?.Field == UsageLogOrderFieldValue.UpdatedAt
+            ? UsageLogSortField.UpdatedAt
+            : UsageLogSortField.Id;
 
     public static SortDirection ToSortDirection(RequestExecutionOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc

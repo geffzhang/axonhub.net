@@ -424,6 +424,13 @@ internal sealed class InMemoryUsageLogStore : IUsageLogStore
         return Task.FromResult(usageLog.Id);
     }
 
+    public Task<UsageLogRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        long? visibilityUserId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the quota path");
+
     public Task<IReadOnlyList<UsageLogRecord>> ListByRequestIdAsync(
         long requestId,
         CancellationToken cancellationToken = default)

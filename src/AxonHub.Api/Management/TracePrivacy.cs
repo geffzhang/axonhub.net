@@ -321,6 +321,73 @@ public sealed class TracePrivacy(
         throw Deny(DefaultDeny);
     }
 
+    /// <summary>
+    /// Port of the UsageLog Query policy
+    /// (internal/ent/schema/usage_log.go:121-136): there is no API-key rule, so
+    /// the chain is <c>UserProjectScopeReadRequestsRule(read_requests)</c> →
+    /// OwnerRule → UserReadScopeRule. The project rule installs the project
+    /// filter and, for a non-owner member, the UsageLogFilter visibility
+    /// predicate that joins each row's request (rule_user_project_scope_requests.go:63-72).
+    /// Returns the filter pair, or null when the query is unfiltered.
+    /// </summary>
+    /// <exception cref="PrivacyDenyException">Every rule skipped or denied.</exception>
+    public async Task<RequestAccessFilter?> EvaluateUsageLogQueryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var current = await identity.GetCurrentUserAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // The test principal's decision context bypasses every rule.
+        if (current?.IsTest == true)
+        {
+            return null;
+        }
+
+        // Rule 1: UserProjectScopeReadRequestsRule — needs both a user and a
+        // project in context; system-scoped users and project owners audit the
+        // whole project, other members see only permitted requests.
+        var contextProjectId = identity.GetCurrentProjectId();
+        PermissionUser? loaded = null;
+        if (current is not null)
+        {
+            loaded = await users.GetPermissionUserAsync(current.Id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (current is not null && contextProjectId is not null
+            && (PermissionValidator.HasSystemScope(loaded, ReadRequests)
+                || PermissionValidator.UserHasProjectScope(
+                    loaded,
+                    contextProjectId.Value,
+                    ReadRequests)))
+        {
+            var fullVisibility = PermissionValidator.HasSystemScope(loaded, ReadRequests)
+                || PermissionValidator.UserIsProjectOwner(loaded, contextProjectId.Value);
+            return new RequestAccessFilter(
+                contextProjectId.Value,
+                fullVisibility ? null : current.Id);
+        }
+
+        // Rule 2: OwnerRule — owner users may read everything.
+        if (current?.IsOwner == true)
+        {
+            return null;
+        }
+
+        // Rule 3: UserReadScopeRule — no user denies; a scope-less user skips.
+        if (current is null)
+        {
+            throw Deny(NoUserInContext);
+        }
+
+        if (PermissionValidator.HasSystemScope(loaded, ReadRequests))
+        {
+            return null;
+        }
+
+        throw Deny(DefaultDeny);
+    }
+
     private static bool HasScope(string? scopesJson, string scope)
     {
         var scopes = ManagementMapping.ParseScopes(scopesJson);

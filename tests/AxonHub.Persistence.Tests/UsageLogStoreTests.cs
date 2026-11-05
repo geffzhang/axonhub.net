@@ -1,3 +1,5 @@
+using Dapper;
+
 namespace AxonHub.Persistence.Tests;
 
 [Collection(PostgresCollection.Name)]
@@ -197,6 +199,110 @@ public sealed class UsageLogStoreTests(PostgresFixture fixture)
 
         Assert.Equal(0L, usage.TotalTokens);
         Assert.Equal(0.0, usage.TotalCost);
+    }
+
+    [Fact]
+    public async Task ListAndGetByIdApplyProjectAndUsageLogVisibility()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UsageLogStore(context);
+
+        await SeedApiKeyAsync(db, 100, type: "personal", userId: 6);
+        await SeedApiKeyAsync(db, 101, type: "personal", userId: 5);
+        await SeedApiKeyAsync(db, 102, type: "service_account", userId: null);
+        await SeedRequestAsync(db, 1, source: "playground", userId: 5);
+        await SeedRequestAsync(db, 2, source: "playground", userId: 6);
+        await SeedRequestAsync(db, 3, apiKeyId: null);
+        await SeedRequestAsync(db, 4, apiKeyId: 100);
+        await SeedRequestAsync(db, 5, apiKeyId: 101);
+        await SeedRequestAsync(db, 6, apiKeyId: 102);
+        await SeedRequestAsync(db, 7, projectId: 2);
+
+        for (var requestId = 1L; requestId <= 7; requestId++)
+        {
+            await store.CreateAsync(new UsageLogRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                ModelId = "gpt-4o",
+                RequestId = requestId,
+                ProjectId = requestId == 7 ? 2 : 1,
+            });
+        }
+
+        // The UsageLogFilter branch of UserProjectScopeReadRequestsRule:
+        // Playground rows of the caller and API requests whose key is missing,
+        // shared, or not another user's personal key.
+        var visible = await store.ListAsync(new UsageLogListQuery { VisibilityUserId = 5 });
+        Assert.Equal(
+            [1L, 3L, 5L, 6L, 7L],
+            visible.Nodes.Select(static row => row.RequestId).ToArray());
+
+        var scoped = await store.ListAsync(new UsageLogListQuery { ProjectScope = 2 });
+        Assert.Equal([7L], scoped.Nodes.Select(static row => row.RequestId).ToArray());
+        Assert.Equal(1, scoped.TotalCount);
+
+        var unscoped = await store.ListAsync(new UsageLogListQuery());
+        Assert.Equal(7, unscoped.TotalCount);
+
+        Assert.Null(await store.GetByIdAsync(4, 1, 5));
+        Assert.Equal(5L, (await store.GetByIdAsync(5, 1, 5))?.RequestId);
+        Assert.Null(await store.GetByIdAsync(1, 2, null));
+        Assert.Equal(7L, (await store.GetByIdAsync(7, 2, null))?.RequestId);
+    }
+
+    private static async Task SeedRequestAsync(
+        TestDatabase db,
+        long id,
+        long projectId = 1,
+        string source = "api",
+        long? userId = null,
+        long? apiKeyId = null)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "requests"
+                ("id", "created_at", "updated_at", "user_id", "source", "model_id",
+                 "request_body", "status", "api_key_id", "project_id")
+            VALUES (@Id, @CreatedAt, @CreatedAt, @UserId, @Source, 'gpt-4o',
+                    '{}'::jsonb, 'completed', @ApiKeyId, @ProjectId);
+            """,
+            new
+            {
+                Id = id,
+                CreatedAt,
+                UserId = userId,
+                Source = source,
+                ApiKeyId = apiKeyId,
+                ProjectId = projectId,
+            });
+    }
+
+    private static async Task SeedApiKeyAsync(
+        TestDatabase db,
+        long id,
+        string type,
+        long? userId)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "api_keys"
+                ("id", "created_at", "updated_at", "key", "name", "type", "user_id")
+            VALUES (@Id, @CreatedAt, @CreatedAt, @Key, @Name, @Type, @UserId);
+            """,
+            new
+            {
+                Id = id,
+                CreatedAt,
+                Key = "key-" + id,
+                Name = "key-" + id,
+                Type = type,
+                UserId = userId,
+            });
     }
 
     private static UsageLogRecord Log(

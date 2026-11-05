@@ -579,11 +579,44 @@ public sealed class AdminQuery
         return TraceMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>Port of queryResolver.UsageLogs (ent.resolvers.go:572-586).</summary>
+    [GraphQLName("usageLogs")]
+    public async Task<UsageLogConnectionType> UsageLogsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        UsageLogOrder? orderBy,
+        UsageLogWhereInput? where,
+        [Service] UsageLogManagementService usageLogs,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = RequestMapping.ToRootUsageLogSortField(orderBy);
+        var page = await usageLogs.ListAsync(
+                new UsageLogListQuery
+                {
+                    Where = RequestMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = RequestMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return RequestMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves Project, User, APIKey, Model, Prompt, Trace, Thread and
-    /// Request so far and reports every other type as
+    /// port resolves Project, User, APIKey, Model, Prompt, Trace, Thread,
+    /// Request and UsageLog so far and reports every other type as
     /// "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
@@ -665,6 +698,14 @@ public sealed class AdminQuery
                 var request = await requests.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return TraceMapping.ToGraphQL(request);
+            }
+
+            case "UsageLog":
+            {
+                var usageLogs = services.GetRequiredService<UsageLogManagementService>();
+                var usageLog = await usageLogs.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return RequestMapping.ToGraphQL(usageLog);
             }
 
             default:

@@ -513,6 +513,13 @@ public sealed class InboundMiddlewareTests(GrainClusterFixture fixture)
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException("the orchestrator writes through the recorder");
 
+        public Task<UsageLogRecord?> GetByIdAsync(
+            long id,
+            long? projectScope,
+            long? visibilityUserId,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("not used by the quota path");
+
         public Task<IReadOnlyList<UsageLogRecord>> ListByRequestIdAsync(
             long requestId,
             CancellationToken cancellationToken = default)

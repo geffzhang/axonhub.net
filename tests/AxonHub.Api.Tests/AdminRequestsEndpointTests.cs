@@ -907,6 +907,13 @@ internal sealed class RequestsSliceUsageLogStore : IUsageLogStore
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("not used by the requests surface");
 
+    public Task<UsageLogRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        long? visibilityUserId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the requests surface");
+
     public Task<IReadOnlyList<UsageLogRecord>> ListByRequestIdAsync(
         long requestId,
         CancellationToken cancellationToken = default)
