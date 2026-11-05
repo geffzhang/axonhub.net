@@ -10,10 +10,39 @@ namespace AxonHub.Api.Management;
 /// (internal/server/gql/graphql.go:181-190); the port's error filter walks the
 /// exception chain for this type.
 /// </summary>
-public sealed class PrivacyDenyException() : Exception(DenyMessage)
+public sealed class PrivacyDenyException : Exception
 {
     /// <summary>The sentinel's Error() text (ent/privacy/policy.go).</summary>
     public const string DenyMessage = "ent/privacy: deny rule";
+
+    public PrivacyDenyException()
+        : base(DenyMessage)
+    {
+    }
+
+    /// <summary>
+    /// A wrapped sentinel: Go's <c>fmt.Errorf("...: %w", privacy.Deny)</c> keeps
+    /// the outer message while <c>errors.Is(err, privacy.Deny)</c> still
+    /// matches. The type carries the identity; the message stays the caller's.
+    /// </summary>
+    public PrivacyDenyException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Port of <c>errors.Is(err, entprivacy.Deny)</c>, walking the chain.</summary>
+    public static bool IsDeny(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is PrivacyDenyException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
 
 /// <summary>The ent mutation operation whose policy is being evaluated.</summary>

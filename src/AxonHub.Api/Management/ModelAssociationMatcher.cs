@@ -1,4 +1,3 @@
-using System.Text.Json;
 using AxonHub.Abstractions;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Models;
@@ -30,11 +29,6 @@ public sealed record ModelAssociationMatch(
 /// </remarks>
 public static class ModelAssociationMatcher
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
-
     /// <summary>Port of MatchConnections.</summary>
     public static IReadOnlyList<ModelChannelConnection> MatchConnections(
         IReadOnlyList<ModelAssociation?>? associations,
@@ -94,7 +88,7 @@ public static class ModelAssociationMatcher
             return false;
         }
 
-        var tags = ParseTags(channel.Tags);
+        var tags = ChannelTagsCodec.Parse(channel.Tags);
 
         foreach (var exclude in excludes)
         {
@@ -374,7 +368,7 @@ public static class ModelAssociationMatcher
 
     private static bool HasAnyTag(ChannelRecord channel, IReadOnlyList<string> requiredTags)
     {
-        var tags = ParseTags(channel.Tags);
+        var tags = ChannelTagsCodec.Parse(channel.Tags);
         foreach (var tag in requiredTags)
         {
             if (tags.Contains(tag))
@@ -384,28 +378,6 @@ public static class ModelAssociationMatcher
         }
 
         return false;
-    }
-
-    private static HashSet<string> ParseTags(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw) || string.Equals(raw, "null", StringComparison.Ordinal))
-        {
-            return new HashSet<string>(StringComparer.Ordinal);
-        }
-
-        try
-        {
-            var values = JsonSerializer.Deserialize<string?[]>(raw, JsonOptions);
-            return values is null
-                ? new HashSet<string>(StringComparer.Ordinal)
-                : new HashSet<string>(
-                    values.Select(static value => value ?? string.Empty),
-                    StringComparer.Ordinal);
-        }
-        catch (JsonException)
-        {
-            return new HashSet<string>(StringComparer.Ordinal);
-        }
     }
 
     private static ChannelDescriptor ToDescriptor(ChannelRecord record)

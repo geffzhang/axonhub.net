@@ -91,7 +91,10 @@ public sealed class ApiKeyAuthenticationTests
         var identity = await auth.AuthenticateAsync(
             NewRequest(("Authorization", "Bearer sk-user")).Request);
 
-        Assert.Equal(new RequestIdentity(project.Id, key.Id), identity);
+        Assert.Equal(project.Id, identity.ProjectId);
+        Assert.Equal(key.Id, identity.ApiKeyId);
+        Assert.Same(key, identity.ApiKey);
+        Assert.Same(project, identity.Project);
     }
 
     [Fact]
@@ -187,7 +190,10 @@ public sealed class ApiKeyAuthenticationTests
             "profiles differ: " + created.Profiles);
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse("[]"), JsonNode.Parse(created.AllowedIps!)));
 
-        Assert.Equal(new RequestIdentity(project.Id, created.Id), identity);
+        Assert.Equal(project.Id, identity.ProjectId);
+        Assert.Equal(created.Id, identity.ApiKeyId);
+        Assert.Same(created, identity.ApiKey);
+        Assert.Same(project, identity.Project);
     }
 
     [Fact]
@@ -208,7 +214,10 @@ public sealed class ApiKeyAuthenticationTests
         var identity = await auth.AuthenticateAsync(NewRequest().Request);
 
         Assert.Single(keys.Rows);
-        Assert.Equal(new RequestIdentity(project.Id, existing.Id), identity);
+        Assert.Equal(project.Id, identity.ProjectId);
+        Assert.Equal(existing.Id, identity.ApiKeyId);
+        Assert.Same(existing, identity.ApiKey);
+        Assert.Same(project, identity.Project);
     }
 
     [Fact]

@@ -1,9 +1,10 @@
 using System.Text;
 using System.Text.Json;
-using AxonHub.Abstractions;
 using AxonHub.Api.Endpoints;
+using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
+using AxonHub.Persistence;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Transformer.Gemini;
@@ -73,12 +74,12 @@ public sealed class GeminiEndpointTests(GrainClusterFixture fixture)
     private static string ResponseBody(DefaultHttpContext context)
         => Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
 
-    private static ModelService NewService(params ChannelDescriptor[] channels)
-    {
-        var provider = new FakeEnabledChannelProvider();
-        provider.Set(channels);
-        return new ModelService(provider, new StaticModelSettingsProvider(ModelSettings.Default));
-    }
+    private static ModelService NewService(params ChannelRecord[] channels)
+        => ModelTestSupport.Service(channels);
+
+    private static IManagementIdentity DeniedIdentity()
+        => ModelTestSupport.ApiKeyIdentity(
+            ModelTestSupport.ApiKey(scopes: "write_requests"));
 
     /// <summary>OpenAI-shaped upstream chunks plus the [DONE] marker.</summary>
     private static List<StreamEvent> StreamChunks()
@@ -224,7 +225,9 @@ public sealed class GeminiEndpointTests(GrainClusterFixture fixture)
     {
         var context = NewGetContext("/v1beta/models");
 
-        await GeminiEndpoint.ListModelsAsync(context, NewService(TestChannels.OpenAi(1, "gpt-4o")));
+        await GeminiEndpoint.ListModelsAsync(
+            context,
+            NewService(ModelTestSupport.Channel(1, "openai", "gpt-4o")));
 
         Assert.Equal(200, context.Response.StatusCode);
         Assert.Equal("application/json; charset=utf-8", context.Response.ContentType);
@@ -236,27 +239,33 @@ public sealed class GeminiEndpointTests(GrainClusterFixture fixture)
     [Fact]
     public async Task ListModelsFailureReturnsGeminiInternalError()
     {
-        // entprivacy.Deny would be a 403 permission_error in the reference; the
-        // port has no ent privacy subsystem, so every failure is the 500 branch.
         var context = NewGetContext("/v1beta/models");
-        var service = new ModelService(
-            new FailedChannelProvider(new InvalidOperationException("channel query failed")),
-            new StaticModelSettingsProvider(ModelSettings.Default));
+        var (service, _, modelStore) = ModelTestSupport.ServiceWithStores(
+            [ModelTestSupport.Channel(1, "openai", "gpt-4o")]);
+        modelStore.ListAllFailure = new InvalidOperationException("channel query failed");
 
         await GeminiEndpoint.ListModelsAsync(context, service);
 
         Assert.Equal(500, context.Response.StatusCode);
         Assert.Equal(
-            """{"error":{"code":500,"message":"channel query failed","status":"internal_server_error"}}""",
+            """{"error":{"code":500,"message":"failed to list configured models: channel query failed","status":"internal_server_error"}}""",
             ResponseBody(context));
     }
 
-    private sealed class FailedChannelProvider(Exception error) : IEnabledChannelProvider
+    [Fact]
+    public async Task ListModelsPermissionDeniedReturnsGeminiPermissionError()
     {
-        public Task<ChannelDescriptor[]> ListEnabledAsync(CancellationToken cancellationToken = default)
-        {
-            _ = cancellationToken;
-            return Task.FromException<ChannelDescriptor[]>(error);
-        }
+        // entprivacy.Deny is the 403 permission_error branch (C178).
+        var context = NewGetContext("/v1beta/models");
+        var service = ModelTestSupport.Service(
+            [ModelTestSupport.Channel(1, "openai", "gpt-4o")],
+            identity: DeniedIdentity());
+
+        await GeminiEndpoint.ListModelsAsync(context, service);
+
+        Assert.Equal(403, context.Response.StatusCode);
+        Assert.Equal(
+            """{"error":{"code":403,"message":"failed to list configured models: ent/privacy: deny rule","status":"permission_error"}}""",
+            ResponseBody(context));
     }
 }

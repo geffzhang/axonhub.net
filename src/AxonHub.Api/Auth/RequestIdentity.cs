@@ -1,3 +1,4 @@
+using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
 
 namespace AxonHub.Api.Auth;
@@ -30,6 +31,19 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     /// request as a channel test.
     /// </summary>
     public string Source { get; init; } = SourceApi;
+
+    /// <summary>
+    /// Port of contexts.GetAPIKey: the authenticated API key row, including the
+    /// project edge the reference's AuthenticateAPIKey loads. The models
+    /// surface reads its active profile (ListEnabledModels).
+    /// </summary>
+    public ApiKeyRecord? ApiKey { get; init; }
+
+    /// <summary>
+    /// Port of contexts.WithProjectID: the key's project, loaded once during
+    /// authentication. Null when the caller never authenticated.
+    /// </summary>
+    public ProjectRecord? Project { get; init; }
 
     /// <summary>
     /// Identity used when no authentication middleware ran (internal callers and

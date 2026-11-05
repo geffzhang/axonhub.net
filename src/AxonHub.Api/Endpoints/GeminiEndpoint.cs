@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using AxonHub.Api.Http;
+using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
@@ -15,8 +16,7 @@ namespace AxonHub.Api.Endpoints;
 /// Gemini surface mounted at <c>/gemini/:gemini-api-version</c> and its
 /// <c>/v1beta</c> alias (routes.go:266-289). GenerateContent picks the writer
 /// from the <c>alt</c> query parameter; ListModels mirrors the reference's
-/// error envelope, taking the 500 branch for every failure because the port
-/// has no ent privacy subsystem (C014).
+/// error envelope, mapping an ent-privacy deny to 403 permission_error (C178).
 /// </summary>
 public static class GeminiEndpoint
 {
@@ -59,13 +59,16 @@ public static class GeminiEndpoint
         }
         catch (Exception ex)
         {
-            // entprivacy.Deny → 403 permission_error in the reference; the port
-            // has no ent privacy subsystem, so every failure is the 500 branch.
+            // entprivacy.Deny → 403 permission_error; everything else is the
+            // 500 internal_server_error branch.
+            var denied = PrivacyDenyException.IsDeny(ex);
             await WriteGeminiErrorAsync(
                 context,
-                StatusCodes.Status500InternalServerError,
+                denied
+                    ? StatusCodes.Status403Forbidden
+                    : StatusCodes.Status500InternalServerError,
                 ex.Message,
-                "internal_server_error",
+                denied ? "permission_error" : "internal_server_error",
                 cancellationToken).ConfigureAwait(false);
             return;
         }

@@ -132,6 +132,20 @@ public sealed class ModelStoreTests(PostgresFixture fixture)
         Assert.Equal([alpha, beta], await IdsAsync(new ModelListFilter { DeveloperContainsFold = "OPEN" }));
         Assert.Equal([beta], await IdsAsync(new ModelListFilter { ModelIdContainsFold = "MINI" }));
         Assert.Equal([alpha], await IdsAsync(new ModelListFilter { StatusIn = ["enabled"] }));
+        Assert.Equal(
+            [alpha, delta],
+            await IdsAsync(new ModelListFilter { ModelIdIn = ["gpt-4o", "claude-3"] }));
+        // The models endpoint's full-data lookup pairs the id set with the
+        // enabled status (openai.go:877-883).
+        Assert.Equal(
+            [alpha],
+            await IdsAsync(new ModelListFilter
+            {
+                Status = "enabled",
+                ModelIdIn = ["gpt-4o", "claude-3"],
+            }));
+        // ent renders an empty In-list as an always-false predicate.
+        Assert.Empty(await IdsAsync(new ModelListFilter { ModelIdIn = [] }));
         Assert.Equal([beta], await IdsAsync(new ModelListFilter { TypeNotIn = ["chat"] }));
         Assert.Equal([alpha, delta], await IdsAsync(new ModelListFilter { RemarkIsNil = true }));
         Assert.Equal([beta], await IdsAsync(new ModelListFilter { RemarkNotNil = true }));

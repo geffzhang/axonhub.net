@@ -29,6 +29,9 @@ public sealed record ModelListFilter
 
     public string? ModelId { get; init; }
 
+    /// <summary>ent <c>ModelIDIn</c> (model.ModelIDIn in the reference).</summary>
+    public IReadOnlyList<string>? ModelIdIn { get; init; }
+
     public string? ModelIdContainsFold { get; init; }
 
     public string? Type { get; init; }
@@ -734,6 +737,11 @@ public sealed class ModelStore(AxonHubDbContext db) : IModelStore
         if (filter.ModelId is not null)
         {
             predicates.Add(alias + ".\"model_id\" = " + args.Add(filter.ModelId));
+        }
+
+        if (filter.ModelIdIn is not null)
+        {
+            ConnectionSql.AppendStringIn(predicates, alias, "model_id", filter.ModelIdIn, args);
         }
 
         if (filter.ModelIdContainsFold is not null)

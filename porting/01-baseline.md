@@ -4256,6 +4256,77 @@ bulkDeleteModels，对齐前端 models.ts 的实际查询与变更：
 configured-model 合并 / profile 过滤；C142（事务边界）、C135（where 子集）
 沿用。
 
+## 89. 公开模型列表切片（ListEnabledModels 合并 / profile / include / 403，45 例，2026-11-05）
+
+参照 `internal/server/biz/model.go` 的 ListEnabledModels（646-755）与
+queryConfiguredModelFacades（744-799）、`model_routability.go` 的
+hasCapableEndpointForModel（13-38）、`model_settings_inheritance.go` 的
+EffectiveModelAssociations（129-146）、`internal/server/api/openai.go` 的
+parseOpenAIModelInclude（620-655）、convertModelFacadeToOpenAIModel /
+convertModelToOpenAIExtended（657-744）、ListModels 与 RetrieveModel
+（792-...）、`anthropic.go` 的 ListModels（85-138）与 `gemini.go` 的
+ListModels（141-...）；端口新增 `ModelService.ListEnabledModelsAsync` /
+`QueryConfiguredModelFacadesAsync` / `HasCapableEndpointForModel`、
+`ModelsEndpoint` 的 include 解析与全量数据查询、`GeminiEndpoint` 的 403
+分支、`RequestIdentity.ApiKey` / `Project` 与 `ApiKeyAuthenticator` 的项目边
+加载、`IManagementIdentity.GetCurrentProject`、`ChannelTagsCodec`，以及
+`ModelListFilter.ModelIdIn`，对齐三个公开列表端点的可观察行为：
+
+- ListEnabledModels：先判定 read_channels 作用域（拒绝抛
+  `failed to list configured models: ent/privacy: deny rule`），再取启用通道；
+  API key 身份下依次按 Project 的激活 profile（ChannelIDs → ChannelTags）与
+  key 的激活 profile（同序）收窄通道，profile 的 ModelIDs 作为
+  allowedModelIDs。配置模型查询为 `status = enabled`（allowedModelIDs 非空时
+  加 `model_id IN (...)`）；每行按 ent 行扫描语义解码 settings / model_card
+  （畸形 JSON 整体失败，文案 `unmarshal field settings|model_card: ...` 外包
+  `failed to list configured models: `），再取设置继承后的关联并匹配通道，
+  无连接的行跳过；`HideUnroutableModelsInList` 开启时，端点能力判定不通过的
+  行进入 suppressedIDs 并从列表隐藏。
+- `QueryAllChannelModels=false` 时只返回配置模型 facade；为 true（默认）时
+  配置模型在前，通道派生项追加在后：已在 modelSet 的 ID 跳过（configured
+  与 suppressed 都预置），`ModelBlacklistRegex` 只过滤通道派生项并把判定缓存
+  进 modelSet；每个通道的模型条目按 request model 字典序稳定输出（C178）。
+  最后再按 allowedModelIDs 过滤一次。facade 的 DisplayName 等于 ID、Created
+  为通道/模型行的 Unix 秒、OwnedBy 为通道类型字符串或 `configured`。
+- 端点能力：`RequestTypeForModelType` → `CapableApiFormats`，空集合视为
+  未知类型放行；连接通道的 `ChannelEndpoints.Resolve` 合并类型默认端点与
+  用户覆盖，命中任一允许格式即可路由；忽略 When 条件、stream 策略与配额。
+- OpenAI GET /v1/models：include 默认值取 `DefaultModelApiIncludeAll`；空串
+  返回（nil, 默认），`all` 全量，逗号分隔字段去空白；needFullData 仅当命中
+  name / description / context_length / max_output_tokens / modalities /
+  capabilities / pricing / icon / type。可见模型为空时直接返回空 data 数组。
+  全量分支以 `status = enabled` + `model_id IN (visibleIDs)` 查询并按 model id
+  映射（重复 id 后者胜出），缺失行回退 facade；扩展字段的 name / icon /
+  type / description 取模型行，modalities / capabilities / context_length /
+  max_output_tokens / pricing 取 model_card，空字符串与零值按 omitempty
+  省略，pricing 固定 `per_1m_tokens` / `USD`。
+- OpenAI GET /v1/models/{model}：include 默认值硬编码 false；先找可见
+  facade，缺失报 `model_not_found`；needFullData 时按 `model_id` + enabled
+  做 ent Only（0 行回退 facade，多行报 `ent: model not singular`）。
+- Anthropic GET /anthropic/v1/models：列表来自同一 ListEnabledModels，
+  `first_id` / `last_id` 取首尾 ID（空列表为 `""`），`has_more` 恒 false。
+- 403 分支：ListEnabledModels 的错误经 `PrivacyDenyException.IsDeny` 识别，
+  OpenAI 返回 403 `permission_denied` / `authentication_error`（无 request_id
+  时省略），Anthropic 返回 403 `permission_error` 且 request_id 恒写出，
+  Gemini 返回 403 code 403 / `permission_error`；其余错误保持 500。
+- 身份：API key 中间件把 key 与其 Project 边写入 RequestIdentity，
+  HttpContextManagementIdentity 在管理面身份缺席时才读取它，使 /v1 与
+  GraphQL 两条路径都能拿到 contexts.GetAPIKey 等价物（C178）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 服务语义：默认 9 个模型的合并集合与 owned_by、配置优先、profile ModelIDs / ChannelIDs / ChannelTags 过滤（含项目与 key 顺序交集）、黑名单正则 / 空串 / 配置豁免、QueryAll=false 两分支、HideUnroutable 抑制与不复活、能力判定忽略 When、privacy 拒绝与存储 / 畸形行错误包装、空通道 | `tests/AxonHub.Api.Tests/ModelServiceTests.cs` | 38（其中 31 例新增） |
+| 端点线形：facade 形状、include all / 单字段 / 系统默认、configured 行回退、全量查询失败、not singular、OpenAI 与 Anthropic 的 403 信封、HTML 转义与请求 id | `tests/AxonHub.Api.Tests/ModelsEndpointTests.cs` | 27（其中 13 例新增） |
+| Gemini 列表形状、内部错误与 403 permission_error | `tests/AxonHub.Api.Tests/GeminiEndpointTests.cs` | 7（其中 1 例新增） |
+| 存储：ModelIdIn 集合、status + ModelIdIn 组合、空集合恒假 | `tests/AxonHub.Persistence.Tests/ModelStoreTests.cs` | 7（断言增补） |
+
+`AxonHub.Api.Tests` 由 2202 增至 2247（+45），`AxonHub.Persistence.Tests` 保持
+207（ModelStoreTests 只增补断言），Llm 3020、Grains 92；四个项目合计由 5521
+增至 5566，0 失败 0 跳过。
+
+差异：新增 C178（公开模型列表切片的已接受差异与真实缺口）；C088 标记
+resolved；C140（并列顺序）与 C149（实时读取通道）沿用。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4277,4 +4348,4 @@ configured-model 合并 / profile 过滤；C142（事务边界）、C135（where
 | 其余 Ent 表（data_storages / prompts / invitations 等） | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74 供自动定价读取，§88 管理面 CRUD）、`channel_override_templates`（§78）与 `oidc_identities`（§79）已落；`invitations`、`data_storages`、`prompts` 等其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随 trace 管理面切片落地 |
 | 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
-| 模型列表的管理面来源 | 参照的 `ModelService.ListEnabledModels` 先取配置的 `models` 实体，再按 `QueryAllChannelModels` 合并通道模型，并以 profile（ChannelIDs / ChannelTags / ModelIDs）过滤、privacy 拒绝；OpenAI 的 `include` 扩展字段来自 `ent.Model`。端口已有 `models` 表（§74，自动定价读取用）与管理面 CRUD（§88），但没有 profile 与 `ListEnabledModels` 的 configured-model 合并，模型列表仍恒为通道派生模型（C088，第 25 节 55 例覆盖可观察部分） | 中 | 随公开模型列表切片落地（C088） |
+| 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |

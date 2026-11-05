@@ -1281,6 +1281,9 @@ internal sealed class FakeManagementIdentity(ManagementUser? user) : IManagement
     /// <summary>API key principal; null when the caller is a user or anonymous.</summary>
     public AxonHub.Persistence.ApiKeyRecord? ApiKey { get; set; }
 
+    /// <summary>The key's project edge (apiKey.Edges.Project).</summary>
+    public AxonHub.Persistence.ProjectRecord? Project { get; set; }
+
     public Task<ManagementUser?> GetCurrentUserAsync(
         CancellationToken cancellationToken = default)
         => Task.FromResult(User);
@@ -1288,4 +1291,6 @@ internal sealed class FakeManagementIdentity(ManagementUser? user) : IManagement
     public AxonHub.Persistence.ApiKeyRecord? GetCurrentApiKey() => ApiKey;
 
     public long? GetCurrentProjectId() => ProjectId;
+
+    public AxonHub.Persistence.ProjectRecord? GetCurrentProject() => Project;
 }

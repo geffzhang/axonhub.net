@@ -97,25 +97,32 @@ public sealed class ApiKeyAuthenticator(
             throw new InvalidApiKeyException();
         }
 
-        ApiKeyRecord? apiKey = null;
+        (ApiKeyRecord ApiKey, ProjectRecord Project)? authenticated = null;
         if (key is not null)
         {
             try
             {
-                apiKey = await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false);
+                authenticated = await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception)
             {
                 // middleware.WithAPIKeyConfig falls back to no-auth on any error.
-                apiKey = null;
+                authenticated = null;
             }
         }
 
-        apiKey ??= await AuthenticateNoAuthAsync(cancellationToken).ConfigureAwait(false);
+        authenticated ??= await AuthenticateNoAuthAsync(cancellationToken).ConfigureAwait(false);
 
+        var apiKey = authenticated.Value.ApiKey;
         CheckAllowedIps(request, apiKey, options.TrustedProxies);
 
-        return new RequestIdentity(apiKey.ProjectId, apiKey.Id);
+        // The reference publishes the key and its project edge on the context
+        // (contexts.WithAPIKey / WithProjectID), which ListEnabledModels reads.
+        return new RequestIdentity(apiKey.ProjectId, apiKey.Id)
+        {
+            ApiKey = apiKey,
+            Project = authenticated.Value.Project,
+        };
     }
 
     /// <summary>
@@ -131,11 +138,15 @@ public sealed class ApiKeyAuthenticator(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var apiKey = await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false);
+        var authenticated = await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false);
 
-        CheckAllowedIps(request, apiKey, options.TrustedProxies);
+        CheckAllowedIps(request, authenticated.ApiKey, options.TrustedProxies);
 
-        return new RequestIdentity(apiKey.ProjectId, apiKey.Id);
+        return new RequestIdentity(authenticated.ApiKey.ProjectId, authenticated.ApiKey.Id)
+        {
+            ApiKey = authenticated.ApiKey,
+            Project = authenticated.Project,
+        };
     }
 
     /// <summary>
@@ -145,13 +156,15 @@ public sealed class ApiKeyAuthenticator(
     /// / ErrInvalidAPIKey branch); every other failure propagates to the
     /// caller's 500 branch.
     /// </summary>
-    public Task<ApiKeyRecord> AuthenticateAdminKeyAsync(
+    public async Task<ApiKeyRecord> AuthenticateAdminKeyAsync(
         string key,
         CancellationToken cancellationToken = default)
-        => AuthenticateApiKeyAsync(key, cancellationToken);
+        => (await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false)).ApiKey;
 
     /// <summary>Port of AuthService.AuthenticateAPIKey.</summary>
-    private async Task<ApiKeyRecord> AuthenticateApiKeyAsync(string key, CancellationToken cancellationToken)
+    private async Task<(ApiKeyRecord ApiKey, ProjectRecord Project)> AuthenticateApiKeyAsync(
+        string key,
+        CancellationToken cancellationToken)
     {
         var apiKey = await apiKeys.GetByKeyAsync(key, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidApiKeyException();
@@ -174,11 +187,14 @@ public sealed class ApiKeyAuthenticator(
             throw new InvalidApiKeyException();
         }
 
-        return apiKey;
+        // AuthService.AuthenticateAPIKey resolves the project edge here; the
+        // reference then publishes it with contexts.WithProjectID.
+        return (apiKey, project);
     }
 
     /// <summary>Port of AuthService.AuthenticateNoAuth + EnsureNoAuthAPIKey.</summary>
-    private async Task<ApiKeyRecord> AuthenticateNoAuthAsync(CancellationToken cancellationToken)
+    private async Task<(ApiKeyRecord ApiKey, ProjectRecord Project)> AuthenticateNoAuthAsync(
+        CancellationToken cancellationToken)
     {
         if (!options.AllowNoAuth)
         {
@@ -201,7 +217,7 @@ public sealed class ApiKeyAuthenticator(
             throw new InvalidApiKeyException();
         }
 
-        return apiKey;
+        return (apiKey, project);
     }
 
     /// <summary>

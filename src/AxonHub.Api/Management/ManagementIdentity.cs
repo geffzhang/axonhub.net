@@ -32,4 +32,11 @@ public interface IManagementIdentity
     /// project context (contexts.GetProjectID).
     /// </summary>
     long? GetCurrentProjectId() => null;
+
+    /// <summary>
+    /// The API key's project edge (apiKey.Edges.Project), loaded during
+    /// authentication. ListEnabledModels reads its active profile; null when
+    /// the caller did not authenticate with an API key.
+    /// </summary>
+    AxonHub.Persistence.ProjectRecord? GetCurrentProject() => null;
 }

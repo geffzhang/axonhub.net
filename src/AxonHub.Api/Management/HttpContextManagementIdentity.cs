@@ -19,10 +19,30 @@ public sealed class HttpContextManagementIdentity(IHttpContextAccessor accessor)
         return Task.FromResult(Identity?.User);
     }
 
-    public AxonHub.Persistence.ApiKeyRecord? GetCurrentApiKey() => Identity?.ApiKey;
+    /// <summary>
+    /// The admin gate's API key, or the key published by the API-key
+    /// middleware for the /v1 surface (contexts.GetAPIKey reads the same
+    /// request context in the reference).
+    /// </summary>
+    public AxonHub.Persistence.ApiKeyRecord? GetCurrentApiKey()
+        => Identity?.ApiKey ?? ApiKeyIdentity?.ApiKey;
 
-    public long? GetCurrentProjectId() => Identity?.ProjectId;
+    public long? GetCurrentProjectId()
+        => Identity?.ProjectId ?? ApiKeyIdentity?.ProjectId;
+
+    public AxonHub.Persistence.ProjectRecord? GetCurrentProject()
+        => Identity is not null ? null : ApiKeyIdentity?.Project;
 
     private AdminGraphqlIdentity? Identity =>
         accessor.HttpContext?.Items[AdminGraphqlIdentity.ContextKey] as AdminGraphqlIdentity;
+
+    /// <summary>
+    /// The middleware-published identity of the /v1 surface. Read lazily and
+    /// only when the admin gate never ran, so management requests keep their
+    /// existing principal exactly.
+    /// </summary>
+    private Auth.RequestIdentity? ApiKeyIdentity
+        => accessor.HttpContext is { } context
+            ? Auth.RequestIdentity.FromHttpContext(context)
+            : null;
 }

@@ -1,10 +1,13 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using AxonHub.Api.Http;
+using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Transformer.Anthropic;
+using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
 
 namespace AxonHub.Api.Endpoints;
@@ -17,11 +20,11 @@ namespace AxonHub.Api.Endpoints;
 /// <c>GET /anthropic/v1/models</c>.
 /// </summary>
 /// <remarks>
-/// The reference's extended <c>include</c> metadata comes from the ent Model
-/// entities; the port has no <c>models</c> table, so every model takes the
-/// reference's "configured model not found" path and renders the facade fields
-/// only. Against a database without <c>models</c> rows the two produce the same
-/// bytes (C088).
+/// The <c>include</c> query parameter selects the extended metadata fields
+/// (name, description, context_length, max_output_tokens, modalities,
+/// capabilities, pricing, icon, type), which the reference reads from the ent
+/// Model entities; models without an enabled row fall back to the facade fields
+/// (C178).
 /// </remarks>
 public static class ModelsEndpoint
 {
@@ -30,15 +33,24 @@ public static class ModelsEndpoint
 
     private const string InternalServerErrorCode = "internal_server_error";
     private const string ModelNotFoundCode = "model_not_found";
+    private const string PermissionDeniedCode = "permission_denied";
+    private const string PermissionDeniedMessage = "insufficient permissions to access this resource";
     private const string ServerErrorType = "server_error";
+    private const string AuthenticationErrorType = "authentication_error";
     private const string InvalidRequestType = "invalid_request_error";
     private const string ModelParam = "model";
 
     /// <summary>Port of OpenAIHandlers.ListModels.</summary>
-    public static async Task ListOpenAiModelsAsync(HttpContext context, ModelService models)
+    public static async Task ListOpenAiModelsAsync(
+        HttpContext context,
+        ModelService models,
+        IModelSettingsProvider settings,
+        IModelStore modelStore)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(models);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(modelStore);
 
         var cancellationToken = context.RequestAborted;
         var requestId = RequestIds.FromHttpContext(context);
@@ -57,6 +69,15 @@ public static class ModelsEndpoint
             return;
         }
 
+        // The include default comes from the system settings and is resolved
+        // before the model list, exactly like the reference.
+        var includeDefault = (await settings.GetModelSettingsOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false))
+            .DefaultModelApiIncludeAll;
+        var (include, needFullData) = ParseOpenAiModelInclude(
+            context.Request.Query["include"].FirstOrDefault(),
+            includeDefault);
+
         IReadOnlyList<ModelFacade> visibleModels;
         try
         {
@@ -64,19 +85,76 @@ public static class ModelsEndpoint
         }
         catch (Exception ex)
         {
+            await WriteModelListErrorAsync(context, requestId, ex, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (visibleModels.Count == 0)
+        {
             await WriteJsonAsync(
                 context,
-                StatusCodes.Status500InternalServerError,
-                InternalServerError(requestId, ex),
+                StatusCodes.Status200OK,
+                GoJson.Marshal(new OpenAiModelListBody { Data = [] }),
                 cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        var data = new OpenAiModelBody[visibleModels.Count];
-        for (var i = 0; i < visibleModels.Count; i++)
+        IReadOnlyList<OpenAiModelBody>? data = null;
+        if (needFullData)
         {
-            data[i] = ToOpenAiModel(visibleModels[i]);
+            IReadOnlyList<ModelRecord> dbModels;
+            try
+            {
+                dbModels = await ListEnabledModelsByIdAsync(
+                        modelStore,
+                        [.. visibleModels.Select(static model => model.Id)],
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(
+                    context,
+                    StatusCodes.Status500InternalServerError,
+                    InternalServerError(requestId, ex),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            // Go maps the rows by model id; a duplicate id keeps the last row.
+            var byModelId = new Dictionary<string, ModelRecord>(StringComparer.Ordinal);
+            foreach (var dbModel in dbModels)
+            {
+                byModelId[dbModel.ModelId] = dbModel;
+            }
+
+            var modelsData = new OpenAiModelBody[visibleModels.Count];
+            try
+            {
+                for (var i = 0; i < visibleModels.Count; i++)
+                {
+                    var visibleModel = visibleModels[i];
+                    modelsData[i] = byModelId.TryGetValue(visibleModel.Id, out var dbModel)
+                        ? ConvertModelToOpenAiExtended(dbModel, include)
+                        : ToOpenAiModel(visibleModel);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // ent scans model_card while decoding the query rows, so a
+                // malformed document fails the whole request (C178).
+                await WriteJsonAsync(
+                    context,
+                    StatusCodes.Status500InternalServerError,
+                    InternalServerError(requestId, ex),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            data = modelsData;
         }
+
+        data ??= [.. visibleModels.Select(ToOpenAiModel)];
 
         await WriteJsonAsync(
             context,
@@ -93,10 +171,12 @@ public static class ModelsEndpoint
     public static async Task RetrieveOpenAiModelAsync(
         HttpContext context,
         string? model,
-        ModelService models)
+        ModelService models,
+        IModelStore modelStore)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(models);
+        ArgumentNullException.ThrowIfNull(modelStore);
 
         var cancellationToken = context.RequestAborted;
         var requestId = RequestIds.FromHttpContext(context);
@@ -112,6 +192,11 @@ public static class ModelsEndpoint
             return;
         }
 
+        // RetrieveModel always uses the strict include default (false).
+        var (include, needFullData) = ParseOpenAiModelInclude(
+            context.Request.Query["include"].FirstOrDefault(),
+            defaultIncludeAll: false);
+
         IReadOnlyList<ModelFacade> visibleModels;
         try
         {
@@ -119,11 +204,7 @@ public static class ModelsEndpoint
         }
         catch (Exception ex)
         {
-            await WriteJsonAsync(
-                context,
-                StatusCodes.Status500InternalServerError,
-                InternalServerError(requestId, ex),
-                cancellationToken).ConfigureAwait(false);
+            await WriteModelListErrorAsync(context, requestId, ex, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -139,12 +220,84 @@ public static class ModelsEndpoint
             return;
         }
 
-        // Extended include fields need an enabled ent Model row; the port has no
-        // models table, so the reference's NotFound fallback is the only path.
+        if (!needFullData)
+        {
+            await WriteJsonAsync(
+                context,
+                StatusCodes.Status200OK,
+                GoJson.Marshal(ToOpenAiModel(visibleModel)),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        // ent Query().Where(model_id, status=enabled).Only(ctx): zero rows fall
+        // back to the facade, any other error is the internal error branch.
+        IReadOnlyList<ModelRecord> configuredModels;
+        try
+        {
+            configuredModels = await modelStore.ListAllAsync(
+                    new ModelListFilter
+                    {
+                        ModelId = modelId,
+                        Status = "enabled",
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await WriteJsonAsync(
+                context,
+                StatusCodes.Status500InternalServerError,
+                InternalServerError(requestId, ex),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (configuredModels.Count == 0)
+        {
+            await WriteJsonAsync(
+                context,
+                StatusCodes.Status200OK,
+                GoJson.Marshal(ToOpenAiModel(visibleModel)),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (configuredModels.Count > 1)
+        {
+            // ent's Only returns this sentinel when the query matches several
+            // live rows (the models_by_model_id unique index normally prevents
+            // it).
+            await WriteJsonAsync(
+                context,
+                StatusCodes.Status500InternalServerError,
+                InternalServerError(
+                    requestId,
+                    new InvalidOperationException("ent: model not singular")),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        byte[] body;
+        try
+        {
+            body = GoJson.Marshal(ConvertModelToOpenAiExtended(configuredModels[0], include));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await WriteJsonAsync(
+                context,
+                StatusCodes.Status500InternalServerError,
+                InternalServerError(requestId, ex),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         await WriteJsonAsync(
             context,
             StatusCodes.Status200OK,
-            GoJson.Marshal(ToOpenAiModel(visibleModel)),
+            body,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -164,20 +317,29 @@ public static class ModelsEndpoint
         }
         catch (Exception ex)
         {
+            // entprivacy.Deny → 403 permission_error; everything else is the
+            // 500 internal_server_error branch.
+            var errorType = PrivacyDenyException.IsDeny(ex)
+                ? "permission_error"
+                : InternalServerErrorCode;
+            var statusCode = PrivacyDenyException.IsDeny(ex)
+                ? StatusCodes.Status403Forbidden
+                : StatusCodes.Status500InternalServerError;
+
             var error = new AnthropicError
             {
-                Type = InternalServerErrorCode,
+                Type = errorType,
                 RequestId = requestId,
                 Error = new AnthropicErrorDetail
                 {
-                    Type = InternalServerErrorCode,
+                    Type = errorType,
                     Message = ex.Message,
                 },
             };
 
             await WriteJsonAsync(
                 context,
-                StatusCodes.Status500InternalServerError,
+                statusCode,
                 GoJson.Marshal(error),
                 cancellationToken).ConfigureAwait(false);
             return;
@@ -208,12 +370,183 @@ public static class ModelsEndpoint
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Port of parseOpenAIModelInclude (openai.go:620-652).</summary>
+    public static (HashSet<string>? Include, bool NeedFullData) ParseOpenAiModelInclude(
+        string? includeParam,
+        bool defaultIncludeAll)
+    {
+        if (string.IsNullOrEmpty(includeParam))
+        {
+            return (null, defaultIncludeAll);
+        }
+
+        if (string.Equals(includeParam, "all", StringComparison.Ordinal))
+        {
+            return (null, true);
+        }
+
+        var include = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var field in includeParam.Split(','))
+        {
+            var trimmed = field.Trim();
+            if (trimmed.Length != 0)
+            {
+                include.Add(trimmed);
+            }
+        }
+
+        string[] extendedFields =
+        [
+            "name", "description", "context_length", "max_output_tokens",
+            "modalities", "capabilities", "pricing", "icon", "type",
+        ];
+        var needFullData = extendedFields.Any(include.Contains);
+
+        return (include, needFullData);
+    }
+
+    private static async Task<IReadOnlyList<ModelRecord>> ListEnabledModelsByIdAsync(
+        IModelStore modelStore,
+        IReadOnlyList<string> modelIds,
+        CancellationToken cancellationToken)
+        => await modelStore.ListAllAsync(
+                new ModelListFilter
+                {
+                    Status = "enabled",
+                    ModelIdIn = modelIds,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary>
+    /// The shared ListEnabledModels error branch: a deny is the 403
+    /// permission_denied envelope, everything else the 500 internal error.
+    /// </summary>
+    private static Task WriteModelListErrorAsync(
+        HttpContext context,
+        string? requestId,
+        Exception error,
+        CancellationToken cancellationToken)
+        => PrivacyDenyException.IsDeny(error)
+            ? WriteJsonAsync(
+                context,
+                StatusCodes.Status403Forbidden,
+                GoJson.Marshal(new ResponseError
+                {
+                    Detail = new ErrorDetail
+                    {
+                        Code = PermissionDeniedCode,
+                        Message = PermissionDeniedMessage,
+                        Type = AuthenticationErrorType,
+                        RequestId = requestId,
+                    },
+                }),
+                cancellationToken)
+            : WriteJsonAsync(
+                context,
+                StatusCodes.Status500InternalServerError,
+                InternalServerError(requestId, error),
+                cancellationToken);
+
     private static OpenAiModelBody ToOpenAiModel(ModelFacade model) => new()
     {
         Id = model.Id,
         Created = model.Created,
         OwnedBy = model.OwnedBy,
     };
+
+    /// <summary>Port of convertModelToOpenAIExtended (openai.go:667-744).</summary>
+    private static OpenAiModelBody ConvertModelToOpenAiExtended(
+        ModelRecord model,
+        HashSet<string>? include)
+    {
+        bool ShouldInclude(string field) => include is null || include.Contains(field);
+
+        var body = new OpenAiModelBody
+        {
+            Id = model.ModelId,
+            Created = GoTime.UnixSeconds(model.CreatedAt),
+            OwnedBy = model.Developer,
+        };
+
+        // Go's omitempty drops empty strings; the body nulls them so the shared
+        // serializer omits the property.
+        if (ShouldInclude("name") && model.Name.Length != 0)
+        {
+            body.Name = model.Name;
+        }
+
+        if (ShouldInclude("icon") && model.Icon.Length != 0)
+        {
+            body.Icon = model.Icon;
+        }
+
+        if (ShouldInclude("type") && model.Type.Length != 0)
+        {
+            body.Type = model.Type;
+        }
+
+        if (ShouldInclude("description") && !string.IsNullOrEmpty(model.Remark))
+        {
+            body.Description = model.Remark;
+        }
+
+        ModelCard? card;
+        try
+        {
+            card = ModelCardCodec.Deserialize(model.ModelCard);
+        }
+        catch (JsonException ex)
+        {
+            // ent scan: "unmarshal field model_card: %w".
+            throw new InvalidOperationException("unmarshal field model_card: " + ex.Message, ex);
+        }
+
+        if (card is not null)
+        {
+            if (ShouldInclude("modalities"))
+            {
+                body.Modalities = new OpenAiModalities
+                {
+                    Input = card.Modalities.Input ?? [],
+                    Output = card.Modalities.Output ?? [],
+                };
+            }
+
+            if (ShouldInclude("capabilities"))
+            {
+                body.Capabilities = new OpenAiCapabilities
+                {
+                    Vision = card.Vision,
+                    ToolCall = card.ToolCall,
+                    Reasoning = card.Reasoning.Supported,
+                };
+            }
+
+            if (ShouldInclude("context_length") && card.Limit.Context != 0)
+            {
+                body.ContextLength = card.Limit.Context;
+            }
+
+            if (ShouldInclude("max_output_tokens") && card.Limit.Output != 0)
+            {
+                body.MaxOutputTokens = card.Limit.Output;
+            }
+
+            if (ShouldInclude("pricing"))
+            {
+                body.Pricing = new OpenAiPricing
+                {
+                    Input = card.Cost.Input,
+                    Output = card.Cost.Output,
+                    CacheRead = card.Cost.CacheRead,
+                    CacheWrite = card.Cost.CacheWrite,
+                };
+            }
+        }
+
+        return body;
+    }
 
     /// <summary>gin: <c>c.JSON(status, openai.OpenAIError{Detail: ...})</c>.</summary>
     private static byte[] ModelNotFoundError(string? requestId, string modelId)
@@ -273,7 +606,10 @@ public static class ModelsEndpoint
             },
             cancellationToken);
 
-    /// <summary>Port of api.OpenAIModel, facade fields only (C088).</summary>
+    /// <summary>
+    /// Port of api.OpenAIModel. The optional fields follow Go's omitempty: a
+    /// null (or the empty string / zero the converter nulls) is not emitted.
+    /// </summary>
     private sealed class OpenAiModelBody
     {
         [JsonPropertyName("id")]
@@ -287,6 +623,91 @@ public static class ModelsEndpoint
 
         [JsonPropertyName("owned_by")]
         public required string OwnedBy { get; init; }
+
+        [JsonPropertyName("name")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("description")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Description { get; set; }
+
+        [JsonPropertyName("context_length")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? ContextLength { get; set; }
+
+        [JsonPropertyName("max_output_tokens")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? MaxOutputTokens { get; set; }
+
+        [JsonPropertyName("modalities")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public OpenAiModalities? Modalities { get; set; }
+
+        [JsonPropertyName("capabilities")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public OpenAiCapabilities? Capabilities { get; set; }
+
+        [JsonPropertyName("pricing")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public OpenAiPricing? Pricing { get; set; }
+
+        [JsonPropertyName("icon")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Icon { get; set; }
+
+        [JsonPropertyName("type")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Type { get; set; }
+    }
+
+    /// <summary>Port of api.Modalities (input/output are never null).</summary>
+    private sealed class OpenAiModalities
+    {
+        [JsonPropertyName("input")]
+        public required IReadOnlyList<string> Input { get; init; }
+
+        [JsonPropertyName("output")]
+        public required IReadOnlyList<string> Output { get; init; }
+    }
+
+    /// <summary>Port of api.Capabilities.</summary>
+    private sealed class OpenAiCapabilities
+    {
+        [JsonPropertyName("vision")]
+        public bool Vision { get; init; }
+
+        [JsonPropertyName("tool_call")]
+        public bool ToolCall { get; init; }
+
+        [JsonPropertyName("reasoning")]
+        public bool Reasoning { get; init; }
+    }
+
+    /// <summary>Port of api.Pricing.</summary>
+    private sealed class OpenAiPricing
+    {
+        [JsonPropertyName("input")]
+        [JsonConverter(typeof(GoOptionalNumberConverter))]
+        public double? Input { get; init; }
+
+        [JsonPropertyName("output")]
+        [JsonConverter(typeof(GoOptionalNumberConverter))]
+        public double? Output { get; init; }
+
+        [JsonPropertyName("cache_read")]
+        [JsonConverter(typeof(GoOptionalNumberConverter))]
+        public double? CacheRead { get; init; }
+
+        [JsonPropertyName("cache_write")]
+        [JsonConverter(typeof(GoOptionalNumberConverter))]
+        public double? CacheWrite { get; init; }
+
+        [JsonPropertyName("unit")]
+        public string Unit { get; init; } = "per_1m_tokens";
+
+        [JsonPropertyName("currency")]
+        public string Currency { get; init; } = "USD";
     }
 
     /// <summary>

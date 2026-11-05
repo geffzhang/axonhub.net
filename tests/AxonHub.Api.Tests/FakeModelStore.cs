@@ -19,6 +19,13 @@ internal sealed class FakeModelStore : IModelStore
 
     public Exception? ListAllFailure { get; set; }
 
+    /// <summary>
+    /// Per-filter failure hook, evaluated before <see cref="ListAllFailure"/>.
+    /// Lets a test fail only the endpoint's full-data lookup (ModelIdIn set)
+    /// while the initial ListEnabledModels query succeeds.
+    /// </summary>
+    public Func<ModelListFilter, Exception?>? ListAllFailureFor { get; set; }
+
     public Exception? CreateFailure { get; set; }
 
     public Exception? UpdateFailure { get; set; }
@@ -27,6 +34,12 @@ internal sealed class FakeModelStore : IModelStore
     {
         var record = new ModelRecord();
         configure?.Invoke(record);
+        return Add(record);
+    }
+
+    /// <summary>Inserts an already-built row, like the reference's ent Create.</summary>
+    public ModelRecord Add(ModelRecord record)
+    {
         record.Id = record.Id > 0 ? record.Id : _nextId++;
         if (record.Id >= _nextId)
         {
@@ -118,9 +131,10 @@ internal sealed class FakeModelStore : IModelStore
         CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
-        if (ListAllFailure is not null)
+        var failure = ListAllFailureFor?.Invoke(filter) ?? ListAllFailure;
+        if (failure is not null)
         {
-            return Task.FromException<IReadOnlyList<ModelRecord>>(ListAllFailure);
+            return Task.FromException<IReadOnlyList<ModelRecord>>(failure);
         }
 
         return Task.FromResult<IReadOnlyList<ModelRecord>>(_rows
@@ -310,6 +324,11 @@ internal sealed class FakeModelStore : IModelStore
         }
 
         if (filter.ModelId is { } modelId && row.ModelId != modelId)
+        {
+            return false;
+        }
+
+        if (filter.ModelIdIn is { } modelIds && !modelIds.Contains(row.ModelId))
         {
             return false;
         }

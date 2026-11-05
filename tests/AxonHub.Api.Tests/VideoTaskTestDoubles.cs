@@ -250,7 +250,12 @@ internal sealed class FakeChannelStore : IChannelStore
         => Task.FromResult(Rows.FirstOrDefault(row => row.Id == id && row.DeletedAt == 0));
 
     public Task<IReadOnlyList<ChannelRecord>> ListEnabledAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("not used by the video task flow");
+        => Task.FromResult<IReadOnlyList<ChannelRecord>>(Rows
+            .Where(row => row.DeletedAt == 0
+                && string.Equals(row.Status, "enabled", StringComparison.Ordinal))
+            .OrderByDescending(static row => row.OrderingWeight)
+            .ThenBy(static row => row.Id)
+            .ToList());
 
     public Task<bool> UpdateStatusAsync(
         long id,
