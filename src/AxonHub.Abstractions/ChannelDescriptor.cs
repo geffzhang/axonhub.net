@@ -60,4 +60,11 @@ public sealed record ChannelDescriptor
     /// reads them for the channel-tags rules and for exclude rules.
     /// </summary>
     public string? Tags { get; init; }
+
+    /// <summary>
+    /// Raw <c>policies</c> jsonb text (objects.ChannelPolicies). The stream
+    /// policy selector reads <c>policies.stream</c> (unlimited / require /
+    /// forbid) to filter candidates for streaming and non-streaming requests.
+    /// </summary>
+    public string? Policies { get; init; }
 }

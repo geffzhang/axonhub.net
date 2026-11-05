@@ -31,6 +31,7 @@ public sealed class PostgresEnabledChannelProvider(IAxonHubDbContextFactory dbFa
             Endpoints = channel.Endpoints,
             DefaultTestModel = channel.DefaultTestModel,
             Tags = channel.Tags,
+            Policies = channel.Policies,
         })];
     }
 }

@@ -148,6 +148,14 @@ public sealed class ChannelCandidate
     /// </summary>
     [Id(23)]
     public string? Tags { get; set; }
+
+    /// <summary>
+    /// Raw <c>policies</c> jsonb text (objects.ChannelPolicies). The stream
+    /// policy selector reads the reference's <c>candidate.Channel.Policies.Stream</c>
+    /// from it; null / empty means unlimited.
+    /// </summary>
+    [Id(24)]
+    public string? Policies { get; set; }
 }
 
 /// <summary>

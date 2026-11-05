@@ -598,6 +598,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
             Settings = channel.Settings,
             Endpoints = channel.Endpoints,
             Tags = channel.Tags,
+            Policies = channel.Policies,
         };
 
         foreach (var entry in models)
@@ -628,6 +629,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         Settings = candidate.Settings,
         Endpoints = candidate.Endpoints,
         Tags = candidate.Tags,
+        Policies = candidate.Policies,
     };
 
     /// <summary>

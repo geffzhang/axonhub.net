@@ -258,13 +258,16 @@ public sealed class ChatCompletionOrchestrator
             identity.ApiKey,
             selection.RoutingPolicy);
 
-        // select_candidates.go:27-61: the project profile (upper boundary) and
-        // the API key profile narrow the base selector's candidates, then the
+        // select_candidates.go:27-63: the project profile (upper boundary) and
+        // the API key profile narrow the base selector's candidates, the
         // native-tool decorators drop channels that cannot carry the request's
-        // Google / Anthropic native tools. All of this runs before the
+        // Google / Anthropic native tools, and the stream policy selector
+        // applies the channel's stream requirement. All of this runs before the
         // load-balanced selector.
-        var scopedCandidates = NativeToolFilters.ApplyToCandidates(
-            ProfileFilters.ApplyToCandidates(selection.Candidates, identity),
+        var scopedCandidates = StreamPolicySelector.ApplyToCandidates(
+            NativeToolFilters.ApplyToCandidates(
+                ProfileFilters.ApplyToCandidates(selection.Candidates, identity),
+                llmRequest),
             llmRequest);
 
         ChannelCandidate[] candidates = [];
@@ -349,10 +352,12 @@ public sealed class ChatCompletionOrchestrator
         }
 
         // The tester's processor runs the same selectCandidates middleware, so
-        // a project / key profile and the native-tool decorators apply to the
+        // the profile, native-tool and stream-policy filters apply to the
         // specified channel too.
-        var scoped = NativeToolFilters.ApplyToCandidates(
-            ProfileFilters.ApplyToCandidates([candidate], identity),
+        var scoped = StreamPolicySelector.ApplyToCandidates(
+            NativeToolFilters.ApplyToCandidates(
+                ProfileFilters.ApplyToCandidates([candidate], identity),
+                llmRequest),
             llmRequest);
         if (scoped.Count == 0)
         {

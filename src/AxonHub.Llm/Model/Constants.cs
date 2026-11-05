@@ -64,6 +64,12 @@ public static class ApiFormats
     public const string AnthropicMessage = "anthropic/messages";
     public const string GeminiContents = "gemini/contents";
 
+    /// <summary>llm.APIFormatAiSDKText (llm/constants.go:59).</summary>
+    public const string AiSDKText = "aisdk/text";
+
+    /// <summary>llm.APIFormatAiSDKDataStream (llm/constants.go:60).</summary>
+    public const string AiSDKDataStream = "aisdk/datastream";
+
     /// <summary>llm.APIFormatGeminiEmbedding (llm/constants.go:62).</summary>
     public const string GeminiEmbedding = "gemini/embeddings";
     public const string OllamaChat = "ollama/chat";

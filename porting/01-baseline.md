@@ -4502,6 +4502,38 @@ IsAnthropicNativeTool / FilterOutAnthropicNativeTools（11-56）；
 
 差异：不新增编号；C179 的真实缺口 (c) 由本节闭合（该条目已就地更新）。
 
+## 94. 流策略候选过滤切片（StreamPolicySelector，19 例，2026-11-05）
+
+参照 `internal/server/orchestrator/candidates_stream_policy.go`（12-84）与
+`errors.go` 的 StreamPolicyConflictError（17-33），以及 `objects.ChannelPolicies.Stream`
+（unlimited / require / forbid）；端口新增 `StreamPolicySelector` 与
+`StreamPolicyConflictException`、`ChannelCandidate.Policies` 原始 jsonb 字段与
+`ChannelDescriptor.Policies` 投影，在原生工具过滤之后、负载均衡排序之前应用，
+对齐可观察行为：
+
+- 流式请求（`stream == true`）：剔除 `forbid` 通道，`require` / `unlimited` / 空策略保留。
+- 非流式请求（`stream == false` 或 null）：先保留非 `require` 通道；只要存在一个这样的
+  通道就返回它（`forbid` 也算可用），不进入回退。
+- 仅剩 `require` 通道时：chat（含空 RequestType/APIFormat、OpenAI chat、Responses、
+  Anthropic Messages、Gemini contents、Ollama chat）与 completion（OpenAI completion）
+  这些可自动聚合的请求保留全部候选；AI SDK text / datastream、embedding、compact 等
+  不可聚合请求返回空列表，最终由 selectCandidates 变成 `model not found: <model>`。
+- Decisions：仅剩 `require` 通道时抛出 `StreamPolicyConflictException`，文案
+  `no eligible channel for model <model>: matching channels require streaming, but Decisions requests are non-streaming`；
+  混合候选时保留非 `require` 通道。
+- 策略来源：候选携带通道行 `policies` 原始 jsonb（模型关联、无模型行回退与 tester 指定
+  通道三条路径一致）；空 / null / 非法 JSON 按 unlimited 处理（沿用 C157 的宽松加载口径）。
+- 空候选列表直接返回，不触发冲突。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 流式 forbid 过滤、非流式 require 优先级与自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突与混合候选、nil stream、空策略、空列表、通道策略流入候选、orchestrator 两条接线 | `tests/AxonHub.Api.Tests/StreamPolicySelectionTests.cs` | 19 |
+
+`AxonHub.Api.Tests` 由 2343 增至 2362（+19），Llm 3023、Grains 95、Persistence 207；
+四个项目合计由 5668 增至 5687，0 失败 0 跳过。
+
+差异：不新增编号；C179 的真实缺口 (d) 由本节闭合（该条目已就地更新）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4528,3 +4560,4 @@ IsAnthropicNativeTool / FilterOutAnthropicNativeTools（11-56）；
 | trace / thread 通道粘性路由 | 已由 §91 闭合：prefer_previous_channel 的生效策略优先级、trace → thread 作用域解析、命中仅限候选池、priority 最小候选置首与同通道 fallback 去重、只记账粘性候选、写回条件与 trace 行 thread 优先、30 分钟 TTL（15 + 1 例）；进程内缓存的多实例限制登记为 C181 | — | 完成（C181） |
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
+| 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
