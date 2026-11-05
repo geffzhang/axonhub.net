@@ -1140,6 +1140,7 @@ public sealed class PassThroughOrchestrationTests(GrainClusterFixture fixture)
             executor,
             new RecordingMetricsRecorder(),
             new StaticRetryPolicyProvider(Policy()),
+            fixture.CandidateSelector,
             TimeProvider.System,
             recorder,
             rateLimitTracker: fixture.RateLimitTracker,

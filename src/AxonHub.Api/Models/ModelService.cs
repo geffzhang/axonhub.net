@@ -343,21 +343,5 @@ public sealed class ModelService(
 
     /// <summary>Port of APIKey.GetActiveProfile (ent/extra.go:30-42).</summary>
     private static ApiKeyProfileModel? ActiveApiKeyProfile(ApiKeyRecord apiKey)
-    {
-        var profiles = ApiKeyProfilesCodec.Deserialize(apiKey.Profiles);
-        if (profiles.ActiveProfile.Length == 0)
-        {
-            return null;
-        }
-
-        foreach (var profile in profiles.Profiles ?? [])
-        {
-            if (string.Equals(profile.Name, profiles.ActiveProfile, StringComparison.Ordinal))
-            {
-                return profile;
-            }
-        }
-
-        return null;
-    }
+        => ApiKeyProfilesCodec.ActiveProfile(apiKey.Profiles);
 }

@@ -583,22 +583,55 @@ public static class DailyTime
         return true;
     }
 
-    /// <summary>Port of <c>parseDailyClock</c>: Go's "15:04" layout needs two-digit hours.</summary>
+    /// <summary>
+    /// Port of <c>parseDailyClock</c>: <c>time.Parse("15:04", strings.TrimSpace(value))</c>.
+    /// Go's "15" layout accepts one or two hour digits (0-23) while "04" requires
+    /// exactly two minute digits (0-59), and any leftover text fails the parse.
+    /// </summary>
     private static bool TryParseClock(string value, out TimeSpan clock)
     {
         clock = default;
 
-        if (!TimeOnly.TryParseExact(
-                value.Trim(),
-                "HH:mm",
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.None,
-                out var parsed))
+        var text = value.Trim();
+        var index = 0;
+        var hour = 0;
+        var hourDigits = 0;
+        while (index < text.Length && hourDigits < 2 && text[index] is >= '0' and <= '9')
+        {
+            hour = (hour * 10) + (text[index] - '0');
+            hourDigits++;
+            index++;
+        }
+
+        if (hourDigits == 0 || index >= text.Length || text[index] != ':')
         {
             return false;
         }
 
-        clock = new TimeSpan(parsed.Hour, parsed.Minute, 0);
+        index++;
+        if (index + 2 != text.Length)
+        {
+            return false;
+        }
+
+        var minute = 0;
+        for (var digit = 0; digit < 2; digit++)
+        {
+            var c = text[index + digit];
+            if (c is < '0' or > '9')
+            {
+                return false;
+            }
+
+            minute = (minute * 10) + (c - '0');
+        }
+
+        if (hour > 23 || minute > 59)
+        {
+            return false;
+        }
+
+        clock = new TimeSpan(hour, minute, 0);
         return true;
     }
 }

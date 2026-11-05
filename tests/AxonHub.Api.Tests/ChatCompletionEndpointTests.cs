@@ -34,6 +34,7 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
                     MaxSingleChannelRetries = 0,
                     RetryDelayMs = 0,
                 }),
+            fixture.CandidateSelector,
             TimeProvider.System,
             recorder,
             rateLimitTracker: fixture.RateLimitTracker,

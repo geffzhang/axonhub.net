@@ -156,6 +156,15 @@ public interface IModelStore
         string modelId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// ent <c>Query().Where(model.ModelID(...), model.StatusEQ(status)).First(ctx)</c>
+    /// (live rows), used by <c>biz.GetModelByModelID</c> on the routing path.
+    /// </summary>
+    Task<ModelRecord?> GetFirstByModelIdAndStatusAsync(
+        string modelId,
+        string status,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Port of the bulk-create existence check's OR-of-AND predicate.</summary>
     Task<IReadOnlyList<ModelRecord>> ListByDeveloperModelIdPairsAsync(
         IReadOnlyList<ModelDeveloperModelId> pairs,
@@ -333,6 +342,26 @@ public sealed class ModelStore(AxonHubDbContext db) : IModelStore
         var args = new SqlArguments();
         var sql = new StringBuilder("SELECT ").Append(Columns)
             .Append(" FROM \"models\" WHERE \"model_id\" = ").Append(args.Add(modelId))
+            .Append(" AND \"deleted_at\" = 0 ORDER BY \"id\" ASC LIMIT 1;");
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<ModelRecord>(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<ModelRecord?> GetFirstByModelIdAndStatusAsync(
+        string modelId,
+        string status,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new SqlArguments();
+        var sql = new StringBuilder("SELECT ").Append(Columns)
+            .Append(" FROM \"models\" WHERE \"model_id\" = ").Append(args.Add(modelId))
+            .Append(" AND \"status\" = ").Append(args.Add(status))
             .Append(" AND \"deleted_at\" = 0 ORDER BY \"id\" ASC LIMIT 1;");
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);

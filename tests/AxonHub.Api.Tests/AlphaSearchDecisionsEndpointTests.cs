@@ -38,6 +38,7 @@ public sealed class AlphaSearchDecisionsEndpointTests(GrainClusterFixture fixtur
                     MaxSingleChannelRetries = 0,
                     RetryDelayMs = 0,
                 }),
+            fixture.CandidateSelector,
             TimeProvider.System,
             rateLimitTracker: fixture.RateLimitTracker,
             channelLimiterManager: fixture.ChannelLimiterManager);
@@ -116,7 +117,13 @@ public sealed class AlphaSearchDecisionsEndpointTests(GrainClusterFixture fixtur
     [Fact]
     public async Task AlphaSearchForwardsRawBodyAndReturnsProviderBodyVerbatim()
     {
-        fixture.Channels.Set(TestChannels.OpenAi(4931, "search-model"));
+        // alpha_search is an explicit-endpoint request type: the openai channel's
+        // built-in endpoints do not include it, so the channel must opt in with a
+        // custom endpoint (channel_endpoint.go buildNonDefaultEndpointOutbound).
+        fixture.Channels.Set(TestChannels.OpenAi(
+            4931,
+            "search-model",
+            endpoints: """[{"api_format":"openai/alpha_search"}]"""));
         const string providerBody = """{"results":[{"title":"Go"}]}""";
         var executor = new ScriptedExecutor
         {
@@ -165,7 +172,10 @@ public sealed class AlphaSearchDecisionsEndpointTests(GrainClusterFixture fixtur
         // Cause. The chat inbound mapper therefore cannot find an
         // httpclient.Error and re-marshals the detail envelope instead of
         // passing the provider bytes through.
-        fixture.Channels.Set(TestChannels.OpenAi(4932, "search-model"));
+        fixture.Channels.Set(TestChannels.OpenAi(
+            4932,
+            "search-model",
+            endpoints: """[{"api_format":"openai/alpha_search"}]"""));
         const string providerError =
             """{"error":{"message":"search rate limit","type":"rate_limit_error","code":"rate_limit"}}""";
         var executor = new ScriptedExecutor
@@ -187,7 +197,11 @@ public sealed class AlphaSearchDecisionsEndpointTests(GrainClusterFixture fixtur
     [Fact]
     public async Task DecisionsForwardsRawBodyAndReturnsProviderBodyVerbatim()
     {
-        fixture.Channels.Set(TestChannels.OpenAi(4933, "gpt-6-luna"));
+        // decisions is an explicit-endpoint request type; the channel opts in.
+        fixture.Channels.Set(TestChannels.OpenAi(
+            4933,
+            "gpt-6-luna",
+            endpoints: """[{"api_format":"openai/decisions"}]"""));
         const string providerBody =
             """{"model":"gpt-6-luna","answers":[{"type":"choice","choice":"billing"}],"usage":{"input_tokens":120}}""";
         var executor = new ScriptedExecutor
@@ -238,7 +252,10 @@ public sealed class AlphaSearchDecisionsEndpointTests(GrainClusterFixture fixtur
         // as the ResponseError's Cause, and the decisions inbound mapper checks
         // errors.As[httpclient.Error] first: the provider status and bytes reach
         // the client untouched.
-        fixture.Channels.Set(TestChannels.OpenAi(4934, "gpt-6-luna"));
+        fixture.Channels.Set(TestChannels.OpenAi(
+            4934,
+            "gpt-6-luna",
+            endpoints: """[{"api_format":"openai/decisions"}]"""));
         const string providerError =
             """{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}""";
         var executor = new ScriptedExecutor

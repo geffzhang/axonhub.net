@@ -344,7 +344,8 @@ internal static class TestChannels
         string? actualModel = null,
         string apiKey = "sk-test",
         string baseUrl = "http://upstream.test",
-        string? settings = null)
+        string? settings = null,
+        string? endpoints = null)
         => new()
         {
             Id = id,
@@ -355,6 +356,7 @@ internal static class TestChannels
             Credentials = "{\"apiKey\":\"" + apiKey + "\"}",
             SupportedModels = "[\"" + (actualModel ?? model) + "\"]",
             Settings = settings,
+            Endpoints = endpoints,
         };
 
     public static ChannelDescriptor Jina(

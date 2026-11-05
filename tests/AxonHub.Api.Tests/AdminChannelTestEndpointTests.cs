@@ -110,6 +110,7 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
                 MaxSingleChannelRetries = 0,
                 RetryDelayMs = 0,
             }));
+        builder.Services.AddSingleton<IModelCandidateSelector>(fixture.CandidateSelector);
         builder.Services.AddScoped<IChannelTestPromptsProvider, SystemChannelSettingsService>();
         builder.Services.AddScoped<ChatCompletionOrchestrator>();
         builder.Services.AddScoped<ChannelTestService>();

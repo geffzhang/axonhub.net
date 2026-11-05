@@ -37,6 +37,7 @@ public sealed class AnthropicMessagesEndpointTests(GrainClusterFixture fixture)
                     MaxSingleChannelRetries = 0,
                     RetryDelayMs = 0,
                 }),
+            fixture.CandidateSelector,
             TimeProvider.System,
             rateLimitTracker: fixture.RateLimitTracker,
             channelLimiterManager: fixture.ChannelLimiterManager);

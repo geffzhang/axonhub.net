@@ -28,6 +28,7 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
             executor,
             metrics,
             new StaticRetryPolicyProvider(policy),
+            fixture.CandidateSelector,
             TimeProvider.System,
             recorder,
             rateLimitTracker: fixture.RateLimitTracker,

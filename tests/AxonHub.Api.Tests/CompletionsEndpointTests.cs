@@ -35,6 +35,7 @@ public sealed class CompletionsEndpointTests(GrainClusterFixture fixture)
                     MaxSingleChannelRetries = 0,
                     RetryDelayMs = 0,
                 }),
+            fixture.CandidateSelector,
             TimeProvider.System,
             rateLimitTracker: fixture.RateLimitTracker,
             channelLimiterManager: fixture.ChannelLimiterManager);
@@ -76,7 +77,14 @@ public sealed class CompletionsEndpointTests(GrainClusterFixture fixture)
     [Fact]
     public async Task CompletionsForwardsJsonAndReturnsCompletionResponse()
     {
-        fixture.Channels.Set(TestChannels.OpenAi(4921, "gpt-3.5-turbo-instruct"));
+        // The openai channel type's built-in endpoints stop at chat (the reference's
+        // openAIFullDefaultEndpoints has no openai/completion), so a completions
+        // request only resolves when the channel opts in with a custom endpoint
+        // (channel_endpoint.go buildNonDefaultEndpointOutbound).
+        fixture.Channels.Set(TestChannels.OpenAi(
+            4921,
+            "gpt-3.5-turbo-instruct",
+            endpoints: """[{"api_format":"openai/completions"}]"""));
         var executor = new ScriptedExecutor
         {
             OnDo = (_, _, _) => JsonUpstreamResponse(

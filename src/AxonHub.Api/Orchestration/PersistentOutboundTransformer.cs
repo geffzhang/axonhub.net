@@ -1,3 +1,4 @@
+using AxonHub.Abstractions;
 using AxonHub.Api.PromptProtection;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
@@ -30,6 +31,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     private readonly Func<ChannelCandidate, LlmRequest, DateTimeOffset, IOutboundTransformer> _factory;
 
     private int _candidateIndex;
+    private int _modelIndex;
     private IOutboundTransformer? _current;
     private bool _originalModelCaptured;
     private bool _originalStreamCaptured;
@@ -209,15 +211,157 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         CurrentLlmRequest = request;
 
         var candidate = _candidates[_candidateIndex];
+        var entry = CurrentModelEntry(candidate);
+
+        // outbound.go:528-532 — synchronize the candidate-level protocol with
+        // the model currently being attempted before selecting its transformer.
+        RefreshCandidateApiFormat(candidate, _modelIndex, request);
+
         CurrentChannelId = candidate.ChannelId;
-        CurrentModel = candidate.ActualModel;
+        CurrentModel = entry.ActualModel;
         _current = _factory(candidate, request, _timeProvider.GetUtcNow());
 
-        // The upstream model is per-candidate: the client's requested model is
-        // only used to select candidates.
-        request.Model = candidate.ActualModel;
+        // The upstream model is per-entry: the client's requested model is only
+        // used to select candidates.
+        request.Model = entry.ActualModel;
 
-        return _current.TransformRequest(request);
+        var outboundFormat = _current.ApiFormat;
+        if (!string.IsNullOrEmpty(candidate.ApiFormat))
+        {
+            outboundFormat = candidate.ApiFormat;
+        }
+
+        var outboundRequest = ApplyModelDefaultMaxTokens(request, candidate, outboundFormat);
+
+        return _current.TransformRequest(outboundRequest);
+    }
+
+    /// <summary>
+    /// The entry the current candidate is attempting. Candidates built by the
+    /// model-association selector always carry at least one entry; directly
+    /// constructed candidates (the tester, tests) may leave the list empty, in
+    /// which case <see cref="ChannelCandidate.ActualModel"/> is the single
+    /// entry.
+    /// </summary>
+    private ChannelCandidateModel CurrentModelEntry(ChannelCandidate candidate)
+    {
+        if (candidate.Models.Count > 0)
+        {
+            return candidate.Models[_modelIndex];
+        }
+
+        return new ChannelCandidateModel
+        {
+            RequestModel = string.Empty,
+            ActualModel = candidate.ActualModel,
+        };
+    }
+
+    /// <summary>
+    /// Port of refreshCandidateAPIFormat (outbound.go:468-498): prefer the
+    /// selector's per-model format table; otherwise preserve an explicitly
+    /// populated format; otherwise recompute it from the current entry and the
+    /// channel's endpoints using the original client model.
+    /// </summary>
+    private void RefreshCandidateApiFormat(
+        ChannelCandidate candidate,
+        int modelIndex,
+        LlmRequest? request)
+    {
+        if (modelIndex < 0 || modelIndex >= candidate.Models.Count)
+        {
+            return;
+        }
+
+        if (candidate.ModelApiFormats is { } formats
+            && formats.Count == candidate.Models.Count)
+        {
+            candidate.ApiFormat = formats[modelIndex];
+            return;
+        }
+
+        // Preserve an explicitly populated format when no per-model table is
+        // available (legacy/specified selectors pick their endpoint up front).
+        if (!string.IsNullOrEmpty(candidate.ApiFormat) || request is null)
+        {
+            return;
+        }
+
+        var requestModel = request.Model;
+        if (OriginalModel.Length != 0)
+        {
+            requestModel = OriginalModel;
+        }
+
+        var entry = new ChannelModelEntry(
+            candidate.Models[modelIndex].RequestModel,
+            candidate.Models[modelIndex].ActualModel,
+            "direct");
+        var channel = new ChannelDescriptor
+        {
+            Id = candidate.ChannelId,
+            Name = candidate.ChannelName,
+            OrderingWeight = candidate.OrderingWeight,
+            Type = candidate.Type,
+            Settings = candidate.Settings,
+            Endpoints = candidate.Endpoints,
+        };
+        var endpoints = ChannelEndpointSelection.ApplyForcedApiFormatsForRequest(
+            channel,
+            [entry],
+            requestModel,
+            request.RequestType,
+            ChannelEndpoints.Resolve(candidate.Type, candidate.Endpoints));
+        candidate.ApiFormat = ChannelEndpointSelection.SelectApiFormat(endpoints, request);
+    }
+
+    /// <summary>
+    /// Port of applyModelDefaultMaxTokens (transform_options.go:49-70): copy the
+    /// model card's output limit onto a copy of the request so Anthropic
+    /// outbound conversion can use it as <c>max_tokens</c>, but only when the
+    /// client set no output cap and the round targets Anthropic messages.
+    /// </summary>
+    private static LlmRequest ApplyModelDefaultMaxTokens(
+        LlmRequest request,
+        ChannelCandidate candidate,
+        string outboundFormat)
+    {
+        if (candidate.DefaultMaxTokens <= 0)
+        {
+            return request;
+        }
+
+        if (outboundFormat != ApiFormats.AnthropicMessage)
+        {
+            return request;
+        }
+
+        if (request.MaxTokens is not null || request.MaxCompletionTokens is not null)
+        {
+            return request;
+        }
+
+        if (request.TransformOptions?.DefaultMaxTokens is not null)
+        {
+            return request;
+        }
+
+        // Go copies the request struct, whose TransformOptions is an inline
+        // struct: the copy's field is replaced without touching the original.
+        // The port clones the mutable TransformOptions object to match.
+        var cloned = request.ShallowClone();
+        var options = request.TransformOptions is null
+            ? new TransformOptions()
+            : new TransformOptions
+            {
+                ArrayInstructions = request.TransformOptions.ArrayInstructions,
+                ArrayInputs = request.TransformOptions.ArrayInputs,
+                DefaultMaxTokens = request.TransformOptions.DefaultMaxTokens,
+            };
+        options.DefaultMaxTokens = candidate.DefaultMaxTokens;
+        cloned.TransformOptions = options;
+
+        return cloned;
     }
 
     public LlmResponse TransformResponse(HttpResponseData? response) => Current.TransformResponse(response);
@@ -284,17 +428,24 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         ResetPassThroughStreamState();
 
         _candidateIndex++;
+        _modelIndex = 0;
         if (_candidateIndex >= _candidates.Length)
         {
             return new InvalidOperationException("no more candidates available for retry");
         }
 
-        _current = null;
-
         // outbound.go:825 — a switched channel decides pass-through afresh.
         PassThroughApplied = false;
 
-        RecordSelection(_candidates[_candidateIndex]);
+        var candidate = _candidates[_candidateIndex];
+        RecordSelection(candidate);
+
+        // outbound.go:827-830 — align the protocol with the new candidate's
+        // first model and rebuild its transformer before the next attempt.
+        RefreshCandidateApiFormat(candidate, _modelIndex, CurrentLlmRequest);
+        _current = CurrentLlmRequest is null
+            ? null
+            : _factory(candidate, CurrentLlmRequest, _timeProvider.GetUtcNow());
 
         return null;
     }
@@ -335,9 +486,15 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             return false;
         }
 
-        // The reference also advances to the next model inside the same channel
-        // here (candidate.Models); the slice's candidates carry one model each.
-        return ChannelRetryPredicate.IsRetryable(error, _candidates[_candidateIndex].RetrySettings);
+        // outbound.go:807-812 — a candidate with another model left is always
+        // worth a same-channel retry, before consulting the channel rules.
+        var candidate = _candidates[_candidateIndex];
+        if (_modelIndex + 1 < candidate.Models.Count)
+        {
+            return true;
+        }
+
+        return ChannelRetryPredicate.IsRetryable(error, candidate.RetrySettings);
     }
 
     /// <summary>Port of PrepareForRetry: count the retry attempt on the same channel.</summary>
@@ -352,7 +509,21 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         // reach the retried attempt's consumer.
         ResetPassThroughStreamState();
 
-        RecordSelection(_candidates[_candidateIndex]);
+        var candidate = _candidates[_candidateIndex];
+
+        // outbound.go:838-856 — advance to the candidate's next model when there
+        // is one, refreshing its protocol and rebuilding the transformer.
+        if (_modelIndex + 1 < candidate.Models.Count)
+        {
+            _modelIndex++;
+            RefreshCandidateApiFormat(candidate, _modelIndex, CurrentLlmRequest);
+            if (CurrentLlmRequest is not null)
+            {
+                _current = _factory(candidate, CurrentLlmRequest, _timeProvider.GetUtcNow());
+            }
+        }
+
+        RecordSelection(candidate);
         return null;
     }
 

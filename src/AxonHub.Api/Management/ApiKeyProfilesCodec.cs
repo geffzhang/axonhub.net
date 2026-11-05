@@ -212,6 +212,30 @@ public static class ApiKeyProfilesCodec
     }
 
     /// <summary>
+    /// Port of APIKey.GetActiveProfile (internal/ent/extra.go:30-42): resolve the
+    /// named active profile, or null when no profile is active or the name does
+    /// not match.
+    /// </summary>
+    public static ApiKeyProfileModel? ActiveProfile(string? profilesJson)
+    {
+        var profiles = Deserialize(profilesJson);
+        if (profiles.ActiveProfile.Length == 0)
+        {
+            return null;
+        }
+
+        foreach (var profile in profiles.Profiles ?? [])
+        {
+            if (string.Equals(profile.Name, profiles.ActiveProfile, StringComparison.Ordinal))
+            {
+                return profile;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Port of UpdateAPIKeyProfiles' validation sequence
     /// (biz/api_key.go:644-664): names, active profile, filters, routing
     /// policies (normalizing the stored values), quota.

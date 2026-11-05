@@ -4327,6 +4327,68 @@ ListModels（141-...）；端口新增 `ModelService.ListEnabledModelsAsync` /
 差异：新增 C178（公开模型列表切片的已接受差异与真实缺口）；C088 标记
 resolved；C140（并列顺序）与 C149（实时读取通道）沿用。
 
+## 90. orchestrator 模型关联路由与多模型重试切片（DefaultSelector / 条件 / 聚合 / 重试，59 例，2026-11-05）
+
+参照 `internal/server/orchestrator/candidates.go` 的 DefaultSelector.Select（110-127）、
+selectChannelCadidates（130-165）与 selectModelCandidates（167-243）、resolveAssociations
+的匹配半程（250-360）、aggregateChannelModelCandidates（551-607）、LoadBalancedSelector 的
+sortCandidates（909-986）与 SpecifiedChannelSelector（1042-1078）、`candidates_condition.go`
+的 filterResolvedCandidatesForRequest（19-71）与 populateAPIFormat（73-126）、
+`model_settings_inheritance.go` 的 EffectiveModelAssociations（129-146）、`transform_options.go`
+的 applyModelDefaultMaxTokens（46-70）、`outbound.go` 的 refreshCandidateAPIFormat（468-498）、
+CanRetry（766-818）与 NextChannel / PrepareForRetry（823-856）、`select_candidates.go`
+的选候选中间件（18-130）与 `tester.go` 的排序接线（240-330）；端口新增
+`ModelCandidateSelector` / `CandidateSelection` / `ModelRoutingPolicy`、`ModelAssociationMatcher`
+（管理面共用）、`AssociationConditionEvaluator`、`CandidateRequestFeatures`、
+`ChannelEndpointSelection` 的显式端点规则、`PersistentOutboundTransformer` 的多模型重试状态，
+并把 `IChannelPoolGrain.SelectAsync` 重构为按优先级分组排序的 `SortAsync`，对齐可观察行为：
+
+- DefaultSelector：模型行按 `model_id` + `status = enabled` 查询；查询前先判定
+  read_channels 作用域（拒绝保持 `PrivacyDenyException`，文案
+  `failed to query AxonHub Model: ent/privacy: deny rule`），其它查询错误包
+  `failed to query AxonHub Model: `；0 行抛 not-found。存在模型行但设置继承后关联为 0 时
+  返回空列表且**不**回退通道池。not-found 且 `FallbackToChannelsOnModelNotFound` 时走
+  `selectChannelCadidates`（按 request.Model 精确匹配通道条目、强制协议覆盖、显式端点跳过、
+  priority 0、无 routing policy、DefaultMaxTokens 0），否则抛
+  `model not found: "<m>"`（InvalidModel；在 catch 内抛出，不再被外层包装）。
+- 行解码：先 model_card 再 settings，畸形 JSON 的文案
+  `failed to query AxonHub Model: unmarshal field model_card|settings: ...`；model_card 优先。
+- 关联匹配：六种 kind（channel_model / channel_regex / regex / model / channel_tags_model /
+  channel_tags_regex）与通道名正则 / 通道 id / 标签排除；停用关联跳过；同一关联内按
+  (channel, actualModel) 去重；通道列表读取失败包 `failed to resolve associations: `。
+- When 条件：null / !Enabled / Condition=null 视为通过；request_format、reasoning_effort、
+  stream、prompt_tokens、has_image/video/document/audio、daily_time、request_header.*；
+  条件在聚合前按候选逐个判定；expr 运行时错误（未知运算符、类型不匹配）按 false 处理。
+- 聚合：按 (channelId, priority) 合并连接，全局 (channelId, actualModel) 去重，空候选丢弃，
+  候选保持首次出现顺序；随后逐模型应用强制 API 格式并选择端点，显式端点类型
+  （alpha_search / decisions / systemone）在无匹配格式时丢弃条目、全丢则丢弃候选；
+  `ModelApiFormats` 与首个 `ApiFormat` 一并写出。
+- 模型级策略：实体设置存在时取 LoadBalancerStrategy / TraceStickyMode（"" / "system_default"
+  → "default"），模型卡输出上限作为 DefaultMaxTokens 写入每个候选。
+- 多模型重试：CanRetry 先看候选剩余模型（本地队列 / RPM 拒绝、429 与空响应哨兵除外），
+  PrepareForRetry 推进模型号并按 ModelApiFormats / 通道端点刷新 ApiFormat、重建变换器并记账，
+  NextChannel 把模型号归零并记录新选择，ApplyModelDefaultMaxTokens 只在 Anthropic 出站、
+  客户端未设上限且 TransformOptions 未显式设置时浅拷贝请求。
+- 负载均衡：sortCandidates 先按关联 priority 分组、组内按策略评分排序、按 requiredCount
+  截断后只记账首个候选；单候选短路但仍记账；评分纯函数抽到 `LoadBalancerScoring` 并由
+  grain 测试直接锁定（strategy 选择来自模型级 routing policy）。
+- tester 路径：ProcessSpecifiedAsync 仍把单候选交给 ChannelPoolGrain.SortAsync
+  （trackSelection），与 tester.go 安装同一组负载均衡器、单候选仍记账一致。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 选择器语义：模型行查询与 privacy、无关联不回退、六种关联 kind / 排除规则 / 停用、When 条件、聚合、逐模型 API 格式与显式端点、routing policy 与 DefaultMaxTokens、错误包装 | `tests/AxonHub.Api.Tests/ModelCandidateSelectorTests.cs` | 50 |
+| 多模型重试与 DefaultMaxTokens：CanRetry 顺序、429、PrepareForRetry 推进 / 刷新 / 记账、NextChannel 归零、变换器重建、浅拷贝 | `tests/AxonHub.Api.Tests/PersistentOutboundRetryTests.cs` | 9 |
+| 负载均衡排序：requiredCount 截断、priority 分组、单候选记账、策略评分纯函数 | `tests/AxonHub.Grains.Tests/ChannelSelectionTests.cs` | 30（其中 2 例新增） |
+
+`AxonHub.Api.Tests` 由 2247 增至 2306（+59），`AxonHub.Grains.Tests` 由 92 增至 94
+（+2，SortAsync 重构与评分纯函数），Llm 3020、Persistence 207；四个项目合计由 5566
+增至 5627，0 失败 0 跳过。
+
+差异：新增 C179（模型关联路由切片的已接受差异与真实缺口）与 C180（四个未移植的通道
+变换选项 / 流策略强制，真实缺口）；C149（实时读取）、C177（连接内模型顺序）与 C012
+残余（延迟 / 熔断中性分）沿用。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -4349,3 +4411,4 @@ resolved；C140（并列顺序）与 C149（实时读取通道）沿用。
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096），查询 / GC / GraphQL 未移植（C095） | 中 | 随 trace 管理面切片落地 |
 | 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
 | 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |
+| 模型关联路由与多模型重试 | 已由 §90 闭合：DefaultSelector 的模型行查询 / privacy / 关联匹配（六种 kind 与排除规则）/ When 条件 / 聚合 / 逐模型 API 格式、模型级 routing policy、模型卡 DefaultMaxTokens、无模型行回退通道、多模型同通道重试与 tester 路径排序（59 例）；残余差异与真实缺口登记为 C179，四个未移植的通道变换选项登记为 C180 | 中 | 完成（C179 / C180） |

@@ -249,13 +249,23 @@ internal sealed class FakeChannelStore : IChannelStore
     public Task<ChannelRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => Task.FromResult(Rows.FirstOrDefault(row => row.Id == id && row.DeletedAt == 0));
 
+    /// <summary>Fails the selector's enabled-channel lookup only.</summary>
+    public Exception? ListEnabledFailure { get; set; }
+
     public Task<IReadOnlyList<ChannelRecord>> ListEnabledAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult<IReadOnlyList<ChannelRecord>>(Rows
+    {
+        if (ListEnabledFailure is not null)
+        {
+            return Task.FromException<IReadOnlyList<ChannelRecord>>(ListEnabledFailure);
+        }
+
+        return Task.FromResult<IReadOnlyList<ChannelRecord>>(Rows
             .Where(row => row.DeletedAt == 0
                 && string.Equals(row.Status, "enabled", StringComparison.Ordinal))
             .OrderByDescending(static row => row.OrderingWeight)
             .ThenBy(static row => row.Id)
             .ToList());
+    }
 
     public Task<bool> UpdateStatusAsync(
         long id,

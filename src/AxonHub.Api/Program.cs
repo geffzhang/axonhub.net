@@ -164,7 +164,10 @@ builder.Services.AddScoped<IRequestStore, RequestStore>();
 builder.Services.AddScoped<IRequestExecutionStore, RequestExecutionStore>();
 builder.Services.AddScoped<VideoService>();
 
-// The orchestrator reads the retry policy through the scoped system store.
+// The orchestrator reads the retry policy through the scoped system store and
+// resolves candidates through the model-association selector
+// (orchestrator.DefaultSelector, candidates.go:110-398).
+builder.Services.AddScoped<IModelCandidateSelector, ModelCandidateSelector>();
 builder.Services.AddScoped<ChatCompletionOrchestrator>();
 
 // Users and roles (biz.UserService / biz.RoleService). Passwords keep the

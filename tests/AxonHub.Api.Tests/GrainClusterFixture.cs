@@ -1,4 +1,6 @@
 using AxonHub.Abstractions;
+using AxonHub.Api.Models;
+using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
@@ -20,6 +22,17 @@ public sealed class OrleansCollection : ICollectionFixture<GrainClusterFixture>
 
 public sealed class GrainClusterFixture : IAsyncLifetime
 {
+    public GrainClusterFixture()
+    {
+        CandidateSelector = new ModelCandidateSelector(
+            new FakeModelStore(),
+            new StaticModelSettingsProvider(ModelSettings.Default),
+            new FakeChannelStore(),
+            Channels,
+            TimeProvider.System,
+            bypassModelPrivacy: true);
+    }
+
     public TestCluster Cluster { get; private set; } = null!;
 
     public FakeEnabledChannelProvider Channels { get; } = new();
@@ -31,6 +44,15 @@ public sealed class GrainClusterFixture : IAsyncLifetime
     public ChannelRequestTracker RateLimitTracker { get; } = new();
 
     public ChannelLimiterManager ChannelLimiterManager { get; } = new();
+
+    /// <summary>
+    /// The orchestrator's model-association selector. The reference's tests
+    /// mark the context with <c>authz.WithTestBypass</c>, which allows every
+    /// privacy query rule; the port passes the equivalent constructor flag.
+    /// The model store starts empty, so requests fall back to the channel pool
+    /// exactly like the reference's unconfigured-model path.
+    /// </summary>
+    public IModelCandidateSelector CandidateSelector { get; }
 
     public async Task InitializeAsync()
     {

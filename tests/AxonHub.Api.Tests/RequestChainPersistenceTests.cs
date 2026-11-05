@@ -30,6 +30,7 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
             executor,
             new RecordingMetricsRecorder(),
             new StaticRetryPolicyProvider(policy),
+            fixture.CandidateSelector,
             TimeProvider.System,
             recorder,
             rateLimitTracker: fixture.RateLimitTracker,

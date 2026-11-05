@@ -26,6 +26,13 @@ internal sealed class FakeModelStore : IModelStore
     /// </summary>
     public Func<ModelListFilter, Exception?>? ListAllFailureFor { get; set; }
 
+    /// <summary>
+    /// Fails the selector's enabled-model lookup only, so the
+    /// "failed to query AxonHub Model" wrap can be asserted without breaking
+    /// the management queries.
+    /// </summary>
+    public Exception? GetFirstByModelIdAndStatusFailure { get; set; }
+
     public Exception? CreateFailure { get; set; }
 
     public Exception? UpdateFailure { get; set; }
@@ -105,6 +112,25 @@ internal sealed class FakeModelStore : IModelStore
         _ = cancellationToken;
         return Task.FromResult(_rows
             .Where(row => row.DeletedAt == 0 && row.ModelId == modelId)
+            .OrderBy(static row => row.Id)
+            .FirstOrDefault());
+    }
+
+    public Task<ModelRecord?> GetFirstByModelIdAndStatusAsync(
+        string modelId,
+        string status,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        if (GetFirstByModelIdAndStatusFailure is not null)
+        {
+            return Task.FromException<ModelRecord?>(GetFirstByModelIdAndStatusFailure);
+        }
+
+        return Task.FromResult(_rows
+            .Where(row => row.DeletedAt == 0
+                && row.ModelId == modelId
+                && row.Status == status)
             .OrderBy(static row => row.Id)
             .FirstOrDefault());
     }

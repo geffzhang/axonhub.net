@@ -1,5 +1,6 @@
 using AxonHub.Api.Auth;
 using AxonHub.Api.Billing;
+using AxonHub.Api.Management;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.PromptProtection;
 using AxonHub.Grains.Abstractions;
@@ -31,6 +32,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IExecutor _executor;
     private readonly IChannelMetricsRecorder _metrics;
     private readonly IRetryPolicyProvider _retryPolicyProvider;
+    private readonly IModelCandidateSelector _candidateSelector;
     private readonly IUpstreamErrorPolicyApplier _upstreamErrorPolicy;
     private readonly TimeProvider _timeProvider;
     private readonly IRequestChainRecorder? _requestChainRecorder;
@@ -46,6 +48,7 @@ public sealed class ChatCompletionOrchestrator
         IExecutor executor,
         IChannelMetricsRecorder metrics,
         IRetryPolicyProvider retryPolicyProvider,
+        IModelCandidateSelector candidateSelector,
         TimeProvider timeProvider,
         IRequestChainRecorder? requestChainRecorder = null,
         IUpstreamErrorPolicyApplier? upstreamErrorPolicy = null,
@@ -60,6 +63,7 @@ public sealed class ChatCompletionOrchestrator
         ArgumentNullException.ThrowIfNull(executor);
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(retryPolicyProvider);
+        ArgumentNullException.ThrowIfNull(candidateSelector);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _grainFactory = grainFactory;
@@ -67,6 +71,7 @@ public sealed class ChatCompletionOrchestrator
         _executor = executor;
         _metrics = metrics;
         _retryPolicyProvider = retryPolicyProvider;
+        _candidateSelector = candidateSelector;
         _upstreamErrorPolicy = upstreamErrorPolicy ?? new UpstreamErrorPolicyApplier(retryPolicyProvider);
         _timeProvider = timeProvider;
         _requestChainRecorder = requestChainRecorder;
@@ -109,6 +114,7 @@ public sealed class ChatCompletionOrchestrator
             _executor,
             _metrics,
             _retryPolicyProvider,
+            _candidateSelector,
             _timeProvider,
             _requestChainRecorder,
             _upstreamErrorPolicy,
@@ -214,12 +220,11 @@ public sealed class ChatCompletionOrchestrator
 
         // orchestrator.Process reads the policy once per request; the load
         // balancer derives top-K from the same values (1 + MaxChannelRetries,
-        // or a single candidate when retries are disabled) and switches the
-        // scoring chain by the configured strategy.
+        // or a single candidate when retries are disabled).
         var retryPolicy = await _retryPolicyProvider
             .GetRetryPolicyAsync(cancellationToken)
             .ConfigureAwait(false);
-        var topK = retryPolicy.Enabled ? 1 + retryPolicy.MaxChannelRetries : 1;
+        var requiredCount = retryPolicy.Enabled ? 1 + retryPolicy.MaxChannelRetries : 1;
 
         // The reference reads the pass-through flags lazily inside each
         // middleware; the port's hooks are synchronous, so one snapshot per
@@ -228,15 +233,38 @@ public sealed class ChatCompletionOrchestrator
             .GetAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var candidates = await _grainFactory
-            .GetGrain<IChannelPoolGrain>(model)
-            .SelectAsync(
-                _timeProvider.GetUtcNow(),
-                trackSelection: true,
-                topK,
-                retryPolicy.LoadBalancerStrategy,
-                cancellationToken);
+        // Port of the selectCandidates inbound middleware: route the requested
+        // model through its effective associations first (DefaultSelector), then
+        // wrap the result in the load-balanced selector.
+        var selection = await _candidateSelector
+            .SelectAsync(llmRequest, identity, cancellationToken)
+            .ConfigureAwait(false);
 
+        // LoadBalancedSelector.Select derives the effective routing policy from
+        // the retry policy, the model policy the selector attached to every
+        // candidate, and the API key's active profile (retry.go:102-142).
+        var effectivePolicy = DeriveRoutingPolicy(
+            retryPolicy,
+            identity.ApiKey,
+            selection.RoutingPolicy);
+
+        ChannelCandidate[] candidates = [];
+        if (selection.Candidates.Count > 0)
+        {
+            candidates = await _grainFactory
+                .GetGrain<IChannelPoolGrain>(model)
+                .SortAsync(
+                    [.. selection.Candidates],
+                    _timeProvider.GetUtcNow(),
+                    trackSelection: true,
+                    requiredCount,
+                    effectivePolicy.LoadBalancerStrategy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // select_candidates.go: an empty result is ErrInvalidModel with the
+        // request model appended unquoted.
         if (candidates.Length == 0)
         {
             throw TransformerErrors.InvalidModel(model);
@@ -303,13 +331,40 @@ public sealed class ChatCompletionOrchestrator
             throw TransformerErrors.InvalidModel(llmRequest.Model);
         }
 
+        // tester.go:306-312 installs the same three load balancers as the
+        // server, so selectCandidates still wraps the SpecifiedChannelSelector
+        // in a LoadBalancedSelector. A lone candidate bypasses the balancer but
+        // sortCandidates records its selection (candidates.go:921-925); the
+        // specified selector attaches no model routing policy, so the effective
+        // policy comes from the retry policy and the caller's API key alone.
+        var requiredCount = retryPolicy.Enabled ? 1 + retryPolicy.MaxChannelRetries : 1;
+        var effectivePolicy = DeriveRoutingPolicy(
+            retryPolicy,
+            identity.ApiKey,
+            modelPolicy: null);
+        var candidates = await _grainFactory
+            .GetGrain<IChannelPoolGrain>(llmRequest.Model)
+            .SortAsync(
+                [candidate],
+                _timeProvider.GetUtcNow(),
+                trackSelection: true,
+                requiredCount,
+                effectivePolicy.LoadBalancerStrategy,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (candidates.Length == 0)
+        {
+            throw TransformerErrors.InvalidModel(llmRequest.Model);
+        }
+
         // The tester's processor leaves the rate limit tracker nil, so
         // withRateLimitAdmission/withRateLimitTracking are no-ops there; the
         // concurrency limiter and the rest of the chain still run.
         return await RunPipelineAsync(
                 inbound,
                 request,
-                [candidate],
+                candidates,
                 identity,
                 onRequestCreated: null,
                 retryPolicy,
@@ -474,6 +529,70 @@ public sealed class ChatCompletionOrchestrator
         return result.Stream
             ? new ChatCompletionResult { Stream = result.EventStream }
             : new ChatCompletionResult { Response = result.Response };
+    }
+
+    /// <summary>
+    /// Port of deriveRoutingPolicy (retry.go:102-142): a non-default
+    /// valid model policy overrides the retry policy, then the API key's active
+    /// profile overrides both. An absent profile, or one whose field is null,
+    /// leaves the earlier value untouched.
+    /// </summary>
+    private static RetryPolicy DeriveRoutingPolicy(
+        RetryPolicy retryPolicy,
+        AxonHub.Persistence.ApiKeyRecord? apiKey,
+        ModelRoutingPolicy? modelPolicy)
+    {
+        var policy = retryPolicy;
+
+        if (modelPolicy is not null)
+        {
+            var strategy = RoutingPolicy.NormalizeValue(modelPolicy.LoadBalancerStrategy);
+            if (strategy != RoutingPolicy.Default
+                && RoutingPolicy.IsValidLoadBalancerStrategy(strategy))
+            {
+                policy = policy with { LoadBalancerStrategy = strategy };
+            }
+
+            var traceStickyMode = RoutingPolicy.NormalizeValue(modelPolicy.TraceStickyMode);
+            if (traceStickyMode != RoutingPolicy.Default
+                && RoutingPolicy.IsValidTraceStickyMode(traceStickyMode))
+            {
+                policy = policy with { TraceStickyMode = traceStickyMode };
+            }
+        }
+
+        if (apiKey is null)
+        {
+            return policy;
+        }
+
+        var activeProfile = ApiKeyProfilesCodec.ActiveProfile(apiKey.Profiles);
+        if (activeProfile is null)
+        {
+            return policy;
+        }
+
+        if (activeProfile.LoadBalanceStrategy is not null)
+        {
+            var strategy = RoutingPolicy.NormalizeValue(activeProfile.LoadBalanceStrategy);
+            if (strategy != RoutingPolicy.Default
+                && RoutingPolicy.IsValidLoadBalancerStrategy(strategy))
+            {
+                policy = policy with { LoadBalancerStrategy = strategy };
+            }
+        }
+
+        if (activeProfile.TraceStickyMode is not null)
+        {
+            var traceStickyMode = RoutingPolicy.NormalizeValue(activeProfile.TraceStickyMode);
+            if (traceStickyMode != RoutingPolicy.Default
+                && RoutingPolicy.IsValidTraceStickyMode(traceStickyMode))
+            {
+                policy = policy with { TraceStickyMode = traceStickyMode };
+            }
+        }
+
+        return policy;
     }
 
     /// <summary>

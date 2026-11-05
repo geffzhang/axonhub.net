@@ -7,46 +7,50 @@ namespace AxonHub.Grains.Tests;
 /// Locks the pool semantics against the reference load balancer tests
 /// (internal/server/orchestrator/lb_strategy_*_test.go, load_balancer_test.go and
 /// lb_simulation_adaptive_test.go): round-robin scoring and its health partition,
-/// the adaptive/failover/circuit-breaker chains, the weight tie-breaker and the
-/// top-K normalization.
+/// the adaptive/failover/circuit-breaker chains, the weight tie-breaker, the
+/// priority grouping and the required-count budget.
 /// </summary>
+/// <remarks>
+/// The reference tests the strategies directly and sortCandidates through its
+/// load balancer; the port keeps the scoring math in
+/// <see cref="LoadBalancerScoring"/> so the same values can be asserted without
+/// a silo, and drives <c>ChannelPoolGrain.SortAsync</c> for ordering.
+/// </remarks>
 public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassFixture<GrainClusterFixture>
 {
     private static readonly DateTimeOffset Now = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
-    private static readonly long[] BasicModelOrder = [101L, 103L];
     private static readonly long[] HealthModelOrder = [302L, 301L];
     private static readonly long[] TieModelOrder = [1101L, 1102L, 1103L];
 
+    private readonly RateLimitAwareScorer _rateLimitAware = new(new ChannelRequestTracker());
+
     [Fact]
-    public async Task SelectsOnlyChannelsSupportingTheModel()
+    public async Task RoundRobinKeepsInputOrderOnEqualScores()
     {
-        fixture.Channels.Set(
-            NewChannel(101, "supports", """["basic-model"]"""),
-            NewChannel(102, "other", """["other-model"]"""),
-            NewChannel(103, "also-supports", """["basic-model"]""", weight: 50));
+        var result = await Sort(
+            "basic-model",
+            [Candidate(101), Candidate(103, weight: 50)],
+            requiredCount: 4,
+            LoadBalancerStrategies.RoundRobin);
 
-        var result = await Pool("basic-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
-
-        Assert.Equal(BasicModelOrder, result.Select(candidate => candidate.ChannelId).ToArray());
-        // RoundRobin(0) + neutral RateLimitAware(100).
-        Assert.Equal(250.0, result[0].Score);
-        Assert.Equal("basic-model", result[0].ActualModel);
+        // RoundRobin(0) + neutral RateLimitAware(100) ties, and the round-robin
+        // balancer disables the OrderingWeight tie-breaker.
+        Assert.Equal([101L, 103L], result.Select(candidate => candidate.ChannelId).ToArray());
     }
 
     [Fact]
     public async Task SelectionTrackingSpreadsLoadEvenly()
     {
-        fixture.Channels.Set(
-            NewChannel(201, "a", """["rr-model"]"""),
-            NewChannel(202, "b", """["rr-model"]"""));
-
-        var pool = Pool("rr-model");
+        var candidates = new[] { Candidate(201), Candidate(202) };
         var picks = new List<long>();
         for (var iteration = 0; iteration < 20; iteration++)
         {
-            var result = await pool.SelectAsync(
-                Now, trackSelection: true, topK: 4, LoadBalancerStrategies.RoundRobin);
+            var result = await Sort(
+                "rr-model",
+                candidates,
+                requiredCount: 4,
+                LoadBalancerStrategies.RoundRobin,
+                trackSelection: true);
             picks.Add(result[0].ChannelId);
         }
 
@@ -57,22 +61,35 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
     [Fact]
     public async Task SortWithoutTrackingDoesNotCountSelection()
     {
-        fixture.Channels.Set(NewChannel(1201, "only", """["no-track-model"]"""));
-
-        var result = await Pool("no-track-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
+        var result = await Sort(
+            "no-track-model",
+            [Candidate(1201)],
+            requiredCount: 4,
+            LoadBalancerStrategies.RoundRobin);
 
         Assert.Single(result);
         Assert.Equal(0, (await Channel(1201).GetMetricsAsync(Now)).RequestCount);
     }
 
     [Fact]
+    public async Task TrackingASingleCandidateCountsItOnce()
+    {
+        // sortCandidates tracks a lone candidate even though it bypasses the
+        // balancer entirely (candidates.go:921-925).
+        var result = await Sort(
+            "single-track-model",
+            [Candidate(1211)],
+            requiredCount: 4,
+            LoadBalancerStrategies.RoundRobin,
+            trackSelection: true);
+
+        Assert.Single(result);
+        Assert.Equal(1, (await Channel(1211).GetMetricsAsync(Now)).RequestCount);
+    }
+
+    [Fact]
     public async Task RecentlyFailingChannelMovesBehindHealthyChannels()
     {
-        fixture.Channels.Set(
-            NewChannel(301, "unhealthy", """["health-model"]"""),
-            NewChannel(302, "busy", """["health-model"]"""));
-
         for (var attempt = 0; attempt < 3; attempt++)
         {
             await Channel(301).RecordFailureAsync(Now.AddMinutes(-1));
@@ -80,25 +97,20 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
 
         await Channel(302).RecordSelectionAsync(Now.AddMinutes(-1));
 
-        var result = await Pool("health-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
+        var result = await Sort(
+            "health-model",
+            [Candidate(301), Candidate(302)],
+            requiredCount: 4,
+            LoadBalancerStrategies.RoundRobin);
 
         // The unhealthy channel has the higher raw score (zero requests), so only
         // the health partition can put it last.
         Assert.Equal(HealthModelOrder, result.Select(candidate => candidate.ChannelId).ToArray());
-        Assert.True(result[0].Score < result[1].Score);
     }
 
     [Fact]
-    public async Task UnhealthyChannelsAreExcludedFromTopK()
+    public async Task UnhealthyChannelsAreExcludedFromTheRequiredCount()
     {
-        fixture.Channels.Set(
-            NewChannel(401, "unhealthy", """["topk-model"]"""),
-            NewChannel(402, "free", """["topk-model"]"""),
-            NewChannel(403, "light", """["topk-model"]"""),
-            NewChannel(404, "medium", """["topk-model"]"""),
-            NewChannel(405, "heavy", """["topk-model"]"""));
-
         for (var attempt = 0; attempt < 3; attempt++)
         {
             await Channel(401).RecordFailureAsync(Now.AddMinutes(-1));
@@ -111,10 +123,13 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
         await Channel(405).RecordSelectionAsync(Now.AddSeconds(-30));
         await Channel(405).RecordSelectionAsync(Now.AddSeconds(-30));
 
-        var result = await Pool("topk-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
+        var result = await Sort(
+            "topk-model",
+            [Candidate(401), Candidate(402), Candidate(403), Candidate(404), Candidate(405)],
+            requiredCount: 4,
+            LoadBalancerStrategies.RoundRobin);
 
-        // topK = 1 + default MaxChannelRetries (3); the unhealthy channel ranks
+        // requiredCount = 1 + MaxChannelRetries (3); the unhealthy channel ranks
         // first by score but is pushed behind all healthy candidates.
         Assert.Equal(4, result.Length);
         Assert.DoesNotContain(401L, result.Select(candidate => candidate.ChannelId));
@@ -122,49 +137,49 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
     }
 
     [Fact]
-    public async Task TopKLimitsCandidatesToThePolicyBudget()
+    public async Task RequiredCountLimitsCandidates()
     {
-        fixture.Channels.Set(
-            NewChannel(1301, "a", """["topk-limit-model"]"""),
-            NewChannel(1302, "b", """["topk-limit-model"]"""),
-            NewChannel(1303, "c", """["topk-limit-model"]"""));
+        var candidates = new[] { Candidate(1301), Candidate(1302), Candidate(1303) };
 
-        var pool = Pool("topk-limit-model");
-
-        Assert.Single(await pool.SelectAsync(
-            Now, trackSelection: false, topK: 1, LoadBalancerStrategies.RoundRobin));
-        Assert.Equal(2, (await pool.SelectAsync(
-            Now, trackSelection: false, topK: 2, LoadBalancerStrategies.RoundRobin)).Length);
-        Assert.Equal(3, (await pool.SelectAsync(
-            Now, trackSelection: false, topK: 3, LoadBalancerStrategies.RoundRobin)).Length);
+        Assert.Single(await Sort(
+            "topk-limit-model", candidates, requiredCount: 1, LoadBalancerStrategies.RoundRobin));
+        Assert.Equal(2, (await Sort(
+            "topk-limit-model", candidates, requiredCount: 2, LoadBalancerStrategies.RoundRobin)).Length);
+        Assert.Equal(3, (await Sort(
+            "topk-limit-model", candidates, requiredCount: 3, LoadBalancerStrategies.RoundRobin)).Length);
     }
 
     [Fact]
-    public async Task NonPositiveOrOversizedTopKKeepsEveryCandidate()
+    public async Task NonPositiveRequiredCountReturnsNothing()
     {
-        fixture.Channels.Set(
-            NewChannel(1311, "a", """["topk-clamp-model"]"""),
-            NewChannel(1312, "b", """["topk-clamp-model"]"""),
-            NewChannel(1313, "c", """["topk-clamp-model"]"""));
+        // sortCandidates: requiredCount <= 0 returns nil (candidates.go:917-919).
+        var candidates = new[] { Candidate(1311), Candidate(1312), Candidate(1313) };
 
-        var pool = Pool("topk-clamp-model");
+        Assert.Empty(await Sort(
+            "topk-clamp-model", candidates, requiredCount: 0, LoadBalancerStrategies.RoundRobin));
+        Assert.Empty(await Sort(
+            "topk-clamp-model", candidates, requiredCount: -2, LoadBalancerStrategies.RoundRobin));
+        Assert.Equal(3, (await Sort(
+            "topk-clamp-model", candidates, requiredCount: 10, LoadBalancerStrategies.RoundRobin)).Length);
+    }
 
-        // calculateTopK: topK <= 0 or topK >= len(candidates) sorts all.
-        Assert.Equal(3, (await pool.SelectAsync(
-            Now, trackSelection: false, topK: 0, LoadBalancerStrategies.RoundRobin)).Length);
-        Assert.Equal(3, (await pool.SelectAsync(
-            Now, trackSelection: false, topK: -2, LoadBalancerStrategies.RoundRobin)).Length);
-        Assert.Equal(3, (await pool.SelectAsync(
-            Now, trackSelection: false, topK: 10, LoadBalancerStrategies.RoundRobin)).Length);
+    [Fact]
+    public async Task PriorityGroupsAreEmptiedInAscendingOrder()
+    {
+        // Lower priority values are served first; the second group only fills the
+        // remaining budget and never reorders the first group.
+        var result = await Sort(
+            "priority-model",
+            [Candidate(1401, priority: 2), Candidate(1402, priority: 0), Candidate(1403, priority: 1)],
+            requiredCount: 2,
+            LoadBalancerStrategies.RoundRobin);
+
+        Assert.Equal([1402L, 1403L], result.Select(candidate => candidate.ChannelId).ToArray());
     }
 
     [Fact]
     public async Task FailureCooldownExpiresAfterFiveMinutes()
     {
-        fixture.Channels.Set(
-            NewChannel(501, "recovered", """["cooldown-model"]"""),
-            NewChannel(502, "busy", """["cooldown-model"]"""));
-
         for (var attempt = 0; attempt < 3; attempt++)
         {
             await Channel(501).RecordFailureAsync(Now.AddMinutes(-6));
@@ -172,8 +187,11 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
 
         await Channel(502).RecordSelectionAsync(Now.AddMinutes(-1));
 
-        var result = await Pool("cooldown-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
+        var result = await Sort(
+            "cooldown-model",
+            [Candidate(501), Candidate(502)],
+            requiredCount: 4,
+            LoadBalancerStrategies.RoundRobin);
 
         Assert.Equal(501L, result[0].ChannelId);
     }
@@ -181,10 +199,6 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
     [Fact]
     public async Task FailureCooldownBoundaryIsExclusive()
     {
-        fixture.Channels.Set(
-            NewChannel(511, "boundary", """["cooldown-boundary-model"]"""),
-            NewChannel(512, "busy", """["cooldown-boundary-model"]"""));
-
         for (var attempt = 0; attempt < 3; attempt++)
         {
             await Channel(511).RecordFailureAsync(Now.AddMinutes(-5));
@@ -192,8 +206,11 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
 
         await Channel(512).RecordSelectionAsync(Now.AddMinutes(-1));
 
-        var result = await Pool("cooldown-boundary-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
+        var result = await Sort(
+            "cooldown-boundary-model",
+            [Candidate(511), Candidate(512)],
+            requiredCount: 4,
+            LoadBalancerStrategies.RoundRobin);
 
         // Exactly five minutes elapsed: time.Since(lastFailure) < cooldown is false.
         Assert.Equal(511L, result[0].ChannelId);
@@ -246,75 +263,13 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
     }
 
     [Fact]
-    public async Task PrefixAutoTrimAndMappingResolveLikeTheReference()
-    {
-        fixture.Channels.Set(
-            NewChannel(801, "prefix", """["prefix-upstream"]""", settings: """{"extraModelPrefix":"azure"}"""),
-            NewChannel(802, "trim", """["vendor/trim-upstream"]""", settings: """{"autoTrimedModelPrefixes":["vendor"]}"""),
-            NewChannel(
-                803,
-                "mapping",
-                """["mapped-upstream"]""",
-                settings: """{"modelMappings":[{"from":"mapped-alias","to":"mapped-upstream"}]}"""));
-
-        var prefixed = Assert.Single(await Pool("azure/prefix-upstream").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.RoundRobin));
-        Assert.Equal(801L, prefixed.ChannelId);
-        Assert.Equal("prefix-upstream", prefixed.ActualModel);
-
-        var trimmed = Assert.Single(await Pool("trim-upstream").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.RoundRobin));
-        Assert.Equal(802L, trimmed.ChannelId);
-        Assert.Equal("vendor/trim-upstream", trimmed.ActualModel);
-
-        var mapped = Assert.Single(await Pool("mapped-alias").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.RoundRobin));
-        Assert.Equal(803L, mapped.ChannelId);
-        Assert.Equal("mapped-upstream", mapped.ActualModel);
-    }
-
-    [Fact]
-    public async Task HideOriginalAndMappedModelsRemovesDirectAliases()
-    {
-        fixture.Channels.Set(NewChannel(
-            901,
-            "hidden",
-            """["hidden-target"]""",
-            settings: """{"modelMappings":[{"from":"hidden-alias","to":"hidden-target"}],"hideOriginalModels":true,"hideMappedModels":true}"""));
-
-        Assert.Empty(await Pool("hidden-target").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.RoundRobin));
-
-        var alias = Assert.Single(await Pool("hidden-alias").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.RoundRobin));
-        Assert.Equal("hidden-target", alias.ActualModel);
-    }
-
-    [Fact]
-    public async Task LowercaseModelIdMatchesCaseInsensitively()
-    {
-        fixture.Channels.Set(NewChannel(
-            1001,
-            "lower",
-            """["LOWER-MODEL"]""",
-            settings: """{"lowercaseModelId":true}"""));
-
-        var candidate = Assert.Single(await Pool("lower-model").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.RoundRobin));
-
-        Assert.Equal("LOWER-MODEL", candidate.ActualModel);
-    }
-
-    [Fact]
     public async Task EqualScoresKeepProviderOrder()
     {
-        fixture.Channels.Set(
-            NewChannel(1101, "first", """["tie-model"]""", weight: 100),
-            NewChannel(1102, "second", """["tie-model"]""", weight: 50),
-            NewChannel(1103, "third", """["tie-model"]""", weight: 10));
-
-        var result = await Pool("tie-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
+        var result = await Sort(
+            "tie-model",
+            [Candidate(1101, weight: 100), Candidate(1102, weight: 50), Candidate(1103, weight: 10)],
+            requiredCount: 4,
+            LoadBalancerStrategies.RoundRobin);
 
         // Round-robin disables the OrderingWeight tie-breaker and keeps input order.
         Assert.Equal(TieModelOrder, result.Select(candidate => candidate.ChannelId).ToArray());
@@ -323,13 +278,11 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
     [Fact]
     public async Task AdaptiveEqualScoresUseOrderingWeightAsTheTieBreaker()
     {
-        fixture.Channels.Set(
-            NewChannel(2101, "light", """["adaptive-tie-model"]""", weight: 10),
-            NewChannel(2102, "heavy", """["adaptive-tie-model"]""", weight: 100),
-            NewChannel(2103, "medium", """["adaptive-tie-model"]""", weight: 50));
-
-        var result = await Pool("adaptive-tie-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.Adaptive);
+        var result = await Sort(
+            "adaptive-tie-model",
+            [Candidate(2101, weight: 10), Candidate(2102, weight: 100), Candidate(2103, weight: 50)],
+            requiredCount: 4,
+            LoadBalancerStrategies.Adaptive);
 
         Assert.Equal(
             [2102L, 2103L, 2101L],
@@ -339,119 +292,48 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
     [Fact]
     public async Task UnknownStrategyFallsBackToAdaptive()
     {
-        fixture.Channels.Set(
-            NewChannel(2111, "light", """["adaptive-fallback-model"]""", weight: 10),
-            NewChannel(2112, "heavy", """["adaptive-fallback-model"]""", weight: 100));
-
-        var result = await Pool("adaptive-fallback-model").SelectAsync(
-            Now, trackSelection: false, topK: 4, "weighted");
+        var result = await Sort(
+            "adaptive-fallback-model",
+            [Candidate(2111, weight: 10), Candidate(2112, weight: 100)],
+            requiredCount: 4,
+            "weighted");
 
         // resolveLoadBalancer picks the adaptive balancer for unknown names, whose
         // weight tie-breaker outranks the input order.
         Assert.Equal([2112L, 2111L], result.Select(candidate => candidate.ChannelId).ToArray());
-        Assert.Equal(490.0, result[0].Score);
-    }
-
-    [Fact]
-    public async Task AdaptiveScoreSumsTheNeutralStrategies()
-    {
-        fixture.Channels.Set(NewChannel(2201, "idle", """["adaptive-neutral-model"]"""));
-
-        var candidate = Assert.Single(await Pool("adaptive-neutral-model").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.Adaptive));
-
-        // ErrorAware 200 + WeightRoundRobin(0) 150 + LatencyAware neutral 40 +
-        // RateLimitAware neutral 100.
-        Assert.Equal(490.0, candidate.Score);
-    }
-
-    [Fact]
-    public async Task AdaptivePenalizesRecentFailuresWithLinearDecay()
-    {
-        fixture.Channels.Set(
-            NewChannel(2211, "failing", """["adaptive-decay-model"]"""),
-            NewChannel(2212, "healthy", """["adaptive-decay-model"]"""));
-
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            await Channel(2211).RecordFailureAsync(Now.AddMinutes(-4));
-        }
-
-        var result = await Pool("adaptive-decay-model").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.Adaptive);
-
-        // cooldownRatio = 1 - 4/5 = 0.2; consecutive penalty 3*30*0.2 = 18 and
-        // base penalty 40*0.2 = 8: ErrorAware = 174, plus 150 + 40 + 100.
-        Assert.Equal(2212L, result[0].ChannelId);
-        Assert.Equal(464.0, result.Single(c => c.ChannelId == 2211).Score, 9);
-    }
-
-    [Fact]
-    public async Task AdaptiveForgetsFailuresAfterTheCooldown()
-    {
-        fixture.Channels.Set(
-            NewChannel(2221, "recovered", """["adaptive-cooldown-model"]"""),
-            NewChannel(2222, "healthy", """["adaptive-cooldown-model"]"""));
-
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            await Channel(2221).RecordFailureAsync(Now.AddMinutes(-5));
-        }
-
-        var result = await Pool("adaptive-cooldown-model").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.Adaptive);
-
-        // Exactly five minutes: the decay window is exclusive, so both channels
-        // score 490 and the equal weight applies (input order keeps 2221 first).
-        Assert.Equal([2221L, 2222L], result.Select(candidate => candidate.ChannelId).ToArray());
-        Assert.All(result, candidate => Assert.Equal(490.0, candidate.Score));
     }
 
     [Fact]
     public async Task FailoverRanksByOrderingWeight()
     {
-        fixture.Channels.Set(
-            NewChannel(2301, "low", """["failover-model"]""", weight: 10),
-            NewChannel(2302, "high", """["failover-model"]""", weight: 100),
-            NewChannel(2303, "zero", """["failover-model"]""", weight: 0));
-
-        var result = await Pool("failover-model").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.Failover);
+        var result = await Sort(
+            "failover-model",
+            [Candidate(2301, weight: 10), Candidate(2302, weight: 100), Candidate(2303, weight: 0)],
+            requiredCount: 4,
+            LoadBalancerStrategies.Failover);
 
         Assert.Equal(
             [2302L, 2301L, 2303L],
             result.Select(candidate => candidate.ChannelId).ToArray());
-
-        // Weight + Random(0-0.5) + neutral RateLimitAware.
-        Assert.InRange(result[0].Score, 200.0, 200.5);
     }
 
     [Fact]
     public async Task CircuitBreakerRanksClosedChannelsByWeight()
     {
-        fixture.Channels.Set(
-            NewChannel(2401, "low", """["breaker-model"]""", weight: 10),
-            NewChannel(2402, "high", """["breaker-model"]""", weight: 100),
-            NewChannel(2403, "zero", """["breaker-model"]""", weight: 0));
-
-        var result = await Pool("breaker-model").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.CircuitBreaker);
+        var result = await Sort(
+            "breaker-model",
+            [Candidate(2401, weight: 10), Candidate(2402, weight: 100), Candidate(2403, weight: 0)],
+            requiredCount: 4,
+            LoadBalancerStrategies.CircuitBreaker);
 
         Assert.Equal(
             [2402L, 2401L, 2403L],
             result.Select(candidate => candidate.ChannelId).ToArray());
-
-        // Weight + closed breaker 200 + Random(0-0.5) + neutral RateLimitAware.
-        Assert.InRange(result[0].Score, 400.0, 400.5);
     }
 
     [Fact]
     public async Task AdaptiveAndRoundRobinRankTheSameStateDifferently()
     {
-        fixture.Channels.Set(
-            NewChannel(2501, "failing", """["adaptive-health-model"]"""),
-            NewChannel(2502, "busy", """["adaptive-health-model"]"""));
-
         for (var attempt = 0; attempt < 3; attempt++)
         {
             await Channel(2501).RecordFailureAsync(Now.AddMinutes(-1));
@@ -465,10 +347,11 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
             await Channel(2502).RecordSelectionAsync(Now.AddMinutes(-1));
         }
 
-        var adaptive = await Pool("adaptive-health-model").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.Adaptive);
-        var roundRobin = await Pool("adaptive-health-model").SelectAsync(
-            Now, false, topK: 4, LoadBalancerStrategies.RoundRobin);
+        var candidates = new[] { Candidate(2501), Candidate(2502) };
+        var adaptive = await Sort(
+            "adaptive-health-model", candidates, requiredCount: 4, LoadBalancerStrategies.Adaptive);
+        var roundRobin = await Sort(
+            "adaptive-health-model", candidates, requiredCount: 4, LoadBalancerStrategies.RoundRobin);
 
         Assert.Equal(2501L, adaptive[0].ChannelId);
 
@@ -477,65 +360,144 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassF
         Assert.Equal(2502L, roundRobin[0].ChannelId);
     }
 
-    [Theory]
-    [InlineData(
-        "select-a",
-        """["gpt-6-sol","select-a"]""",
-        " main ",
-        """{"modelMappings":[{"from":"main","to":"gpt-6-sol"}]}""",
-        "gpt-6-sol")]
-    [InlineData(
-        "select-b",
-        """["gpt-6-sol","select-b"]""",
-        "MAIN",
-        """{"lowercaseModelId":true,"modelMappings":[{"from":"main","to":"gpt-6-sol"}]}""",
-        "gpt-6-sol")]
-    [InlineData("select-c", """["gpt-6-sol","select-c"]""", "  gpt-6-sol  ", null, "gpt-6-sol")]
-    [InlineData("select-d", """["gpt-6-sol","select-d"]""", "unknown-model", null, "unknown-model")]
-    public async Task DefaultTestModelIsTrimmedAndResolvedThroughModelEntries(
-        string model,
-        string supportedModels,
-        string defaultTestModel,
-        string? settings,
-        string want)
+    // -- Strategy scoring ----------------------------------------------------
+
+    [Fact]
+    public void AdaptiveScoreSumsTheNeutralStrategies()
     {
-        // Port of TestCodexChannel_ImageMainModelUsesDefaultTestModel's model
-        // resolution: buildCodexOutbound trims default_test_model and maps it
-        // through the channel's model entries (ChooseModel), keeping the trimmed
-        // value when the channel does not support it.
-        fixture.Channels.Set(new ChannelDescriptor
-        {
-            Id = 2601,
-            Name = "codex",
-            OrderingWeight = 100,
-            Type = "codex",
-            SupportedModels = supportedModels,
-            DefaultTestModel = defaultTestModel,
-            Settings = settings,
-        });
-
-        var result = await Pool(model).SelectAsync(
-            Now, trackSelection: false, topK: 4, LoadBalancerStrategies.RoundRobin);
-
-        Assert.Single(result);
-        Assert.Equal(want, result[0].DefaultTestModel);
+        // ErrorAware 200 + WeightRoundRobin(0) 150 + LatencyAware neutral 40 +
+        // RateLimitAware neutral 100.
+        Assert.Equal(490.0, Score(LoadBalancerStrategies.Adaptive, Candidate(2201), NeutralMetrics()));
     }
 
-    private static ChannelDescriptor NewChannel(
+    [Fact]
+    public void AdaptivePenalizesRecentFailuresWithLinearDecay()
+    {
+        var metrics = FailureMetrics(consecutiveFailures: 3, lastFailureAt: Now.AddMinutes(-4));
+
+        // cooldownRatio = 1 - 4/5 = 0.2; consecutive penalty 3*30*0.2 = 18 and
+        // base penalty 40*0.2 = 8: ErrorAware = 174, plus 150 + 40 + 100.
+        Assert.Equal(464.0, Score(LoadBalancerStrategies.Adaptive, Candidate(2211), metrics), 9);
+    }
+
+    [Fact]
+    public void AdaptiveForgetsFailuresAfterTheCooldown()
+    {
+        var metrics = FailureMetrics(consecutiveFailures: 3, lastFailureAt: Now.AddMinutes(-5));
+
+        // Exactly five minutes: the decay window is exclusive.
+        Assert.Equal(490.0, Score(LoadBalancerStrategies.Adaptive, Candidate(2221), metrics), 9);
+    }
+
+    [Fact]
+    public void AdaptiveFloorsTheErrorPenaltyAtZero()
+    {
+        var metrics = FailureMetrics(consecutiveFailures: 10, lastFailureAt: Now.AddMinutes(-1));
+
+        // 200 - 10*30*0.8 - 40*0.8 = -72 is clamped to zero.
+        Assert.Equal(0.0, LoadBalancerScoring.ErrorAwareScore(metrics, Now), 9);
+    }
+
+    [Fact]
+    public void FailoverScoreIsWeightPlusRandomPlusRateLimit()
+    {
+        var score = Score(LoadBalancerStrategies.Failover, Candidate(2302, weight: 100), NeutralMetrics());
+
+        // Weight + Random(0-0.5) + neutral RateLimitAware.
+        Assert.InRange(score, 200.0, 200.5);
+    }
+
+    [Fact]
+    public void CircuitBreakerScoreIsWeightPlusClosedBreakerPlusRandom()
+    {
+        var score = Score(
+            LoadBalancerStrategies.CircuitBreaker, Candidate(2402, weight: 100), NeutralMetrics());
+
+        // Weight + closed breaker 200 + Random(0-0.5) + neutral RateLimitAware.
+        Assert.InRange(score, 400.0, 400.5);
+    }
+
+    [Fact]
+    public void RoundRobinScoreFallsAsRequestCountRises()
+    {
+        Assert.Equal(150.0, LoadBalancerScoring.RoundRobinScore(0));
+        Assert.Equal(75.0, LoadBalancerScoring.RoundRobinScore(150));
+        Assert.Equal(40.909090909, LoadBalancerScoring.RoundRobinScore(400), 9);
+
+        // Negative counters cannot occur, but the reference clamps them to zero.
+        Assert.Equal(150.0, LoadBalancerScoring.RoundRobinScore(-5));
+    }
+
+    [Fact]
+    public void WeightRoundRobinScoreScalesByOrderingWeight()
+    {
+        // Weight 200 halves the normalized count: 150 / (1 + 150/150) = 75.
+        Assert.Equal(75.0, LoadBalancerScoring.WeightRoundRobinScore(300, 200));
+
+        // Non-positive weights keep the reference's default factor of 1.0.
+        Assert.Equal(75.0, LoadBalancerScoring.WeightRoundRobinScore(150, 0));
+    }
+
+    [Fact]
+    public void HardUnavailableScoresAreAtOrBelowHalfTheExhaustedScore()
+    {
+        Assert.True(LoadBalancerScoring.IsHardUnavailableScore(
+            RateLimitAwareScorer.ExhaustedScore));
+        Assert.True(LoadBalancerScoring.IsHardUnavailableScore(
+            RateLimitAwareScorer.ExhaustedScore / 2));
+        Assert.False(LoadBalancerScoring.IsHardUnavailableScore(
+            (RateLimitAwareScorer.ExhaustedScore / 2) + 1));
+        Assert.False(LoadBalancerScoring.IsHardUnavailableScore(0));
+    }
+
+    [Fact]
+    public void UnhealthyThresholdIsThreeFailuresInsideTheCooldown()
+    {
+        Assert.False(LoadBalancerScoring.IsUnhealthy(
+            FailureMetrics(2, Now.AddMinutes(-1)), Now));
+        Assert.True(LoadBalancerScoring.IsUnhealthy(
+            FailureMetrics(3, Now.AddMinutes(-1)), Now));
+        Assert.False(LoadBalancerScoring.IsUnhealthy(
+            FailureMetrics(3, Now.AddMinutes(-5)), Now));
+
+        // A failure count without a timestamp counts as just happened.
+        Assert.True(LoadBalancerScoring.IsUnhealthy(
+            FailureMetrics(3, lastFailureAt: null), Now));
+    }
+
+    private static ChannelCandidate Candidate(
         long id,
-        string name,
-        string supportedModels,
         long weight = 100,
-        string? settings = null) => new()
+        int priority = 0) => new()
         {
-            Id = id,
-            Name = name,
+            ChannelId = id,
+            ChannelName = "channel-" + id,
             OrderingWeight = weight,
-            SupportedModels = supportedModels,
-            Settings = settings,
+            Priority = priority,
         };
 
-    private IChannelGrain Channel(long id) => fixture.Cluster.GrainFactory.GetGrain<IChannelGrain>(id);
+    private static ChannelMetricsSnapshot NeutralMetrics() => new();
 
-    private IChannelPoolGrain Pool(string model) => fixture.Cluster.GrainFactory.GetGrain<IChannelPoolGrain>(model);
+    private static ChannelMetricsSnapshot FailureMetrics(
+        long consecutiveFailures,
+        DateTimeOffset? lastFailureAt) => new()
+        {
+            ConsecutiveFailures = consecutiveFailures,
+            LastFailureAt = lastFailureAt,
+        };
+
+    private double Score(string strategy, ChannelCandidate candidate, ChannelMetricsSnapshot metrics)
+        => LoadBalancerScoring.StrategyScore(strategy, candidate, metrics, Now, _rateLimitAware);
+
+    private Task<ChannelCandidate[]> Sort(
+        string key,
+        ChannelCandidate[] candidates,
+        int requiredCount,
+        string strategy,
+        bool trackSelection = false)
+        => fixture.Cluster.GrainFactory
+            .GetGrain<IChannelPoolGrain>(key)
+            .SortAsync(candidates, Now, trackSelection, requiredCount, strategy);
+
+    private IChannelGrain Channel(long id) => fixture.Cluster.GrainFactory.GetGrain<IChannelGrain>(id);
 }

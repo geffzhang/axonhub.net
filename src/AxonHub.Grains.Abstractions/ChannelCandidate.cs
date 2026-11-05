@@ -85,4 +85,65 @@ public sealed class ChannelCandidate
     /// </summary>
     [Id(15)]
     public string? ApiKeyOverride { get; set; }
+
+    /// <summary>
+    /// The ordered upstream models this candidate may try (the reference's
+    /// <c>ChannelModelsCandidate.Models</c>). A candidate assembled by
+    /// <c>DefaultSelector</c> carries one entry per association connection; the
+    /// persistent outbound transformer advances through the list on same-channel
+    /// retries. Directly constructed candidates may leave this empty, in which
+    /// case <see cref="ActualModel"/> is the single entry.
+    /// </summary>
+    [Id(16)]
+    public List<ChannelCandidateModel> Models { get; set; } = [];
+
+    /// <summary>
+    /// Outbound API format per entry in <see cref="Models"/> (the reference's
+    /// <c>modelAPIFormats</c>). Null when the candidate was built without a
+    /// per-model protocol table; the transformer then falls back to
+    /// <see cref="ApiFormat"/> or recomputes it from the channel endpoints.
+    /// </summary>
+    [Id(17)]
+    public List<string>? ModelApiFormats { get; set; }
+
+    /// <summary>Association priority; lower values are tried first.</summary>
+    [Id(18)]
+    public int Priority { get; set; }
+
+    /// <summary>
+    /// The model card's output limit (the reference's
+    /// <c>DefaultMaxTokens</c>), applied only when the outbound request is an
+    /// Anthropic message and the client set no max tokens.
+    /// </summary>
+    [Id(19)]
+    public long DefaultMaxTokens { get; set; }
+
+    /// <summary>
+    /// Raw <c>channels.settings</c> jsonb text. The transformer re-reads the
+    /// per-model protocol overrides from it when recomputing a candidate's
+    /// format for a model that has no table entry.
+    /// </summary>
+    [Id(20)]
+    public string? Settings { get; set; }
+
+    /// <summary>
+    /// Raw <c>channels.endpoints</c> jsonb text, used together with
+    /// <see cref="Type"/> for the same format recomputation.
+    /// </summary>
+    [Id(21)]
+    public string? Endpoints { get; set; }
+}
+
+/// <summary>
+/// One request-model → upstream-model entry inside a candidate (the reference's
+/// <c>biz.ChannelModelEntry</c> as carried by <c>ChannelModelsCandidate.Models</c>).
+/// </summary>
+[GenerateSerializer]
+public sealed class ChannelCandidateModel
+{
+    [Id(0)]
+    public string RequestModel { get; set; } = string.Empty;
+
+    [Id(1)]
+    public string ActualModel { get; set; } = string.Empty;
 }

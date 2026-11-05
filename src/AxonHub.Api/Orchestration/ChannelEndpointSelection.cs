@@ -13,16 +13,18 @@ public static class ChannelEndpointSelection
     /// <summary>
     /// Port of SelectAPIFormat (select_endpoints.go:16-45). Prefers the inbound
     /// format so pass-through can be enabled when both sides match, falls back
-    /// to the first capable endpoint, then to the first endpoint.
+    /// to the first capable endpoint, then to the first endpoint. The reference
+    /// treats a nil endpoint list as empty; the port's
+    /// <see cref="ApplyForcedApiFormatsForRequest"/> may return null for an
+    /// explicit-endpoint request whose overrides match nothing.
     /// </summary>
     public static string SelectApiFormat(
-        IReadOnlyList<ChannelEndpoint> endpoints,
+        IReadOnlyList<ChannelEndpoint>? endpoints,
         LlmRequest request)
     {
-        ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(request);
 
-        if (endpoints.Count == 0)
+        if (endpoints is null || endpoints.Count == 0)
         {
             return string.Empty;
         }

@@ -39,6 +39,7 @@ public sealed class UsageCostInjectionTests(GrainClusterFixture fixture)
                 MaxSingleChannelRetries = 0,
                 RetryDelayMs = 0,
             }),
+            fixture.CandidateSelector,
             new TestTimeProvider(Now),
             recorder,
             rateLimitTracker: fixture.RateLimitTracker,
