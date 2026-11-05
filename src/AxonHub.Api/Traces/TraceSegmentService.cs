@@ -341,7 +341,42 @@ public sealed class TraceSegmentService(
         return IsExternalResponseBodyMarker(body) ? EmptyJson : body;
     }
 
-    private static bool IsExternalResponseBodyMarker(string body)
+    /// <summary>
+    /// Port of RequestService.LoadRequestExecutionRequestBody
+    /// (request.go:1727-1756). The port has no external object storage, so the
+    /// stored column is authoritative (C191).
+    /// </summary>
+    public static string LoadRequestBody(RequestExecutionRecord execution)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        return string.IsNullOrEmpty(execution.RequestBody) ? EmptyJson : execution.RequestBody;
+    }
+
+    /// <summary>
+    /// Port of RequestService.LoadRequestExecutionResponseBody
+    /// (request.go:1758-1791) plus sanitizeLoadedResponseBody. The port has no
+    /// external object storage, so the stored column is authoritative (C191).
+    /// </summary>
+    public static string LoadResponseBody(RequestExecutionRecord execution)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+
+        if (execution.Status != "completed")
+        {
+            return EmptyJson;
+        }
+
+        var body = execution.ResponseBody;
+        if (string.IsNullOrEmpty(body))
+        {
+            return EmptyJson;
+        }
+
+        return IsExternalResponseBodyMarker(body) ? EmptyJson : body;
+    }
+
+    /// <summary>Port of isExternalResponseBodyMarker (request.go:128-138).</summary>
+    public static bool IsExternalResponseBodyMarker(string body)
         => string.Equals(
             Encoding.UTF8.GetString(GoJson.Compact(Encoding.UTF8.GetBytes(body))),
             ExternalResponseBodyMarker,

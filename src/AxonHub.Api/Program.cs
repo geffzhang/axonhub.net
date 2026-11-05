@@ -290,6 +290,7 @@ builder.Services.AddScoped<TraceSegmentService>();
 builder.Services.AddScoped<TraceManagementService>();
 builder.Services.AddScoped<ThreadManagementService>();
 builder.Services.AddScoped<RequestManagementService>();
+builder.Services.AddScoped<RequestQueryService>();
 
 // Management identity: the gate middleware writes the authenticated caller
 // into HttpContext.Items; the scoped seam reads it back for the resolvers.

@@ -480,7 +480,7 @@ public sealed class ThreadWhereInput
 /// remaining entgql predicates are not ported in this slice (C165).
 /// </summary>
 [GraphQLName("RequestWhereInput")]
-public sealed class RequestWhereInput
+public sealed partial class RequestWhereInput
 {
     public RequestWhereInput? Not { get; set; }
 
@@ -901,12 +901,12 @@ public sealed class RequestConnectionType
 }
 
 /// <summary>
-/// Port of the scalar fields of the <c>Request</c> type (ent.graphql:4900-...)
-/// that the trace/thread detail surface can reach. The remaining fields,
-/// edges and connections belong to the requests slice (C165).
+/// Port of the <c>Request</c> type (ent.graphql:4477-4606). The scalar fields
+/// the trace/thread detail surface reaches live here; the body fields, edges
+/// and connections are added by <c>RequestTypes.cs</c>.
 /// </summary>
 [GraphQLName("Request")]
-public sealed class RequestType : INode
+public sealed partial class RequestType : INode
 {
     [GraphQLIgnore]
     public RequestRecord Record { get; init; } = null!;
@@ -1251,6 +1251,15 @@ public static class TraceMapping
             ? ThreadSortField.UpdatedAt
             : ThreadSortField.Id;
 
+    /// <summary>
+    /// The root Requests resolver rewrites CREATED_AT to
+    /// ent.DefaultRequestOrder's field (id) (ent.resolvers.go:497-505).
+    /// </summary>
+    public static RequestSortField ToRootRequestSortField(RequestOrder? orderBy)
+        => orderBy?.Field == RequestOrderFieldValue.UpdatedAt
+            ? RequestSortField.UpdatedAt
+            : RequestSortField.Id;
+
     public static SortDirection ToSortDirection(TraceOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc
             ? SortDirection.Desc
@@ -1531,6 +1540,94 @@ public static class TraceMapping
             ProjectIdNEQ = ParseId(where.ProjectIdNEQ),
             ProjectIdIn = ParseIds(where.ProjectIdIn),
             ProjectIdNotIn = ParseIds(where.ProjectIdNotIn),
+            ApiKeyId = ParseId(where.ApiKeyId),
+            ApiKeyIdNEQ = ParseId(where.ApiKeyIdNEQ),
+            ApiKeyIdIn = ParseIds(where.ApiKeyIdIn),
+            ApiKeyIdNotIn = ParseIds(where.ApiKeyIdNotIn),
+            ApiKeyIdIsNil = where.ApiKeyIdIsNil == true ? true : null,
+            ApiKeyIdNotNil = where.ApiKeyIdNotNil == true ? true : null,
+            TraceId = ParseId(where.TraceId),
+            TraceIdNEQ = ParseId(where.TraceIdNEQ),
+            TraceIdIn = ParseIds(where.TraceIdIn),
+            TraceIdNotIn = ParseIds(where.TraceIdNotIn),
+            TraceIdIsNil = where.TraceIdIsNil == true ? true : null,
+            TraceIdNotNil = where.TraceIdNotNil == true ? true : null,
+            DataStorageId = ParseId(where.DataStorageId),
+            DataStorageIdNEQ = ParseId(where.DataStorageIdNEQ),
+            DataStorageIdIn = ParseIds(where.DataStorageIdIn),
+            DataStorageIdNotIn = ParseIds(where.DataStorageIdNotIn),
+            DataStorageIdIsNil = where.DataStorageIdIsNil == true ? true : null,
+            DataStorageIdNotNil = where.DataStorageIdNotNil == true ? true : null,
+            ChannelId = ParseId(where.ChannelId),
+            ChannelIdNEQ = ParseId(where.ChannelIdNEQ),
+            ChannelIdIn = ParseIds(where.ChannelIdIn),
+            ChannelIdNotIn = ParseIds(where.ChannelIdNotIn),
+            ChannelIdIsNil = where.ChannelIdIsNil == true ? true : null,
+            ChannelIdNotNil = where.ChannelIdNotNil == true ? true : null,
+            Source = where.Source is null ? null : ToWireStatus(where.Source.Value),
+            SourceNEQ = where.SourceNEQ is null ? null : ToWireStatus(where.SourceNEQ.Value),
+            SourceIn = where.SourceIn is { Count: > 0 }
+                ? where.SourceIn.Select(static source => ToWireStatus(source)).ToList()
+                : null,
+            SourceNotIn = where.SourceNotIn is { Count: > 0 }
+                ? where.SourceNotIn.Select(static source => ToWireStatus(source)).ToList()
+                : null,
+            ModelId = where.ModelId,
+            ModelIdNEQ = where.ModelIdNEQ,
+            ModelIdIn = ToList(where.ModelIdIn),
+            ModelIdNotIn = ToList(where.ModelIdNotIn),
+            ModelIdGT = where.ModelIdGT,
+            ModelIdGTE = where.ModelIdGTE,
+            ModelIdLT = where.ModelIdLT,
+            ModelIdLTE = where.ModelIdLTE,
+            ModelIdContains = where.ModelIdContains,
+            ModelIdContainsFold = where.ModelIdContainsFold,
+            ModelIdHasPrefix = where.ModelIdHasPrefix,
+            ModelIdHasSuffix = where.ModelIdHasSuffix,
+            ModelIdEqualFold = where.ModelIdEqualFold,
+            ReasoningEffort = where.ReasoningEffort,
+            ReasoningEffortNEQ = where.ReasoningEffortNEQ,
+            ReasoningEffortIn = ToList(where.ReasoningEffortIn),
+            ReasoningEffortNotIn = ToList(where.ReasoningEffortNotIn),
+            ReasoningEffortGT = where.ReasoningEffortGT,
+            ReasoningEffortGTE = where.ReasoningEffortGTE,
+            ReasoningEffortLT = where.ReasoningEffortLT,
+            ReasoningEffortLTE = where.ReasoningEffortLTE,
+            ReasoningEffortContains = where.ReasoningEffortContains,
+            ReasoningEffortContainsFold = where.ReasoningEffortContainsFold,
+            ReasoningEffortHasPrefix = where.ReasoningEffortHasPrefix,
+            ReasoningEffortHasSuffix = where.ReasoningEffortHasSuffix,
+            ReasoningEffortEqualFold = where.ReasoningEffortEqualFold,
+            ReasoningEffortIsNil = where.ReasoningEffortIsNil == true ? true : null,
+            ReasoningEffortNotNil = where.ReasoningEffortNotNil == true ? true : null,
+            Format = where.Format,
+            FormatNEQ = where.FormatNEQ,
+            FormatIn = ToList(where.FormatIn),
+            FormatNotIn = ToList(where.FormatNotIn),
+            FormatGT = where.FormatGT,
+            FormatGTE = where.FormatGTE,
+            FormatLT = where.FormatLT,
+            FormatLTE = where.FormatLTE,
+            FormatContains = where.FormatContains,
+            FormatContainsFold = where.FormatContainsFold,
+            FormatHasPrefix = where.FormatHasPrefix,
+            FormatHasSuffix = where.FormatHasSuffix,
+            FormatEqualFold = where.FormatEqualFold,
+            ExternalId = where.ExternalId,
+            ExternalIdNEQ = where.ExternalIdNEQ,
+            ExternalIdIn = ToList(where.ExternalIdIn),
+            ExternalIdNotIn = ToList(where.ExternalIdNotIn),
+            ExternalIdGT = where.ExternalIdGT,
+            ExternalIdGTE = where.ExternalIdGTE,
+            ExternalIdLT = where.ExternalIdLT,
+            ExternalIdLTE = where.ExternalIdLTE,
+            ExternalIdContains = where.ExternalIdContains,
+            ExternalIdContainsFold = where.ExternalIdContainsFold,
+            ExternalIdHasPrefix = where.ExternalIdHasPrefix,
+            ExternalIdHasSuffix = where.ExternalIdHasSuffix,
+            ExternalIdEqualFold = where.ExternalIdEqualFold,
+            ExternalIdIsNil = where.ExternalIdIsNil == true ? true : null,
+            ExternalIdNotNil = where.ExternalIdNotNil == true ? true : null,
             Status = where.Status is null ? null : ToWireStatus(where.Status.Value),
             StatusNEQ = where.StatusNEQ is null
                 ? null
@@ -1575,6 +1672,14 @@ public static class TraceMapping
         "playground" => RequestSourceValue.Playground,
         "test" => RequestSourceValue.Test,
         _ => RequestSourceValue.Api,
+    };
+
+    /// <summary>Port of the RequestSource wire strings (ent.graphql:86-101).</summary>
+    public static string ToWireStatus(RequestSourceValue source) => source switch
+    {
+        RequestSourceValue.Playground => "playground",
+        RequestSourceValue.Test => "test",
+        _ => "api",
     };
 
     public static string ToWireStatus(TraceStatusValue status) => status switch

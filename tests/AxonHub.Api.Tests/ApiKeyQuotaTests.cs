@@ -409,6 +409,11 @@ internal sealed class InMemoryUsageLogStore : IUsageLogStore
 {
     public List<UsageLogRecord> Rows { get; } = [];
 
+    public Task<ListPage<UsageLogRecord>> ListAsync(
+        UsageLogListQuery query,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the quota path");
+
     public Task<long> CreateAsync(
         UsageLogRecord usageLog,
         CancellationToken cancellationToken = default)

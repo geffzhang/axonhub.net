@@ -165,6 +165,11 @@ internal sealed class FakeRequestExecutionStore : IRequestExecutionStore
         return row;
     }
 
+    public Task<ListPage<RequestExecutionRecord>> ListAsync(
+        RequestExecutionListQuery query,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the video task flow");
+
     public Task<long> CreateAsync(
         RequestExecutionRecord execution,
         CancellationToken cancellationToken = default)

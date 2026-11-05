@@ -614,6 +614,18 @@ internal sealed class FakeRequestSegmentStore : IRequestSegmentStore
         return Task.FromResult(rows);
     }
 
+    public Task<RequestRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        long? visibilityUserId,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        return Task.FromResult(_rows.FirstOrDefault(
+            row => row.Id == id
+                && (projectScope is null || row.ProjectId == projectScope.Value)));
+    }
+
     public Task<RequestRecord?> GetFirstCompletedByTraceAsync(
         long traceDbId,
         long? projectScope,

@@ -515,6 +515,12 @@ public static class PriceMapping
         _ => throw new InvalidOperationException("unknown price item code: " + code),
     };
 
+    /// <summary>
+    /// Maps a stored cost item's wire code to the PriceItemCode enum. An
+    /// unknown code fails the field like gqlgen's enum marshaler does.
+    /// </summary>
+    public static PriceItemCodeValue ToGraphQLItemCode(string code) => ItemCodeFromWire(code);
+
     private static PriceItemCodeValue ItemCodeFromWire(string code) => code switch
     {
         PriceItemCodes.PromptTokens => PriceItemCodeValue.PromptTokens,

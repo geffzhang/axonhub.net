@@ -503,6 +503,11 @@ public sealed class InboundMiddlewareTests(GrainClusterFixture fixture)
     /// <summary>Reads the usage rows the persistence middleware wrote.</summary>
     private sealed class RecorderUsageLogStore(RecordingRequestChainRecorder recorder) : IUsageLogStore
     {
+        public Task<ListPage<UsageLogRecord>> ListAsync(
+            UsageLogListQuery query,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("not used by the quota path");
+
         public Task<long> CreateAsync(
             UsageLogRecord usageLog,
             CancellationToken cancellationToken = default)

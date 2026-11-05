@@ -81,6 +81,174 @@ public sealed record RequestListFilter
 
     public IReadOnlyList<string>? StatusNotIn { get; init; }
 
+    public long? ApiKeyId { get; init; }
+
+    public long? ApiKeyIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? ApiKeyIdIn { get; init; }
+
+    public IReadOnlyList<long>? ApiKeyIdNotIn { get; init; }
+
+    public bool? ApiKeyIdIsNil { get; init; }
+
+    public bool? ApiKeyIdNotNil { get; init; }
+
+    public long? TraceId { get; init; }
+
+    public long? TraceIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? TraceIdIn { get; init; }
+
+    public IReadOnlyList<long>? TraceIdNotIn { get; init; }
+
+    public bool? TraceIdIsNil { get; init; }
+
+    public bool? TraceIdNotNil { get; init; }
+
+    public long? DataStorageId { get; init; }
+
+    public long? DataStorageIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? DataStorageIdIn { get; init; }
+
+    public IReadOnlyList<long>? DataStorageIdNotIn { get; init; }
+
+    public bool? DataStorageIdIsNil { get; init; }
+
+    public bool? DataStorageIdNotNil { get; init; }
+
+    public long? ChannelId { get; init; }
+
+    public long? ChannelIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? ChannelIdIn { get; init; }
+
+    public IReadOnlyList<long>? ChannelIdNotIn { get; init; }
+
+    public bool? ChannelIdIsNil { get; init; }
+
+    public bool? ChannelIdNotNil { get; init; }
+
+    public string? Source { get; init; }
+
+    public string? SourceNEQ { get; init; }
+
+    public IReadOnlyList<string>? SourceIn { get; init; }
+
+    public IReadOnlyList<string>? SourceNotIn { get; init; }
+
+    public string? ModelId { get; init; }
+
+    public string? ModelIdNEQ { get; init; }
+
+    public IReadOnlyList<string>? ModelIdIn { get; init; }
+
+    public IReadOnlyList<string>? ModelIdNotIn { get; init; }
+
+    public string? ModelIdGT { get; init; }
+
+    public string? ModelIdGTE { get; init; }
+
+    public string? ModelIdLT { get; init; }
+
+    public string? ModelIdLTE { get; init; }
+
+    public string? ModelIdContains { get; init; }
+
+    public string? ModelIdContainsFold { get; init; }
+
+    public string? ModelIdHasPrefix { get; init; }
+
+    public string? ModelIdHasSuffix { get; init; }
+
+    public string? ModelIdEqualFold { get; init; }
+
+    public string? ReasoningEffort { get; init; }
+
+    public string? ReasoningEffortNEQ { get; init; }
+
+    public IReadOnlyList<string>? ReasoningEffortIn { get; init; }
+
+    public IReadOnlyList<string>? ReasoningEffortNotIn { get; init; }
+
+    public string? ReasoningEffortGT { get; init; }
+
+    public string? ReasoningEffortGTE { get; init; }
+
+    public string? ReasoningEffortLT { get; init; }
+
+    public string? ReasoningEffortLTE { get; init; }
+
+    public string? ReasoningEffortContains { get; init; }
+
+    public string? ReasoningEffortContainsFold { get; init; }
+
+    public string? ReasoningEffortHasPrefix { get; init; }
+
+    public string? ReasoningEffortHasSuffix { get; init; }
+
+    public string? ReasoningEffortEqualFold { get; init; }
+
+    public bool? ReasoningEffortIsNil { get; init; }
+
+    public bool? ReasoningEffortNotNil { get; init; }
+
+    public string? Format { get; init; }
+
+    public string? FormatNEQ { get; init; }
+
+    public IReadOnlyList<string>? FormatIn { get; init; }
+
+    public IReadOnlyList<string>? FormatNotIn { get; init; }
+
+    public string? FormatGT { get; init; }
+
+    public string? FormatGTE { get; init; }
+
+    public string? FormatLT { get; init; }
+
+    public string? FormatLTE { get; init; }
+
+    public string? FormatContains { get; init; }
+
+    public string? FormatContainsFold { get; init; }
+
+    public string? FormatHasPrefix { get; init; }
+
+    public string? FormatHasSuffix { get; init; }
+
+    public string? FormatEqualFold { get; init; }
+
+    public string? ExternalId { get; init; }
+
+    public string? ExternalIdNEQ { get; init; }
+
+    public IReadOnlyList<string>? ExternalIdIn { get; init; }
+
+    public IReadOnlyList<string>? ExternalIdNotIn { get; init; }
+
+    public string? ExternalIdGT { get; init; }
+
+    public string? ExternalIdGTE { get; init; }
+
+    public string? ExternalIdLT { get; init; }
+
+    public string? ExternalIdLTE { get; init; }
+
+    public string? ExternalIdContains { get; init; }
+
+    public string? ExternalIdContainsFold { get; init; }
+
+    public string? ExternalIdHasPrefix { get; init; }
+
+    public string? ExternalIdHasSuffix { get; init; }
+
+    public string? ExternalIdEqualFold { get; init; }
+
+    public bool? ExternalIdIsNil { get; init; }
+
+    public bool? ExternalIdNotNil { get; init; }
+
     public RequestListFilter? Not { get; init; }
 
     public IReadOnlyList<RequestListFilter>? And { get; init; }
@@ -160,6 +328,16 @@ public interface IRequestSegmentStore
 
     Task<ListPage<RequestRecord>> ListAsync(
         RequestListQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Node lookup with the Request query policy's project and visibility
+    /// predicates (entgql Noder -> Request.Query().Only).
+    /// </summary>
+    Task<RequestRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        long? visibilityUserId,
         CancellationToken cancellationToken = default);
 }
 
@@ -290,6 +468,76 @@ public sealed class RequestSegmentStore(AxonHubDbContext db) : IRequestSegmentSt
         }
 
         return new ListPage<RequestRecord>(nodes, hasNextPage, hasPreviousPage, count);
+    }
+
+    public async Task<RequestRecord?> GetByIdAsync(
+        long id,
+        long? projectScope,
+        long? visibilityUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new SqlArguments();
+        var sql = new StringBuilder("SELECT ").Append(Columns)
+            .Append(" FROM \"requests\" m WHERE m.\"id\" = ").Append(args.Add(id));
+        if (projectScope is not null)
+        {
+            sql.Append(" AND m.\"project_id\" = ").Append(args.Add(projectScope.Value));
+        }
+
+        AppendVisibility(sql, args, visibilityUserId);
+        sql.Append(';');
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<RequestRecord>(
+            new CommandDefinition(
+                sql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    private static void AppendNullableIdComparisons(
+        List<string?> predicates,
+        string alias,
+        string column,
+        long? value,
+        long? notEqual,
+        IReadOnlyList<long>? inList,
+        IReadOnlyList<long>? notInList,
+        bool? isNil,
+        bool? notNil,
+        SqlArguments args)
+    {
+        var name = alias + ".\"" + column + "\"";
+        if (value is not null)
+        {
+            predicates.Add(name + " = " + args.Add(value.Value));
+        }
+
+        if (notEqual is not null)
+        {
+            predicates.Add(name + " <> " + args.Add(notEqual.Value));
+        }
+
+        if (inList is not null)
+        {
+            ConnectionSql.AppendIdIn(predicates, alias, column, inList, args);
+        }
+
+        if (notInList is not null)
+        {
+            TraceAdminStore.AppendIdNotIn(predicates, alias, column, notInList, args);
+        }
+
+        if (isNil == true)
+        {
+            predicates.Add(name + " IS NULL");
+        }
+
+        if (notNil == true)
+        {
+            predicates.Add(name + " IS NOT NULL");
+        }
     }
 
     private async Task<RequestRecord?> SingleCompletedByTraceAsync(
@@ -472,6 +720,76 @@ public sealed class RequestSegmentStore(AxonHubDbContext db) : IRequestSegmentSt
         TraceAdminStore.AppendStatusComparisons(
             predicates, filter.Status, filter.StatusNEQ, filter.StatusIn,
             filter.StatusNotIn, alias, args);
+
+        AppendNullableIdComparisons(
+            predicates, alias, "api_key_id", filter.ApiKeyId, filter.ApiKeyIdNEQ,
+            filter.ApiKeyIdIn, filter.ApiKeyIdNotIn, filter.ApiKeyIdIsNil,
+            filter.ApiKeyIdNotNil, args);
+        AppendNullableIdComparisons(
+            predicates, alias, "trace_id", filter.TraceId, filter.TraceIdNEQ,
+            filter.TraceIdIn, filter.TraceIdNotIn, filter.TraceIdIsNil,
+            filter.TraceIdNotNil, args);
+        AppendNullableIdComparisons(
+            predicates, alias, "data_storage_id", filter.DataStorageId,
+            filter.DataStorageIdNEQ, filter.DataStorageIdIn, filter.DataStorageIdNotIn,
+            filter.DataStorageIdIsNil, filter.DataStorageIdNotNil, args);
+        AppendNullableIdComparisons(
+            predicates, alias, "channel_id", filter.ChannelId, filter.ChannelIdNEQ,
+            filter.ChannelIdIn, filter.ChannelIdNotIn, filter.ChannelIdIsNil,
+            filter.ChannelIdNotNil, args);
+
+        TraceAdminStore.AppendStringComparisons(
+            predicates, filter.Source, filter.SourceNEQ, filter.SourceIn,
+            filter.SourceNotIn, null, null, null, null, null, null, null, null,
+            null, alias, "source", args);
+        TraceAdminStore.AppendStringComparisons(
+            predicates, filter.ModelId, filter.ModelIdNEQ, filter.ModelIdIn,
+            filter.ModelIdNotIn, filter.ModelIdGT, filter.ModelIdGTE, filter.ModelIdLT,
+            filter.ModelIdLTE, filter.ModelIdContains, filter.ModelIdContainsFold,
+            filter.ModelIdHasPrefix, filter.ModelIdHasSuffix, filter.ModelIdEqualFold,
+            alias, "model_id", args);
+        TraceAdminStore.AppendStringComparisons(
+            predicates, filter.ReasoningEffort, filter.ReasoningEffortNEQ,
+            filter.ReasoningEffortIn, filter.ReasoningEffortNotIn,
+            filter.ReasoningEffortGT, filter.ReasoningEffortGTE,
+            filter.ReasoningEffortLT, filter.ReasoningEffortLTE,
+            filter.ReasoningEffortContains, filter.ReasoningEffortContainsFold,
+            filter.ReasoningEffortHasPrefix, filter.ReasoningEffortHasSuffix,
+            filter.ReasoningEffortEqualFold, alias, "reasoning_effort", args);
+
+        if (filter.ReasoningEffortIsNil == true)
+        {
+            predicates.Add(alias + ".\"reasoning_effort\" IS NULL");
+        }
+
+        if (filter.ReasoningEffortNotNil == true)
+        {
+            predicates.Add(alias + ".\"reasoning_effort\" IS NOT NULL");
+        }
+
+        TraceAdminStore.AppendStringComparisons(
+            predicates, filter.Format, filter.FormatNEQ, filter.FormatIn,
+            filter.FormatNotIn, filter.FormatGT, filter.FormatGTE, filter.FormatLT,
+            filter.FormatLTE, filter.FormatContains, filter.FormatContainsFold,
+            filter.FormatHasPrefix, filter.FormatHasSuffix, filter.FormatEqualFold,
+            alias, "format", args);
+        TraceAdminStore.AppendStringComparisons(
+            predicates, filter.ExternalId, filter.ExternalIdNEQ, filter.ExternalIdIn,
+            filter.ExternalIdNotIn, filter.ExternalIdGT, filter.ExternalIdGTE,
+            filter.ExternalIdLT, filter.ExternalIdLTE, filter.ExternalIdContains,
+            filter.ExternalIdContainsFold, filter.ExternalIdHasPrefix,
+            filter.ExternalIdHasSuffix, filter.ExternalIdEqualFold,
+            alias, "external_id", args);
+
+        if (filter.ExternalIdIsNil == true)
+        {
+            predicates.Add(alias + ".\"external_id\" IS NULL");
+        }
+
+        if (filter.ExternalIdNotNil == true)
+        {
+            predicates.Add(alias + ".\"external_id\" IS NOT NULL");
+        }
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)
         {

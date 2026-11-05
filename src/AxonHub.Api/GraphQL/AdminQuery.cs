@@ -546,11 +546,45 @@ public sealed class AdminQuery
         return TraceMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>Port of queryResolver.Requests (ent.resolvers.go:496-511).</summary>
+    [GraphQLName("requests")]
+    public async Task<RequestConnectionType> RequestsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RequestOrder? orderBy,
+        RequestWhereInput? where,
+        [Service] RequestManagementService requests,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = TraceMapping.ToRootRequestSortField(orderBy);
+        var page = await requests.ListAsync(
+                new RequestListQuery
+                {
+                    Where = TraceMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves Project, User, APIKey, Model, Prompt, Trace and Thread so
-    /// far and reports every other type as "unknown node type: %s" (C165).
+    /// port resolves Project, User, APIKey, Model, Prompt, Trace, Thread and
+    /// Request so far and reports every other type as
+    /// "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -623,6 +657,14 @@ public sealed class AdminQuery
                 var thread = await threads.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return TraceMapping.ToGraphQL(thread);
+            }
+
+            case "Request":
+            {
+                var requests = services.GetRequiredService<RequestQueryService>();
+                var request = await requests.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return TraceMapping.ToGraphQL(request);
             }
 
             default:
