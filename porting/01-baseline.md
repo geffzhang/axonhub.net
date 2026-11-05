@@ -4829,6 +4829,76 @@ Llm 3032、Grains 95；四个项目合计由 5790 增至 5842，0 失败 0 跳�
 差异：C188 由 gap 改为 accepted，登记剩余六项差异（where 子集、必填输入严格度、未知
 枚举输出、order 列宽、无缓存失效、Project.prompts 反向边归 C165）。
 
+## 101. 追踪与线程管理面（traces / threads / 八个状态变更 / 段与用量解析，23 + 15 例，2026-11-05）
+
+参照 `internal/server/gql/ent.graphql:4477-4520`（Request）、`:5747-5810`（Thread）、
+`:5940-6030`（Trace）、`axonhub.graphql:822-843`（UsageMetadata 与 Trace / Thread 的
+扩展字段）、`ent.resolvers.go:541-570`（Threads / Traces）、`:856-896`（ID / projectID /
+threadID 的 GUID 解析）、`axonhub.resolvers.go:786-810`（四个 Trace 变更）、
+`:999-1085`（Thread / Trace 的 firstUserQuery、usageMetadata、archivedTracesCount、
+rootSegment、rawRootSegment、firstText）、`gql_edge.go:652-688`（Project / Thread /
+requests 边）、`gql_pagination.go`（DefaultTraceOrder / DefaultThreadOrder 与
+CREATED_AT 重写）、`internal/server/biz/trace.go:117-256、448-1919`、`thread.go:120-222`、
+`usage_metadata.go`、`request.go:1872-1897`、`internal/ent/schema/trace.go:80-107` 与
+`thread.go:61-79`。端口新增 `TraceTypes`（Trace / Thread / Request / Segment / Span /
+UsageMetadata 等 17 个类型、4 个枚举、三个 where 输入与三个 order 输入）、
+`TracePrivacy`、`TraceManagementService`、`ThreadManagementService`、
+`TraceSegmentService`、`TraceSegmentJson`、`TraceMapping`、`TraceAdminStore`、
+`ThreadAdminStore`、`UsageMetadataStore`，扩展 `RequestSegmentStore`；`AdminQuery`
+接线 traces / threads 与 node(Trace / Thread)，`AdminMutation` 接线八个状态变更。
+
+- 查询与排序：traces / threads 的 first / last 经 validatePaginationArgs（至少一个、
+  1..1000）与 validateFirstLast（不可同时）校验；根查询把 `orderBy.field == CREATED_AT`
+  重写为 ent 默认排序字段 `id` 并保留方向（ent.resolvers.go:543-547、559-563）；
+  UPDATED_AT 按 updated_at 排序，id 排序没有时间游标。Thread.traces 与 Trace.requests
+  边不重写 CREATED_AT，保持 created_at 排序与 time 游标；Trace.requests 还带隐式
+  `TraceIDEQ` 谓词。连接游标由 id + 排序字段时间组成，pageInfo 的 start / end cursor
+  取 edges 首尾，与参照的键集分页一致。
+- 节点与边：Trace / Thread / Request 的 id、projectID、threadID、apiKeyID、traceID、
+  dataStorageID 按参照 resolver 生成 GID（零值语义见 C190）；project 边走 Project
+  查询策略，缺失时抛 `ent: project not found`；Trace.thread 的缺失按 MaskNotFound
+  返回 null（gql_edge.go:652-668）。rawRootSegment 按 Go encoding/json 语义序列化，
+  nil 段输出 null；firstUserQuery / firstText / usageMetadata / archivedTracesCount
+  分别调用与参照相同的第一段 / 聚合查询，存储错误以 `failed to ...` 包裹。
+- 段构建：GetRootSegment 读取该 trace 的全部 completed 请求（Request 查询策略的项目
+  谓词与逐行可见性谓词），参照的 10 路并发正文加载以顺序加载复现；正文按 completed
+  状态与 `_ext` 标记规范化为空对象；请求 / 响应 span 由已移植的入站 / 出站变换器提取，
+  覆盖 OpenAI Chat / Responses / Compact / Decisions、Anthropic、Gemini、图片、
+  moderation、alpha search 的既有格式；首段按同一线程上一 trace 的 span 去重请求
+  span，后续段按 tool_call_id 与已产生工具调用挂到父段，parentId / children 顺序与
+  参照一致；变换失败跳过受影响 span（C191）。firstUserQuery / firstText 使用
+  GetTraceFirstSegment（最早的 completed 请求）。
+- 状态变更：archiveTrace / unarchiveTrace / retainTrace / unretainTrace 与四个 thread
+  变更分别以 active↔archived、active↔retained 的 from / to 调用 UpdateStatus，谓词为
+  id + from 状态 + 隐私项目谓词；affected==0 → `cannot <op> trace|thread: current
+  status is not <from> or trace|thread not found`；存储异常以
+  `failed to <op> trace|thread: ` 包裹；thread 变更在同一事务内把该 thread 中与 thread
+  原状态相同的 trace 级联到新状态（Trace 变更策略的 project 谓词同样生效），级联失败
+  回滚并以 `failed to cascade <op> traces: ` 报错。
+- 隐私（C189）：Trace / Thread 共用查询策略（API-key read_requests → 用户项目
+  read_requests → owner → 用户 read_requests → default deny）与变更策略
+  （write_requests 链）；Request 查询策略额外给出逐行可见性谓词。端口在存储调用前
+  显式求值并转成 project_id / 可见性 / 级联 project 谓词；API-key、service account
+  与 test principal 的允许 / 拒绝文案与参照一致（拒绝经 GraphQL 呈现层映射为
+  `permission denied`）。
+- 顺带修复：`HttpContextManagementIdentity` 在管理 JWT 主体没有项目上下文时曾回落到
+  /v1 的 `RequestIdentity.Default`（项目 1），导致 owner 查询被意外限定到项目 1；
+  现已按主体类型分流，管理主体不再继承 /v1 默认项目。`RequestSegmentStore` 的
+  `GetFirstCompletedByTraceAsync` 补上 LIMIT 1（消除 QuerySingleOrDefault 多行异常），
+  线程级联 SQL 补上 Trace 变更策略的 project 谓词。提示词端点夹具改为像前端一样发送
+  `X-Project-ID`，与参照的上下文项目要求一致。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 根查询形状（gid / 时间 / projectID / thread 边 / requests totalCount）、CREATED_AT→id 回退、where 子集、段 / 用量 / rawRootSegment、project / thread 边错误、Thread/0、requests 边排序与时间谓词、threads 查询与 tracesSummary / archivedTracesCount、Thread.traces 的 CREATED_AT 顺序、空 where、node 解析与缺失文案、八个状态变更与文案、级联错误、项目成员作用域、service account 拒绝 | `tests/AxonHub.Api.Tests/AdminTracesEndpointTests.cs` | 23 |
+| Trace 列表过滤 / 作用域 / 键集 / 状态更新 / 线程内首条与上一条 / archived 计数；Thread 列表 / 级联事务与回滚；用量聚合；completed 请求读取 / where 时间谓词 / 可见性谓词 | `tests/AxonHub.Persistence.Tests/TraceAdminStoreTests.cs`（4）、`ThreadAdminStoreTests.cs`（5）、`UsageMetadataStoreTests.cs`（3）、`RequestSegmentStoreTests.cs`（3） | +15 |
+
+`AxonHub.Api.Tests` 由 2604 增至 2627（+23），`AxonHub.Persistence.Tests` 由 224 增至 239
+（+15），Llm 3032、Grains 95；四个项目合计由 5955 增至 5993，0 失败 0 跳过。
+
+差异：C189 登记显式隐私求值与 where 子集；C190 登记 Go int → GraphQL Int 的 checked
+截断与零值 GID；C191 登记无外部对象存储、无日志接缝与正文加载并发差异。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

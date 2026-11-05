@@ -25,10 +25,10 @@ public sealed class HttpContextManagementIdentity(IHttpContextAccessor accessor)
     /// request context in the reference).
     /// </summary>
     public AxonHub.Persistence.ApiKeyRecord? GetCurrentApiKey()
-        => Identity?.ApiKey ?? ApiKeyIdentity?.ApiKey;
+        => Identity is not null ? Identity.ApiKey : ApiKeyIdentity?.ApiKey;
 
     public long? GetCurrentProjectId()
-        => Identity?.ProjectId ?? ApiKeyIdentity?.ProjectId;
+        => Identity is not null ? Identity.ProjectId : ApiKeyIdentity?.ProjectId;
 
     public AxonHub.Persistence.ProjectRecord? GetCurrentProject()
         => Identity is not null ? null : ApiKeyIdentity?.Project;

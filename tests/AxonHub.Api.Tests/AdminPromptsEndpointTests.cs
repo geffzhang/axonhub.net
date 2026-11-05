@@ -545,6 +545,11 @@ public sealed class AdminPromptsEndpointTests : IAsyncLifetime
             "Bearer",
             token ?? _gate.Jwt);
 
+        // Project-scoped prompt mutations read the selected project from the
+        // request context (contexts.GetProjectID); the frontend sends this
+        // header with every admin GraphQL call once a project is selected.
+        request.Headers.Add("X-Project-ID", "gid://axonhub/Project/1");
+
         using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
         Assert.True(response.StatusCode == HttpStatusCode.OK, body);

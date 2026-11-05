@@ -1724,4 +1724,100 @@ public sealed class AdminMutation
             .ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>Port of mutationResolver.ArchiveTrace (axonhub.resolvers.go:1034-1037).</summary>
+    [GraphQLName("archiveTrace")]
+    public async Task<bool> ArchiveTraceAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        await traces.ArchiveAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UnarchiveTrace (axonhub.resolvers.go:1039-1042).</summary>
+    [GraphQLName("unarchiveTrace")]
+    public async Task<bool> UnarchiveTraceAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        await traces.UnarchiveAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.RetainTrace (axonhub.resolvers.go:1034-1037).</summary>
+    [GraphQLName("retainTrace")]
+    public async Task<bool> RetainTraceAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        await traces.RetainAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UnretainTrace (axonhub.resolvers.go:1039-1042).</summary>
+    [GraphQLName("unretainTrace")]
+    public async Task<bool> UnretainTraceAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        await traces.UnretainAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.ArchiveThread (axonhub.resolvers.go:999-1002).</summary>
+    [GraphQLName("archiveThread")]
+    public async Task<bool> ArchiveThreadAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        await threads.ArchiveAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UnarchiveThread (axonhub.resolvers.go:1004-1007).</summary>
+    [GraphQLName("unarchiveThread")]
+    public async Task<bool> UnarchiveThreadAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        await threads.UnarchiveAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.RetainThread (axonhub.resolvers.go:999-1002).</summary>
+    [GraphQLName("retainThread")]
+    public async Task<bool> RetainThreadAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        await threads.RetainAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UnretainThread (axonhub.resolvers.go:1004-1007).</summary>
+    [GraphQLName("unretainThread")]
+    public async Task<bool> UnretainThreadAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        await threads.UnretainAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
 }

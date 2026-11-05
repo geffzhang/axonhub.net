@@ -14,6 +14,7 @@ using AxonHub.Api.Prompts;
 using AxonHub.Api.Security;
 using AxonHub.Api.Settings;
 using AxonHub.Api.Static;
+using AxonHub.Api.Traces;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -274,6 +275,21 @@ builder.Services.AddScoped<ModelManagementService>();
 // (C187/C188).
 builder.Services.AddScoped<PromptPrivacy>();
 builder.Services.AddScoped<PromptManagementService>();
+
+// Trace/thread management surface (biz.TraceService / biz.ThreadService admin
+// reads, the status transitions and the trace segment tree). The reference
+// runs every access through an ent client carrying the privacy policy in the
+// context; the port evaluates the same policies explicitly (C189). The admin
+// stores are distinct from the request-path ITraceStore/IThreadStore.
+builder.Services.AddScoped<ITraceAdminStore, TraceAdminStore>();
+builder.Services.AddScoped<IThreadAdminStore, ThreadAdminStore>();
+builder.Services.AddScoped<IRequestSegmentStore, RequestSegmentStore>();
+builder.Services.AddScoped<IUsageMetadataStore, UsageMetadataStore>();
+builder.Services.AddScoped<TracePrivacy>();
+builder.Services.AddScoped<TraceSegmentService>();
+builder.Services.AddScoped<TraceManagementService>();
+builder.Services.AddScoped<ThreadManagementService>();
+builder.Services.AddScoped<RequestManagementService>();
 
 // Management identity: the gate middleware writes the authenticated caller
 // into HttpContext.Items; the scoped seam reads it back for the resolvers.

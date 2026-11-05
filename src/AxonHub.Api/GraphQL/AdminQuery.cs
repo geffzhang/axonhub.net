@@ -475,11 +475,82 @@ public sealed class AdminQuery
         return [.. projects.Select(UserProfileMapping.ToGraphQL)];
     }
 
+    /// <summary>Port of queryResolver.Traces (ent.resolvers.go:557-570).</summary>
+    /// <remarks>
+    /// The reference validates pagination, rewrites a CREATED_AT order to
+    /// ent.DefaultTraceOrder's field (id) and then paginates; the list runs
+    /// through the Trace schema's query policy (C189).
+    /// </remarks>
+    [GraphQLName("traces")]
+    public async Task<TraceConnectionType> TracesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        TraceOrder? orderBy,
+        TraceWhereInput? where,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = TraceMapping.ToRootTraceSortField(orderBy);
+        var page = await traces.ListAsync(
+                new TraceListQuery
+                {
+                    Where = TraceMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Threads (ent.resolvers.go:541-554).</summary>
+    [GraphQLName("threads")]
+    public async Task<ThreadConnectionType> ThreadsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ThreadOrder? orderBy,
+        ThreadWhereInput? where,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = TraceMapping.ToRootThreadSortField(orderBy);
+        var page = await threads.ListAsync(
+                new ThreadListQuery
+                {
+                    Where = TraceMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves only Project, User, APIKey, Model and Prompt so far and
-    /// reports every other type as "unknown node type: %s" (C165).
+    /// port resolves Project, User, APIKey, Model, Prompt, Trace and Thread so
+    /// far and reports every other type as "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -536,6 +607,22 @@ public sealed class AdminQuery
                 var prompt = await prompts.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return PromptMapping.ToGraphQL(prompt);
+            }
+
+            case "Trace":
+            {
+                var traces = services.GetRequiredService<TraceManagementService>();
+                var trace = await traces.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return TraceMapping.ToGraphQL(trace);
+            }
+
+            case "Thread":
+            {
+                var threads = services.GetRequiredService<ThreadManagementService>();
+                var thread = await threads.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return TraceMapping.ToGraphQL(thread);
             }
 
             default:
