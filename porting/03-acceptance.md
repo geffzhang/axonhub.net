@@ -42,6 +42,10 @@ EF 模型（而非 EF 迁移）由 `EfCoreModelTests` 与幂等 DDL 建出的库
 `BackupServiceTests` 新增 8），按项目规则未运行 lint / build / test；上表仍是 §107 的实测值。§108 落地后的
 静态计数为 `AxonHub.Api.Tests` 2772、四项目合计 6175，下一次全量运行应以该数字复核。
 
+§109 追加 21 个用例（`ApiKeyProfileTemplateServiceTests` 14、`AdminApiKeyProfileTemplateEndpointTests` 3、
+`ApiKeyProfileTemplateStoreTests` 4），按项目规则未运行 lint / build / test；上表仍是 §107 的实测值。§109 落地后的
+静态计数为 `AxonHub.Api.Tests` 2789、`AxonHub.Persistence.Tests` 280、四项目合计 6196，下一次全量运行应以该数字复核。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

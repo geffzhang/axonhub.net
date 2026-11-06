@@ -453,6 +453,31 @@ public sealed class ApiKeyRecord
     public long? UserId { get; set; }
 }
 
+/// <summary>Row of the reference <c>api_key_profile_templates</c> table.</summary>
+public sealed class ApiKeyProfileTemplateRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// objects.APIKeyProfile JSON. Ent defaults an omitted profile to an empty
+    /// APIKeyProfile; an explicit nil profile is stored as SQL NULL.
+    /// </summary>
+    public string? Profile { get; set; }
+
+    public long ProjectId { get; set; } = 1;
+}
+
 /// <summary>Row of the reference <c>systems</c> table (key/value settings).</summary>
 public sealed class SystemRecord
 {

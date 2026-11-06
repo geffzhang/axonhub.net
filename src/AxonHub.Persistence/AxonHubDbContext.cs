@@ -44,6 +44,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<ApiKeyRecord> ApiKeys => Set<ApiKeyRecord>();
 
+    public DbSet<ApiKeyProfileTemplateRecord> ApiKeyProfileTemplates => Set<ApiKeyProfileTemplateRecord>();
+
     public DbSet<SystemRecord> Systems => Set<SystemRecord>();
 
     public DbSet<PromptRecord> Prompts => Set<PromptRecord>();
@@ -96,6 +98,7 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureUser(modelBuilder.Entity<UserRecord>());
         ConfigureProject(modelBuilder.Entity<ProjectRecord>());
         ConfigureApiKey(modelBuilder.Entity<ApiKeyRecord>());
+        ConfigureApiKeyProfileTemplate(modelBuilder.Entity<ApiKeyProfileTemplateRecord>());
         ConfigureSystem(modelBuilder.Entity<SystemRecord>());
         ConfigurePrompt(modelBuilder.Entity<PromptRecord>());
         ConfigureDataStorage(modelBuilder.Entity<DataStorageRecord>());
@@ -489,6 +492,35 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         builder.HasIndex(apiKey => apiKey.UserId).HasDatabaseName("api_keys_by_user_id");
         builder.HasIndex(apiKey => apiKey.ProjectId).HasDatabaseName("api_keys_by_project_id");
         builder.HasIndex(apiKey => apiKey.Key).HasDatabaseName("api_keys_by_key").IsUnique();
+    }
+
+    private static void ConfigureApiKeyProfileTemplate(
+        EntityTypeBuilder<ApiKeyProfileTemplateRecord> builder)
+    {
+        builder.ToTable("api_key_profile_templates");
+        builder.HasKey(template => template.Id);
+        builder.Property(template => template.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(template => template.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(template => template.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(template => template.DeletedAt).HasColumnName("deleted_at").IsRequired();
+        builder.Property(template => template.Name).HasColumnName("name").HasColumnType("varchar").IsRequired();
+        builder.Property(template => template.Description)
+            .HasColumnName("description")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(template => template.Profile).HasColumnName("profile").HasColumnType("jsonb");
+        builder.Property(template => template.ProjectId).HasColumnName("project_id").IsRequired();
+
+        builder.HasIndex(template => new { template.ProjectId, template.Name, template.DeletedAt })
+            .HasDatabaseName("api_key_profile_templates_by_project_name")
+            .IsUnique();
     }
 
     private static void ConfigureChannel(EntityTypeBuilder<ChannelRecord> builder)

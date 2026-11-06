@@ -1471,6 +1471,80 @@ public sealed class AdminMutation
                     cancellationToken)
                 .ConfigureAwait(false));
 
+    /// <summary>
+    /// Port of mutationResolver.CreateAPIKeyProfileTemplate
+    /// (axonhub.resolvers.go:731-734).
+    /// </summary>
+    [GraphQLName("createApiKeyProfileTemplate")]
+    public async Task<ApiKeyProfileTemplateType> CreateApiKeyProfileTemplateAsync(
+        CreateApiKeyProfileTemplateInput input,
+        ApiKeyProfileInput profile,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+        => ApiKeyProfileTemplateMapping.ToGraphQL(
+            await templates.CreateAsync(
+                    new CreateApiKeyProfileTemplateCommand
+                    {
+                        Name = input.Name,
+                        Description = input.Description,
+                        ProjectId = GidValue.Parse(input.ProjectID).Id,
+                    },
+                    ApiKeyMapping.ToModel(profile),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateAPIKeyProfileTemplate
+    /// (axonhub.resolvers.go:736-739).
+    /// </summary>
+    [GraphQLName("updateApiKeyProfileTemplate")]
+    public async Task<ApiKeyProfileTemplateType> UpdateApiKeyProfileTemplateAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateApiKeyProfileTemplateInput input,
+        ApiKeyProfileInput? profile,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+        => ApiKeyProfileTemplateMapping.ToGraphQL(
+            await templates.UpdateAsync(
+                    GidValue.Parse(id).Id,
+                    new UpdateApiKeyProfileTemplateCommand
+                    {
+                        Name = input.Name,
+                        Description = input.Description,
+                    },
+                    profile is null ? null : ApiKeyMapping.ToModel(profile),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteAPIKeyProfileTemplate
+    /// (axonhub.resolvers.go:741-744).
+    /// </summary>
+    [GraphQLName("deleteApiKeyProfileTemplate")]
+    public async Task<ApiKeyProfileTemplateType> DeleteApiKeyProfileTemplateAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+        => ApiKeyProfileTemplateMapping.ToGraphQL(
+            await templates.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.LoadAPIKeyProfileTemplate
+    /// (axonhub.resolvers.go:746-749).
+    /// </summary>
+    [GraphQLName("loadApiKeyProfileTemplate")]
+    public async Task<ApiKeyType> LoadApiKeyProfileTemplateAsync(
+        LoadApiKeyProfileTemplateInput input,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await templates.LoadAsync(
+                    GidValue.Parse(input.TemplateID).Id,
+                    GidValue.Parse(input.ApiKeyID).Id,
+                    cancellationToken)
+                .ConfigureAwait(false));
+
     /// <summary>Port of mutationResolver.RotateAPIKey (axonhub.resolvers.go:484-487).</summary>
     [GraphQLName("rotateAPIKey")]
     public async Task<ApiKeyType> RotateApiKeyAsync(

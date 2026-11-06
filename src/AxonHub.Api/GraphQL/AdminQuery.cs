@@ -233,6 +233,46 @@ public sealed class AdminQuery
     }
 
     /// <summary>
+    /// Port of queryResolver.APIKeyProfileTemplates (ent.resolvers.go:355-368).
+    /// </summary>
+    /// <remarks>
+    /// The reference validates pagination and rewrites a CREATED_AT order to
+    /// ent.DefaultAPIKeyProfileTemplateOrder's field (id) before paginating; the
+    /// list runs through the template schema's query policy.
+    /// </remarks>
+    [GraphQLName("apiKeyProfileTemplates")]
+    public async Task<ApiKeyProfileTemplateConnectionType> ApiKeyProfileTemplatesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ApiKeyProfileTemplateOrder? orderBy,
+        ApiKeyProfileTemplateWhereInput? where,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ApiKeyProfileTemplateMapping.ToSortField(orderBy);
+        var page = await templates.ListAsync(
+                new ApiKeyProfileTemplateListQuery
+                {
+                    Where = ApiKeyProfileTemplateMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ApiKeyProfileTemplateMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ApiKeyProfileTemplateMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>
     /// Port of queryResolver.Models (ent.resolvers.go:416-424).
     /// </summary>
     /// <remarks>
@@ -705,6 +745,14 @@ public sealed class AdminQuery
                 var apiKey = await apiKeys.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return ApiKeyMapping.ToGraphQL(apiKey);
+            }
+
+            case "APIKeyProfileTemplate":
+            {
+                var templates = services.GetRequiredService<ApiKeyProfileTemplateService>();
+                var template = await templates.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return ApiKeyProfileTemplateMapping.ToGraphQL(template);
             }
 
             case "Model":

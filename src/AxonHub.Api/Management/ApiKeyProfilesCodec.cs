@@ -218,6 +218,56 @@ public static class ApiKeyProfilesCodec
     }
 
     /// <summary>
+    /// Go-compatible marshal of one objects.APIKeyProfile, used by the
+    /// api_key_profile_templates.profile jsonb column.
+    /// </summary>
+    public static string SerializeProfile(ApiKeyProfileModel profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(
+                   buffer,
+                   new JsonWriterOptions
+                   {
+                       Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                   }))
+        {
+            WriteProfile(writer, profile);
+        }
+
+        return Encoding.UTF8.GetString(GoJson.Escape(buffer.ToArray()));
+    }
+
+    /// <summary>
+    /// Decodes the api_key_profile_templates.profile column. A SQL NULL column
+    /// scans as a nil *objects.APIKeyProfile in ent, so null/empty JSON maps to
+    /// null here.
+    /// </summary>
+    public static ApiKeyProfileModel? DeserializeProfile(string? json)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException(
+                "json: cannot unmarshal " + root.ValueKind + " into Go value of type objects.APIKeyProfile");
+        }
+
+        return ReadProfile(root);
+    }
+
+    /// <summary>
     /// Port of APIKey.GetActiveProfile (internal/ent/extra.go:30-42): resolve the
     /// named active profile, or null when no profile is active or the name does
     /// not match.
@@ -470,6 +520,40 @@ public static class ApiKeyProfilesCodec
     public static string OrDefaultChannelTagsMatchMode(string mode)
         => mode is "all" or "none" ? mode : "any";
 
+    /// <summary>
+    /// Port of normalizeAndValidateProfileRoutingPolicy
+    /// (biz/api_key.go:813-839): default a nil strategy to "default", normalize
+    /// the stored value, then validate. The reference mutates the profile in
+    /// place; records are immutable here, so the normalized profile is returned.
+    /// </summary>
+    public static ApiKeyProfileModel NormalizeAndValidateRoutingPolicy(
+        ApiKeyProfileModel profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var loadBalanceStrategy = RoutingPolicy.NormalizeValue(
+            profile.LoadBalanceStrategy ?? RoutingPolicy.Default);
+        if (!RoutingPolicy.IsValidLoadBalancerStrategy(loadBalanceStrategy))
+        {
+            throw new InvalidOperationException(
+                "profile '" + profile.Name + "' loadBalanceStrategy is invalid");
+        }
+
+        var traceStickyMode = RoutingPolicy.NormalizeValue(
+            profile.TraceStickyMode ?? RoutingPolicy.Default);
+        if (!RoutingPolicy.IsValidTraceStickyMode(traceStickyMode))
+        {
+            throw new InvalidOperationException(
+                "profile '" + profile.Name + "' traceStickyMode is invalid");
+        }
+
+        return profile with
+        {
+            LoadBalanceStrategy = loadBalanceStrategy,
+            TraceStickyMode = traceStickyMode,
+        };
+    }
+
     private static ApiKeyProfilesModel NormalizeProfileRoutingPolicies(ApiKeyProfilesModel profiles)
     {
         if (profiles.Profiles is null)
@@ -480,29 +564,7 @@ public static class ApiKeyProfilesCodec
         var normalized = new List<ApiKeyProfileModel>(profiles.Profiles.Count);
         foreach (var profile in profiles.Profiles)
         {
-            // Port of normalizeAndValidateProfileRoutingPolicy
-            // (biz/api_key.go:813-839).
-            var loadBalanceStrategy = RoutingPolicy.NormalizeValue(
-                profile.LoadBalanceStrategy ?? RoutingPolicy.Default);
-            if (!RoutingPolicy.IsValidLoadBalancerStrategy(loadBalanceStrategy))
-            {
-                throw new InvalidOperationException(
-                    "profile '" + profile.Name + "' loadBalanceStrategy is invalid");
-            }
-
-            var traceStickyMode = RoutingPolicy.NormalizeValue(
-                profile.TraceStickyMode ?? RoutingPolicy.Default);
-            if (!RoutingPolicy.IsValidTraceStickyMode(traceStickyMode))
-            {
-                throw new InvalidOperationException(
-                    "profile '" + profile.Name + "' traceStickyMode is invalid");
-            }
-
-            normalized.Add(profile with
-            {
-                LoadBalanceStrategy = loadBalanceStrategy,
-                TraceStickyMode = traceStickyMode,
-            });
+            normalized.Add(NormalizeAndValidateRoutingPolicy(profile));
         }
 
         return profiles with { Profiles = normalized };
@@ -544,7 +606,29 @@ public static class ApiKeyProfilesCodec
         var b = NormalizeProfileForComparison(right);
 
         return string.Equals(a.Name, b.Name, StringComparison.Ordinal)
-            && SequenceEqual(a.ModelMappings, b.ModelMappings)
+            && ProfileContentsEqual(a, b);
+    }
+
+    /// <summary>
+    /// Port of isLegacyTemplateMatch's reflect.DeepEqual comparison
+    /// (biz/api_key_profile_template.go:355-373): normalize both sides, clear
+    /// Name, TemplateID and TemplateName, then compare structurally.
+    /// </summary>
+    public static bool SameProfileContentsIgnoringNameAndTemplate(
+        ApiKeyProfileModel left,
+        ApiKeyProfileModel right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+
+        return ProfileContentsEqual(
+            NormalizeProfileForComparison(left),
+            NormalizeProfileForComparison(right));
+    }
+
+    /// <summary>Structural comparison with the template link fields already cleared.</summary>
+    private static bool ProfileContentsEqual(ApiKeyProfileModel a, ApiKeyProfileModel b)
+        => SequenceEqual(a.ModelMappings, b.ModelMappings)
             && QuotaEqual(a.Quota, b.Quota)
             && string.Equals(a.LoadBalanceStrategy, b.LoadBalanceStrategy, StringComparison.Ordinal)
             && string.Equals(a.TraceStickyMode, b.TraceStickyMode, StringComparison.Ordinal)
@@ -555,9 +639,9 @@ public static class ApiKeyProfilesCodec
                 b.ChannelTagsMatchMode,
                 StringComparison.Ordinal)
             && SequenceEqual(a.ModelIDs, b.ModelIDs);
-    }
 
-    private static ApiKeyProfileModel NormalizeProfileForComparison(ApiKeyProfileModel profile)
+    /// <summary>Port of normalizeProfileForComparison (biz/api_key.go:733-760).</summary>
+    public static ApiKeyProfileModel NormalizeProfileForComparison(ApiKeyProfileModel profile)
         => profile with
         {
             TemplateId = null,

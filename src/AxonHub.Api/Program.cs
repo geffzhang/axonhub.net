@@ -266,6 +266,14 @@ builder.Services.AddScoped<ChannelOverrideTemplateService>();
 builder.Services.AddScoped<ApiKeyPrivacy>();
 builder.Services.AddScoped<ApiKeyManagementService>();
 
+// API key profile templates (biz.APIKeyProfileTemplateService): the
+// apiKeyProfileTemplates connection, node(APIKeyProfileTemplate), the
+// create/update/delete/load mutations and linkedProfilesCount under the
+// template schema's own privacy rules.
+builder.Services.AddScoped<IApiKeyProfileTemplateStore, ApiKeyProfileTemplateStore>();
+builder.Services.AddScoped<ApiKeyProfileTemplatePrivacy>();
+builder.Services.AddScoped<ApiKeyProfileTemplateService>();
+
 // Models (biz.ModelService): models / queryModels / the association helpers /
 // node(Model) and the create/update/status/delete/bulk mutations under the
 // Model privacy policy (identical to the Channel policy). The model fetcher

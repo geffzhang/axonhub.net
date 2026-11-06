@@ -14,6 +14,7 @@ public sealed class SchemaTests(PostgresFixture fixture)
 {
     private static readonly string[] ExpectedTables =
     [
+        "api_key_profile_templates",
         "api_keys", "channel_model_price_versions", "channel_model_prices",
         "channel_override_templates", "channels", "data_storages", "models", "oidc_identities",
         "projects", "prompt_protection_rules", "prompts", "request_executions",
@@ -27,6 +28,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
         [
             "id", "created_at", "updated_at", "deleted_at", "key", "name", "type",
             "status", "scopes", "profiles", "allowed_ips", "project_id", "user_id",
+        ],
+        ["api_key_profile_templates"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "name", "description",
+            "profile", "project_id",
         ],
         ["projects"] =
         [
@@ -164,6 +170,13 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["timestamp with time zone"] = ["created_at", "updated_at"],
                 ["jsonb"] = ["scopes", "profiles", "allowed_ips"],
                 ["character varying"] = ["key", "name", "type", "status"],
+            },
+            ["api_key_profile_templates"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "project_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at"],
+                ["jsonb"] = ["profile"],
+                ["character varying"] = ["name", "description"],
             },
             ["projects"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
@@ -387,6 +400,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
             ["api_keys_by_user_id"] = ("api_keys", false, ["user_id"]),
             ["api_keys_by_project_id"] = ("api_keys", false, ["project_id"]),
             ["api_keys_by_key"] = ("api_keys", true, ["key"]),
+            ["api_key_profile_templates_by_project_name"] =
+                ("api_key_profile_templates", true, ["project_id", "name", "deleted_at"]),
             ["systems_key_key"] = ("systems", true, ["key"]),
             ["threads_by_project_id"] = ("threads", false, ["project_id"]),
             ["threads_by_thread_id"] = ("threads", true, ["thread_id"]),
