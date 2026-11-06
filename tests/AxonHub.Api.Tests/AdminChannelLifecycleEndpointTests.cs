@@ -516,6 +516,13 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public List<ChannelRecord> CreatedChannels { get; } = [];
 
+    /// <summary>
+    /// The live rows, exposed so the quota routing migration tests can build an
+    /// <see cref="IChannelStore"/> read seam over the same table this store
+    /// mutates.
+    /// </summary>
+    public IReadOnlyList<ChannelRecord> LiveRows => _rows;
+
     public List<(long Id, ChannelUpdateRecord Update)> UpdateCalls { get; } = [];
 
     public List<(long Id, string EndpointsJson)> SaveEndpointsCalls { get; } = [];
@@ -550,6 +557,13 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
     public Exception? NameCheckFailure { get; set; }
 
     public Exception? UpdateFailure { get; set; }
+
+    /// <summary>
+    /// Per-id update failures, mirroring the quota routing migration test's
+    /// beforeChannelUpdate hook (fail one channel without failing the earlier
+    /// successful writes).
+    /// </summary>
+    public Dictionary<long, Exception> UpdateFailuresById { get; } = [];
 
     public Exception? CreateFailure { get; set; }
 
@@ -630,6 +644,11 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         if (UpdateFailure is not null)
         {
             throw UpdateFailure;
+        }
+
+        if (UpdateFailuresById.TryGetValue(snapshot.Id, out var failure))
+        {
+            throw failure;
         }
 
         if (UpdateConflict)

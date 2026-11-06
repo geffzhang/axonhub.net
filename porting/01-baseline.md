@@ -5518,6 +5518,52 @@ CodeChallenge）、`internal/server/api/error.go:12-20`（JSONError 信封）、
 差异：C121 由 gap 转为 resolved；C202 登记代理、传输与 JSON 解码的残余细节（错误文案、连接池、
 ProxyFromEnvironment、ShouldBindJSON 的尾随内容、xcache 多后端）。
 
+## 112. 配额路由启动数据迁移（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，2026-11-06）
+
+参照 `b8bb3421`：`internal/server/biz/quota_routing_migration.go`（132 行，`Migrate`:28-33、
+`migrateInTransaction`:35-110、`quotaRoutingModeFromLegacy`:112-123、`QuotaRoutingModeFromLegacy`:125-131）、
+`internal/server/biz/fx_module.go:117-128`（ProviderQuotaService 的 OnStart 在 goroutine 里执行迁移
+`(&quotaRoutingMigrator{system: systemSvc, channels: channelSvc}).Migrate(context.Background())`，失败只
+`log.Error("quota routing migration failed")`，不阻塞也不使启动失败）与 `internal/server/biz/abstract.go`
+的 `RunInTransaction`（已有外层事务时复用）。参照测试 `quota_routing_migration_test.go`（1 个 Test、9 个
+`t.Run`）与 `quota_routing_migration_postgres_test.go`（`AXONHUB_TEST_PG_DSN` 门控，3 个 `t.Run`：legacy
+缺失只写标记、legacy + allowed 通道只迁移一次、4 路并发启动幂等）。实时上游 `f272549f` 的该文件与冻结
+基线逐字节一致。
+
+新增 `Api/Management/QuotaRoutingMigrationService.cs`（claim、legacy 解码与映射、通道改写、标记与全部
+错误包装）、`Api/Management/QuotaRoutingMigrationHostedService.cs`（宿主启动后在独立 scope 里执行一次，
+`CancellationToken.None`，失败只记录错误）；`Program` 注册两者。持久化侧补齐 `ISystemStore.CreateIfAbsentAsync`
+（`ON CONFLICT ("key") DO NOTHING`，软删行同样冲突）与 `ISystemStore.RunInTransactionAsync`（复用
+`db.Database.CurrentTransaction`，否则新开并在本调用内提交 / 回滚）；`ChannelWriteStore.UpdateAsync` 改为
+加入 ambient 事务而不是每次新开，使通道更新与 systems 写入落在同一事务。
+
+- 事务与 claim：`uuid.NewString()` 等价的 `Guid.NewGuid().ToString()` 写入 `quota_routing_migration_done`；
+  读回时应用软删谓词，缺失按 `ent: system not found` 报错；`marker.Value != claim` 直接返回，因此并发启动
+  只有一个实例执行迁移。
+- legacy 与新键：`quota_enforcement_settings` 缺失时只把标记写为 `"true"`（此路径不套 outer 包装）；解码按
+  `{"enabled","exhaustedOnly","dePrioritize","allowedChannelIDs","mode"}`；`quota_routing_mode_from_legacy`
+  的五条映射沿用 §95；`quota_routing_settings` 仅在缺失时写入 `{"defaultMode":<mode>}`（GoJson、模式校验）。
+- allowedChannelIDs：逐项按 ent `Channel.Query().Where(IDEQ).Only` 读取（缺失只 Warn 并跳过），把
+  `settings.quotaRoutingMode` 置为 `ignore_quota` 后经 `ChannelLifecycleService.UpdateAsync` 写回
+  （`ChannelService.UpdateChannel` 的校验顺序、Go JSON 序列化与 `channel was updated concurrently` 守卫）。
+- 错误文案：claim、标记读取、legacy 读取（`failed to get system value` 双层）、解码、新键检查、新键写入
+  （`failed to create system setting` 双层）、通道加载、通道写入（`failed to migrate channel %d`）与最终
+  标记写入（双层）逐条与参照一致；任一失败回滚整条事务，下次启动重试。
+- 启动时序：hosted service 的 `Task.Yield()` + 独立 scope 复刻 goroutine 的非阻塞、失败只打日志语义。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 全新迁移、重跑与 4 路并发幂等、缺失通道跳过、nil settings、既有新键、空 allowed 列表、legacy 缺失、失败回滚后重试、10 个错误前缀 | `tests/AxonHub.Api.Tests/QuotaRoutingMigrationServiceTests.cs` | 19 |
+| claim 插入 / 软删冲突、事务提交 / 回滚 / 复用 ambient、4 路并发抢占恰有一个 owner | `tests/AxonHub.Persistence.Tests/SystemStoreTests.cs` | +6 |
+| 通道更新加入 ambient 事务，channels 与 systems 写入随外部回滚一起消失 | `tests/AxonHub.Persistence.Tests/ChannelWriteStoreTests.cs` | +1 |
+
+`AxonHub.Api.Tests` 由 2909 增至 2928（+19），`AxonHub.Persistence.Tests` 由 294 增至 301（+7），四个项目
+合计由 6330 增至 6356。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]`
+的静态计数；下一次全量运行应以 2928 / 301 / 6356 复核。**
+
+差异：C183 由 accepted 转为 resolved；日志字段形态（`channel_ids=1,2` 对照 `log.Any([]int)`）与
+System.Text.Json 的解码文案沿用 C095 / C120 与既有 JSON 文案差异的口径，不另立条目。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -5545,7 +5591,7 @@ ProxyFromEnvironment、ShouldBindJSON 的尾随内容、xcache 多后端）。
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；供应商配额采集子系统（checkers / ProviderQuotaService / provider_quota_status / GraphQL 配额面）与启动数据迁移未移植（C182 / C183），null provider 下与参照「通道无配额状态」可观察等价 | 中 | 闸门完成；采集与迁移随 C182 / C183 切片落地 |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；供应商配额采集子系统（checkers / ProviderQuotaService / provider_quota_status / GraphQL 配额面）未移植（C182），null provider 下与参照「通道无配额状态」可观察等价 | 中 | 闸门与迁移完成；采集随 C182 切片落地 |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |

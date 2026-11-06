@@ -160,6 +160,153 @@ public sealed class SystemStoreTests(PostgresFixture fixture)
         Assert.Equal(0, row.DeletedAt);
     }
 
+    [Fact]
+    public async Task CreateIfAbsentInsertsOnlyWhenTheKeyIsMissing()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        await store.SetAsync("existing", "first");
+        await store.CreateIfAbsentAsync("existing", "second");
+
+        Assert.Equal("first", (await store.GetByKeyAsync("existing"))!.Value);
+
+        await store.CreateIfAbsentAsync("fresh", "claim");
+        Assert.Equal("claim", (await store.GetByKeyAsync("fresh"))!.Value);
+
+        await using var connection = await db.Factory.OpenAsync();
+        Assert.Equal(2, await connection.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM \"systems\";"));
+    }
+
+    [Fact]
+    public async Task CreateIfAbsentDoesNothingForASoftDeletedRow()
+    {
+        // The unique index covers key alone, so a soft-deleted marker still
+        // makes ON CONFLICT DO NOTHING suppress the claim insert.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        var system = NewSystem();
+        var id = await store.CreateAsync(system);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"systems\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, Id = id });
+        }
+
+        await store.CreateIfAbsentAsync(system.Key, "claim");
+
+        Assert.Null(await store.GetByKeyAsync(system.Key));
+
+        await using var verify = await db.Factory.OpenAsync();
+        Assert.Equal(1, await verify.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM \"systems\";"));
+    }
+
+    [Fact]
+    public async Task RunInTransactionCommitsTheCallbackWrites()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        await store.RunInTransactionAsync(
+            cancellationToken => store.SetAsync("committed", "1", cancellationToken));
+
+        Assert.Equal("1", (await store.GetByKeyAsync("committed"))!.Value);
+    }
+
+    [Fact]
+    public async Task RunInTransactionRollsBackTheCallbackWrites()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.RunInTransactionAsync(async cancellationToken =>
+            {
+                await store.CreateIfAbsentAsync("claim", "mine", cancellationToken);
+                await store.SetAsync("settings", "written", cancellationToken);
+                throw new InvalidOperationException("boom");
+            }));
+
+        Assert.Null(await store.GetByKeyAsync("claim"));
+        Assert.Null(await store.GetByKeyAsync("settings"));
+    }
+
+    [Fact]
+    public async Task RunInTransactionJoinsAnAmbientTransaction()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        await using (var transaction = await context.Database.BeginTransactionAsync())
+        {
+            // The callback must not commit the ambient transaction.
+            await store.RunInTransactionAsync(
+                cancellationToken => store.SetAsync("joined", "1", cancellationToken));
+            await transaction.RollbackAsync();
+        }
+
+        await using var verify = db.Factory.CreateDbContext();
+        var verifyStore = new SystemStore(verify);
+        Assert.Null(await verifyStore.GetByKeyAsync("joined"));
+    }
+
+    [Fact]
+    public async Task ConcurrentClaimsElectExactlyOneOwner()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+
+        async Task<(bool Owns, string Claim)> ClaimAsync()
+        {
+            await using var context = db.Factory.CreateDbContext();
+            var store = new SystemStore(context);
+            var claim = Guid.NewGuid().ToString();
+            var owns = false;
+
+            await store.RunInTransactionAsync(async cancellationToken =>
+            {
+                await store.CreateIfAbsentAsync(
+                    "quota_routing_migration_done",
+                    claim,
+                    cancellationToken);
+                var marker = await store.GetByKeyAsync(
+                    "quota_routing_migration_done",
+                    cancellationToken);
+                owns = marker?.Value == claim;
+            });
+
+            return (owns, claim);
+        }
+
+        // Four concurrent starts, like the reference's real-Postgres test.
+        var claims = Enumerable.Range(0, 4).Select(_ => ClaimAsync()).ToArray();
+        var results = await Task.WhenAll(claims);
+
+        // The unique index (key alone) plus the transaction make exactly one
+        // start the migration; the losers read the committed claim and skip.
+        var winner = Assert.Single(results.Where(result => result.Owns).ToArray());
+
+        await using var verify = db.Factory.CreateDbContext();
+        var marker = await new SystemStore(verify).GetByKeyAsync(
+            "quota_routing_migration_done");
+        Assert.Equal(winner.Claim, marker?.Value);
+    }
+
     private static SystemRecord NewSystem() => new()
     {
         CreatedAt = CreatedAt,

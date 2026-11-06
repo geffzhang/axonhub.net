@@ -56,6 +56,13 @@ EF 模型（而非 EF 迁移）由 `EfCoreModelTests` 与幂等 DDL 建出的库
 `Llm/Http/ProxyConfig.cs` / `ProxyExecutorFactory.cs`，其 URL 分支由上述 API 用例经 `IProxyExecutorFactory`
 接缝验证，具体 `SocketsHttpHandler` 参数与残余差异见 C202。
 
+§112 追加 26 个用例（`QuotaRoutingMigrationServiceTests` 19、`SystemStoreTests` 新增 6、
+`ChannelWriteStoreTests` 新增 1），按项目规则未运行 lint / build / test；上表仍是 §107 的实测值。
+§112 落地后的静态计数为 `AxonHub.Api.Tests` 2928、`AxonHub.Persistence.Tests` 301、四项目合计 6356，
+下一次全量运行应以该数字复核。§112 同时把 `ChannelWriteStore.UpdateAsync` 改为加入 ambient 事务、
+为 `ISystemStore` 增加 `CreateIfAbsentAsync` / `RunInTransactionAsync`，共享事务语义由
+`SystemStoreTests` 与 `ChannelWriteStoreTests` 的真实 PostgreSQL 用例锁定。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

@@ -238,6 +238,16 @@ builder.Services.AddScoped<ChannelQueryService>();
 builder.Services.AddScoped<IChannelWriteStore, ChannelWriteStore>();
 builder.Services.AddScoped<ChannelLifecycleService>();
 
+// Quota routing startup migration (biz/quota_routing_migration.go): one
+// transaction claims quota_routing_migration_done, copies the legacy
+// quota_enforcement_settings into quota_routing_settings when the new key is
+// absent, rewrites the legacy allowedChannelIDs to ignore_quota, then flips
+// the marker to "true". The reference launches it from ProviderQuotaService's
+// OnStart hook in a goroutine; the hosted service keeps that non-blocking,
+// log-only-failure timing (C183).
+builder.Services.AddScoped<QuotaRoutingMigrationService>();
+builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
+
 // Endpoint auto-detection (detectChannelEndpoints): read-only upstream probes
 // built from the channel type's primary outbound and generic peers.
 builder.Services.AddScoped<ChannelEndpointDetectService>();

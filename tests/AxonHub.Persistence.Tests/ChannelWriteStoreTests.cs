@@ -583,6 +583,52 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task UpdateJoinsAnAmbientTransactionSharedWithSystemWrites()
+    {
+        // The quota routing startup migration runs one transaction over the
+        // systems claim/settings writes and ChannelService.UpdateChannel; the
+        // store must not open a second transaction or commit the outer one.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelWriteStore(context);
+        var systems = new SystemStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            name: "Alpha",
+            settings: """{"modelMappings":[]}""");
+
+        var snapshot = await channels.GetForUpdateAsync(channel.Id);
+        Assert.NotNull(snapshot);
+
+        await using (var transaction = await context.Database.BeginTransactionAsync())
+        {
+            await channels.UpdateAsync(
+                snapshot,
+                new ChannelUpdateRecord
+                {
+                    SettingsJson = """{"modelMappings":[],"quotaRoutingMode":"ignore_quota"}""",
+                });
+            await systems.SetAsync(
+                "quota_routing_settings",
+                """{"defaultMode":"backpressure"}""");
+            await systems.SetAsync("quota_routing_migration_done", "true");
+
+            await transaction.RollbackAsync();
+        }
+
+        await using var verify = db.Factory.CreateDbContext();
+        var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+        Assert.Equal("""{"modelMappings": []}""", reloaded.Settings);
+        Assert.Equal(UpdatedAt, reloaded.UpdatedAt);
+        Assert.False(await verify.Systems.AnyAsync(
+            row => row.Key == "quota_routing_settings"));
+        Assert.False(await verify.Systems.AnyAsync(
+            row => row.Key == "quota_routing_migration_done"));
+    }
+
+    [Fact]
     public async Task UnguardedUpdateIgnoresAStaleLoadedVersion()
     {
         await using var db = new TestDatabase(fixture);

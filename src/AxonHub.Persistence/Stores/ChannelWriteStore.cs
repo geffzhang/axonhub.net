@@ -460,9 +460,12 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
 
         // UpdateChannel wraps the save and the follow-up ensureChannelModelPrices
         // in one RunInTransaction (channel.go:1072-1172); the hook joins it.
-        await using var transaction = await db.Database
-            .BeginTransactionAsync(cancellationToken)
-            .ConfigureAwait(false);
+        // ent's RunInTransaction reuses an enclosing transaction, so when an
+        // ambient one exists (the quota routing startup migration) it owns the
+        // commit and this call must not begin or commit a nested transaction.
+        await using var transaction = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
 
         int affected;
         try
@@ -518,8 +521,9 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
         if (affected == 0)
         {
             // The row vanished or the loaded updated_at no longer matches; ent
-            // reports both as not found. Disposing rolls the transaction back
-            // (nothing was written).
+            // reports both as not found. None of this store's statements wrote
+            // anything; disposing the owned transaction rolls it back, while an
+            // ambient owner decides its own fate.
             return null;
         }
 
@@ -528,7 +532,10 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
             await afterUpdate(snapshot.Id, cancellationToken).ConfigureAwait(false);
         }
 
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         // ent returns the saved entity. The port projects the loaded snapshot
         // instead of reloading; concurrent edits of untouched columns are

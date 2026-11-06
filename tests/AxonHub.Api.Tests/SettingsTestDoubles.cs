@@ -8,6 +8,7 @@ namespace AxonHub.Api.Tests;
 /// <summary>In-memory systems table mirroring the Dapper store's live-row predicate.</summary>
 internal sealed class FakeSystemStore : ISystemStore
 {
+    private readonly SemaphoreSlim _transactionLock = new(1, 1);
     private long _nextId = 1;
 
     public List<SystemRecord> Rows { get; } = [];
@@ -15,6 +16,14 @@ internal sealed class FakeSystemStore : ISystemStore
     public Exception? GetFailure { get; set; }
 
     public Exception? SetFailure { get; set; }
+
+    public Exception? CreateIfAbsentFailure { get; set; }
+
+    /// <summary>Fails the read of one key only, leaving the claim/marker reads intact.</summary>
+    public Dictionary<string, Exception> GetFailuresByKey { get; } = [];
+
+    /// <summary>Fails the write of one key only.</summary>
+    public Dictionary<string, Exception> SetFailuresByKey { get; } = [];
 
     public Task<long> CreateAsync(SystemRecord system, CancellationToken cancellationToken = default)
     {
@@ -38,6 +47,11 @@ internal sealed class FakeSystemStore : ISystemStore
             return Task.FromException<SystemRecord?>(GetFailure);
         }
 
+        if (GetFailuresByKey.TryGetValue(key, out var failure))
+        {
+            return Task.FromException<SystemRecord?>(failure);
+        }
+
         return Task.FromResult(Rows.SingleOrDefault(row => row.Key == key && row.DeletedAt == 0));
     }
 
@@ -48,6 +62,11 @@ internal sealed class FakeSystemStore : ISystemStore
         if (SetFailure is not null)
         {
             return Task.FromException(SetFailure);
+        }
+
+        if (SetFailuresByKey.TryGetValue(key, out var failure))
+        {
+            return Task.FromException(failure);
         }
 
         var existing = Rows.SingleOrDefault(row => row.Key == key);
@@ -64,6 +83,63 @@ internal sealed class FakeSystemStore : ISystemStore
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// ent's OnConflict(key) + ResolveWithIgnore: the unique index on key
+    /// covers the soft-deleted row too, so any existing row suppresses the
+    /// insert.
+    /// </summary>
+    public Task CreateIfAbsentAsync(
+        string key,
+        string value,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        if (CreateIfAbsentFailure is not null)
+        {
+            return Task.FromException(CreateIfAbsentFailure);
+        }
+
+        if (!Rows.Any(row => string.Equals(row.Key, key, StringComparison.Ordinal)))
+        {
+            Rows.Add(new SystemRecord { Id = _nextId++, Key = key, Value = value });
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// AbstractService.RunInTransaction over the in-memory table: serialize
+    /// competing migrations the way PostgreSQL serializes the claim insert,
+    /// and restore the table when the callback throws.
+    /// </summary>
+    public async Task RunInTransactionAsync(
+        Func<CancellationToken, Task> action,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        await _transactionLock.WaitAsync(cancellationToken);
+        try
+        {
+            var snapshot = Rows.Select(Clone).ToList();
+            try
+            {
+                await action(cancellationToken);
+            }
+            catch
+            {
+                Rows.Clear();
+                Rows.AddRange(snapshot);
+                _nextId = Rows.Count == 0 ? 1 : Rows.Max(row => row.Id) + 1;
+                throw;
+            }
+        }
+        finally
+        {
+            _transactionLock.Release();
+        }
+    }
+
     public SystemRecord Add(string key, string value, Action<SystemRecord>? configure = null)
     {
         var row = new SystemRecord { Key = key, Value = value };
@@ -72,6 +148,16 @@ internal sealed class FakeSystemStore : ISystemStore
         Rows.Add(row);
         return row;
     }
+
+    private static SystemRecord Clone(SystemRecord row) => new()
+    {
+        Id = row.Id,
+        CreatedAt = row.CreatedAt,
+        UpdatedAt = row.UpdatedAt,
+        DeletedAt = row.DeletedAt,
+        Key = row.Key,
+        Value = row.Value,
+    };
 }
 
 /// <summary>Scripted security settings for the IP blocklist middleware tests.</summary>
