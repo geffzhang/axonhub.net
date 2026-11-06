@@ -50,6 +50,12 @@ EF 模型（而非 EF 迁移）由 `EfCoreModelTests` 与幂等 DDL 建出的库
 新增 4、`InvitationStoreTests` 14），按项目规则未运行 lint / build / test；上表仍是 §107 的实测值。§110 落地后的
 静态计数为 `AxonHub.Api.Tests` 2848、`AxonHub.Persistence.Tests` 294、四项目合计 6269，下一次全量运行应以该数字复核。
 
+§111 追加 61 个用例（`AntigravityOAuthServiceTests` 35、`AdminAntigravityOAuthEndpointTests` 26），按项目规则
+未运行 lint / build / test；上表仍是 §107 的实测值。§111 落地后的静态计数为 `AxonHub.Api.Tests` 2909、
+`AxonHub.Persistence.Tests` 294、四项目合计 6330，下一次全量运行应以该数字复核。§111 同时落地
+`Llm/Http/ProxyConfig.cs` / `ProxyExecutorFactory.cs`，其 URL 分支由上述 API 用例经 `IProxyExecutorFactory`
+接缝验证，具体 `SocketsHttpHandler` 参数与残余差异见 C202。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
@@ -366,6 +372,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C186：API key 配额时区按请求读取 | 已接受：参照 `SystemService.TimeLocation` 进程内缓存，端口每次配额检查读取 `system_general_settings`；行缺失 / 读取失败 / 畸形 JSON / 空值 / 未知时区回退 UTC 与 `Local` 映射一致，calendar 零点转换（含 DST 缺口与歧义）由测试锁定；差异仅在设置变更的生效时机与每次检查多一次主键查询 | 已接受（写入即时可见，无陈旧缓存） |
 | C187：项目提示词按请求读取数据库 | 已接受：参照 `biz.PromptService` 把每个项目的启用提示词缓存为进程内 map（初始化、每分钟刷新、进程内 CRUD 后失效），端口 `IPromptProvider` / `PromptService` 每次请求经 Dapper 读取 `prompts` 表；同一时刻的行集合与注入行为一致，差异仅在写入后的生效时机（端口立即生效，参照最多延迟一分钟）与每请求多一次查询；多实例部署下端口可见性更强 | 已接受（§99 注入 63 例锁定；若后续引入缓存需保持单一数据源并复核快照时机） |
 | C188：项目提示词管理面的 GraphQL 契约与已接受差异 | 已接受：§100 接入 `prompts` 连接（分页 / 排序 / where）与七个变更，写入校验 model_id / model_pattern / api_key 条件、重名 `DUPLICATE_NAME`、软删与 aggregate 更新语义均与参照一致；残余差异六项：`PromptWhereInput` 仅支持前端使用的谓词子集、缺失必填输入的 SDL 拒绝（gqlgen 零值继续）、未知枚举输出抛错（参照原样透出）、`order` 为 32 位 Int（参照 64 位）、写入不刷新缓存（端口无缓存，C187）、`Project.prompts` 反向边归 C165；37 例 Api（端点 10 + 服务 27）与 7 例 Persistence 锁定 | 已接受（六项均不影响前端实际查询 / 变更契约与运行时注入；超出子集的 where 需扩展 `PromptWhereInput` 与 `PromptStore.BuildFilter`） |
+| C121 / C202：Antigravity OAuth 管理面 | 已解决：§111 接入 `POST /admin/antigravity/oauth/start` 与 `/exchange`（admin JWT + WithProjectID）、PKCE 状态缓存、令牌交换与 loadCodeAssist / onboardUser 项目发现，35 + 26 例锁定；残余差异登记为 C202（代理错误文案、连接池表达、ProxyFromEnvironment、ShouldBindJSON 尾随内容、System.Text.Json 解码文案、xcache 多后端见 C171） | 已关闭（C121 resolved / C202 accepted） |
 | C197：备份存储后端、自动备份调度与保留清理 | 已解决（§108）：fs / S3 / GCS / WebDAV 四种后端按 `SaveData` / `SaveDataFromReader` / `LoadData` / `DeleteData` / `afero.ReadDir` 的可观察语义移植（键规范化、错误分层与包装顺序、缺失对象映射、列表只返回直接子项）；非 database 存储的自动备份改为临时文件 + 流式写入；`RetentionDays > 0` 的保留清理按前缀 / 后缀 / 修改时间执行且失败只告警（database 存储下同样执行并吞掉文件系统错误）；`AutoBackupScheduler` 以系统时区每日 02:00 触发且不补跑错过的运行，`Reschedule` 由轮询隐式实现。保留清理与调度由 8 + 5 例锁定，四种后端的键 / 错误 / 协议形状由 12 + 10 例锁定；残余实现差异登记为 C199 | 已关闭（database 存储下的行为与 §107 一致；非 database 存储由 §107 的确定性失败改为可用） |
 | C199：存储后端与调度的实现差异 | 已接受：S3 用 AWSSDK.S3 单次 PutObject 而非参照的 16 MiB multipart（对象存储写入本身原子，字节与键一致）；GCS / WebDAV 为手写 HTTP 客户端（OAuth JWT-bearer / refresh_token、media upload、PROPFIND Depth 1），第三方库的错误文本为语义近似（如 googleapi 的 `Error <code>: <message>, <reason>`、gowebdav 的状态处理）；后端按操作创建并 Dispose 而非进程内缓存（配置即时生效，代价是每次操作一次 TLS 握手）；调度为 1 分钟轮询而非 robfig/cron 精确计时（02:00 最多晚 1 分钟，参照也不保证毫秒级），DST 缺口 / 歧义按 Go `time.Date` 语义；S3 客户端未采用实时上游 `f272549f` 新增的 checksum 关闭配置，以冻结基线 `b8bb3421` 的默认行为为准 | 已接受（协议形状由 10 例脚本化 HttpMessageHandler 用例锁定；误差仅在库内部实现、错误措辞与 ≤1 分钟触发延迟，不改变对象内容、键、列表、保留与触发结果） |
 | C198：备份 GraphQL 接入层 | 已接受：HotChocolate `AddUploadType` / `IFile` 对接 graphql-multipart-request-spec（gqlgen `graphql.Upload` + `io.ReadAll`）；存储的未声明 frequency 输出时报字段错误 `Enum "BackupFrequency" cannot represent value: "hourly"`（gqlgen 原样透出字符串）；`updateAutoBackupSettings` 的输入枚举在 HotChocolate 校验阶段被拒绝（gqlgen 接受任意字符串并落库）；`triggerAutoBackup` 以 `Task.Run` + 新建 DI scope + `CancellationToken.None` 实现（参照 goroutine + `context.WithoutCancel`）；GraphQL Int 32 位（C190）、restore 解码文案（C002 / C141）、取消语义（C155）沿用既有登记；14 例 Api 锁定 | 已接受（合法频率下查询 / 变更契约与参照一致；输入枚举更严格只拒绝参照本就不该接受的值） |

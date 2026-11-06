@@ -5472,6 +5472,52 @@ Grains 95，四个项目合计由 6196 增至 6269。**本切片按项目规则�
 差异：C201 登记邀请 REST 片段的边界行为（软删项目边、时间精度、JSON 解码、`%w` 内层文本、密码哈希时机、
 提交后重载）；C136 由 no-op 转为 resolved（角色删除同事务撤销）。
 
+## 111. Antigravity OAuth 管理面（start / exchange / 项目发现，35 + 26 例，2026-11-06）
+
+参照 `b8bb3421`：`internal/server/api/antigravity.go`（AntigravityHandlers 的 StartOAuth / Exchange、
+parseAntigravityCallbackURL、resolveProjectID、onboardUser、generateAntigravityState / CodeVerifier /
+CodeChallenge）、`internal/server/api/error.go:12-20`（JSONError 信封）、`internal/server/routes.go:106,124-125`
+（adminGroup 的 JWT + WithProjectID 与两条 POST）、`llm/httpclient/proxy.go` 与 `client.go:71-215`
+（ProxyConfig / NewHttpClientWithProxy / getProxyFunc）。参照没有该文件的测试。实时上游 `f272549f` 的
+`antigravity.go` / `routes.go` 与冻结基线逐字节一致。
+
+新增 `Api/Management/AntigravityOAuthService.cs`（PKCE、回调校验、令牌交换、项目发现）、
+`Api/Auth/AntigravityOAuthHandlers.cs`（HTTP 绑定、gin 信封、MapAntigravityOAuthRoutes）、
+`Api/Auth/AntigravityOAuthCache.cs`（go-cache 到期语义的进程内状态缓存）、`Llm/Http/ProxyConfig.cs` 与
+`Llm/Http/ProxyExecutorFactory.cs`（proxy 参数的 url 分支与传输选项）；`Program` 注册 DI、两条路由与
+`/admin/antigravity/oauth` 的 AdminJwtAuthMiddleware + ProjectIdMiddleware。
+
+- start：绑定失败（空 body / 坏 JSON / 类型不符）400 `invalid request format`，JSON `null` 视为零请求；
+  32 字节 state、64 字节 verifier、SHA-256 base64url challenge；缓存键 `antigravity:oauth:<state>`，值为
+  `{code_verifier, project_id, created_at}`，TTL 10 分钟（到期判定 `now > expiresAt`，恰在截止时刻仍有效）；
+  Set 失败 500 `failed to save oauth state: %w`；授权 URL 为 authorize 端点 + url.Values.Encode（键序
+  access_type、client_id、code_challenge、code_challenge_method、prompt、redirect_uri、response_type、
+  scope、state）；响应 `{session_id, auth_url}`。
+- exchange：绑定失败或空 session_id / callback_url 400 `invalid request format`；缓存未命中 400
+  `invalid or expired oauth session`；回调解析按 TrimSpace → http(s) 前缀（`callback_url must be a full URL`）
+  → URL 解析（`invalid callback_url: %w`）→ code（`code parameter not found in callback_url`）→ state
+  （`state parameter not found in callback_url`）的顺序报 400；state 不一致 400 `oauth state mismatch` 且不消费
+  会话；校验成功后删除会话（删除失败只告警）；proxy 仅在 type=url 且 url 非空时生效；令牌交换失败 502
+  `token exchange failed: %w`（provider 文本已含一层同名前缀，故常见为双层）；project_id 为空时按
+  Prod / Daily / Autopush 顺序 POST loadCodeAssist，项目可来自 `cloudaicompanionProject` 的字符串或 `{id}`
+  对象，缺失时按 allowedTiers 首项 / isDefault 选 tier 调 onboardUser（每端点 3 次、失败 1s、未完成 2s），
+  全部失败 502 `failed to resolve project id and none provided: %w`；成功输出 `refreshToken|projectID`。
+- 线路形状：令牌请求为 form（client_id、client_secret、code、code_verifier、grant_type、redirect_uri），
+  Accept `application/json` 与 Antigravity UA；loadCodeAssist / onboardUser 请求带 Bearer、Content-Type、
+  User-Agent、X-Goog-Api-Client、Client-Metadata，body 键序与参照逐字节一致。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| PKCE 形状与逐调用随机、授权 URL 键序、项目存储、TTL 截止边界、回调完整解析、令牌请求逐字节、provider / 传输错误包装、项目 string/object/大小写、tier 选择、端点回退与状态、onboard 3 次重试顺序、代理生效与忽略、空 refresh token | `tests/AxonHub.Api.Tests/AntigravityOAuthServiceTests.cs` | 35 |
+| JWT 门与 Bearer 文案、绑定失败（空 / 坏 JSON / null / 缺字段）、gin 信封、项目头校验、缓存失败 500、未知 / 过期会话、非 URL 回调、state 不一致、502 分类、会话单次消费、代理接线 | `tests/AxonHub.Api.Tests/AdminAntigravityOAuthEndpointTests.cs` | 26 |
+
+`AxonHub.Api.Tests` 由 2848 增至 2909（+61），Llm 3032、Grains 95、`AxonHub.Persistence.Tests` 294，四个项目
+合计由 6269 增至 6330。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]`
+的静态计数；下一次全量运行应以 2909 / 294 / 6330 复核。**
+
+差异：C121 由 gap 转为 resolved；C202 登记代理、传输与 JSON 解码的残余细节（错误文案、连接池、
+ProxyFromEnvironment、ShouldBindJSON 的尾随内容、xcache 多后端）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -5492,7 +5538,7 @@ Grains 95，四个项目合计由 6196 增至 6269。**本切片按项目规则�
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）未接入，角色 / 权限校验由 §84 接入（PermissionValidator 与 users / roles 写入接线，25 例），OIDC 登录流程由 §83 接入（提供方配置与 providers 列表由 §82 接入），JWT 登录 / 刷新由 §80 接入，管理员 GraphQL 的 bearer / service_account 门与只读规则由 §81 接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表 | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74 供自动定价读取，§88 管理面 CRUD）、`channel_override_templates`（§78）、`oidc_identities`（§79）、`data_storages`（§106）、`prompts`（§99）与 `invitations`（§110）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096）；查询与 GraphQL（列表 / node / 段 / 用量 / 八个状态变更）由 §101 闭合（23 + 15 例），GC / 保留策略与日志接缝未移植（C095） | 中 | GC / 保留策略随 C095 切片落地 |
-| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123，管理面部分仍缺），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity OAuth 管理面/模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123），其 OAuth 管理面（start / exchange / 项目发现）由第 111 节闭合（C121 resolved，残余见 C202），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity 模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
 | 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |
 | 模型关联路由与多模型重试 | 已由 §90 闭合：DefaultSelector 的模型行查询 / privacy / 关联匹配（六种 kind 与排除规则）/ When 条件 / 聚合 / 逐模型 API 格式、模型级 routing policy、模型卡 DefaultMaxTokens、无模型行回退通道、多模型同通道重试与 tester 路径排序（59 例）；残余差异与真实缺口登记为 C179，通道变换选项与流策略强制由 §96 闭合（C180） | 中 | 完成（C179 / C180） |
 | trace / thread 通道粘性路由 | 已由 §91 闭合：prefer_previous_channel 的生效策略优先级、trace → thread 作用域解析、命中仅限候选池、priority 最小候选置首与同通道 fallback 去重、只记账粘性候选、写回条件与 trace 行 thread 优先、30 分钟 TTL（15 + 1 例）；进程内缓存的多实例限制登记为 C181 | — | 完成（C181） |

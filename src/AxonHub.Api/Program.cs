@@ -215,6 +215,14 @@ builder.Services.AddScoped<RoleManagementService>();
 builder.Services.AddScoped<IInvitationStore, InvitationStore>();
 builder.Services.AddScoped<InvitationService>();
 
+// Antigravity OAuth management (api/antigravity.go): the PKCE session lives in
+// the in-process cache (cache.mode defaults to "memory"), the token exchange
+// and project discovery reuse the shared executor, and the optional URL proxy
+// builds a per-request executor (C202).
+builder.Services.AddSingleton<IProxyExecutorFactory, HttpProxyExecutorFactory>();
+builder.Services.AddSingleton<IAntigravityOAuthStateCache, AntigravityOAuthStateCache>();
+builder.Services.AddScoped<AntigravityOAuthService>();
+
 // Projects (biz.ProjectService): CRUD over the projects table plus the
 // project-level role presets and the creator's UserProject row. The project
 // cache is not ported (C174).
@@ -428,6 +436,9 @@ app.MapOidcLoginRoutes();
 // JWT gate, and the public GET/register pair under /auth/invitations.
 app.MapInvitationRoutes();
 
+// Antigravity OAuth (routes.go:124-125): both routes sit on the admin group.
+app.MapAntigravityOAuthRoutes();
+
 // NewOIDCHandlers warns when providers are configured without a public URL
 // (api/oidc.go:36-41). An empty value still fails each flow at getBaseURL.
 if (oidcProviders.Count > 0 && oidcLoginOptions.PublicUrl.Length == 0)
@@ -493,6 +504,16 @@ app.UseWhen(
 // (routes.go:87-88) stays outside every auth middleware.
 app.UseWhen(
     static context => context.Request.Path.StartsWithSegments("/admin/invitations"),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+    });
+
+// The Antigravity OAuth pair sits on the admin group (routes.go:106,124-125):
+// the same plain user-JWT gate and WithProjectID.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/antigravity/oauth"),
     static branch =>
     {
         branch.UseMiddleware<AdminJwtAuthMiddleware>();
