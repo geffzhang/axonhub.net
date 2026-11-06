@@ -1,5 +1,6 @@
 using HotChocolate;
 using HotChocolate.Types;
+using Microsoft.Extensions.DependencyInjection;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Security;
@@ -1843,4 +1844,125 @@ public sealed class AdminMutation
                     DataStorageMapping.ToCommand(id, input),
                     cancellationToken)
                 .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.Backup (backup.resolvers.go:20-33).</summary>
+    [GraphQLName("backup")]
+    public async Task<BackupPayloadType> BackupAsync(
+        BackupOptionsInput input,
+        [Service] BackupService backupService,
+        CancellationToken cancellationToken)
+    {
+        var data = await backupService.BackupAsync(
+                BackupMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new BackupPayloadType
+        {
+            Success = true,
+            Data = data,
+            Message = "Backup completed successfully",
+        };
+    }
+
+    /// <summary>Port of mutationResolver.Restore (backup.resolvers.go:36-51).</summary>
+    [GraphQLName("restore")]
+    public async Task<RestorePayloadType> RestoreAsync(
+        IFile file,
+        RestoreOptionsInput input,
+        [Service] BackupService backupService,
+        CancellationToken cancellationToken)
+    {
+        // io.ReadAll(file.File): the upload is buffered in memory and read
+        // errors propagate unchanged.
+        await using var buffer = new MemoryStream();
+        await file.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+
+        await backupService.RestoreAsync(
+                buffer.ToArray(),
+                BackupMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new RestorePayloadType
+        {
+            Success = true,
+            Message = "Restore completed successfully",
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateAutoBackupSettings
+    /// (backup.resolvers.go:54-117).
+    /// </summary>
+    [GraphQLName("updateAutoBackupSettings")]
+    public async Task<bool> UpdateAutoBackupSettingsAsync(
+        UpdateAutoBackupSettingsInput input,
+        [Service] IManagementIdentity identity,
+        [Service] ISystemSettingsAdminService settings,
+        [Service] BackupService backupService,
+        CancellationToken cancellationToken)
+    {
+        var user = await identity.GetCurrentUserAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null || !user.IsOwner)
+        {
+            throw new InvalidOperationException("permission denied: owner access required");
+        }
+
+        // Errors from the reference are returned without an additional prefix.
+        var current = await settings.GetAutoBackupSettingsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        await settings.SetAutoBackupSettingsAsync(
+                BackupMapping.Apply(current, input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        backupService.Reschedule();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TriggerAutoBackup (backup.resolvers.go:120-141).
+    /// The reference detaches the HTTP context and runs the backup in a fresh
+    /// goroutine; the port opens a new DI scope and drops the request token so
+    /// the work survives the response.
+    /// </summary>
+    [GraphQLName("triggerAutoBackup")]
+    public async Task<TriggerBackupPayloadType> TriggerAutoBackupAsync(
+        [Service] IManagementIdentity identity,
+        [Service] IServiceScopeFactory scopeFactory,
+        CancellationToken cancellationToken)
+    {
+        var user = await identity.GetCurrentUserAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null || !user.IsOwner)
+        {
+            throw new InvalidOperationException("permission denied: owner access required");
+        }
+
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    await using var scope = scopeFactory.CreateAsyncScope();
+                    var backupService =
+                        scope.ServiceProvider.GetRequiredService<BackupService>();
+                    await backupService.RunBackupNowAsync(CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // log.Error(bgCtx, "Manual trigger autobackup failed", ...)
+                }
+            },
+            CancellationToken.None);
+
+        return new TriggerBackupPayloadType
+        {
+            Success = true,
+            Message = "Backup completed successfully",
+        };
+    }
 }

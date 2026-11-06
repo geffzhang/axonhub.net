@@ -23,6 +23,9 @@ public static class GraphQLSetup
             .AddType<GoDecimalType>()
             .AddType<JsonRawMessageType>()
 
+            // backup.graphql declares `scalar Upload` for the restore mutation.
+            .AddUploadType()
+
             // Defined by dashboard.graphql but never reached from a root field;
             // registering it keeps the same named type in the schema.
             .AddType<HourlyRequestStatsType>()

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AxonHub.Api.Billing;
 using AxonHub.Llm.Json;
 
@@ -71,8 +72,13 @@ public sealed record ApiKeyQuotaModel
 
     /// <summary>
     /// shopspring/decimal marshals as a quoted, trailing-zero-trimmed string.
-    /// The .NET decimal domain is narrower than big.Int; see the ledger.
+    /// The .NET decimal domain is narrower than big.Int; see the ledger. The
+    /// converter is required for the restore decode path
+    /// (<c>LlmJson.Deserialize&lt;BackupData&gt;</c>), where the stored profile
+    /// JSON is decoded by System.Text.Json rather than
+    /// <see cref="ApiKeyProfilesCodec"/>.
     /// </summary>
+    [JsonConverter(typeof(GoNullableDecimalConverter))]
     public decimal? Cost { get; init; }
 
     /// <summary>No omitempty: the period always appears, zero-valued if absent.</summary>

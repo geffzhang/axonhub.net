@@ -552,9 +552,20 @@ public sealed class ChannelCredentialsDraft
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ManagementApiKey { get; set; }
 
+    [JsonPropertyName("azure")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AzureCredentialDraft? Azure { get; set; }
+
     [JsonPropertyName("gcp")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public GcpCredentialDraft? Gcp { get; set; }
+}
+
+/// <summary>Port of objects.AzureCredential (channel.go:478-481).</summary>
+public sealed class AzureCredentialDraft
+{
+    [JsonPropertyName("apiVersion")]
+    public string ApiVersion { get; set; } = string.Empty;
 }
 
 /// <summary>Port of oauth.OAuthCredentials (credentials.go:10-18).</summary>

@@ -92,6 +92,14 @@ public sealed class AdminQuery
         => SystemSettingsMapping.ToGraphQL(
             await settings.GetSecuritySettingsAsync(cancellationToken).ConfigureAwait(false));
 
+    /// <summary>Port of queryResolver.AutoBackupSettings (backup.resolvers.go:130-132).</summary>
+    [GraphQLName("autoBackupSettings")]
+    public async Task<AutoBackupSettingsType> AutoBackupSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => BackupMapping.ToGraphQL(
+            await settings.GetAutoBackupSettingsAsync(cancellationToken).ConfigureAwait(false));
+
     /// <summary>Port of queryResolver.Users (ent.resolvers.go:579-592).</summary>
     [GraphQLName("users")]
     public async Task<UserConnectionType> UsersAsync(

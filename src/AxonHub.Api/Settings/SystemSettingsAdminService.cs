@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AxonHub.Api.GraphQL;
+using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Security;
@@ -36,6 +37,20 @@ public interface ISystemSettingsAdminService
     /// <summary>Port of SystemService.SetSecuritySettings.</summary>
     Task SetSecuritySettingsAsync(
         SecuritySettings settings,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.AutoBackupSettings (system.go:1604-1640).</summary>
+    Task<AutoBackupSettings> GetAutoBackupSettingsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetAutoBackupSettings (system.go:1642-1649).</summary>
+    Task SetAutoBackupSettingsAsync(
+        AutoBackupSettings settings,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.UpdateAutoBackupLastRun (system.go:1651-1670).</summary>
+    Task UpdateAutoBackupLastRunAsync(
+        string lastError,
         CancellationToken cancellationToken = default);
 }
 
@@ -206,6 +221,85 @@ public sealed class SystemSettingsAdminService(ISystemStore systems) : ISystemSe
                 SecuritySettingsCodec.Serialize(normalized),
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    public async Task<AutoBackupSettings> GetAutoBackupSettingsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                AutoBackupSettingsCodec.Key,
+                "failed to get auto backup settings",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: the defaults are returned as-is.
+            return AutoBackupSettingsCodec.Default;
+        }
+
+        try
+        {
+            return AutoBackupSettingsCodec.Deserialize(row.Value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal auto backup settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task SetAutoBackupSettingsAsync(
+        AutoBackupSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        string value;
+        try
+        {
+            value = AutoBackupSettingsCodec.Serialize(settings);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal auto backup settings: " + ex.Message,
+                ex);
+        }
+
+        try
+        {
+            await systems.SetAsync(AutoBackupSettingsCodec.Key, value, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to set auto backup settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task UpdateAutoBackupLastRunAsync(
+        string lastError,
+        CancellationToken cancellationToken = default)
+    {
+        var settings = await GetAutoBackupSettingsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // The reference stamps time.Now(); the port stores UTC (C198).
+        var updated = settings with
+        {
+            LastBackupAt = DateTime.UtcNow,
+            LastBackupError = lastError,
+        };
+
+        await SetAutoBackupSettingsAsync(updated, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<SystemRecord?> GetValueAsync(

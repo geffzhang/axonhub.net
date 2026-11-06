@@ -45,6 +45,22 @@ public static class ChannelWriteSerialization
             return null;
         }
 
+        return NormalizeSettings(settings);
+    }
+
+    /// <summary>
+    /// Applies the Go decode/marshal round-trip normalization to a channel
+    /// settings value: the value struct's TransformOptions is never nil and
+    /// every <c>omitempty</c> field is pruned back to null. Restore re-encodes
+    /// settings decoded from the backup file through this same path.
+    /// </summary>
+    public static ChannelSettingsDraft NormalizeSettings(ChannelSettingsDraft settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        // objects.ChannelSettings.TransformOptions is a value struct: a JSON
+        // null leaves its zero value, never a nil pointer.
+        settings.TransformOptions ??= new TransformOptionsDraft();
         PruneGoOmitEmpty(settings);
         return settings;
     }
@@ -105,6 +121,18 @@ public static class ChannelWriteSerialization
 
         var credentials = LlmJson.Deserialize<ChannelCredentialsDraft>(raw)
             ?? new ChannelCredentialsDraft();
+        return NormalizeCredentials(credentials);
+    }
+
+    /// <summary>
+    /// Applies the Go decode/marshal round-trip normalization to channel
+    /// credentials: empty strings and empty lists are pruned back to nil so a
+    /// later marshal drops them.
+    /// </summary>
+    public static ChannelCredentialsDraft NormalizeCredentials(ChannelCredentialsDraft credentials)
+    {
+        ArgumentNullException.ThrowIfNull(credentials);
+
         credentials.ApiKey = NullIfEmpty(credentials.ApiKey);
         credentials.ManagementApiKey = NullIfEmpty(credentials.ManagementApiKey);
         credentials.ApiKeys = credentials.ApiKeys is { Count: > 0 } ? credentials.ApiKeys : null;

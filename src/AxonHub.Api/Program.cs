@@ -292,6 +292,14 @@ builder.Services.AddScoped<IDataStorageStore, DataStorageStore>();
 builder.Services.AddScoped<DataStoragePrivacy>();
 builder.Services.AddScoped<DataStorageManagementService>();
 
+// Backup / restore (internal/server/backup): the streamed backup document, the
+// transactional restore and the auto-backup operations. The non-database
+// storage backends, the cron scheduler and retention cleanup are not ported
+// (C197); the reference's system-value cache invalidation is a no-op here.
+builder.Services.AddScoped<IBackupBatchSource, BackupStore>();
+builder.Services.AddScoped<IBackupRestoreStore, BackupRestoreStore>();
+builder.Services.AddScoped<BackupService>();
+
 // Trace/thread management surface (biz.TraceService / biz.ThreadService admin
 // reads, the status transitions and the trace segment tree). The reference
 // runs every access through an ent client carrying the privacy policy in the

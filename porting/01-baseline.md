@@ -5171,6 +5171,106 @@ Llm 3032、Grains 95；四个项目合计由 6037 增至 6059，0 失败 0 跳�
 EF 写 + Dapper 读、settings JSON 的恶化解码（C141 同型）、未移植的存储后端 / 缓存 / 边与 where 子集，
 以及 Go mergeSettings 在 settings 指针为 nil 时的空指针边界（端口降级而非崩溃）。
 
+## 107. 备份 / 恢复与自动备份管理面 GraphQL（backup / restore / autoBackupSettings / updateAutoBackupSettings / triggerAutoBackup，57 + 24 例，2026-11-06）
+
+参照 `b8bb3421`（冻结基线；与实时上游 `f272549f` 相比，`internal/server/backup/`、`backup.graphql`
+与 `backup.resolvers.go` 零差异，`biz/system.go` 的差异只有 safeguards 接线，不触及自动备份设置）：
+`internal/server/backup/types.go:11-244`（BackupData 与九个实体、usage request / log 的自定义
+MarshalJSON、版本常量、BackupOptions / RestoreOptions、冲突策略）、
+`internal/server/backup/backup_ops.go:26-132`（Backup / BackupWithoutAuth 的 owner 门禁、
+doBackupToWriter 的根成员顺序与 17 个可移植系统配置 key）、`:124-440`（八个 stream* 的 500 行 ID 游标、
+SoftDeleteMixin 谓词、eager 边与 omitempty）、
+`internal/server/backup/restore.go:29-146`（owner 门禁、encoding/json 解码、版本检查先于事务、单事务提交、
+恢复顺序）、`:148-259`（系统配置 upsert、旧配额路由迁移、channel id map）、`:482-535`（projects）、
+`:536-699`（channel_model_prices 的校验 / 归档 / active 版本）、`:700-790`（channels）、`:791-870`（models）、
+`:871-960`（API keys）、`:961-1555`（用量请求与用量日志的去重、请求壳、批量 500 行）、
+`internal/server/backup/autobackup.go:22-222`（Reschedule、triggerAutoBackup、shouldRunBackup、
+performBackup、cleanupOldBackups、RunBackupNow）、
+`internal/server/biz/system.go:188-235` 与 `:1616-1676`、`:1975-1986`（AutoBackupSettings 的三个指针字段
+回退、SetAutoBackupSettings、UpdateAutoBackupLastRun 的 UTC 时间）、
+`internal/server/biz/system_default.go:118-129`（默认设置）、
+`internal/server/gql/backup.graphql:1-97` 与 `internal/server/gql/backup.resolvers.go:20-146`（SDL 与五个
+解析器）、`internal/ent/channel_update.go:1149-1155`（SetNillableBaseURL 仅在指针非 nil 时写列）。
+
+新增 `Api/Management/BackupModels.cs`（选项、版本、自动备份设置编解码与备份文档 DTO）、
+`Api/Management/BackupJson.cs`（与 Go 同序的流式文档）、`Api/Management/BackupService.cs`（备份、恢复、
+自动备份）、`Persistence/BackupSystemConfigKeys.cs`（17 个 key）、`Persistence/Stores/BackupStore.cs`
+（备份读侧）、`Persistence/Stores/BackupRestoreStore.cs`（恢复读写与事务）、`Api/GraphQL/BackupTypes.cs`
+（SDL 类型与映射），在 `AdminQuery` 接线 `autoBackupSettings`、在 `AdminMutation` 接线 `backup` /
+`restore` / `updateAutoBackupSettings` / `triggerAutoBackup`，`GraphQLSetup` 注册 Upload 标量，`Program`
+注册存储与服务；`SystemSettingsAdminService` 增加自动备份设置的读 / 写 / LastRun，
+`ChannelWriteSerialization` 暴露 `NormalizeSettings` / `NormalizeCredentials`（恢复解码后的再编码），
+`ChannelCredentialsDraft` 补 `azure` 凭据，`ApiKeyProfilesCodec` 的 `Cost` 增加 Go 十进制转换器
+（恢复路径经 System.Text.Json 解码）。
+
+- 备份文档：根成员固定顺序 `version, timestamp, system_configs, projects, channels, models,
+  channel_model_prices, api_keys, usage_requests, usage_logs`；timestamp 为带本地偏移的 RFC3339Nano；
+  `system_configs / projects / channel_model_prices / api_keys / usage_requests / usage_logs` 关闭或为空时
+  省略，`channels / models` 关闭时写 null（Go 指针）；channel `edges` 恒为 `{}`、credentials 恒输出、
+  `base_url` 与 `default_test_model` 空串省略；project / API key 的 `edges` 只含活边；price 的 channel
+  边缺失（通道不存在或软删）时跳过该元素；usage request 的 `api_key_key` 仅 `IncludeAPIKeys` 时输出；
+  usage log 的 api key 名字还需 `IncludeUsageStats` 且映射非空；八个 stream 都以 500 行
+  `id > lastID ORDER BY id` 取页，NextId 为最后一行 id，空页为 0；空凭据通道、软删行与白名单外的
+  系统配置都不进入文档。
+- 权限与错误：`Backup` / `Restore` 无用户时 `user not found in context`，非 owner 分别
+  `only owners can perform backup operations` / `only owners can perform restore operations`；
+  `BackupWithoutAuth` 跳过门禁（自动备份路径）；GraphQL 的四个变更统一以
+  `permission denied: owner access required` 拒绝非 owner。
+- 恢复：先解码（Go encoding/json 语义：大小写不敏感、null 文档降级为空、字段缺失取零值），再版本校验
+  （接受 1.4 / 1.3 / 1.2 / 1.1 / 1.0，否则 `backup version mismatch: expected 1.4, got {version}`），
+  之后才开事务；顺序为系统配置 → 通道 → channel id map → 旧配额路由 → 价格 → 模型 → 项目 → API key →
+  用量；任一步失败回滚，提交后整体生效。系统配置只 upsert 17 个白名单 key
+  （`failed to restore system configuration "<key>": `）；通道先按名字查活行再判断空凭据
+  （APIKey 与 APIKeys 与 OAuth 都空则跳过）；冲突策略 skip / error / overwrite 的文案逐字复刻；
+  overwrite 保留备份为空的 BaseUrl（ent 的 SetNillableBaseURL 对 nil 不写列），Remark 为 null 时清空，
+  AutoSyncModelPattern / DefaultTestModel 以空串落库；create 不触碰 DisabledApiKeys / Policies /
+  Endpoints / Settings / SupportedModels / ManualModels / Tags（ent schema 默认值）。
+  模型 / 项目 / API key 的查重与 overwrite / create 字段集与参照一致，API key 缺项目时跳过、项目名空串
+  回退 `Default`、UserId 取当前用户；价格先 `Price.Validate()`（`invalid channel model price:
+  channel={name} model_id={id}: {msg}`）、reference ID 为空报错、引用通道缺失或软删则跳过，overwrite
+  归档 active 版本（archived + EffectiveEndAt=now）后更新价格并新建 active 版本，同值同 reference 时
+  无操作；通道 updated_at 由批量末尾的 SetChannelUpdatedAt 刷新。用量请求按 id 与指纹（含 / 不含
+  API key 两种形态）去重，未映射的请求 id 在日志阶段跳过；日志缺请求时创建请求壳
+  （`request_body "{}"`、status `completed`、stream false、client_ip `""`、ApiKeyId / ChannelId 为 0 时
+  落 null），项目缺失的请求连同日志跳过，CostItems 为 null 时写 `"null"`，CostPriceReferenceId 空串
+  写 null，批量 500 行 `failed to restore usage logs: `。
+- 自动备份：`ShouldRunBackup` 对 daily 恒真、weekly 仅周日、monthly 仅 1 号、未知频率恒真（本地时间）；
+  `TriggerAutoBackupAsync` 吞设置读取失败、禁用或频率不匹配时直接返回，执行后把错误文本写入
+  `last_backup_error`（UTC 时间戳，记录失败也吞）；`RunBackupNowAsync` 把设置读取失败包装为
+  `failed to get auto backup settings: `、`DataStorageId == 0` 报 `data storage not configured for backup`，
+  执行后记录 last run 并以 `ExceptionDispatchInfo` 重抛原异常；`PerformBackupAsync` 的 data storage
+  缺失文案为 `failed to get data storage: failed to get data storage by ID {id}: ent: data storage not found`，
+  database 类型完整生成文档并跳过参照中为纯 nil 的 SaveData。
+- 自动备份设置：`system_auto_backup_settings` 的 JSON 形状与 Go 结构体一致（last_backup_at 与
+  last_backup_error 为空时省略）；行缺失时返回默认值（channels / models / modelPrices true，其余 false，
+  retention 30）；解码错误 `failed to unmarshal auto backup settings: `、读取失败
+  `failed to get auto backup settings: failed to get system value: `、写入失败
+  `failed to set auto backup settings: `；三个指针字段（include_system_configs / include_usage_stats /
+  include_request_logs）缺失时回退默认值，其余缺失字段取 Go 零值；UpdateAutoBackupLastRun 先读后写并保留
+  其余字段。
+- GraphQL SDL：`BackupOptionsInput` / `RestoreOptionsInput`（含 SDL 默认值 includeModelPrices=true、
+  includeUsageStats=true）、三个输入枚举、`BackupPayload` / `RestorePayload` / `TriggerBackupPayload`、
+  `AutoBackupSettings`、`UpdateAutoBackupSettingsInput`、`scalar Upload`、`autoBackupSettings` 查询与四个
+  变更；`IncludeProjects` 与 `ProjectConflictStrategy` 不是 SDL 字段，管理面恒为 false / 空串（与 gqlgen
+  生成映射的零值一致），因此经 GraphQL 的备份文档不含 projects 段、恢复也不写项目段；未知存储
+  frequency 的输出与输入枚举校验见 C198。
+- 未移植：fs / S3 / GCS / WebDAV 存储后端、cron 调度与保留清理（C197）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| owner 门禁与版本校验先行、备份文档根顺序 / 白名单 / 软删 / 边与 omitempty、系统配置恢复、通道四种策略与默认值、模型 / 项目 / API key 策略、价格校验 / 归档 / 版本、用量请求双指纹去重、用量日志请求壳与跳过规则、ShouldRunBackup 频率表、RunBackupNow / TriggerAutoBackup 的记录与重抛 | `tests/AxonHub.Api.Tests/BackupServiceTests.cs` | 43 |
+| autoBackupSettings 默认值与存储文档、未知 / 非法 frequency、update 合并与 owner 门禁、backup 金文档与关闭段的 null、restore 的 multipart 上传 / 提交 / 版本拒绝 / owner 门禁、triggerAutoBackup 的返回与门禁 | `tests/AxonHub.Api.Tests/AdminBackupEndpointTests.cs` | 14 |
+| 系统配置白名单与软删、项目 / 通道 / 模型分页、ID 游标、价格与 API key 的活边、用量请求 / 日志的边与 includeApiKeys 门、API key 映射 | `tests/AxonHub.Persistence.Tests/BackupStoreTests.cs` | 8 |
+| 事务提交 / 回滚 / 环境事务、通道查询与全列更新、ent not found 文案、设置与 updated_at、项目 / 模型 / API key / 价格 CRUD、active 版本归档、用量请求查询与 500 分批、日志批量插入 | `tests/AxonHub.Persistence.Tests/BackupRestoreStoreTests.cs` | 16 |
+
+`AxonHub.Api.Tests` 由 2680 增至 2737（+57），`AxonHub.Persistence.Tests` 由 252 增至 276（+24），
+Llm 3032、Grains 95；四个项目合计由 6059 增至 6140，0 失败 0 跳过。
+
+差异：C197 登记未移植的 fs / S3 / GCS / WebDAV 存储后端、自动备份 cron 调度与保留清理
+（非 database 存储的自动备份在端口确定性失败）；C198 登记 GraphQL 接入层差异（HotChocolate Upload
+标量、未知 frequency 的输出与输入枚举校验、triggerAutoBackup 的新作用域替代 context.WithoutCancel、
+32 位 Int 与解码错误文本）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -5183,7 +5283,7 @@ EF 写 + Dapper 读、settings JSON 的恶化解码（C141 同型）、未移植
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、invitations、dashboard、系统设置类查询等）未移植（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入，dashboard 的 21 个根字段由 §105 接入，数据存储管理面（dataStorages / node(DataStorage) / createDataStorage / updateDataStorage）由 §106 接入（14 例））；前端实际调用的 215 个根字段中 139 个已接入（约 65%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 18 个 ent 类型见 C165）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、invitations、dashboard、系统设置类查询等）未移植（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入，dashboard 的 21 个根字段由 §105 接入，数据存储管理面（dataStorages / node(DataStorage) / createDataStorage / updateDataStorage）由 §106 接入（14 例），备份与自动备份管理面（autoBackupSettings / backup / restore / updateAutoBackupSettings / triggerAutoBackup）由 §107 接入（57 + 24 例））；前端实际调用的 215 个根字段中 144 个已接入（约 67%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 18 个 ent 类型见 C165）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），通道测试由 §76 接入，模型同步由 §77 接入，覆盖模板的 `channel_override_templates` 表、`channelOverrideTemplates` 查询与 create/update/delete/apply/clear 五个变更由 §78 接入（隐私作用域 C161、where 子集 C162、通道顺序 C163），其余通道写操作（C037）未移植 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / models / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads / data_storages） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`models` 管理存储由 §88 的 7 例锁定，`data_storages` 管理存储由 §106 的 8 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 与存储策略未接入（C020），响应头捕获点差异已登记（C021） | 低 | 容器化验收；存储策略随对应功能落地 |
