@@ -4,6 +4,7 @@ using HotChocolate.Types;
 using Microsoft.Extensions.DependencyInjection;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
+using AxonHub.Api.Orchestration;
 using AxonHub.Api.Scopes;
 using AxonHub.Api.Settings;
 using AxonHub.Persistence;
@@ -99,6 +100,29 @@ public sealed class AdminQuery
         CancellationToken cancellationToken)
         => SystemSettingsMapping.ToGraphQL(
             await settings.GetStoragePolicyAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.QuotaRoutingSettings (system.resolvers.go:705-708):
+    /// the strict read, so a malformed or invalid stored mode is a field error.
+    /// </summary>
+    [GraphQLName("quotaRoutingSettings")]
+    public async Task<QuotaRoutingSettingsType> QuotaRoutingSettingsAsync(
+        [Service] SystemQuotaRoutingSettingsService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.ProviderQuotaCollectionSettings
+    /// (system.resolvers.go:710-713): the strict read with its
+    /// "failed to get provider quota collection settings" wrappers.
+    /// </summary>
+    [GraphQLName("providerQuotaCollectionSettings")]
+    public async Task<ProviderQuotaCollectionSettingsType> ProviderQuotaCollectionSettingsAsync(
+        [Service] IProviderQuotaCollectionSettingsService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetAsync(cancellationToken).ConfigureAwait(false));
 
     /// <summary>Port of queryResolver.PreviewGcCleanup (system.resolvers.go:499-515).</summary>
     [GraphQLName("previewGcCleanup")]

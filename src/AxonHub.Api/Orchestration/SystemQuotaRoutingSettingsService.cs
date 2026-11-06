@@ -47,7 +47,7 @@ public sealed class SystemQuotaRoutingSettingsService(ISystemStore systems)
     {
         try
         {
-            return await LoadAsync(cancellationToken).ConfigureAwait(false);
+            return await GetAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -57,19 +57,47 @@ public sealed class SystemQuotaRoutingSettingsService(ISystemStore systems)
         }
     }
 
-    private async Task<QuotaRoutingSettings> LoadAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Port of <c>SystemService.QuotaRoutingSettings</c> (system.go:1826-1862),
+    /// the strict read behind the GraphQL query: every failure except a missing
+    /// legacy key (which yields the defaults) is surfaced.
+    /// </summary>
+    public async Task<QuotaRoutingSettings> GetAsync(CancellationToken cancellationToken = default)
     {
-        var row = await systems
-            .GetByKeyAsync(QuotaRoutingSettingsKey, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (row is null)
+        string? value;
+        try
         {
-            var legacyRow = await systems
-                .GetByKeyAsync(LegacyQuotaEnforcementSettingsKey, cancellationToken)
+            var row = await systems
+                .GetByKeyAsync(QuotaRoutingSettingsKey, cancellationToken)
                 .ConfigureAwait(false);
+            value = row?.Value;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to get quota routing settings: failed to get system value: " + ex.Message,
+                ex);
+        }
 
-            if (legacyRow is null)
+        if (value is null)
+        {
+            string? legacyValue;
+            try
+            {
+                var legacyRow = await systems
+                    .GetByKeyAsync(LegacyQuotaEnforcementSettingsKey, cancellationToken)
+                    .ConfigureAwait(false);
+                legacyValue = legacyRow?.Value;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    "failed to get legacy quota enforcement settings: failed to get system value: "
+                    + ex.Message,
+                    ex);
+            }
+
+            if (legacyValue is null)
             {
                 return QuotaRoutingSettings.Default;
             }
@@ -77,7 +105,7 @@ public sealed class SystemQuotaRoutingSettingsService(ISystemStore systems)
             LegacyQuotaEnforcementSettings legacy;
             try
             {
-                legacy = LlmJson.Deserialize<LegacyQuotaEnforcementSettings>(legacyRow.Value)
+                legacy = LlmJson.Deserialize<LegacyQuotaEnforcementSettings>(legacyValue)
                     ?? new LegacyQuotaEnforcementSettings();
             }
             catch (JsonException)
@@ -94,21 +122,63 @@ public sealed class SystemQuotaRoutingSettingsService(ISystemStore systems)
                     legacy.Mode));
         }
 
-        var settings = LlmJson.Deserialize<QuotaRoutingSettingsDraft>(row.Value)
-            ?? new QuotaRoutingSettingsDraft();
-        var mode = string.IsNullOrEmpty(settings.DefaultMode)
+        QuotaRoutingSettingsDraft? settings;
+        try
+        {
+            settings = LlmJson.Deserialize<QuotaRoutingSettingsDraft>(value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal quota routing settings: " + ex.Message,
+                ex);
+        }
+
+        var mode = string.IsNullOrEmpty(settings?.DefaultMode)
             ? QuotaRoutingSettings.Default.DefaultMode
             : settings.DefaultMode;
 
         if (!QuotaRoutingModes.IsValid(mode))
         {
-            // The reference returns an error; the OrDefault caller turns it into
-            // the default settings.
             throw new InvalidOperationException(
-                "invalid quota routing mode: \"" + mode + "\"");
+                "invalid quota routing mode: " + GoCast.GoQuote(mode));
         }
 
         return new QuotaRoutingSettings(mode!);
+    }
+
+    /// <summary>Port of <c>SystemService.SetQuotaRoutingSettings</c> (system.go:1874-1888).</summary>
+    public async Task SetAsync(
+        QuotaRoutingSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var mode = string.IsNullOrEmpty(settings.DefaultMode)
+            ? QuotaRoutingSettings.Default.DefaultMode
+            : settings.DefaultMode;
+        if (!QuotaRoutingModes.IsValid(mode))
+        {
+            throw new InvalidOperationException(
+                "invalid quota routing mode: " + GoCast.GoQuote(mode));
+        }
+
+        // json.Marshal(QuotaRoutingSettings): a single field, always present.
+        var json = AxonHub.Llm.Json.GoJson.MarshalToString(
+            new QuotaRoutingSettingsDraft { DefaultMode = mode });
+
+        try
+        {
+            await systems.SetAsync(QuotaRoutingSettingsKey, json, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // setSystemValue's own prefix is the only wrapper here.
+            throw new InvalidOperationException(
+                "failed to create system setting: " + ex.Message,
+                ex);
+        }
     }
 
     /// <summary>Port of quotaRoutingModeFromLegacy (quota_routing_migration.go:128-142).</summary>

@@ -555,6 +555,20 @@ public sealed class InboundMiddlewareTests(GrainClusterFixture fixture)
                 needCost ? rows.Sum(row => row.TotalCost ?? 0) : 0));
         }
 
+        public Task<double> SumCostByChannelAsync(
+            long channelId,
+            DateTime since,
+            DateTime until,
+            CancellationToken cancellationToken = default)
+        {
+            _ = cancellationToken;
+            return Task.FromResult(recorder.UsageLogs
+                .Where(row => row.ChannelId == channelId
+                    && row.CreatedAt >= since
+                    && row.CreatedAt < until)
+                .Sum(row => row.TotalCost ?? 0));
+        }
+
         private static bool Matches(
             UsageLogRecord row,
             long apiKeyId,

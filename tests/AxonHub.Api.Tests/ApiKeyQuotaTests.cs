@@ -467,6 +467,20 @@ internal sealed class InMemoryUsageLogStore : IUsageLogStore
         return Task.FromResult(new UsageAggregate(tokens, cost));
     }
 
+    public Task<double> SumCostByChannelAsync(
+        long channelId,
+        DateTime since,
+        DateTime until,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        return Task.FromResult(Rows
+            .Where(row => row.ChannelId == channelId
+                && row.CreatedAt >= since
+                && row.CreatedAt < until)
+            .Sum(row => row.TotalCost ?? 0));
+    }
+
     private static bool Matches(
         UsageLogRecord row,
         long apiKeyId,

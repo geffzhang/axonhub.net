@@ -17,7 +17,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
         "api_key_profile_templates",
         "api_keys", "channel_model_price_versions", "channel_model_prices",
         "channel_override_templates", "channels", "data_storages", "invitations", "models",
-        "oidc_identities", "projects", "prompt_protection_rules", "prompts", "request_executions",
+        "oidc_identities", "projects", "prompt_protection_rules", "prompts",
+        "provider_quota_status", "request_executions",
         "requests", "roles", "systems", "threads", "traces", "usage_logs",
         "user_projects", "user_roles", "users",
     ];
@@ -100,6 +101,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
         [
             "id", "created_at", "updated_at", "deleted_at", "name", "description",
             "role", "content", "status", "order", "settings", "project_id",
+        ],
+        ["provider_quota_status"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "provider_type", "status",
+            "quota_data", "next_reset_at", "ready", "next_check_at", "account_key",
+            "channel_id",
         ],
         ["channels"] =
         [
@@ -280,6 +287,15 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["timestamp with time zone"] = ["created_at", "updated_at", "last_login_at"],
                 ["character varying"] = ["issuer", "subject", "email", "idp_name"],
             },
+            ["provider_quota_status"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "channel_id"],
+                ["timestamp with time zone"] =
+                    ["created_at", "updated_at", "next_reset_at", "next_check_at"],
+                ["boolean"] = ["ready"],
+                ["jsonb"] = ["quota_data"],
+                ["character varying"] = ["provider_type", "status", "account_key"],
+            },
             ["data_storages"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["bigint"] = ["id", "deleted_at"],
@@ -427,6 +443,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ("prompt_protection_rules", true, ["name", "deleted_at"]),
             ["prompts_by_project_id"] = ("prompts", false, ["project_id"]),
             ["prompts_by_project_id_name"] = ("prompts", true, ["project_id", "name", "deleted_at"]),
+            ["providerquotastatus_channel_id"] =
+                ("provider_quota_status", true, ["channel_id"]),
+            ["providerquotastatus_next_check_at"] =
+                ("provider_quota_status", false, ["next_check_at"]),
+            ["providerquotastatus_account_key"] =
+                ("provider_quota_status", false, ["account_key"]),
             ["requests_by_api_key_id_created_at"] = ("requests", false, ["api_key_id", "created_at"]),
             ["requests_by_project_id_created_at"] = ("requests", false, ["project_id", "created_at"]),
             ["requests_by_project_id_user_id_created_at"] =
@@ -620,6 +642,33 @@ public sealed class SchemaTests(PostgresFixture fixture)
             "SELECT COUNT(*) FROM information_schema.tables " +
             "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE';");
         Assert.Equal(ExpectedTables.Length, secondCount);
+    }
+
+    [Fact]
+    public async Task RemovedProviderQuotaRowsArePurgedOnEveryStartup()
+    {
+        // cleanupRemovedProviderQuotaTypes (removed_provider_quotas.go) deletes
+        // both live and soft-deleted rows of retired provider types before the
+        // schema migration on every startup. The port keeps that observable
+        // end state in the migration script.
+        await using var db = new TestDatabase(fixture);
+        await using var connection = await db.OpenMigratedAsync();
+
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "provider_quota_status"
+                ("provider_type", "status", "quota_data", "next_check_at", "channel_id", "deleted_at")
+            VALUES
+                ('wafer', 'exhausted', '{}', now(), 1, 0),
+                ('wafer', 'available', '{}', now(), 2, 1798761600),
+                ('codex', 'unknown', '{}', now(), 3, 0);
+            """);
+
+        await DatabaseMigrator.EnsureCreatedAsync(connection);
+
+        var remaining = await connection.QueryAsync<string>(
+            "SELECT \"provider_type\" FROM \"provider_quota_status\" ORDER BY \"channel_id\";");
+        Assert.Equal(["codex"], remaining.ToArray());
     }
 
     private sealed class ColumnInfo

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
+using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -38,6 +39,7 @@ public sealed class AdminChannelUpdateEndpointTests : IAsyncLifetime
     private readonly FakeChannelWriteStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
     private readonly FakeChannelModelPriceStore _prices = new();
+    private readonly RecordingQuotaInvalidator _quotaInvalidator = new();
 
     private readonly AdminGraphqlGateServices _gate = new();
 
@@ -53,6 +55,7 @@ public sealed class AdminChannelUpdateEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
         builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
         builder.Services.AddSingleton(_limiters);
+        builder.Services.AddSingleton<IProviderQuotaInvalidator>(_quotaInvalidator);
         builder.Services.AddSingleton<ChannelLifecycleService>();
 
         _app = builder.Build();
@@ -340,6 +343,108 @@ public sealed class AdminChannelUpdateEndpointTests : IAsyncLifetime
         Assert.Equal(
             string.Empty,
             settings.RootElement.GetProperty("extraModelPrefix").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateChannelInvalidatesTheQuotaStatusWhenTheProviderIdentityChanges()
+    {
+        var channel = SeedChannel(name: "Alpha");
+
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { baseURL = "https://api.other/v1" },
+            });
+
+        Assert.Equal([channel.Id], _quotaInvalidator.ChannelIds);
+    }
+
+    [Fact]
+    public async Task UpdateChannelSkipsTheQuotaHookWhenTheIdentityIsUnchanged()
+    {
+        var channel = SeedChannel(name: "Alpha");
+
+        // The identity guard runs (baseURL is provided) but compares equal.
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { baseURL = "https://api.example/v1" },
+            });
+
+        // A non-identity update never reaches the comparison at all.
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { remark = "note" },
+            });
+
+        Assert.Empty(_quotaInvalidator.ChannelIds);
+    }
+
+    [Fact]
+    public async Task UpdateChannelInvalidatesWhenTheCommandCodeCookieIsCleared()
+    {
+        var channel = SeedChannel(
+            name: "Alpha",
+            type: "commandcode",
+            baseUrl: "https://api.commandcode.ai",
+            settings:
+                """{"providerQuota":{"commandCode":{"authCookie":"__secure-commandcode_prod_.session_token=abc"}}}""");
+
+        // A blank cookie and an omitted providerQuota block both clear it
+        // (channel.go:923-925) and both invalidate without an identity change.
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new
+                {
+                    settings = new
+                    {
+                        providerQuota = new
+                        {
+                            commandCode = new { authCookie = "   " },
+                        },
+                    },
+                },
+            });
+
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { settings = new { extraModelPrefix = "x" } },
+            });
+
+        Assert.Equal([channel.Id, channel.Id], _quotaInvalidator.ChannelIds);
+    }
+
+    [Fact]
+    public async Task UpdateChannelKeepsTheUpdateWhenTheQuotaHookFails()
+    {
+        var channel = SeedChannel(name: "Alpha");
+        _quotaInvalidator.Error = new InvalidOperationException("invalidate boom");
+
+        var data = await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { baseURL = "https://api.other/v1" },
+            });
+
+        Assert.Equal(
+            "https://api.other/v1",
+            data.GetProperty("updateChannel").GetProperty("baseURL").GetString());
+        Assert.Equal([channel.Id], _quotaInvalidator.ChannelIds);
     }
 
     [Fact]

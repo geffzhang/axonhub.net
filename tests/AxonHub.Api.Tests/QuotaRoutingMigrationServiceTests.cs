@@ -437,6 +437,11 @@ public sealed class QuotaRoutingMigrationServiceTests
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public Task<IReadOnlyList<ChannelRecord>> ListEnabledByTypesAsync(
+            IReadOnlyCollection<string> types,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public Task<bool> UpdateStatusAsync(
             long id,
             string status,

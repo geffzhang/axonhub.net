@@ -13,6 +13,16 @@ public interface IChannelStore
     /// <summary>Live (not soft-deleted) channels whose status is enabled.</summary>
     Task<IReadOnlyList<ChannelRecord>> ListEnabledAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Port of the quota collection query
+    /// (<c>channel.StatusEQ(enabled)</c> AND <c>channel.TypeIn(types...)</c>).
+    /// The reference leaves ordering unspecified; id ASC keeps the port
+    /// deterministic without changing which rows are returned.
+    /// </summary>
+    Task<IReadOnlyList<ChannelRecord>> ListEnabledByTypesAsync(
+        IReadOnlyCollection<string> types,
+        CancellationToken cancellationToken = default);
+
     Task<bool> UpdateStatusAsync(
         long id,
         string status,
@@ -73,6 +83,30 @@ public sealed class ChannelStore(AxonHubDbContext db) : IChannelStore
         var rows = await connection.QueryAsync<ChannelRecord>(
             new CommandDefinition(
                 sql,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.AsList();
+    }
+
+    public async Task<IReadOnlyList<ChannelRecord>> ListEnabledByTypesAsync(
+        IReadOnlyCollection<string> types,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(types);
+        if (types.Count == 0)
+        {
+            return [];
+        }
+
+        var sql = "SELECT " + Columns
+            + " FROM \"channels\" WHERE \"deleted_at\" = 0 AND \"status\" = 'enabled'"
+            + " AND \"type\" IN @Types ORDER BY \"id\";";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<ChannelRecord>(
+            new CommandDefinition(
+                sql,
+                new { Types = types },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
         return rows.AsList();

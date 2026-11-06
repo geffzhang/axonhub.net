@@ -148,7 +148,12 @@ builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminServi
 builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
 builder.Services.AddScoped<IRetryPolicyProvider, SystemRetryPolicyService>();
 builder.Services.AddScoped<IPassThroughSettingsProvider, SystemPassThroughSettingsService>();
-builder.Services.AddScoped<IQuotaRoutingSettingsProvider, SystemQuotaRoutingSettingsService>();
+// Quota routing settings (biz/quota_routing_settings.go): the lenient runtime
+// accessor the orchestrator reads, and the strict get/set pair the management
+// mutation surfaces. They share one scoped instance.
+builder.Services.AddScoped<SystemQuotaRoutingSettingsService>();
+builder.Services.AddScoped<IQuotaRoutingSettingsProvider>(
+    static services => services.GetRequiredService<SystemQuotaRoutingSettingsService>());
 
 // Prompt protection (biz.PromptProtectionRuleService): the port reads enabled
 // rules per request instead of the reference's 30-second live cache (C092).
@@ -247,6 +252,31 @@ builder.Services.AddScoped<ChannelLifecycleService>();
 // log-only-failure timing (C183).
 builder.Services.AddScoped<QuotaRoutingMigrationService>();
 builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
+
+// Provider quota collection (biz/provider_quota.go,
+// biz/provider_quota_settings.go, biz/channel_provider_quota_hook.go): the
+// per-channel quota status table, the collection loop and its five-minute UTC
+// schedule, the synchronous routing-gate snapshot and the settings surface.
+// Only the collection core is ported; the nineteen provider checkers arrive in
+// follow-up slices (C182), so every provider currently reaches the reference's
+// "No checker for provider" branch. The service is a singleton because the
+// routing gate reads its cache synchronously; every database operation runs in
+// its own DI scope. ProviderQuotaService's startup cache load (the reference
+// constructor call) and the settings snapshot seed run in a hosted service
+// (C182).
+builder.Services.AddScoped<IProviderQuotaStatusStore, ProviderQuotaStatusStore>();
+builder.Services.AddSingleton<ProviderQuotaSettingsCache>();
+builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaCheckerRegistry>();
+builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
+builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(
+    static services => services.GetRequiredService<ProviderQuotaCollectionSettingsService>());
+builder.Services.AddSingleton<ProviderQuotaService>();
+builder.Services.AddSingleton<IProviderQuotaStatusProvider>(
+    static services => services.GetRequiredService<ProviderQuotaService>());
+builder.Services.AddSingleton<IProviderQuotaInvalidator>(
+    static services => services.GetRequiredService<ProviderQuotaService>());
+builder.Services.AddHostedService<ProviderQuotaInitializationHostedService>();
+builder.Services.AddHostedService<ProviderQuotaScheduler>();
 
 // Endpoint auto-detection (detectChannelEndpoints): read-only upstream probes
 // built from the channel type's primary outbound and generic peers.

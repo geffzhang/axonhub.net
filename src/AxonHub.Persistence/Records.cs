@@ -760,3 +760,43 @@ public sealed class InvitationRecord
 
     public long ProjectId { get; set; }
 }
+
+/// <summary>
+/// Row of the reference <c>provider_quota_status</c> table
+/// (internal/ent/schema/provider_quota_status.go): TimeMixin + SoftDeleteMixin,
+/// one live row per channel, an enum provider type and status, the normalized
+/// quota document, the schedule columns and the optional quota account key.
+/// </summary>
+public sealed class ProviderQuotaStatusRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    /// <summary>One of the 19 provider quota enum values.</summary>
+    public string ProviderType { get; set; } = string.Empty;
+
+    /// <summary>available, warning, exhausted, or unknown.</summary>
+    public string Status { get; set; } = "unknown";
+
+    /// <summary>objects.QuotaData JSON; Ent stores it as jsonb.</summary>
+    public string QuotaData { get; set; } = "{}";
+
+    /// <summary>Ent field.Time Optional().Nillable(): null when no reset is known.</summary>
+    public DateTime? NextResetAt { get; set; }
+
+    public bool Ready { get; set; } = true;
+
+    public DateTime NextCheckAt { get; set; }
+
+    /// <summary>Ent field.String Default("") Optional().Nillable().</summary>
+    public string? AccountKey { get; set; } = string.Empty;
+
+    /// <summary>Ent edge to Channel, unique and immutable.</summary>
+    public long ChannelId { get; set; }
+}

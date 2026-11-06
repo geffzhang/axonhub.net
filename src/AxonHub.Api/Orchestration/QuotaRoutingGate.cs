@@ -140,15 +140,68 @@ public sealed class QuotaRoutingGate
             return decision;
         }
 
-        var (state, _) = ProviderQuotaRouting.EvaluateQuotaRouting(
-            status.Limits,
-            status.Status,
-            limitType,
-            _timeProvider.GetUtcNow());
-
-        if (state == QuotaRoutingStates.Exhausted)
+        var now = _timeProvider.GetUtcNow();
+        string state;
+        if (candidate.Models.Count > 0)
         {
-            return decision;
+            // Quota limits can target a model pool (antigravity's Gemini and
+            // Claude/GPT pools), so every candidate model is evaluated against
+            // its own filtered limits before the candidate's fate is decided.
+            var usableModels = new List<ChannelCandidateModel>(candidate.Models.Count);
+            var usableStates = new List<string>(candidate.Models.Count);
+            var usableReasons = new List<string>(candidate.Models.Count);
+            var usableFormats = candidate.ModelApiFormats is { } formats
+                && formats.Count == candidate.Models.Count
+                ? new List<string>(candidate.Models.Count)
+                : null;
+
+            for (var i = 0; i < candidate.Models.Count; i++)
+            {
+                var entry = candidate.Models[i];
+                var limits = ProviderQuotaModelFilter.FilterLimitsForModel(
+                    status.Limits,
+                    entry.ActualModel);
+                var (modelState, modelReason) = ProviderQuotaRouting.EvaluateQuotaRouting(
+                    limits,
+                    status.Status,
+                    limitType,
+                    now);
+                if (modelState == QuotaRoutingStates.Exhausted)
+                {
+                    continue;
+                }
+
+                usableModels.Add(entry);
+                usableStates.Add(modelState);
+                usableReasons.Add(modelReason);
+                usableFormats?.Add(candidate.ModelApiFormats![i]);
+            }
+
+            if (usableModels.Count == 0)
+            {
+                return decision;
+            }
+
+            candidate.Models = usableModels;
+            if (usableFormats is not null)
+            {
+                candidate.ModelApiFormats = usableFormats;
+            }
+
+            state = usableStates[0];
+        }
+        else
+        {
+            (state, _) = ProviderQuotaRouting.EvaluateQuotaRouting(
+                status.Limits,
+                status.Status,
+                limitType,
+                now);
+
+            if (state == QuotaRoutingStates.Exhausted)
+            {
+                return decision;
+            }
         }
 
         switch (mode)

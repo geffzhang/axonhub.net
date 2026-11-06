@@ -272,6 +272,22 @@ internal sealed class FakeChannelStore : IChannelStore
             .ToList());
     }
 
+    public int ListEnabledByTypesCalls { get; private set; }
+
+    public Task<IReadOnlyList<ChannelRecord>> ListEnabledByTypesAsync(
+        IReadOnlyCollection<string> types,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        ListEnabledByTypesCalls++;
+        return Task.FromResult<IReadOnlyList<ChannelRecord>>(Rows
+            .Where(row => row.DeletedAt == 0
+                && string.Equals(row.Status, "enabled", StringComparison.Ordinal)
+                && types.Contains(row.Type, StringComparer.Ordinal))
+            .OrderBy(static row => row.Id)
+            .ToList());
+    }
+
     public Task<bool> UpdateStatusAsync(
         long id,
         string status,

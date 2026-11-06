@@ -232,6 +232,18 @@ public interface IUsageLogStore
         bool needTokens,
         bool needCost,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of ProviderQuotaService.channelCostSince
+    /// (internal/server/biz/provider_quota_cost.go:87-108): the cost of the
+    /// usage logs a channel produced in <c>[since, until)</c>, served by the
+    /// <c>usage_logs_by_channel_id_created_at</c> index.
+    /// </summary>
+    Task<double> SumCostByChannelAsync(
+        long channelId,
+        DateTime since,
+        DateTime until,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -651,6 +663,29 @@ public sealed class UsageLogStore(AxonHubDbContext db) : IUsageLogStore
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
 
         return new UsageAggregate(row.TotalTokens, row.TotalCost);
+    }
+
+    public async Task<double> SumCostByChannelAsync(
+        long channelId,
+        DateTime since,
+        DateTime until,
+        CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            SELECT COALESCE(SUM("total_cost"), 0)
+            FROM "usage_logs"
+            WHERE "channel_id" = @ChannelId
+              AND "created_at" >= @Since
+              AND "created_at" < @Until;
+            """;
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteScalarAsync<double>(
+            new CommandDefinition(
+                sql,
+                new { ChannelId = channelId, Since = since, Until = until },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
     private static void AppendWindow(

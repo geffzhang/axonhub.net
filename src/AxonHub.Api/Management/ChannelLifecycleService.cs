@@ -6,6 +6,7 @@ using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Json;
 using AxonHub.Persistence;
+using Microsoft.Extensions.Logging;
 using GoJson = AxonHub.Llm.Json.GoJson;
 
 namespace AxonHub.Api.Management;
@@ -20,7 +21,9 @@ namespace AxonHub.Api.Management;
 public sealed class ChannelLifecycleService(
     IChannelWriteStore channels,
     ChannelLimiterManager limiters,
-    IChannelModelPriceStore prices)
+    IChannelModelPriceStore prices,
+    IProviderQuotaInvalidator? quotaInvalidator = null,
+    ILogger<ChannelLifecycleService>? logger = null)
 {
     /// <summary>
     /// Port of ChannelService.apiKeyOpsLock: the reference serializes every
@@ -29,6 +32,17 @@ public sealed class ChannelLifecycleService(
     /// service is scoped, hence the static lock.
     /// </summary>
     private static readonly SemaphoreSlim ApiKeyOpsLock = new(1, 1);
+
+    /// <summary>
+    /// Port of <c>ChannelService.invalidateProviderQuota</c>'s warning
+    /// (channel_provider_quota_hook.go); the hook never fails the mutation.
+    /// </summary>
+    private static readonly Action<ILogger, long, Exception?> LogQuotaInvalidationFailed =
+        LoggerMessage.Define<long>(
+            LogLevel.Warning,
+            new EventId(0, "ChannelProviderQuotaInvalidationFailed"),
+            "failed to invalidate provider quota after channel provider change "
+            + "channel_id={ChannelId}");
 
     /// <summary>
     /// Port of ChannelService.CreateChannel (channel.go:633-671) over the frozen
@@ -608,16 +622,19 @@ public sealed class ChannelLifecycleService(
             || command.Endpoints is not null
             || commandCodeQuotaSettings;
 
+        // A cleared Command Code quota cookie must invalidate the old persisted
+        // status, regardless of whether the client sent null or an empty
+        // object (channel.go:923-925).
+        var quotaCookieCleared = false;
+
         if (command.Settings is { } inputSettings)
         {
-            // A cleared Command Code cookie must not survive on the channel.
-            // The reference additionally invalidates the cached provider quota
-            // status after commit; that subsystem is not ported (C139).
             if (ChannelValidation.IsCommandCodeChannelType(effectiveType)
                 && (inputSettings.ProviderQuota is null
                     || ChannelValidation.CommandCodeQuotaCookieIsBlank(inputSettings)))
             {
                 ChannelValidation.ClearCommandCodeQuotaSettings(inputSettings);
+                quotaCookieCleared = true;
             }
 
             var error = ChannelValidation.NormalizeCommandCodeQuotaCookieSettings(
@@ -956,8 +973,54 @@ public sealed class ChannelLifecycleService(
             throw new InvalidOperationException(ex.Message, ex);
         }
 
-        return updated ?? throw new InvalidOperationException(
-            "channel was updated concurrently; retry the operation");
+        if (updated is null)
+        {
+            throw new InvalidOperationException(
+                "channel was updated concurrently; retry the operation");
+        }
+
+        // The saved row is compared against the pre-normalization identity
+        // snapshot; the comparison only runs under the identity guard
+        // (channel.go:1211-1214).
+        var providerIdentityChanged = guardProviderIdentity
+            && (updated.Type != snapshot.Type || updated.BaseUrl != snapshot.BaseUrl);
+
+        if (providerIdentityChanged || quotaCookieCleared)
+        {
+            // runAfterCommit equivalent (channel.go:1230-1234): invalidate the
+            // cached provider quota status once the update is committed. The
+            // hook only logs on failure and never fails the mutation.
+            await InvalidateProviderQuotaAsync(id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return updated;
+    }
+
+    /// <summary>
+    /// Port of <c>ChannelService.invalidateProviderQuota</c>
+    /// (channel_provider_quota_hook.go): absent invalidator is a no-op and a
+    /// failure is logged, never propagated.
+    /// </summary>
+    private async Task InvalidateProviderQuotaAsync(long channelId, CancellationToken cancellationToken)
+    {
+        if (quotaInvalidator is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await quotaInvalidator.InvalidateChannelQuotaAsync(channelId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (logger is not null)
+            {
+                LogQuotaInvalidationFailed(logger, channelId, ex);
+            }
+        }
     }
 
     /// <summary>Port of ChannelService.UpdateChannelStatus.</summary>

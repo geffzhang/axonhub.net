@@ -552,6 +552,83 @@ public sealed class TriggerGcCleanupInput
     public int? ResponseChunksCleanupDays { get; set; }
 }
 
+/// <summary>Port of the gqlgen <c>QuotaRoutingMode</c> enum (system.graphql:164-168).</summary>
+[GraphQLName("QuotaRoutingMode")]
+public enum QuotaRoutingModeValue
+{
+    [GraphQLName("IGNORE_QUOTA")]
+    IgnoreQuota,
+
+    [GraphQLName("REMOVE_ON_EXHAUSTED")]
+    RemoveOnExhausted,
+
+    [GraphQLName("BACKPRESSURE")]
+    Backpressure,
+}
+
+/// <summary>Port of the <c>QuotaRoutingSettings</c> type (system.graphql:170-172).</summary>
+[GraphQLName("QuotaRoutingSettings")]
+public sealed class QuotaRoutingSettingsType
+{
+    public QuotaRoutingModeValue DefaultMode { get; init; }
+}
+
+/// <summary>Port of <c>UpdateQuotaRoutingSettingsInput</c> (system.graphql:174-176).</summary>
+public sealed class UpdateQuotaRoutingSettingsInput
+{
+    public QuotaRoutingModeValue? DefaultMode { get; set; }
+}
+
+/// <summary>
+/// Port of the <c>ProviderQuotaCollectionProvider</c> type (system.graphql:178-181).
+/// </summary>
+[GraphQLName("ProviderQuotaCollectionProvider")]
+public sealed class ProviderQuotaCollectionProviderType
+{
+    public string Provider { get; init; } = string.Empty;
+
+    public bool Enabled { get; init; }
+}
+
+/// <summary>
+/// Port of the <c>ProviderQuotaCollectionSettings</c> type (system.graphql:183-186).
+/// </summary>
+[GraphQLName("ProviderQuotaCollectionSettings")]
+public sealed class ProviderQuotaCollectionSettingsType
+{
+    public bool Enabled { get; init; }
+
+    /// <summary>
+    /// Always the full supported-provider list in reference order: the field
+    /// resolver iterates <c>biz.SupportedProviderQuotaTypes()</c> and reads the
+    /// map, so a provider missing from the stored settings reports false.
+    /// </summary>
+    public IReadOnlyList<ProviderQuotaCollectionProviderType> Providers { get; init; } = [];
+}
+
+/// <summary>
+/// Port of <c>ProviderQuotaCollectionProviderInput</c> (system.graphql:188-191).
+/// </summary>
+public sealed class ProviderQuotaCollectionProviderInput
+{
+    public string Provider { get; set; } = string.Empty;
+
+    public bool Enabled { get; set; }
+}
+
+/// <summary>
+/// Port of <c>UpdateProviderQuotaCollectionSettingsInput</c>
+/// (system.graphql:193-196). Both fields are optional: an absent
+/// <c>enabled</c> keeps the stored switch and an absent <c>providers</c> list
+/// changes no provider.
+/// </summary>
+public sealed class UpdateProviderQuotaCollectionSettingsInput
+{
+    public bool? Enabled { get; set; }
+
+    public IReadOnlyList<ProviderQuotaCollectionProviderInput>? Providers { get; set; }
+}
+
 /// <summary>Port of <c>GcCleanupPreviewItem</c> (system.graphql:385-390).</summary>
 [GraphQLName("GcCleanupPreviewItem")]
 public sealed class GcCleanupPreviewItemType
@@ -666,6 +743,69 @@ public static class SystemSettingsMapping
     {
         BlockedIps = settings.BlockedIps,
         ShowRequestLogIpBanIcon = settings.ShowRequestLogIpBanIcon,
+    };
+
+    /// <summary>
+    /// The stored wire values are the lowercase objects.QuotaRoutingMode
+    /// constants; gqlgen renders them as the uppercase enum names.
+    /// </summary>
+    public static QuotaRoutingSettingsType ToGraphQL(QuotaRoutingSettings settings) => new()
+    {
+        DefaultMode = ToGraphQLMode(settings.DefaultMode),
+    };
+
+    /// <summary>
+    /// The GraphQL enum values decode back to the lowercase wire constants
+    /// (objects.QuotaRoutingMode).
+    /// </summary>
+    public static string ToDomain(QuotaRoutingModeValue mode) => mode switch
+    {
+        QuotaRoutingModeValue.IgnoreQuota => QuotaRoutingModes.IgnoreQuota,
+        QuotaRoutingModeValue.RemoveOnExhausted => QuotaRoutingModes.RemoveOnExhausted,
+        QuotaRoutingModeValue.Backpressure => QuotaRoutingModes.Backpressure,
+        _ => throw new GraphQLException(
+            "Enum \"QuotaRoutingMode\" cannot represent value: "
+            + JsonSerializer.Serialize((int)mode)),
+    };
+
+    /// <summary>
+    /// Port of providerQuotaCollectionSettingsResolver.Providers
+    /// (system.resolvers.go:458-467): the list follows
+    /// <c>SupportedProviderQuotaTypes()</c> order, and a provider missing from
+    /// the stored map reports false.
+    /// </summary>
+    public static ProviderQuotaCollectionSettingsType ToGraphQL(
+        ProviderQuotaCollectionSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var supported = ProviderQuotaCollectionSettingsService.SupportedProviderQuotaTypes;
+        var providers = new List<ProviderQuotaCollectionProviderType>(supported.Count);
+        foreach (var providerType in supported)
+        {
+            providers.Add(new ProviderQuotaCollectionProviderType
+            {
+                Provider = providerType,
+                Enabled = settings.Providers.TryGetValue(providerType, out var enabled)
+                    && enabled,
+            });
+        }
+
+        return new ProviderQuotaCollectionSettingsType
+        {
+            Enabled = settings.Enabled,
+            Providers = providers,
+        };
+    }
+
+    private static QuotaRoutingModeValue ToGraphQLMode(string mode) => mode switch
+    {
+        QuotaRoutingModes.IgnoreQuota => QuotaRoutingModeValue.IgnoreQuota,
+        QuotaRoutingModes.RemoveOnExhausted => QuotaRoutingModeValue.RemoveOnExhausted,
+        QuotaRoutingModes.Backpressure => QuotaRoutingModeValue.Backpressure,
+        _ => throw new GraphQLException(
+            "Enum \"QuotaRoutingMode\" cannot represent value: "
+            + JsonSerializer.Serialize(mode)),
     };
 
     public static SystemModelSettingsType ToGraphQL(ModelSettings settings) => new()

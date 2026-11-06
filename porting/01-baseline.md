@@ -5644,6 +5644,78 @@ GraphQL 的 `AdminQuery` / `AdminMutation` / `SystemSettingsTypes` 与 `Authoriz
 差异：C095 的 trace GC 缺口由本节闭合并转为 resolved；GC / 存储策略的调度器结构、cron 语法、
 32 位预览计数、数据存储缓存与 SQL 形态登记为 C203。
 
+## 114. 供应商配额采集核心（ProviderQuotaService / provider_quota_status / GraphQL，111 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota.go`（`loadQuotaCache`:369、`registerProviderQuotaSupport`:374-480、
+`RegisterScheduledTasks`:396-404、`getWarningCheckInterval`:518-525、`getCheckInterval`:534-540、
+`GetQuotaStatus`:561-584、`InvalidateChannelQuota`:595-603、`getProviderType`:1012-1049、
+`hasCredentialsForProvider`:1051-1095、`extractLimitsFromQuotaData`:1141-1219、`maxConcurrentQuotaChecks`:26、
+`providerQuotaChannelTypes`:54-83）、`internal/server/biz/provider_quota/`（`types.go`、归一化与聚合、
+`provider_quota_account.go:25-64` 的 `quotaAccountKey` / `groupChannelsByQuotaAccount`、`url_detection.go`、
+`ListResets` / `ResetChannelQuotaNow` 与 checker / resetter 接口——19 个 checker 本体见 C182）、
+`internal/server/biz/provider_quota_settings.go:12-174`、`provider_quota_cost.go`、
+`channel_provider_quota_hook.go`、`internal/server/db/removed_provider_quotas.go`、
+`internal/ent/schema/provider_quota_status.go`、`internal/server/gql/ent.graphql:3729-3758` 与
+`ent.resolvers.go:98-142`，以及 `axonhub.graphql` 的 `checkProviderQuotas` / `resetChannelQuotaNow` /
+`providerQuotaCollectionSettings` / `updateProviderQuotaCollectionSettings` 与对应 resolver。
+
+新增 `src/AxonHub.Api/Orchestration/ProviderQuotaService.cs`（采集编排、缓存、错误退避、周期成本与重置分发）、
+`ProviderQuotaStatus.cs`（`QuotaLimitStatus` / `QuotaChannelStatus` / 状态常量）、`ProviderQuotaData.cs`
+（归一化、limit 过滤、克隆与 URL provider 检测）、`ProviderQuotaCheckerRegistry.cs`（`IQuotaChecker` /
+`IQuotaResetter` 注册表，当前为空）、`ProviderQuotaCollectionSettingsService.cs` 与
+`ProviderQuotaSettingsCache.cs`（`provider_quota_collection_settings` 的读取、归一化、写入与同步快照）、
+`src/AxonHub.Api/Management/ProviderQuotaInitializationHostedService.cs` / `ProviderQuotaScheduler.cs`
+（启动缓存加载与 `*/5 * * * *` UTC 调度）、`src/AxonHub.Persistence/Stores/ProviderQuotaStatusStore.cs`
+（Dapper SQL）、`DatabaseSchema` 的 `provider_quota_status` 表与启动清除，GraphQL 的 `AdminQuery` /
+`AdminMutation` / `ChannelTypes` / `ChannelMapping` / `SystemSettingsTypes`，`ChannelLifecycleService`
+的失效钩子与 `Program` 接线。
+
+- 受支持集合与 provider 键：`ProviderQuotaChannelTypes` 28 项按参照顺序；`GetProviderType` 把通道类型折叠到
+  19 个 checker 键（`moonshot_coding` → `kimi_code`，五类 `zenmux_*` → `zenmux`，`openai` / `openai_responses`
+  按 base URL 主机映射到 `synthetic` / `neuralwatt` / `apertis` / `charm_hyper`）。
+- 采集设置：`provider_quota_collection_settings` 缺失时 `enabled=true`、19 个 provider 全部启用；缺失的
+  provider 视为禁用；写入拒绝未知 / 重复 provider（`unsupported|duplicate provider quota type`）并按键排序
+  序列化（复刻 Go `json.Marshal`）；运行时读取失败回退默认值并刷新同步快照。
+- 采集调度：`Initialize` 把全部存活行装入进程内缓存；采集只选启用、类型可折叠且设置启用的通道，按 account
+  key 分组（仅 zenmux 管理键参与 SHA256 分组，其余通道单成员成组），组间并行度 8；`force` 跳过
+  `next_check_at` 到期判定；设置读取失败只告警并继续。
+- 检查与状态：无凭据的通道硬删其配额行并清缓存；无 checker 时记录 “No checker for provider” 并保留旧行；
+  checker 结果经 `Normalize`（ratio 截断、过期时间清除、分组就绪、状态推导）后 upsert；`warning` 用 4 倍
+  间隔（20 分钟），其余 5 分钟；`_resets` 由 resetter 的 `ListResets` 填入（失败写 `error`）。
+- 错误与重置：普通检查失败写 `{error_code,error_count}` 并保留原状态 / 重置时间；provider 变更或
+  `missing_credentials` 走 reset 路径（provider / account / status=unknown / not ready / null reset /
+  退避后下一检查）；错误退避为 1/2/4/8 倍间隔，计数封顶。
+- 失效钩子：通道更新时 provider 身份（类型、base URL、端点、Command Code 设置）变化或配额 cookie 被清空，
+  调用 `InvalidateChannelQuota`（硬删行 + 清缓存）；钩子失败只记录，不阻断更新。
+- 持久化：`provider_quota_status`（jsonb `quota_data`、唯一 `channel_id`、`next_check_at` / `account_key`
+  索引）；upsert 冲突只改插入列（`created_at` / `updated_at` / `deleted_at` 不动），create 依赖唯一约束
+  （含软删行），错误更新与 reset 分别写字段，硬删同时清除软删行；启动脚本删除退役 provider（`wafer`）的行。
+- GraphQL：`Channel.providerQuotaStatus` 缺行 / 退役 provider / 设置禁用返回 null，其余映射真实行
+  （`quotaData` 为 Map 标量原样 JSON）；`providerQuotaCollectionSettings` 按受支持顺序输出；更新与
+  `checkProviderQuotas`（互斥锁内同步执行）、`resetChannelQuotaNow`（`write:channels` 用户 scope）的错误
+  按参照包裹。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 初始化缓存与失败保留、设置门禁、缓存副本、失效硬删、采集遍历与跳过、28 项通道类型、状态持久化与缓存、间隔与退避、失败 / 重置 / 周期成本 / zenmux 分组 / 无 checker / 无凭据 / 设置读失败 / 调度到期 | `tests/AxonHub.Api.Tests/ProviderQuotaServiceTests.cs` | 31 |
+| 归一化边界、状态推导、model 过滤、退避计数、cron 表达式、limit 合并与提取、legacy 错误键、provider 键映射、URL 检测、zenmux account key、RFC3339 | `tests/AxonHub.Api.Tests/ProviderQuotaDomainTests.cs` | 21 + 27 |
+| 设置默认 / 归一化 / 严格读取 / 回退 / 写入校验与错误包装 / 快照 | `tests/AxonHub.Api.Tests/ProviderQuotaCollectionSettingsServiceTests.cs` | 11 |
+| `providerQuotaStatus` 缺行与枚举错误、真实行形状（Map / gid / 时间）、退役 / 禁用 / 空类型隐藏 | `tests/AxonHub.Api.Tests/AdminChannelsEndpointTests.cs` | 2 |
+| 配额采集设置查询 / 更新 / 错误包装 / 路由设置写入 / 强制采集 / 立即重置 | `tests/AxonHub.Api.Tests/AdminSystemSettingsEndpointTests.cs` | 6 |
+| 通道更新触发失效、身份不变跳过、cookie 清空、钩子失败不阻断 | `tests/AxonHub.Api.Tests/AdminChannelUpdateEndpointTests.cs` | 4 |
+| upsert 冲突列、软删读谓词、create 唯一约束、reset / error 更新、硬删 | `tests/AxonHub.Persistence.Tests/ProviderQuotaStatusStoreTests.cs` | 6 |
+| 表 / 列 / 类型 / 索引与退役行清除 | `tests/AxonHub.Persistence.Tests/SchemaTests.cs` | 1 |
+| `ListEnabledByTypesAsync` 的存活 / 启用 / 类型过滤 | `tests/AxonHub.Persistence.Tests/ChannelStoreTests.cs` | 1 |
+| `SumCostByChannelAsync` 的半开窗口与 NULL 合并 | `tests/AxonHub.Persistence.Tests/UsageLogStoreTests.cs` | 1 |
+
+`AxonHub.Api.Tests` 由 2982 增至 3084（+102），`AxonHub.Persistence.Tests` 由 310 增至 319（+9），四个项目
+合计由 6419 增至 6530。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]`
+的静态计数；下一次全量运行应以 3084 / 319 / 6530 复核。**
+
+差异：C182 由「子系统未移植」收窄为「19 个 checker 与供应商专属重置未移植」；C123 仅剩 antigravity checker；
+C139 的 `providerQuotaStatus` 缺口闭合并转为 resolved；`QuotaLimitStatus.Type` 的默认值补偿登记为 C204，
+`Map` 标量的 jsonb 键序 / 转义差异登记为 C205。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -5671,7 +5743,7 @@ GraphQL 的 `AdminQuery` / `AdminMutation` / `SystemSettingsTypes` 与 `Authoriz
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；供应商配额采集子系统（checkers / ProviderQuotaService / provider_quota_status / GraphQL 配额面）未移植（C182），null provider 下与参照「通道无配额状态」可观察等价 | 中 | 闸门与迁移完成；采集随 C182 切片落地 |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），19 个 provider checker 与供应商专属重置未移植（C182）；空注册表下不发起采集、保留既有行 | 中 | 闸门与迁移完成；checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |

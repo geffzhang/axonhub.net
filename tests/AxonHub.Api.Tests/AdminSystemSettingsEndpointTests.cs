@@ -6,6 +6,7 @@ using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Security;
 using AxonHub.Api.Settings;
+using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -21,6 +22,9 @@ namespace AxonHub.Api.Tests;
 public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
 {
     private readonly FakeSystemStore _store = new();
+    private readonly FakeProviderQuotaStatusStore _quotaStatuses = new();
+    private readonly FakeChannelStore _quotaChannels = new();
+    private readonly ProviderQuotaSettingsCache _quotaCache = new();
     private readonly AdminGraphqlGateServices _gate = new();
 
     private WebApplication _app = null!;
@@ -34,6 +38,20 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         _gate.Register(builder.Services);
         builder.Services.AddScoped<ISystemSettingsAdminService>(
             _ => new SystemSettingsAdminService(_store));
+        builder.Services.AddSingleton<IProviderQuotaStatusStore>(_quotaStatuses);
+        builder.Services.AddSingleton(_quotaCache);
+        builder.Services.AddScoped(
+            _ => new ProviderQuotaCollectionSettingsService(_store, _quotaCache));
+        builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(
+            static services => services
+                .GetRequiredService<ProviderQuotaCollectionSettingsService>());
+        builder.Services.AddScoped(
+            _ => new SystemQuotaRoutingSettingsService(_store));
+        builder.Services.AddScoped<IQuotaRoutingSettingsProvider>(
+            static services => services.GetRequiredService<SystemQuotaRoutingSettingsService>());
+        builder.Services.AddSingleton<IChannelStore>(_quotaChannels);
+        builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaCheckerRegistry>();
+        builder.Services.AddSingleton<ProviderQuotaService>();
 
         _app = builder.Build();
         _app.MapAdminGraphql();
@@ -340,6 +358,152 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
                 .ToArray());
         Assert.Equal("SCALAR", data.GetProperty("any").GetProperty("kind").GetString());
     }
+
+    [Fact]
+    public async Task ProviderQuotaCollectionSettingsQueryFollowsTheSupportedProviderOrder()
+    {
+        _store.Add(
+            ProviderQuotaCollectionSettingsService.SystemKey,
+            """{"enabled":true,"providers":{"minimax":false}}""");
+
+        var data = await QueryAsync(
+            """
+            {
+              providerQuotaCollectionSettings {
+                enabled
+                providers { provider enabled }
+              }
+            }
+            """);
+
+        var settings = data.GetProperty("providerQuotaCollectionSettings");
+        Assert.True(settings.GetProperty("enabled").GetBoolean());
+        var providers = settings.GetProperty("providers").EnumerateArray().ToArray();
+        Assert.Equal(
+            ProviderQuotaCollectionSettingsService.SupportedProviderQuotaTypes.ToArray(),
+            providers.Select(static provider => provider.GetProperty("provider").GetString()!)
+                .ToArray());
+        Assert.False(ProviderEntry(providers, "minimax"));
+        Assert.True(ProviderEntry(providers, "codex"));
+    }
+
+    [Fact]
+    public async Task UpdateProviderQuotaCollectionSettingsMergesIntoTheStoredRow()
+    {
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateProviderQuotaCollectionSettings(input: {
+                enabled: false
+                providers: [
+                  { provider: "minimax", enabled: false }
+                  { provider: "codex", enabled: true }
+                ]
+              })
+            }
+            """);
+
+        Assert.True(data.GetProperty("updateProviderQuotaCollectionSettings").GetBoolean());
+
+        using var document = JsonDocument.Parse(Assert.Single(_store.Rows).Value);
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("enabled").GetBoolean());
+        var providerMap = root.GetProperty("providers");
+        Assert.Equal(
+            ProviderQuotaCollectionSettingsService.SupportedProviderQuotaTypes
+                .OrderBy(static name => name, StringComparer.Ordinal)
+                .ToArray(),
+            providerMap.EnumerateObject().Select(static property => property.Name).ToArray());
+        Assert.False(providerMap.GetProperty("minimax").GetBoolean());
+        Assert.True(providerMap.GetProperty("codex").GetBoolean());
+    }
+
+    [Fact]
+    public async Task UpdateProviderQuotaCollectionSettingsSurfacesTheReferenceError()
+    {
+        _store.SetFailure = new InvalidOperationException("boom");
+
+        var response = await PostAsync(
+            """
+            mutation {
+              updateProviderQuotaCollectionSettings(input: { enabled: true })
+            }
+            """);
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update provider quota collection settings: "
+            + "failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task QuotaRoutingSettingsUpdatePersistsTheDomainMode()
+    {
+        var initial = await QueryAsync("{ quotaRoutingSettings { defaultMode } }");
+        Assert.Equal(
+            "REMOVE_ON_EXHAUSTED",
+            initial.GetProperty("quotaRoutingSettings").GetProperty("defaultMode").GetString());
+
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateQuotaRoutingSettings(input: { defaultMode: BACKPRESSURE })
+            }
+            """);
+        Assert.True(data.GetProperty("updateQuotaRoutingSettings").GetBoolean());
+
+        var updated = await QueryAsync("{ quotaRoutingSettings { defaultMode } }");
+        Assert.Equal(
+            "BACKPRESSURE",
+            updated.GetProperty("quotaRoutingSettings").GetProperty("defaultMode").GetString());
+
+        using var document = JsonDocument.Parse(Assert.Single(_store.Rows).Value);
+        Assert.Equal(
+            "backpressure",
+            document.RootElement.GetProperty("defaultMode").GetString());
+    }
+
+    [Fact]
+    public async Task CheckProviderQuotasRunsTheCollectionPass()
+    {
+        var data = await QueryAsync("mutation { checkProviderQuotas }");
+
+        Assert.True(data.GetProperty("checkProviderQuotas").GetBoolean());
+        // The collection pass reached the channel query even though nothing is
+        // configured to check.
+        Assert.Equal(1, _quotaChannels.ListEnabledByTypesCalls);
+    }
+
+    [Fact]
+    public async Task ResetChannelQuotaNowResolvesTheGidAndSurfacesTheServiceError()
+    {
+        _quotaChannels.Add(new ChannelRecord
+        {
+            Id = 42,
+            Type = "claudecode",
+            Name = "claudecode-channel",
+            Status = "enabled",
+            Credentials = """{"oauth":{"access_token":"token"}}""",
+        });
+
+        var response = await PostAsync(
+            """
+            mutation {
+              resetChannelQuotaNow(channelID: "gid://axonhub/Channel/42")
+            }
+            """);
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "provider quota reset is not supported for provider \"claudecode\"",
+            error.GetProperty("message").GetString());
+    }
+
+    private static bool ProviderEntry(JsonElement[] providers, string providerType)
+        => providers.Single(
+                provider => provider.GetProperty("provider").GetString() == providerType)
+            .GetProperty("enabled").GetBoolean();
 
     private async Task<JsonElement> QueryAsync(string query)
     {

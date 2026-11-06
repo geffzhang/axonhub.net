@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
+using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -25,6 +26,8 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
 
     private readonly FakeChannelAdminStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
+    private readonly FakeProviderQuotaStatusStore _quotaStatuses = new();
+    private readonly ProviderQuotaSettingsCache _quotaSettingsCache = new();
 
     private readonly AdminGraphqlGateServices _gate = new();
 
@@ -40,6 +43,11 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IChannelAdminStore>(_channels);
         builder.Services.AddSingleton(_limiters);
         builder.Services.AddSingleton<ChannelQueryService>();
+        builder.Services.AddSingleton<IProviderQuotaStatusStore>(_quotaStatuses);
+        builder.Services.AddSingleton(_quotaSettingsCache);
+        builder.Services.AddScoped<
+            IProviderQuotaCollectionSettingsService,
+            ProviderQuotaCollectionSettingsService>();
 
         _app = builder.Build();
         _app.MapAdminGraphql();
@@ -900,6 +908,136 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
         Assert.Equal(
             "Enum \"ChannelType\" cannot represent value: \"wat\"",
             errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ProviderQuotaStatusReturnsTheStoredRowShape()
+    {
+        var channel = SeedChannel(type: "codex", name: "Quota", status: "enabled");
+        var row = _quotaStatuses.Add(new ProviderQuotaStatusRecord
+        {
+            ChannelId = channel.Id,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            UpdatedAt = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc),
+            ProviderType = "codex",
+            Status = ProviderQuotaStatuses.Warning,
+            Ready = true,
+            QuotaData = """
+                {"email":"user@example.com","_limits":[{"type":"token","status":"warning","usageRatio":0.85,"ready":true,"window":"5h","nextResetAt":"2026-05-01T16:00:00Z"}],"_resets":{"supported":true,"resets":[{"id":"reset-1","status":"available"}]}}
+                """,
+            NextResetAt = new DateTime(2026, 5, 1, 16, 0, 0, DateTimeKind.Utc),
+            NextCheckAt = new DateTime(2026, 5, 1, 12, 5, 0, DateTimeKind.Utc),
+            AccountKey = "account-1",
+        });
+
+        var data = await QueryDataAsync(
+            """
+            {
+              channels(first: 1) {
+                edges {
+                  node {
+                    providerQuotaStatus {
+                      id
+                      channelID
+                      providerType
+                      status
+                      ready
+                      nextResetAt
+                      nextCheckAt
+                      accountKey
+                      createdAt
+                      updatedAt
+                      quotaData
+                      channel { id name }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        var status = data.GetProperty("channels").GetProperty("edges")[0]
+            .GetProperty("node").GetProperty("providerQuotaStatus");
+
+        Assert.Equal(
+            "gid://axonhub/ProviderQuotaStatus/" + row.Id,
+            status.GetProperty("id").GetString());
+        Assert.Equal(
+            "gid://axonhub/Channel/" + channel.Id,
+            status.GetProperty("channelID").GetString());
+        Assert.Equal("codex", status.GetProperty("providerType").GetString());
+        Assert.Equal("warning", status.GetProperty("status").GetString());
+        Assert.True(status.GetProperty("ready").GetBoolean());
+        Assert.Equal("2026-05-01T16:00:00Z", status.GetProperty("nextResetAt").GetString());
+        Assert.Equal("2026-05-01T12:05:00Z", status.GetProperty("nextCheckAt").GetString());
+        Assert.Equal("account-1", status.GetProperty("accountKey").GetString());
+        Assert.Equal("2026-01-01T00:00:00Z", status.GetProperty("createdAt").GetString());
+        Assert.Equal("2026-01-02T03:04:05Z", status.GetProperty("updatedAt").GetString());
+
+        // gqlgen's Map scalar embeds the stored document as a JSON object.
+        var quotaData = status.GetProperty("quotaData");
+        Assert.Equal(JsonValueKind.Object, quotaData.ValueKind);
+        Assert.Equal("user@example.com", quotaData.GetProperty("email").GetString());
+        Assert.Equal(
+            "reset-1",
+            quotaData.GetProperty("_resets").GetProperty("resets")[0]
+                .GetProperty("id").GetString());
+        Assert.Equal(
+            0.85,
+            quotaData.GetProperty("_limits")[0].GetProperty("usageRatio").GetDouble());
+
+        var embedded = status.GetProperty("channel");
+        Assert.Equal("gid://axonhub/Channel/" + channel.Id, embedded.GetProperty("id").GetString());
+        Assert.Equal("Quota", embedded.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task ProviderQuotaStatusIsHiddenForRetiredOrDisabledProviders()
+    {
+        var disabled = SeedChannel(type: "codex", name: "Disabled", status: "enabled");
+        var retired = SeedChannel(type: "codex", name: "Retired", status: "enabled");
+        var empty = SeedChannel(type: "codex", name: "Empty", status: "enabled");
+        _quotaStatuses.Add(new ProviderQuotaStatusRecord
+        {
+            ChannelId = disabled.Id,
+            ProviderType = "codex",
+            Status = ProviderQuotaStatuses.Available,
+        });
+        _quotaStatuses.Add(new ProviderQuotaStatusRecord
+        {
+            ChannelId = retired.Id,
+            ProviderType = "wafer",
+            Status = ProviderQuotaStatuses.Available,
+        });
+        _quotaStatuses.Add(new ProviderQuotaStatusRecord
+        {
+            ChannelId = empty.Id,
+            ProviderType = string.Empty,
+            Status = ProviderQuotaStatuses.Available,
+        });
+        _gate.Systems.Add(
+            ProviderQuotaCollectionSettingsService.SystemKey,
+            """{"enabled":true,"providers":{"codex":false}}""");
+
+        var data = await QueryDataAsync(
+            """
+            {
+              channels(first: 3) {
+                edges { node { name providerQuotaStatus { status } } }
+              }
+            }
+            """);
+
+        var edges = data.GetProperty("channels").GetProperty("edges").EnumerateArray().ToArray();
+        Assert.Equal(
+            ["Disabled", "Retired", "Empty"],
+            edges.Select(static edge => edge.GetProperty("node").GetProperty("name").GetString()!)
+                .ToArray());
+        Assert.All(
+            edges,
+            static edge => Assert.Equal(
+                JsonValueKind.Null,
+                edge.GetProperty("node").GetProperty("providerQuotaStatus").ValueKind));
     }
 
     [Fact]

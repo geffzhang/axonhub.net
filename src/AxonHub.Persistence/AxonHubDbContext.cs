@@ -68,6 +68,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<InvitationRecord> Invitations => Set<InvitationRecord>();
 
+    public DbSet<ProviderQuotaStatusRecord> ProviderQuotaStatuses => Set<ProviderQuotaStatusRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -112,6 +114,65 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureUserProject(modelBuilder.Entity<UserProjectRecord>());
         ConfigureOidcIdentity(modelBuilder.Entity<OidcIdentityRecord>());
         ConfigureInvitation(modelBuilder.Entity<InvitationRecord>());
+        ConfigureProviderQuotaStatus(modelBuilder.Entity<ProviderQuotaStatusRecord>());
+    }
+
+    private static void ConfigureProviderQuotaStatus(
+        EntityTypeBuilder<ProviderQuotaStatusRecord> builder)
+    {
+        builder.ToTable("provider_quota_status");
+        builder.HasKey(status => status.Id);
+        builder.Property(status => status.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(status => status.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(status => status.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(status => status.DeletedAt)
+            .HasColumnName("deleted_at")
+            .IsRequired();
+        builder.Property(status => status.ProviderType)
+            .HasColumnName("provider_type")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(status => status.Status)
+            .HasColumnName("status")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(status => status.QuotaData)
+            .HasColumnName("quota_data")
+            .HasColumnType("jsonb")
+            .IsRequired();
+        builder.Property(status => status.NextResetAt)
+            .HasColumnName("next_reset_at")
+            .HasColumnType("timestamptz");
+        builder.Property(status => status.Ready)
+            .HasColumnName("ready")
+            .HasDefaultValue(true)
+            .IsRequired();
+        builder.Property(status => status.NextCheckAt)
+            .HasColumnName("next_check_at")
+            .HasColumnType("timestamptz")
+            .IsRequired();
+        builder.Property(status => status.AccountKey)
+            .HasColumnName("account_key")
+            .HasColumnType("varchar")
+            .HasDefaultValue(string.Empty);
+        builder.Property(status => status.ChannelId)
+            .HasColumnName("channel_id")
+            .IsRequired();
+
+        builder.HasIndex(status => status.ChannelId)
+            .HasDatabaseName("providerquotastatus_channel_id")
+            .IsUnique();
+        builder.HasIndex(status => status.NextCheckAt)
+            .HasDatabaseName("providerquotastatus_next_check_at");
+        builder.HasIndex(status => status.AccountKey)
+            .HasDatabaseName("providerquotastatus_account_key");
     }
 
     private static void ConfigureInvitation(EntityTypeBuilder<InvitationRecord> builder)

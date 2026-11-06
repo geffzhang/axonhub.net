@@ -519,6 +519,13 @@ internal sealed class UsageLogSliceStore : IUsageLogStore
         bool needCost,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("not used by the usage log surface");
+
+    public Task<double> SumCostByChannelAsync(
+        long channelId,
+        DateTime since,
+        DateTime until,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the usage log surface");
 }
 
 /// <summary>
@@ -681,6 +688,13 @@ public sealed class UsageLogPrivacyTests
             bool endInclusive,
             bool needTokens,
             bool needCost,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<double> SumCostByChannelAsync(
+            long channelId,
+            DateTime since,
+            DateTime until,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
     }

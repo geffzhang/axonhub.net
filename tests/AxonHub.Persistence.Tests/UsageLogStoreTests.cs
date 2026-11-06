@@ -202,6 +202,34 @@ public sealed class UsageLogStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task SumCostByChannelSumsTheHalfOpenWindowAndCoalescesMissingRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UsageLogStore(context);
+
+        await store.CreateAsync(LogForChannel(7, CreatedAt, 0.25, requestId: 801));
+        await store.CreateAsync(LogForChannel(7, CreatedAt.AddSeconds(1), 0.5, requestId: 802));
+        await store.CreateAsync(LogForChannel(7, CreatedAt.AddSeconds(2), null, requestId: 803));
+        await store.CreateAsync(LogForChannel(8, CreatedAt.AddSeconds(1), 9.0, requestId: 804));
+
+        // channelCostSince queries [since, until), so the row at +2s is out.
+        var total = await store.SumCostByChannelAsync(
+            7,
+            CreatedAt.AddSeconds(1),
+            CreatedAt.AddSeconds(2));
+        Assert.Equal(0.5, total, precision: 10);
+
+        Assert.Equal(
+            0.0,
+            await store.SumCostByChannelAsync(7, CreatedAt.AddDays(1), CreatedAt.AddDays(2)));
+        Assert.Equal(
+            0.0,
+            await store.SumCostByChannelAsync(404, CreatedAt, CreatedAt.AddDays(1)));
+    }
+
+    [Fact]
     public async Task ListAndGetByIdApplyProjectAndUsageLogVisibility()
     {
         await using var db = new TestDatabase(fixture);
@@ -318,6 +346,21 @@ public sealed class UsageLogStoreTests(PostgresFixture fixture)
             ApiKeyId = apiKeyId,
             ModelId = "gpt-4o",
             TotalTokens = totalTokens,
+            TotalCost = totalCost,
+            RequestId = requestId,
+        };
+
+    private static UsageLogRecord LogForChannel(
+        long channelId,
+        DateTime createdAt,
+        double? totalCost,
+        long requestId)
+        => new()
+        {
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            ChannelId = channelId,
+            ModelId = "gpt-4o",
             TotalCost = totalCost,
             RequestId = requestId,
         };

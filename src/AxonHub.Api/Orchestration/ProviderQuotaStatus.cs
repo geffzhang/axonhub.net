@@ -9,6 +9,12 @@ public static class QuotaLimitTypes
     public const string Image = "image";
     public const string Token = "token";
     public const string SubscriptionCycle = "subscription_cycle";
+
+    /// <summary>
+    /// A display-only search-quota counter (normalization.go:41-46). It never
+    /// participates in routing because it is never in an availability group.
+    /// </summary>
+    public const string Search = "search";
 }
 
 /// <summary>

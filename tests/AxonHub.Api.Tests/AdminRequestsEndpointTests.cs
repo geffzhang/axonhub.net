@@ -936,6 +936,13 @@ internal sealed class RequestsSliceUsageLogStore : IUsageLogStore
         bool needCost,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("not used by the requests surface");
+
+    public Task<double> SumCostByChannelAsync(
+        long channelId,
+        DateTime since,
+        DateTime until,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the requests surface");
 }
 
 /// <summary>
@@ -1010,6 +1017,11 @@ public sealed class RequestQueryServiceVisibilityTests
             => throw new InvalidOperationException("boom");
 
         public Task<IReadOnlyList<ChannelRecord>> ListEnabledAsync(
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<ChannelRecord>> ListEnabledByTypesAsync(
+            IReadOnlyCollection<string> types,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

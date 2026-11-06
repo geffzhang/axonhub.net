@@ -704,8 +704,10 @@ public static class ChannelValidation
     /// <summary>
     /// Port of NormalizeCommandCodeCookie (commandcode_checker.go:249-321).
     /// Returns the reference error text and, on success, the canonical cookie.
+    /// Also used by the provider quota service's credential probe
+    /// (hasCredentialsForProvider → commandCodeCookie).
     /// </summary>
-    private static string? NormalizeCommandCodeCookie(string raw, out string normalized)
+    internal static string? NormalizeCommandCodeCookie(string raw, out string normalized)
     {
         normalized = string.Empty;
         var cleaned = raw.Trim();

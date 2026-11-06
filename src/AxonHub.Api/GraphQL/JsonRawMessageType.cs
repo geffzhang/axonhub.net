@@ -15,10 +15,21 @@ namespace AxonHub.Api.GraphQL;
 /// <see cref="JsonElement"/> and writes it structurally; the wire bytes match
 /// because the service already produced them with Go's encoder semantics.
 /// </summary>
-public sealed class JsonRawMessageType : ScalarType<JsonElement>
+public class JsonRawMessageType : ScalarType<JsonElement>
 {
     public JsonRawMessageType()
-        : base("JSONRawMessage", BindingBehavior.Explicit)
+        : this("JSONRawMessage")
+    {
+    }
+
+    /// <summary>
+    /// Shared JSON-embedding behaviour for scalars that emit their runtime
+    /// value as raw JSON rather than as a GraphQL String; gqlgen's <c>Map</c>
+    /// scalar is the same wire shape under a different name
+    /// (<see cref="MapScalarType"/>).
+    /// </summary>
+    protected JsonRawMessageType(string name)
+        : base(name, BindingBehavior.Explicit)
     {
     }
 

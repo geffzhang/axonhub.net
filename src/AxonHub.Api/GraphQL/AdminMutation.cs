@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
+using AxonHub.Api.Orchestration;
 using AxonHub.Api.Security;
 using AxonHub.Api.Settings;
 using AxonHub.Llm.Http;
@@ -154,6 +155,153 @@ public sealed class AdminMutation
             // fmt.Errorf("failed to update storage policy: %w", err)
             throw new InvalidOperationException(
                 "failed to update storage policy: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateQuotaRoutingSettings
+    /// (system.resolvers.go:211-227). The reference guards with
+    /// <c>authz.HasScope(write_settings)</c> and starts from the lenient
+    /// OrDefault read, so an absent mode keeps the current/default one.
+    /// </summary>
+    [GraphQLName("updateQuotaRoutingSettings")]
+    public async Task<bool> UpdateQuotaRoutingSettingsAsync(
+        UpdateQuotaRoutingSettingsInput input,
+        [Service] IQuotaRoutingSettingsProvider currentSettings,
+        [Service] SystemQuotaRoutingSettingsService settings,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasScopeAsync(
+                AuthorizationScope.WriteSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write_settings scope");
+        }
+
+        var updated = await currentSettings
+            .GetQuotaRoutingSettingsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (input.DefaultMode is { } mode)
+        {
+            updated = updated with { DefaultMode = SystemSettingsMapping.ToDomain(mode) };
+        }
+
+        try
+        {
+            await settings.SetAsync(updated, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to update quota routing settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateProviderQuotaCollectionSettings
+    /// (system.resolvers.go:229-244). The reference resolver has no scope
+    /// check; a nil providers slice is passed as an empty slice.
+    /// </summary>
+    [GraphQLName("updateProviderQuotaCollectionSettings")]
+    public async Task<bool> UpdateProviderQuotaCollectionSettingsAsync(
+        UpdateProviderQuotaCollectionSettingsInput input,
+        [Service] IProviderQuotaCollectionSettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        var providers = new List<ProviderQuotaCollectionProviderDraft>(
+            input.Providers?.Count ?? 0);
+        if (input.Providers is not null)
+        {
+            foreach (var provider in input.Providers)
+            {
+                providers.Add(new ProviderQuotaCollectionProviderDraft
+                {
+                    Provider = provider.Provider,
+                    Enabled = provider.Enabled,
+                });
+            }
+        }
+
+        try
+        {
+            await settings
+                .UpdateAsync(input.Enabled, providers, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to update provider quota collection settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CheckProviderQuotas (system.resolvers.go:273-282):
+    /// the forced check runs under the service mutex and completes before the
+    /// mutation returns.
+    /// </summary>
+    [GraphQLName("checkProviderQuotas")]
+    public async Task<bool> CheckProviderQuotasAsync(
+        [Service] ProviderQuotaService? quotaService,
+        CancellationToken cancellationToken)
+    {
+        if (quotaService is null)
+        {
+            throw new InvalidOperationException("provider quota service is not available");
+        }
+
+        await quotaService.ManualCheckAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ResetChannelQuotaNow
+    /// (system.resolvers.go:284-299). Unlike the routing-settings mutation this
+    /// guard is <c>scopes.UserHasScope</c>, which never admits API keys.
+    /// </summary>
+    [GraphQLName("resetChannelQuotaNow")]
+    public async Task<bool> ResetChannelQuotaNowAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        [Service] ProviderQuotaService? quotaService,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.WriteChannels,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write:channels scope");
+        }
+
+        if (quotaService is null)
+        {
+            throw new InvalidOperationException("provider quota service is not available");
+        }
+
+        try
+        {
+            await quotaService
+                .ResetChannelQuotaNowAsync(GidValue.Parse(channelID).Id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to reset channel quota: " + ex.Message,
                 ex);
         }
 

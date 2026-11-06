@@ -33,6 +33,12 @@ public static class ChannelMapping
     private static readonly Dictionary<ChannelStatusValue, string> ChannelStatusWires =
         ChannelStatusesByWire.ToDictionary(static pair => pair.Value, static pair => pair.Key);
 
+    private static readonly Dictionary<string, ProviderQuotaStatusProviderTypeValue>
+        ProviderQuotaTypesByWire = BuildWireMap<ProviderQuotaStatusProviderTypeValue>();
+
+    private static readonly Dictionary<string, ProviderQuotaStatusStatusValue>
+        ProviderQuotaStatusesByWire = BuildWireMap<ProviderQuotaStatusStatusValue>();
+
     private static readonly DateTime ZeroTime = new(1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
     public static ChannelType ToGraphQL(ChannelRecord record)
@@ -68,6 +74,49 @@ public static class ChannelMapping
             Endpoints = ParseEndpoints(record.Endpoints),
             CredentialsJson = record.Credentials,
             DisabledApiKeysJson = record.DisabledApiKeys,
+        };
+    }
+
+    /// <summary>
+    /// Maps a live <c>provider_quota_status</c> row for the
+    /// <c>Channel.providerQuotaStatus</c> field. The reference resolver returns
+    /// the ent row itself; the port builds the GraphQL type from the record.
+    /// </summary>
+    public static ProviderQuotaStatusType ToGraphQL(
+        ProviderQuotaStatusRecord record,
+        ChannelType channel)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(channel);
+
+        if (!ProviderQuotaTypesByWire.TryGetValue(record.ProviderType, out var providerType))
+        {
+            throw new GraphQLException(
+                "Enum \"ProviderQuotaStatusProviderType\" cannot represent value: "
+                + JsonSerializer.Serialize(record.ProviderType));
+        }
+
+        if (!ProviderQuotaStatusesByWire.TryGetValue(record.Status, out var status))
+        {
+            throw new GraphQLException(
+                "Enum \"ProviderQuotaStatusStatus\" cannot represent value: "
+                + JsonSerializer.Serialize(record.Status));
+        }
+
+        return new ProviderQuotaStatusType
+        {
+            Id = new GidValue("ProviderQuotaStatus", record.Id).ToString(),
+            CreatedAt = record.CreatedAt,
+            UpdatedAt = record.UpdatedAt,
+            ChannelId = new GidValue("Channel", record.ChannelId).ToString(),
+            ProviderType = providerType,
+            Status = status,
+            QuotaData = ParseQuotaData(record.QuotaData),
+            NextResetAt = record.NextResetAt,
+            Ready = record.Ready,
+            NextCheckAt = record.NextCheckAt,
+            AccountKey = record.AccountKey,
+            Channel = channel,
         };
     }
 
@@ -873,6 +922,22 @@ public static class ChannelMapping
         }
 
         return map;
+    }
+
+    /// <summary>
+    /// The ent field is <c>map[string]any</c> stored as jsonb; the port keeps
+    /// the stored document and emits it structurally, like gqlgen's Map.
+    /// </summary>
+    private static JsonElement ParseQuotaData(string? quotaData)
+    {
+        if (string.IsNullOrEmpty(quotaData))
+        {
+            using var empty = JsonDocument.Parse("{}");
+            return empty.RootElement.Clone();
+        }
+
+        using var document = JsonDocument.Parse(quotaData);
+        return document.RootElement.Clone();
     }
 
     private sealed class ChannelSettingsDto

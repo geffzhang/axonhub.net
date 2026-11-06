@@ -1,8 +1,10 @@
+using System.Text.Json;
 using HotChocolate;
-using HotChocolate.Language;
 using HotChocolate.Types;
 using HotChocolate.Types.Relay;
+using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
+using AxonHub.Persistence;
 
 namespace AxonHub.Api.GraphQL;
 
@@ -856,40 +858,25 @@ public enum ProviderQuotaStatusStatusValue
 
 /// <summary>
 /// Port of gqlgen's <c>Map</c> scalar (ent.graphql:2316), the type of
-/// <c>ProviderQuotaStatus.quotaData</c>. The port never materialises the type
-/// (the reference provider quota lookup is absent, C139), but the schema must
-/// still validate the frontend selection.
+/// <c>ProviderQuotaStatus.quotaData</c>. gqlgen's <c>graphql.MarshalMap</c>
+/// writes <c>json.Marshal(map[string]any)</c> verbatim, so the value appears in
+/// the response as a JSON object, not as a GraphQL String; the port reuses the
+/// raw-JSON scalar behaviour with the schema name <c>Map</c>. The scalar is an
+/// output-only type in the schema, so the inherited input coercion is never
+/// exercised.
 /// </summary>
-public sealed class MapScalarType : ScalarType<object, StringValueNode>
+public sealed class MapScalarType : JsonRawMessageType
 {
     public MapScalarType()
-        : base("Map", BindingBehavior.Explicit)
+        : base("Map")
     {
     }
-
-    protected override object OnCoerceInputLiteral(StringValueNode valueLiteral)
-        => valueLiteral.Value;
-
-    protected override object OnCoerceInputValue(
-        System.Text.Json.JsonElement inputValue,
-        HotChocolate.Features.IFeatureProvider context)
-        => inputValue.GetRawText();
-
-    protected override void OnCoerceOutputValue(
-        object runtimeValue,
-        HotChocolate.Text.Json.ResultElement resultValue)
-        => resultValue.SetStringValue(
-            System.Text.Json.JsonSerializer.Serialize(runtimeValue),
-            isEncoded: false);
-
-    protected override StringValueNode OnValueToLiteral(object runtimeValue)
-        => new(System.Text.Json.JsonSerializer.Serialize(runtimeValue));
 }
 
 /// <summary>
 /// Port of <c>ProviderQuotaStatus</c> (ent.graphql:3729-3758). The reference
 /// resolver only returns a row when quota collection is enabled for the
-/// provider; the port returns null until the quota subsystem lands (C139).
+/// provider; see <see cref="ChannelType.GetProviderQuotaStatusAsync"/>.
 /// </summary>
 [GraphQLName("ProviderQuotaStatus")]
 public sealed class ProviderQuotaStatusType
@@ -911,8 +898,12 @@ public sealed class ProviderQuotaStatusType
 
     public ProviderQuotaStatusStatusValue Status { get; init; }
 
+    /// <summary>
+    /// The stored <c>quota_data</c> jsonb document, emitted as a raw JSON
+    /// object (gqlgen <c>Map</c>).
+    /// </summary>
     [GraphQLType(typeof(MapScalarType))]
-    public object QuotaData { get; init; } = new();
+    public JsonElement QuotaData { get; init; }
 
     [GraphQLType(typeof(GoTimeType))]
     public DateTime? NextResetAt { get; init; }
@@ -1046,12 +1037,75 @@ public sealed class ChannelType
         => ChannelMapping.LiveLimiterStats(SettingsJson, DbId, limiters);
 
     /// <summary>
-    /// Port of channelResolver.ProviderQuotaStatus, reduced to its observable
-    /// result for the migrated frontend: the reference returns a row only when
-    /// provider quota collection is enabled, which this build does not implement.
+    /// Port of channelResolver.ProviderQuotaStatus (ent.resolvers.go:98-142):
+    /// a missing row is null, a retired provider type is null, and a row whose
+    /// provider has quota collection disabled is null. Every other failure is
+    /// surfaced with the reference's wrapper.
     /// </summary>
     [GraphQLName("providerQuotaStatus")]
-    public ProviderQuotaStatusType? GetProviderQuotaStatus() => null;
+    public async Task<ProviderQuotaStatusType?> GetProviderQuotaStatusAsync(
+        [Service] IProviderQuotaStatusStore quotaStatuses,
+        [Service] IProviderQuotaCollectionSettingsService quotaSettings,
+        CancellationToken cancellationToken)
+    {
+        var status = await quotaStatuses.GetByChannelIdAsync(DbId, cancellationToken)
+            .ConfigureAwait(false);
+        if (status is null)
+        {
+            return null;
+        }
+
+        if (status.ProviderType.Length == 0)
+        {
+            // The reference re-selects provider_type when the loaded edge
+            // carries the enum zero value; the port's row query always selects
+            // the column, so the reload can only observe the same row (or a
+            // concurrent delete) and its provider type stays empty.
+            ProviderQuotaStatusRecord? reloaded;
+            try
+            {
+                reloaded = await quotaStatuses.GetByChannelIdAsync(DbId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    "failed to load provider quota type: " + ex.Message,
+                    ex);
+            }
+
+            if (reloaded is null)
+            {
+                return null;
+            }
+
+            status.ProviderType = reloaded.ProviderType;
+        }
+
+        // Rows created before a provider type was retired (e.g. 'wafer') stay
+        // in the database until purge runs; surface them as "no status" so one
+        // orphan row cannot break the quota view for every channel.
+        if (!ProviderQuotaCollectionSettingsService.IsSupportedProviderQuotaType(
+                status.ProviderType))
+        {
+            return null;
+        }
+
+        bool enabled;
+        try
+        {
+            enabled = await quotaSettings.IsEnabledAsync(status.ProviderType, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to read provider quota collection settings: " + ex.Message,
+                ex);
+        }
+
+        return enabled ? ChannelMapping.ToGraphQL(status, this) : null;
+    }
 }
 
 /// <summary>Port of <c>ChannelEdge</c> (ent.graphql:564-573).</summary>

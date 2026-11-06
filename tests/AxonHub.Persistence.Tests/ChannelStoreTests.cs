@@ -138,6 +138,51 @@ public sealed class ChannelStoreTests(PostgresFixture fixture)
         Assert.True(reusedId > firstId);
     }
 
+    [Fact]
+    public async Task ListEnabledByTypesReturnsOnlyLiveEnabledChannelsOfTheListedTypes()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelStore(context);
+
+        var openAiId = await store.CreateAsync(NewChannel());
+
+        var codex = NewChannel();
+        codex.Name = "codex";
+        codex.Type = "codex";
+        var codexId = await store.CreateAsync(codex);
+
+        var anthropic = NewChannel();
+        anthropic.Name = "anthropic";
+        anthropic.Type = "anthropic";
+        await store.CreateAsync(anthropic);
+
+        var disabled = NewChannel();
+        disabled.Name = "disabled";
+        disabled.Status = "disabled";
+        await store.CreateAsync(disabled);
+
+        var deleted = NewChannel();
+        deleted.Name = "deleted";
+        deleted.Type = "codex";
+        var deletedId = await store.CreateAsync(deleted);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"channels\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, Id = deletedId });
+        }
+
+        var live = await store.ListEnabledByTypesAsync(["codex", "openai"]);
+
+        Assert.Equal(
+            [openAiId, codexId],
+            live.Select(channel => channel.Id).ToArray());
+        Assert.Empty(await store.ListEnabledByTypesAsync([]));
+    }
+
     private static ChannelRecord NewChannel() => new()
     {
         CreatedAt = CreatedAt,
