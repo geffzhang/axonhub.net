@@ -1,6 +1,7 @@
 using HotChocolate;
 using HotChocolate.Types;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Security;
@@ -17,6 +18,12 @@ namespace AxonHub.Api.GraphQL;
 /// </summary>
 public sealed class AdminMutation
 {
+    private static readonly Action<ILogger, Exception?> LogGcCleanupFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "ManualGcCleanupFailed"),
+            "Manual GC cleanup failed");
+
     /// <summary>Port of mutationResolver.UpdateRetryPolicy.</summary>
     [GraphQLName("updateRetryPolicy")]
     public async Task<bool> UpdateRetryPolicyAsync(
@@ -124,6 +131,79 @@ public sealed class AdminMutation
                 "failed to update security settings: " + ex.Message,
                 ex);
         }
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UpdateStoragePolicy (system.resolvers.go:84-92).</summary>
+    [GraphQLName("updateStoragePolicy")]
+    public async Task<bool> UpdateStoragePolicyAsync(
+        UpdateStoragePolicyInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetStoragePolicyAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to update storage policy: %w", err)
+            throw new InvalidOperationException(
+                "failed to update storage policy: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TriggerGcCleanup (system.resolvers.go:301-321).
+    /// The reference checks write:settings, launches a goroutine with a
+    /// detached system-bypass context and returns true immediately; the port
+    /// resolves the worker from a fresh DI scope so the detached run never
+    /// touches the disposed request scope.
+    /// </summary>
+    [GraphQLName("triggerGcCleanup")]
+    public async Task<bool> TriggerGcCleanupAsync(
+        TriggerGcCleanupInput input,
+        [Service] IServiceScopeFactory scopeFactory,
+        [Service] AuthorizationScope scope,
+        [Service] ILogger<AdminMutation> logger,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.WriteSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write:settings scope");
+        }
+
+        var request = SystemSettingsMapping.ToDomain(input);
+
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    await using var cleanupScope = scopeFactory.CreateAsyncScope();
+                    var cleanup = cleanupScope.ServiceProvider
+                        .GetRequiredService<IGcCleanupService>();
+                    await cleanup.RunCleanupNowAsync(request, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // The reference recovers the goroutine panic and prints it.
+                    LogGcCleanupFailed(logger, ex);
+                }
+            },
+            CancellationToken.None);
 
         return true;
     }

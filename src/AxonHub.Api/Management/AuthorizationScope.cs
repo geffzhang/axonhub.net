@@ -28,6 +28,32 @@ public sealed class AuthorizationScope(
 
     public const string WriteRequests = "write_requests";
 
+    public const string ReadSettings = "read_settings";
+
+    public const string WriteSettings = "write_settings";
+
+    /// <summary>
+    /// Port of <c>scopes.UserHasScope</c> (rule_user_scope.go:66-77): only a
+    /// management user principal is consulted — API keys never qualify and
+    /// the test principal gets no bypass — and the user must pass
+    /// <c>HasSystemScope</c> (owner, direct scope, or system-role scope).
+    /// </summary>
+    public async Task<bool> HasUserScopeAsync(
+        string requiredScope,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await identity.GetCurrentUserAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (current is null)
+        {
+            return false;
+        }
+
+        var loaded = await users.GetPermissionUserAsync(current.Id, cancellationToken)
+            .ConfigureAwait(false);
+        return PermissionValidator.HasSystemScope(loaded, requiredScope);
+    }
+
     /// <summary>Port of authz.HasScope.</summary>
     public async Task<bool> HasScopeAsync(
         string requiredScope,

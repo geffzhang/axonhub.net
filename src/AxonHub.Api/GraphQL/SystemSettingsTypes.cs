@@ -5,6 +5,7 @@ using HotChocolate.Types;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Security;
+using AxonHub.Api.Settings;
 
 namespace AxonHub.Api.GraphQL;
 
@@ -483,11 +484,149 @@ public sealed class UpdateSecuritySettingsInput
     public bool? ShowRequestLogIpBanIcon { get; set; }
 }
 
+/// <summary>Port of the <c>StoragePolicy</c> type (system.graphql:27-33).</summary>
+[GraphQLName("StoragePolicy")]
+public sealed class StoragePolicyType
+{
+    public bool StoreChunks { get; init; }
+
+    public bool LivePreview { get; init; }
+
+    public bool StoreRequestBody { get; init; }
+
+    public bool StoreResponseBody { get; init; }
+
+    public IReadOnlyList<CleanupOptionType> CleanupOptions { get; init; } = [];
+}
+
+/// <summary>Port of the <c>CleanupOption</c> type (system.graphql:35-39).</summary>
+[GraphQLName("CleanupOption")]
+public sealed class CleanupOptionType
+{
+    public string ResourceType { get; init; } = string.Empty;
+
+    public bool Enabled { get; init; }
+
+    public int CleanupDays { get; init; }
+}
+
+/// <summary>
+/// Port of <c>UpdateStoragePolicyInput</c> (system.graphql:47-53). The
+/// reference decodes it into biz.StoragePolicy: absent fields become the Go
+/// zero value, while an absent cleanupOptions stays a nil slice.
+/// </summary>
+public sealed class UpdateStoragePolicyInput
+{
+    public bool? StoreChunks { get; set; }
+
+    public bool? LivePreview { get; set; }
+
+    public bool? StoreRequestBody { get; set; }
+
+    public bool? StoreResponseBody { get; set; }
+
+    public IReadOnlyList<CleanupOptionInput>? CleanupOptions { get; set; }
+}
+
+/// <summary>Port of <c>CleanupOptionInput</c> (system.graphql:55-59).</summary>
+public sealed class CleanupOptionInput
+{
+    public string ResourceType { get; set; } = string.Empty;
+
+    public bool Enabled { get; set; }
+
+    public int CleanupDays { get; set; }
+}
+
+/// <summary>Port of <c>TriggerGcCleanupInput</c> (system.graphql:377-383).</summary>
+public sealed class TriggerGcCleanupInput
+{
+    public int RequestsCleanupDays { get; set; }
+
+    public int UsageLogsCleanupDays { get; set; }
+
+    public int? RequestBodiesCleanupDays { get; set; }
+
+    public int? ResponseBodiesCleanupDays { get; set; }
+
+    public int? ResponseChunksCleanupDays { get; set; }
+}
+
+/// <summary>Port of <c>GcCleanupPreviewItem</c> (system.graphql:385-390).</summary>
+[GraphQLName("GcCleanupPreviewItem")]
+public sealed class GcCleanupPreviewItemType
+{
+    public string ResourceType { get; init; } = string.Empty;
+
+    public int EstimatedCount { get; init; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime CutoffTime { get; init; }
+
+    public int RetentionDays { get; init; }
+}
+
 /// <summary>Domain ↔ GraphQL mapping for the system-settings slice.</summary>
 public static class SystemSettingsMapping
 {
     public static SystemStatusType ToGraphQL(bool isInitialized)
         => new() { IsInitialized = isInitialized };
+
+    /// <summary>
+    /// The GraphQL list is non-null; GetStoragePolicy/SetStoragePolicy always
+    /// leave a merged list, so the fallback only guards a hand-built policy.
+    /// </summary>
+    public static StoragePolicyType ToGraphQL(StoragePolicy policy) => new()
+    {
+        StoreChunks = policy.StoreChunks,
+        LivePreview = policy.LivePreview,
+        StoreRequestBody = policy.StoreRequestBody,
+        StoreResponseBody = policy.StoreResponseBody,
+        CleanupOptions = (policy.CleanupOptions ?? Array.Empty<CleanupOption>())
+            .Select(static option => new CleanupOptionType
+            {
+                ResourceType = option.ResourceType,
+                Enabled = option.Enabled,
+                CleanupDays = option.CleanupDays,
+            })
+            .ToList(),
+    };
+
+    /// <summary>
+    /// gqlgen decodes UpdateStoragePolicyInput straight into biz.StoragePolicy:
+    /// an absent boolean is false and an absent cleanupOptions stays nil.
+    /// </summary>
+    public static StoragePolicy ToDomain(UpdateStoragePolicyInput input) => new()
+    {
+        StoreChunks = input.StoreChunks ?? false,
+        LivePreview = input.LivePreview ?? false,
+        StoreRequestBody = input.StoreRequestBody ?? false,
+        StoreResponseBody = input.StoreResponseBody ?? false,
+        CleanupOptions = input.CleanupOptions?
+            .Select(static option => new CleanupOption(
+                option.ResourceType,
+                option.Enabled,
+                option.CleanupDays))
+            .ToList(),
+    };
+
+    /// <summary>Absent optional day fields decode to the Go zero value.</summary>
+    public static GcCleanupRequest ToDomain(TriggerGcCleanupInput input) => new()
+    {
+        RequestsCleanupDays = input.RequestsCleanupDays,
+        UsageLogsCleanupDays = input.UsageLogsCleanupDays,
+        RequestBodiesCleanupDays = input.RequestBodiesCleanupDays ?? 0,
+        ResponseBodiesCleanupDays = input.ResponseBodiesCleanupDays ?? 0,
+        ResponseChunksCleanupDays = input.ResponseChunksCleanupDays ?? 0,
+    };
+
+    public static GcCleanupPreviewItemType ToGraphQL(GcCleanupPreviewItem item) => new()
+    {
+        ResourceType = item.ResourceType,
+        EstimatedCount = item.EstimatedCount,
+        CutoffTime = item.CutoffTime,
+        RetentionDays = item.RetentionDays,
+    };
 
     public static RetryPolicyType ToGraphQL(RetryPolicy policy) => new()
     {

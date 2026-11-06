@@ -92,6 +92,40 @@ public sealed class AdminQuery
         => SystemSettingsMapping.ToGraphQL(
             await settings.GetSecuritySettingsAsync(cancellationToken).ConfigureAwait(false));
 
+    /// <summary>Port of queryResolver.StoragePolicy (system.resolvers.go:590-593).</summary>
+    [GraphQLName("storagePolicy")]
+    public async Task<StoragePolicyType> StoragePolicyAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetStoragePolicyAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Port of queryResolver.PreviewGcCleanup (system.resolvers.go:499-515).</summary>
+    [GraphQLName("previewGcCleanup")]
+    public async Task<IReadOnlyList<GcCleanupPreviewItemType>> PreviewGcCleanupAsync(
+        TriggerGcCleanupInput input,
+        [Service] IGcCleanupService gcCleanup,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.ReadSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires read:settings scope");
+        }
+
+        var items = await gcCleanup.PreviewCleanupAsync(
+                SystemSettingsMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        // The reference returns the worker's error untouched.
+        return [.. items.Select(SystemSettingsMapping.ToGraphQL)];
+    }
+
     /// <summary>Port of queryResolver.AutoBackupSettings (backup.resolvers.go:130-132).</summary>
     [GraphQLName("autoBackupSettings")]
     public async Task<AutoBackupSettingsType> AutoBackupSettingsAsync(

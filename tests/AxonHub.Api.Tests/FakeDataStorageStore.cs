@@ -77,6 +77,25 @@ internal sealed class FakeDataStorageStore : IDataStorageStore
             row.Id == id && row.DeletedAt == 0));
     }
 
+    public Task<DataStorageRecord?> GetByIdIncludingDeletedAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        return Task.FromResult(_rows.SingleOrDefault(row => row.Id == id));
+    }
+
+    public Task<DataStorageRecord?> GetPrimaryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        return Task.FromResult(
+            _rows
+                .Where(static row => row.Primary)
+                .OrderBy(static row => row.Id)
+                .FirstOrDefault());
+    }
+
     public Task<bool> ExistsByNameAsync(
         string name,
         long? excludeId,

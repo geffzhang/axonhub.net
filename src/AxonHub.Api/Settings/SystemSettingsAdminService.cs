@@ -39,6 +39,14 @@ public interface ISystemSettingsAdminService
         SecuritySettings settings,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Port of SystemService.StoragePolicy.</summary>
+    Task<StoragePolicy> GetStoragePolicyAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetStoragePolicy.</summary>
+    Task SetStoragePolicyAsync(
+        StoragePolicy policy,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Port of SystemService.AutoBackupSettings (system.go:1604-1640).</summary>
     Task<AutoBackupSettings> GetAutoBackupSettingsAsync(
         CancellationToken cancellationToken = default);
@@ -220,6 +228,66 @@ public sealed class SystemSettingsAdminService(ISystemStore systems) : ISystemSe
                 SecuritySettingsCodec.SecuritySettingsKey,
                 SecuritySettingsCodec.Serialize(normalized),
                 cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<StoragePolicy> GetStoragePolicyAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                StoragePolicyCodec.Key,
+                "failed to get storage policy",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: the default policy is returned as-is (already
+            // carrying the merged cleanup list).
+            return StoragePolicy.Default;
+        }
+
+        try
+        {
+            return StoragePolicyCodec.Deserialize(row.Value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal storage policy: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task SetStoragePolicyAsync(
+        StoragePolicy policy,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+
+        foreach (var option in policy.CleanupOptions ?? [])
+        {
+            if (option.CleanupDays <= 0)
+            {
+                throw new InvalidOperationException(
+                    "cleanup_days for \"" + option.ResourceType
+                    + "\" must be positive; set enabled=false to keep data forever");
+            }
+        }
+
+        string value;
+        try
+        {
+            value = StoragePolicyCodec.Serialize(policy);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal storage policy: " + ex.Message,
+                ex);
+        }
+
+        await SetValueAsync(StoragePolicyCodec.Key, value, cancellationToken)
             .ConfigureAwait(false);
     }
 

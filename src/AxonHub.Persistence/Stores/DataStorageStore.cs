@@ -119,6 +119,22 @@ public interface IDataStorageStore
     Task<DataStorageRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// ent <c>DataStorage.Get(ctx, id)</c> with <c>schematype.SkipSoftDelete</c>
+    /// (the GC worker's context): soft-deleted rows stay visible so their
+    /// external objects can still be removed (gc.go:117-118, 289-309).
+    /// </summary>
+    Task<DataStorageRecord?> GetByIdIncludingDeletedAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// ent <c>DataStorage.Query().Where(Primary(true)).First(ctx)</c> under the
+    /// GC worker's SkipSoftDelete context (gc_bodies.go:367-382). Null stands
+    /// in for ent's NotFoundError; the caller renders that text.
+    /// </summary>
+    Task<DataStorageRecord?> GetPrimaryAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// ent <c>DataStorage.Query().Where(NameEQ[, IDNEQ]).Exist(ctx)</c> (live
     /// rows; the unique index itself has no deleted_at column).
     /// </summary>
@@ -188,6 +204,39 @@ public sealed class DataStorageStore(AxonHubDbContext db) : IDataStorageStore
             new CommandDefinition(
                 sql,
                 args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<DataStorageRecord?> GetByIdIncludingDeletedAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new SqlArguments();
+        var sql = "SELECT " + Columns + " FROM \"data_storages\" WHERE \"id\" = "
+            + args.Add(id) + ";";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<DataStorageRecord>(
+            new CommandDefinition(
+                sql,
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<DataStorageRecord?> GetPrimaryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // ent's First() on multiple primary rows is unspecified; the seeded
+        // invariant is at most one, and id ASC keeps the port deterministic.
+        var sql = "SELECT " + Columns
+            + " FROM \"data_storages\" WHERE \"primary\" = TRUE ORDER BY \"id\" ASC LIMIT 1;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<DataStorageRecord>(
+            new CommandDefinition(
+                sql,
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
     }

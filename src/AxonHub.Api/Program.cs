@@ -337,6 +337,31 @@ builder.Services.AddSingleton<IDataStorageBackendFactory, DataStorageBackendFact
 builder.Services.AddScoped<BackupService>();
 builder.Services.AddHostedService<AutoBackupScheduler>();
 
+// Garbage collection (internal/server/gc): the storage-policy-driven cleanup
+// worker and its "gc" cron entry in UTC. The reference registers the task
+// through fx.Invoke during app construction, so an unparsable gc.cron fails
+// startup; parsing eagerly reproduces that. Channel probes have no table in
+// the port schema (C195), and the reference's process-wide data-storage caches
+// are not ported (C196).
+var gcOptions = GcOptions.FromConfiguration(builder.Configuration);
+GcCronSchedule gcSchedule;
+try
+{
+    gcSchedule = new GcCronSchedule(gcOptions.Cron);
+}
+catch (InvalidOperationException ex)
+{
+    throw new InvalidOperationException(
+        "register task \"gc\": " + ex.Message,
+        ex);
+}
+
+builder.Services.AddSingleton(gcOptions);
+builder.Services.AddSingleton(gcSchedule);
+builder.Services.AddScoped<IGcStore, GcStore>();
+builder.Services.AddScoped<IGcCleanupService, GcWorker>();
+builder.Services.AddHostedService<GcScheduler>();
+
 // Trace/thread management surface (biz.TraceService / biz.ThreadService admin
 // reads, the status transitions and the trace segment tree). The reference
 // runs every access through an ent client carrying the privacy policy in the
