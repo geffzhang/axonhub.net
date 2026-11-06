@@ -25,6 +25,7 @@ public sealed class BackupServiceTests
     private readonly FakeBackupRestoreStore _restoreStore = new();
     private readonly FakeSystemStore _systems = new();
     private readonly FakeDataStorageStore _dataStorages = new();
+    private readonly FakeDataStorageBackends _backends = new();
     private readonly SystemSettingsAdminService _settings;
     private readonly FakeManagementIdentity _identity;
     private readonly BackupService _service;
@@ -39,7 +40,8 @@ public sealed class BackupServiceTests
             _systems,
             _settings,
             _dataStorages,
-            _identity);
+            _identity,
+            _backends);
     }
 
     // ---------------------------------------------------------- owner gates
@@ -887,18 +889,25 @@ public sealed class BackupServiceTests
             storage.Name = "s3";
             storage.Type = "s3";
         });
+        _backends.Failure = new InvalidOperationException(
+            "failed to create s3 filesystem: failed to load AWS config: no region");
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => _service.RunBackupNowAsync());
 
+        // SaveDataFromReader reaches objectStoreFor before GetFileSystem, and
+        // objectStoreFor wraps client construction failures with
+        // "failed to create s3 object store" (objectstore.go:75-78).
         Assert.Equal(
-            "failed to write backup file: unsupported storage type: s3",
+            "failed to write backup file: failed to create s3 object store: "
+            + "failed to load AWS config: no region",
             ex.Message);
 
         var stored = await _settings.GetAutoBackupSettingsAsync();
         Assert.NotNull(stored.LastBackupAt);
         Assert.Equal(
-            "failed to write backup file: unsupported storage type: s3",
+            "failed to write backup file: failed to create s3 object store: "
+            + "failed to load AWS config: no region",
             stored.LastBackupError);
     }
 
@@ -983,6 +992,202 @@ public sealed class BackupServiceTests
 
         var stored = await _settings.GetAutoBackupSettingsAsync();
         Assert.NotNull(stored.LastBackupAt);
+        Assert.Equal(string.Empty, stored.LastBackupError);
+    }
+
+    // ------------------------------------------------- non-database storage
+
+    [Fact]
+    public async Task RunBackupNowStreamsTheDocumentToANonDatabaseStorage()
+    {
+        await _settings.SetAutoBackupSettingsAsync(
+            AutoBackupSettingsCodec.Default with
+            {
+                DataStorageId = 4,
+                IncludeSystemConfigs = true,
+            });
+        _dataStorages.Seed(storage =>
+        {
+            storage.Id = 4;
+            storage.Name = "disk";
+            storage.Type = "fs";
+            storage.Settings = "{}";
+        });
+
+        await _service.RunBackupNowAsync();
+
+        var key = Assert.Single(_backends.Backend.StreamWrites);
+        Assert.StartsWith("axonhub-backup-", key);
+        Assert.EndsWith(".json", key);
+
+        using var document = JsonDocument.Parse(_backends.Backend.Objects[key]);
+        Assert.Equal(BackupVersions.Current, document.RootElement.GetProperty("version").GetString());
+
+        var stored = await _settings.GetAutoBackupSettingsAsync();
+        Assert.NotNull(stored.LastBackupAt);
+        Assert.Equal(string.Empty, stored.LastBackupError);
+    }
+
+    [Fact]
+    public async Task RunBackupNowWrapsFileSystemConstructionFailures()
+    {
+        await _settings.SetAutoBackupSettingsAsync(
+            AutoBackupSettingsCodec.Default with { DataStorageId = 4 });
+        _dataStorages.Seed(storage =>
+        {
+            storage.Id = 4;
+            storage.Name = "disk";
+            storage.Type = "fs";
+        });
+        _backends.Failure = new InvalidOperationException(
+            "directory not configured for fs storage");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.RunBackupNowAsync());
+
+        Assert.Equal(
+            "failed to write backup file: failed to get file system: "
+            + "directory not configured for fs storage",
+            ex.Message);
+    }
+
+    [Fact]
+    public async Task RunBackupNowReportsUnknownStorageTypesWithoutTheFileSystemWrapper()
+    {
+        await _settings.SetAutoBackupSettingsAsync(
+            AutoBackupSettingsCodec.Default with { DataStorageId = 4 });
+        _dataStorages.Seed(storage =>
+        {
+            storage.Id = 4;
+            storage.Name = "mystery";
+            storage.Type = "mystery";
+        });
+        _backends.Failure = new InvalidOperationException(
+            "unsupported storage type: mystery");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.RunBackupNowAsync());
+
+        Assert.Equal(
+            "failed to write backup file: unsupported storage type: mystery",
+            ex.Message);
+    }
+
+    [Fact]
+    public async Task RunBackupNowWrapsStreamingSaveFailures()
+    {
+        await _settings.SetAutoBackupSettingsAsync(
+            AutoBackupSettingsCodec.Default with { DataStorageId = 4 });
+        _dataStorages.Seed(storage =>
+        {
+            storage.Id = 4;
+            storage.Name = "disk";
+            storage.Type = "fs";
+        });
+        _backends.Backend.WriteStreamFailure = new InvalidOperationException(
+            "failed to write file: disk full, key: axonhub-backup-x.json");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.RunBackupNowAsync());
+
+        Assert.Equal(
+            "failed to write backup file: failed to write file: disk full, "
+            + "key: axonhub-backup-x.json",
+            ex.Message);
+    }
+
+    [Fact]
+    public async Task RetentionDeletesOnlyOldBackupFiles()
+    {
+        await _settings.SetAutoBackupSettingsAsync(
+            AutoBackupSettingsCodec.Default with { DataStorageId = 5, RetentionDays = 30 });
+        _dataStorages.Seed(storage =>
+        {
+            storage.Id = 5;
+            storage.Name = "disk";
+            storage.Type = "fs";
+        });
+
+        var now = DateTimeOffset.UtcNow;
+        _backends.Backend.Add("axonhub-backup-old.json", [], now.AddDays(-31));
+        _backends.Backend.Add("axonhub-backup-recent.json", [], now.AddDays(-29));
+        _backends.Backend.Add("notes.json", [], now.AddDays(-60));
+        _backends.Backend.Add("axonhub-backup-old.txt", [], now.AddDays(-60));
+
+        await _service.RunBackupNowAsync();
+
+        Assert.Equal(["axonhub-backup-old.json"], _backends.Backend.Deletes);
+        Assert.True(_backends.Backend.Objects.ContainsKey("axonhub-backup-recent.json"));
+        Assert.True(_backends.Backend.Objects.ContainsKey("notes.json"));
+    }
+
+    [Fact]
+    public async Task RetentionCleanupFailuresAreSwallowed()
+    {
+        await _settings.SetAutoBackupSettingsAsync(
+            AutoBackupSettingsCodec.Default with { DataStorageId = 5, RetentionDays = 30 });
+        _dataStorages.Seed(storage =>
+        {
+            storage.Id = 5;
+            storage.Name = "disk";
+            storage.Type = "fs";
+        });
+        _backends.Backend.ListFailure = new InvalidOperationException(
+            "failed to list backups: boom");
+
+        await _service.RunBackupNowAsync();
+
+        var stored = await _settings.GetAutoBackupSettingsAsync();
+        Assert.Equal(string.Empty, stored.LastBackupError);
+    }
+
+    [Fact]
+    public async Task RetentionRunsForDatabaseStorageAndSwallowsTheFilesystemError()
+    {
+        await _settings.SetAutoBackupSettingsAsync(
+            AutoBackupSettingsCodec.Default with { DataStorageId = 2, RetentionDays = 30 });
+        _dataStorages.Seed(storage =>
+        {
+            storage.Id = 2;
+            storage.Name = "db";
+            storage.Type = "database";
+        });
+        _backends.Failure = new InvalidOperationException(
+            "database storage does not support file system operations");
+
+        await _service.RunBackupNowAsync();
+
+        // cleanupOldBackups runs for every storage type and the caller only
+        // logs the GetFileSystem failure (autobackup.go:146-150).
+        Assert.Empty(_backends.Backend.Deletes);
+        var stored = await _settings.GetAutoBackupSettingsAsync();
+        Assert.Equal(string.Empty, stored.LastBackupError);
+    }
+
+    [Fact]
+    public async Task RetentionKeepsFilesWhoseDeleteFails()
+    {
+        await _settings.SetAutoBackupSettingsAsync(
+            AutoBackupSettingsCodec.Default with { DataStorageId = 5, RetentionDays = 30 });
+        _dataStorages.Seed(storage =>
+        {
+            storage.Id = 5;
+            storage.Name = "disk";
+            storage.Type = "fs";
+        });
+
+        _backends.Backend.Add(
+            "axonhub-backup-old.json",
+            [],
+            DateTimeOffset.UtcNow.AddDays(-31));
+        _backends.Backend.DeleteFailureFor = key => key == "axonhub-backup-old.json"
+            ? new InvalidOperationException("failed to remove file: denied")
+            : null;
+
+        await _service.RunBackupNowAsync();
+
+        Assert.True(_backends.Backend.Objects.ContainsKey("axonhub-backup-old.json"));
+        var stored = await _settings.GetAutoBackupSettingsAsync();
         Assert.Equal(string.Empty, stored.LastBackupError);
     }
 

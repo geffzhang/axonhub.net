@@ -5,8 +5,10 @@ using AxonHub.Api.Billing;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Settings;
+using AxonHub.Api.Storage;
 using AxonHub.Llm.Json;
 using AxonHub.Persistence;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Management;
 
@@ -23,7 +25,9 @@ public sealed class BackupService(
     ISystemStore systems,
     ISystemSettingsAdminService systemSettings,
     IDataStorageStore dataStorages,
-    IManagementIdentity identity)
+    IManagementIdentity identity,
+    IDataStorageBackendFactory dataStorageBackends,
+    ILogger<BackupService>? logger = null)
 {
     /// <summary>backup.backupBatchSize (backup_ops.go:23).</summary>
     public const int BatchSize = 500;
@@ -39,6 +43,30 @@ public sealed class BackupService(
 
     /// <summary>datastorage.TypeDatabase.</summary>
     private const string DatabaseStorageType = "database";
+
+    private static readonly Action<ILogger, string, long, Exception?> LogBackupUploaded =
+        LoggerMessage.Define<string, long>(
+            LogLevel.Information,
+            new EventId(0, "BackupUploaded"),
+            "Backup uploaded to storage {Path} ({Size} bytes)");
+
+    private static readonly Action<ILogger, Exception?> LogCleanupFailed =
+        LoggerMessage.Define(
+            LogLevel.Warning,
+            new EventId(0, "CleanupOldBackupsFailed"),
+            "Failed to cleanup old backups");
+
+    private static readonly Action<ILogger, string, Exception?> LogDeletedOldBackup =
+        LoggerMessage.Define<string>(
+            LogLevel.Information,
+            new EventId(0, "DeletedOldBackup"),
+            "Deleted old backup {File}");
+
+    private static readonly Action<ILogger, string, Exception?> LogDeleteOldBackupFailed =
+        LoggerMessage.Define<string>(
+            LogLevel.Warning,
+            new EventId(0, "DeleteOldBackupFailed"),
+            "Failed to delete old backup {File}");
 
     // --------------------------------------------------------------- backup
 
@@ -2076,8 +2104,9 @@ public sealed class BackupService(
 
     /// <summary>
     /// Port of BackupService.Reschedule (autobackup.go:26-40). The reference
-    /// re-creates the scheduler cron entry; the port has no scheduler
-    /// (C197), so there is nothing to reschedule.
+    /// re-creates the cron entry in the scheduler; <see cref="AutoBackupScheduler"/>
+    /// re-reads the system time zone at least once per minute, so the next
+    /// occurrence always reflects the saved settings without a signal.
     /// </summary>
     public void Reschedule()
     {
@@ -2219,7 +2248,7 @@ public sealed class BackupService(
         var timestamp = DateTime.Now.ToString(
             "yyyy-MM-dd_HH-mm-ss",
             System.Globalization.CultureInfo.InvariantCulture);
-        _ = "axonhub-backup-" + timestamp + ".json";
+        var filename = "axonhub-backup-" + timestamp + ".json";
 
         if (storage.Type == DatabaseStorageType)
         {
@@ -2235,7 +2264,7 @@ public sealed class BackupService(
                     .ConfigureAwait(false);
 
                 // DataStorageService.SaveData for the database backend returns
-                // nil and has no observable side effect (C197).
+                // nil and has no observable side effect (autobackup.go:107-118).
             }
             catch (OperationCanceledException)
             {
@@ -2250,18 +2279,229 @@ public sealed class BackupService(
         }
         else
         {
-            // C197: the port has no filesystem/object-store backends, so the
-            // streaming branch cannot write its temp file. Report the failure
-            // the reference would report from SaveDataFromReader.
-            throw new InvalidOperationException(
-                "failed to write backup file: unsupported storage type: "
-                + storage.Type);
+            // autobackup.go:119-144: stream into a temp file, rewind, hand the
+            // reader to SaveDataFromReader.
+            string tempPath;
+            FileStream file;
+            try
+            {
+                tempPath = Path.Combine(
+                    Path.GetTempPath(),
+                    "axonhub-backup-" + Guid.NewGuid().ToString("N") + ".json");
+                file = new FileStream(
+                    tempPath,
+                    FileMode.CreateNew,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to create temp backup file: " + ex.Message,
+                    ex);
+            }
+
+            try
+            {
+                try
+                {
+                    await BackupJson.WriteAsync(
+                            file,
+                            options,
+                            batchSource,
+                            DateTime.Now,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "failed to create backup: " + ex.Message,
+                        ex);
+                }
+
+                try
+                {
+                    file.Position = 0;
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "failed to seek backup file: " + ex.Message,
+                        ex);
+                }
+
+                using var backend = CreateBackend(storage, "failed to write backup file: ");
+
+                string key;
+                long written;
+                try
+                {
+                    (key, written) = await backend
+                        .WriteFromStreamAsync(filename, file, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "failed to write backup file: " + ex.Message,
+                        ex);
+                }
+
+                if (logger is not null)
+                {
+                    LogBackupUploaded(logger, key, written, null);
+                }
+            }
+            finally
+            {
+                await file.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch (Exception)
+                {
+                    // defer os.Remove ignores the error.
+                }
+            }
         }
 
         if (settings.RetentionDays > 0)
         {
-            // cleanupOldBackups only applies to the unavailable non-database
-            // backends (C197).
+            try
+            {
+                await CleanupOldBackupsAsync(
+                        storage,
+                        settings.RetentionDays,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // autobackup.go:146-150: cleanup failures are logged, not raised.
+                if (logger is not null)
+                {
+                    LogCleanupFailed(logger, ex);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// SaveDataFromReader wraps GetFileSystem failures with
+    /// <c>failed to get file system: %w</c> (data_storage.go:609-612), but S3
+    /// never reaches GetFileSystem: objectStoreFor runs first and wraps client
+    /// construction with <c>failed to create s3 object store: %w</c>; a missing
+    /// settings block and an unknown type are returned bare
+    /// (objectstore.go:59-66, data_storage.go:644-646).
+    /// </summary>
+    private IDataStorageBackend CreateBackend(DataStorageRecord storage, string prefix)
+    {
+        const string S3FileSystemPrefix = "failed to create s3 filesystem: ";
+
+        try
+        {
+            return dataStorageBackends.Create(storage);
+        }
+        catch (InvalidOperationException ex)
+        {
+            var message = ex.Message;
+
+            if (storage.Type == "s3")
+            {
+                if (message.StartsWith(S3FileSystemPrefix, StringComparison.Ordinal))
+                {
+                    message = "failed to create s3 object store: "
+                        + message[S3FileSystemPrefix.Length..];
+                }
+            }
+            else if (storage.Type is "fs" or "gcs" or "webdav")
+            {
+                message = "failed to get file system: " + message;
+            }
+
+            throw new InvalidOperationException(prefix + message, ex);
+        }
+    }
+
+    /// <summary>Port of BackupService.cleanupOldBackups (autobackup.go:155-205).</summary>
+    private async Task CleanupOldBackupsAsync(
+        DataStorageRecord storage,
+        int retentionDays,
+        CancellationToken cancellationToken)
+    {
+        IDataStorageBackend backend;
+        try
+        {
+            backend = dataStorageBackends.Create(storage);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get data storage filesystem: " + ex.Message,
+                ex);
+        }
+
+        using (backend)
+        {
+            IReadOnlyList<DataStorageEntry> files;
+            try
+            {
+                files = await backend.ListAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("failed to list backups: " + ex.Message, ex);
+            }
+
+            var cutoff = DateTimeOffset.UtcNow.AddDays(-retentionDays);
+            var backups = files
+                .Where(static file => file.Name.StartsWith("axonhub-backup-", StringComparison.Ordinal)
+                    && file.Name.EndsWith(".json", StringComparison.Ordinal))
+                .OrderBy(static file => file.LastModified)
+                .ToList();
+
+            foreach (var backup in backups)
+            {
+                if (backup.LastModified >= cutoff)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await backend.DeleteAsync(backup.Name, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (logger is not null)
+                    {
+                        LogDeletedOldBackup(logger, backup.Name, null);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    if (logger is not null)
+                    {
+                        LogDeleteOldBackupFailed(logger, backup.Name, ex);
+                    }
+                }
+            }
         }
     }
 

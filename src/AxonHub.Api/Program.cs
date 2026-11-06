@@ -14,6 +14,7 @@ using AxonHub.Api.Prompts;
 using AxonHub.Api.Security;
 using AxonHub.Api.Settings;
 using AxonHub.Api.Static;
+using AxonHub.Api.Storage;
 using AxonHub.Api.Traces;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
@@ -293,12 +294,15 @@ builder.Services.AddScoped<DataStoragePrivacy>();
 builder.Services.AddScoped<DataStorageManagementService>();
 
 // Backup / restore (internal/server/backup): the streamed backup document, the
-// transactional restore and the auto-backup operations. The non-database
-// storage backends, the cron scheduler and retention cleanup are not ported
-// (C197); the reference's system-value cache invalidation is a no-op here.
+// transactional restore and the auto-backup operations. The storage backends
+// live in Storage/ (fs / S3 / GCS / WebDAV, C199); AutoBackupScheduler carries
+// the reference's daily 02:00 cron entry in the system time zone. The
+// reference's system-value cache invalidation is a no-op here.
 builder.Services.AddScoped<IBackupBatchSource, BackupStore>();
 builder.Services.AddScoped<IBackupRestoreStore, BackupRestoreStore>();
+builder.Services.AddSingleton<IDataStorageBackendFactory, DataStorageBackendFactory>();
 builder.Services.AddScoped<BackupService>();
+builder.Services.AddHostedService<AutoBackupScheduler>();
 
 // Trace/thread management surface (biz.TraceService / biz.ThreadService admin
 // reads, the status transitions and the trace segment tree). The reference

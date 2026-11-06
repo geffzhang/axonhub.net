@@ -5254,7 +5254,7 @@ performBackup、cleanupOldBackups、RunBackupNow）、
   变更；`IncludeProjects` 与 `ProjectConflictStrategy` 不是 SDL 字段，管理面恒为 false / 空串（与 gqlgen
   生成映射的零值一致），因此经 GraphQL 的备份文档不含 projects 段、恢复也不写项目段；未知存储
   frequency 的输出与输入枚举校验见 C198。
-- 未移植：fs / S3 / GCS / WebDAV 存储后端、cron 调度与保留清理（C197）。
+- fs / S3 / GCS / WebDAV 存储后端、cron 调度与保留清理由 §108 接入（C197 已解决）。
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
@@ -5270,6 +5270,89 @@ Llm 3032、Grains 95；四个项目合计由 6059 增至 6140，0 失败 0 跳�
 （非 database 存储的自动备份在端口确定性失败）；C198 登记 GraphQL 接入层差异（HotChocolate Upload
 标量、未知 frequency 的输出与输入枚举校验、triggerAutoBackup 的新作用域替代 context.WithoutCancel、
 32 位 Int 与解码错误文本）。
+
+## 108. 数据存储后端与自动备份调度（fs / S3 / GCS / WebDAV、保留清理、每日 02:00，35 例，2026-11-06）
+
+参照 `b8bb3421`：`internal/server/biz/data_storage.go:83-197`（RegisterScheduledTasks、refreshFileSystems、
+buildFileSystem 的六种错误文本）、`:388-524`（InvalidateFsCache、createS3Fs / createGcsFs / createWebDAVFs
+的客户端构造与 `failed to create s3/gcs/webdav filesystem: %w` 包装、GetFileSystem）、`:531-584`
+（SaveData：database 纯 nil、S3 原生 PutObject、其余 afero.WriteFile）、`:589-647`（SaveDataFromReader：
+database 拒绝流式写、fs 的 `filepath.FromSlash` + MkdirAll + OpenFile `O_WRONLY|O_CREATE|O_TRUNC`、
+webdav 的 `TrimPrefix("/")` + mkdirAll、GCS 不裁剪）、`:651-691`（DeleteData：fs 的 `os.ErrNotExist`
+视作成功、S3 幂等、webdav / gcs 透出 404）、`:696-733`（LoadData：database 返回键字节、S3 缺失 →
+`os.ErrNotExist: <key>`、其余 `failed to read file: %w`）、`:870-903`（mkdirAll 的逐级 Mkdir 与
+ErrExist / DirExists 回退）、`internal/server/biz/objectstore.go:59-85`（objectStoreFor 仅 S3；缺 settings
+裸返、客户端构造包装 `failed to create s3 object store: %w`）、`internal/server/biz/objectstore_s3.go:26-160`
+（16 MiB 分片、Put/Get/Delete 的四个错误模板、isS3NotFound 的 NoSuchKey / NotFound / 404 判定、自适应
+重试 max 3）、`internal/server/backup/autobackup.go:22-32`（cron `0 2 * * *` + 系统时区、Reschedule）、
+`:88-153`（performBackup 的 database / 临时文件两分支与错误前缀）、`:155-205`（cleanupOldBackups 的前缀 /
+后缀过滤、按 ModTime 升序、早于 now-retention 删除、单文件失败只告警）、
+`internal/server/scheduler/task.go:22-31`（TaskSpec 的 CronExpr / Timezone）。
+实时上游 `f272549f` 的 `data_storage.go` / `objectstore_s3.go` 与冻结基线相比只多了 S3 的
+`RequestChecksumCalculation` / `ResponseChecksumValidation` 配置与 HTTPClient 测试注入接缝（以及对应的
+`newS3ClientWithHTTPClient` / `newS3ObjectStoreWithHTTPClient`），`autobackup.go`、`objectstore.go`、
+`scheduler/` 零差异；端口以冻结基线为准。
+
+新增 `Api/Storage/DataStorageBackend.cs`（`IDataStorageBackend` / `DataStorageEntry` /
+`IDataStorageBackendFactory`）、`Api/Storage/DataStorageBackendFactory.cs`、`Api/Storage/FsDataStorageBackend.cs`、
+`Api/Storage/S3DataStorageBackend.cs`（AWSSDK.S3 4.0.20.4）、`Api/Storage/GcsDataStorageBackend.cs`、
+`Api/Storage/WebDavDataStorageBackend.cs`、`Api/Storage/CountingStream.cs`；
+`Api/Management/AutoBackupSchedule.cs`（`0 2 * * *` 的下一触发时刻）与 `Api/Management/AutoBackupScheduler.cs`
+（`BackgroundService`）；`BackupService.PerformBackupAsync` 的非 database 分支、`CleanupOldBackupsAsync`
+与 `CreateBackend` 的错误分层；`Program` 注册工厂与托管服务，`Directory.Packages.props` / csproj 增加
+AWSSDK.S3。
+
+- 后端工厂：database → `database storage does not support file system operations`；fs 缺目录 →
+  `directory not configured for fs storage`；s3 / gcs / webdav 缺设置块分别 → `s3 settings not configured` /
+  `gcs settings not configured` / `webdav settings not configured`；未知类型 → `unsupported storage type: <type>`
+  （裸文本）；客户端构造失败在工厂内包装为 `failed to create s3/gcs/webdav filesystem: %w`。
+- 错误分层：`SaveData` / `SaveDataFromReader` / `LoadData` / `DeleteData` 对 S3 先走 `objectStoreFor`，
+  因此 S3 只出现 `failed to create s3 object store: %w`、永不出现 `failed to get file system:`；fs / gcs / webdav
+  在调用侧得到 `failed to get file system: <buildFileSystem 文本>`；database 的流式写 → 
+  `database storage does not support streaming writes`；写入 / 删除的尾部统一 `, key: %s`；
+  `failed to create directory:` / `failed to create file:` / `failed to write file:` / `failed to remove file:` /
+  `failed to read file:`。
+- fs：BasePathFs 等价为固定根目录 + 键的单前导分隔符剥离（Go `filepath.Join` 语义）+ 越界拒绝
+  `invalid path: <key>`；写入时逐级建目录并以截断模式打开；删除缺失键视为成功；列表只返回直接子项，
+  修改时间取文件系统时间。
+- S3：对象键只剥离一个前导 `/`；写入为一次 PutObject（不切分片）；读取缺失 →
+  `FileNotFoundException("file does not exist: <key>")`（对应 `fmt.Errorf("%w: %s", os.ErrNotExist, key)`）；
+  删除幂等；列表用 Delimiter `/` + 分页，名字取 basename，修改时间缺失时用 `DateTime.MinValue`。
+- GCS：凭据在构造期解析（service_account 的 RSA PEM 立即校验、authorized_user 的 refresh_token），
+  构造期失败为 `failed to create gcs filesystem: failed to parse GCP credentials: …`；访问令牌惰性获取并
+  缓存（60 秒提前量），service_account 以 RS256 JWT-bearer、authorized_user 以 refresh_token 交换；
+  上传为 media upload、读取 / 删除 / 列表走 JSON API，404 → `storage: object doesn't exist`，401 重试一次；
+  列表分页并解析 `updated`。
+- WebDAV：URL = 配置 URL + Path-or-Directory（单前导 `/` 裁剪，兼容 Synology/NAS），Basic 认证仅在用户名或
+  密码非空时发送，超时 10 分钟；写入先逐级 MKCOL（2xx / 405 / 409 / 301 / 302 视为已存在）再 PUT；
+  读取非 2xx → `failed to read file: <status>`；删除 404 抛错（gowebdav 语义）；列表为 PROPFIND Depth 1，
+  跳过集合自身并解析 `getlastmodified`，只返回直接子项。
+- 自动备份：database 存储生成完整文档后跳过保存（参照的 SaveData 为纯 nil）；其余存储写临时文件
+  `axonhub-backup-*.json`，依次 `failed to create temp backup file:` / `failed to create backup:` /
+  `failed to seek backup file:` / `failed to write backup file:`，结束后删除临时文件；成功后可记录
+  `uploaded` 日志（端口新增，参照无此日志）。
+- 保留清理：`RetentionDays > 0` 时在备份成功后执行；`axonhub-backup-` 前缀 + `.json` 后缀、按修改时间升序、
+  删除早于 `UtcNow - RetentionDays` 的条目；`failed to get data storage filesystem:` / `failed to list backups:`
+  与单文件删除失败都只记日志、不向上抛出（database 存储下同样执行并吞掉文件系统错误）。
+- 调度：以 `BackgroundService` 轮询替代 robfig/cron，最多每分钟重读一次系统时区，按系统墙钟计算严格晚于
+  “现在”的下一个 02:00；设置变更无需显式 Reschedule（下一轮自会按当前设置执行），错过的 02:00 不补跑；
+  DST 缺口按 Go `time.Date` 语义向前归一（纽约 2026-03-08 的 02:00 → 03:00 -04），歧义取首个偏移
+  （柏林 2026-10-25 的 02:00 → +02:00）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| fs 往返与父目录创建、流式写入字节数、列表名字与修改时间、删除幂等、越界键拒绝；工厂六种错误文本、GCS 凭据包装、S3 键规范化 | `tests/AxonHub.Api.Tests/StorageBackendTests.cs` | 12 |
+| WebDAV 基本认证与 10 分钟超时、根集合与多级 MKCOL + PUT、读取状态文案、PROPFIND 解析；GCS authorized_user 与 service_account 令牌、媒体上传、令牌缓存、404 映射、分页与时间解析 | `tests/AxonHub.Api.Tests/StorageProtocolTests.cs` | 10 |
+| 02:00 的当日 / 次日边界、上海墙钟、纽约春季缺口、柏林秋季歧义 | `tests/AxonHub.Api.Tests/AutoBackupScheduleTests.cs` | 5 |
+| 非 database 存储的流式备份、文件系统构造 / 未知类型 / 流式写失败的包装、保留清理的过滤与失败容忍（含 database 存储仍执行、单文件删除失败保留） | `tests/AxonHub.Api.Tests/BackupServiceTests.cs`（新增 8 例） | 8 |
+
+`AxonHub.Api.Tests` 由 2737 增至 2772（+35），Persistence 276、Llm 3032、Grains 95，四个项目合计由
+6140 增至 6175。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `InlineData` 的静态
+计数；下一次全量运行应以 2772 / 6175 复核。**
+
+差异：C197 由真实缺口改为已解决（四种后端、保留清理与每日 02:00 调度均已接入）；C199 登记实现差异
+（S3 单次 PutObject 取代 16 MiB 分片、GCS / WebDAV 为手写客户端而非 gcsfs / gowebdav、按操作创建客户端、
+第三方库错误文案为语义近似、调度轮询最多 1 分钟延迟）。
 
 ## 覆盖缺口
 

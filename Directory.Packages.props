@@ -20,6 +20,8 @@
     <PackageVersion Include="ZstdSharp.Port" Version="0.8.8" />
     <!-- 密码哈希：参照内部使用 golang.org/x/crypto/bcrypt（cost 10，$2a$，hex 编码） -->
     <PackageVersion Include="BCrypt.Net-Next" Version="4.2.0" />
+    <!-- 备份存储：S3 用官方 SDK（参照 aws-sdk-go-v2）；GCS/WebDAV 走 HTTP，见 Storage/ -->
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.20.4" />
     <!-- 测试 -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
