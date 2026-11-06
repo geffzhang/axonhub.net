@@ -257,8 +257,8 @@ builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
 // biz/provider_quota_settings.go, biz/channel_provider_quota_hook.go): the
 // per-channel quota status table, the collection loop and its five-minute UTC
 // schedule, the synchronous routing-gate snapshot and the settings surface.
-// Only the collection core is ported; the nineteen provider checkers arrive in
-// follow-up slices (C182), so every provider currently reaches the reference's
+// The collection core is ported; the remaining eighteen provider checkers
+// arrive in follow-up slices (C182), so those providers reach the reference's
 // "No checker for provider" branch. The service is a singleton because the
 // routing gate reads its cache synchronously; every database operation runs in
 // its own DI scope. ProviderQuotaService's startup cache load (the reference
@@ -267,6 +267,17 @@ builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
 builder.Services.AddScoped<IProviderQuotaStatusStore, ProviderQuotaStatusStore>();
 builder.Services.AddSingleton<ProviderQuotaSettingsCache>();
 builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaCheckerRegistry>();
+
+// Provider checkers: provider_quota.go:422-424 registers the Antigravity
+// checker, which prefers the quota-summary endpoint and falls back to the
+// legacy per-model session quota. Checkers are stateless singletons sharing
+// the process HTTP executor and the channel-proxy factory.
+builder.Services.AddSingleton<AntigravityQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "antigravity",
+        services.GetRequiredService<AntigravityQuotaChecker>()));
+
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(
     static services => services.GetRequiredService<ProviderQuotaCollectionSettingsService>());

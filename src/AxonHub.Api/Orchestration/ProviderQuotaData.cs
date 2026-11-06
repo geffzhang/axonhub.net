@@ -632,6 +632,18 @@ public static class ProviderQuotaModelFilter
         return string.Empty;
     }
 
+    /// <summary>
+    /// Port of antigravityPoolAvailabilityGroup (antigravity_summary.go:44-49):
+    /// limits in the same model pool share an availability group so routing can
+    /// map a requested model onto the pool's windows.
+    /// </summary>
+    public static string AntigravityPoolAvailabilityGroup(string pool)
+    {
+        ArgumentNullException.ThrowIfNull(pool);
+
+        return pool.Length == 0 ? string.Empty : AntigravityPoolAvailabilityGroupPrefix + pool;
+    }
+
     /// <summary>Port of MatchLimitModel.</summary>
     public static bool MatchLimitModel(QuotaLimitStatus limit, string actualModel)
     {

@@ -22,9 +22,10 @@ public interface IProviderQuotaCheckerRegistry
 
 /// <summary>
 /// Registry built from every <see cref="ProviderQuotaCheckerRegistration"/>
-/// found in DI. The core quota slice registers none: the nineteen provider
-/// checkers land in follow-up slices (C182), so a channel with credentials logs
-/// the reference's "No checker for provider" error and keeps its previous row.
+/// found in DI. The Antigravity checker is registered; the remaining eighteen
+/// provider checkers land in follow-up slices (C182), so a channel of those
+/// providers logs the reference's "No checker for provider" error and keeps its
+/// previous row.
 /// </summary>
 public sealed class ProviderQuotaCheckerRegistry : IProviderQuotaCheckerRegistry
 {

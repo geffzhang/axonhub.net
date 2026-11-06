@@ -5716,6 +5716,59 @@ GraphQL 的 `AdminQuery` / `AdminMutation` / `SystemSettingsTypes` 与 `Authoriz
 C139 的 `providerQuotaStatus` 缺口闭合并转为 resolved；`QuotaLimitStatus.Type` 的默认值补偿登记为 C204，
 `Map` 标量的 jsonb 键序 / 转义差异登记为 C205。
 
+## 115. Antigravity 供应商配额检查器（quota summary / legacy 回退，61 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/antigravity_checker.go:36-267`（`CheckQuota`:44、
+`SupportsChannel`:98、`credentials`:102、摘要 404/501 回退:52-93、legacy 解析与 pool 折叠:148-267）、
+`antigravity_summary.go:1-169`（envelope 优先级、`antigravityModelPool`、窗口别名、剩余额度回退链、
+顺序 limits 与 RawData）、`provider_quota.go:422-424` 的 `registerAntigravitySupport`，以及
+`antigravity_checker_test.go`、`antigravity_summary_test.go`。
+
+新增 `src/AxonHub.Api/Orchestration/AntigravityQuotaChecker.cs`（`IQuotaChecker` 实现：凭据解析与 OAuth
+刷新、摘要优先 / 旧式回退两段式请求、两份解析器、epoch / RFC3339 重置时间解析），
+`ProviderQuotaData.cs` 新增公开的 `AntigravityPoolAvailabilityGroup`，`Program.cs` 注册
+`AntigravityQuotaChecker` 与 `ProviderQuotaCheckerRegistration("antigravity", …)`，
+`ProviderQuotaCheckerRegistry` 的文档同步为「仅 Antigravity 已注册」。
+
+- 采集流程：先 POST `…/v1internal:retrieveUserQuotaSummary`（仅 legacy 凭据带 projectID 时 body 含
+  `project`），只把 404/501（抛出的 `HttpClientError` 或返回的状态码）与「200 但响应体无法解析」视作
+  摘要不可用并静默回退；其余摘要错误按 `fetch Antigravity quota summary: %w` 包装，非 2xx 报
+  `fetch Antigravity quota summary: status %d`。回退请求 `…/v1internal:fetchAvailableModels`，复用同一
+  executor（含通道代理）与同一组 `AntigravityVersion` 客户端头，错误包装为
+  `fetch legacy Antigravity quota: %w` / `… status %d`。
+- 凭据：OAuth 对象优先于 legacy API key；legacy 按 `SplitN(TrimSpace, "|", 2)` 取
+  `refreshToken|projectID`。access token 非空且（未过期或两个 refresh token 都为空）时直接使用；
+  否则克隆并补齐 RefreshToken / ClientId / Scopes，经 `AntigravityTokenProviderFactory`（client_secret
+  form grant）刷新，失败包装为 `refresh Antigravity OAuth token: %w`；无 refresh token 报
+  `channel has no Antigravity OAuth credentials`。刷新与配额请求共用同一（可能被代理的）executor。
+- Legacy 解析：按模型 ID 排序；跳过 internal / 缺 quotaInfo / 缺 remainingFraction / NaN / Inf / 负数；
+  remaining 截断到 0..1，≥1 为 exhausted、≥0.8 为 warning；记录最早 resetTime；RawData.models 为
+  `{displayName, remainingPercentage, status, resetAt}`；同一 pool 的 effort 变体折叠为用量最高的 5h
+  窗口并挂 `availabilityGroup=antigravity_pool:<pool>`；错误文案 `decode Antigravity quota response: %w`、
+  `Antigravity quota response has no models`、`… has no quota data`、`… has no recognized model pools`。
+- Summary 解析：envelope 的 `response` 优先于 `summary`、再退回顶层 `groups`；pool 由
+  `id + " " + group.DisplayName + " " + group.Name` 归类，窗口由 `window` / `id` / `displayName` 的别名
+  token 判定（`7d|week|weekly`、`5h|session`、`5|five` + hour、`7|seven` + day，`bi` / `semi` 后不认
+  week）；remaining 依次取 `remainingFraction`、`remaining.remainingFraction`、
+  `remaining.case=="remainingFraction"` 的 `value`；跳过 disabled / 未知 pool / 未知窗口 / 缺失或越界
+  remaining；同一 pool+window 取最大用量；limits 按 `[gemini, claude_gpt] × [5h, 7d]` 顺序输出；无可用
+  窗口报 `Antigravity quota summary has no measured pool windows`；RawData 为整个响应体的 Go 形状 map。
+- 重置时间：数字按 epoch 秒 / 毫秒，字符串按 `strconv.ParseInt`（base 10）或 RFC3339；端口按 Go
+  `time.Parse` 的宽度与范围规则实现，`DateTimeOffset` 无法表示的极端值返回无重置（见 C123）。
+- 注册与接线：`antigravity` 通道不再落 “No checker for provider” 分支；采集循环、错误退避、状态归一化
+  与持久化沿用 §114 核心，GraphQL 面无需改动。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（两条 URL、Authorization、X-Client-*、User-Agent、Content-Type/Accept、`{project}` body）、摘要优先与 404/501 / 解析失败回退、脚本化非 2xx 文案、OAuth 刷新优先级与失败包装、legacy 凭据、空凭据、通道代理与畸形设置、摘要 / 旧式解析、pool 折叠与可用性分组、窗口别名、resetTime 接受 / 拒绝、状态阈值 | `tests/AxonHub.Api.Tests/AntigravityQuotaCheckerTests.cs` | 17 + 44 |
+
+`AxonHub.Api.Tests` 由 3084 增至 3145（+61），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由 6530
+增至 6591。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态计数；
+下一次全量运行应以 3145 / 319 / 6591 复核。**
+
+差异：C123 由真实缺口转为 resolved（子差异：UTC 渲染、不可表示的年份 / 偏移 / 极端 epoch、超 100ns 小数、
+超范围 JSON 数字的容错）；C182 由 19 个 checker 收窄为剩余 18 个。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -5736,14 +5789,14 @@ C139 的 `providerQuotaStatus` 缺口闭合并转为 resolved；`QuotaLimitStatu
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）未接入，角色 / 权限校验由 §84 接入（PermissionValidator 与 users / roles 写入接线，25 例），OIDC 登录流程由 §83 接入（提供方配置与 providers 列表由 §82 接入），JWT 登录 / 刷新由 §80 接入，管理员 GraphQL 的 bearer / service_account 门与只读规则由 §81 接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表 | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74 供自动定价读取，§88 管理面 CRUD）、`channel_override_templates`（§78）、`oidc_identities`（§79）、`data_storages`（§106）、`prompts`（§99）与 `invitations`（§110）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096）；查询与 GraphQL（列表 / node / 段 / 用量 / 八个状态变更）由 §101 闭合（23 + 15 例），GC / 保留策略由 §113 闭合（C095 resolved）；仅剩日志接缝与 gjson 归一化等已接受差异（C095 / C203） | — | 完成（C095 / C203） |
-| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123），其 OAuth 管理面（start / exchange / 项目发现）由第 111 节闭合（C121 resolved，残余见 C202），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity 模型拉取/配额采集、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
+| 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123），其 OAuth 管理面（start / exchange / 项目发现）由第 111 节闭合（C121 resolved，残余见 C202），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity 模型拉取（配额采集已由 §115 闭合）、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
 | 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |
 | 模型关联路由与多模型重试 | 已由 §90 闭合：DefaultSelector 的模型行查询 / privacy / 关联匹配（六种 kind 与排除规则）/ When 条件 / 聚合 / 逐模型 API 格式、模型级 routing policy、模型卡 DefaultMaxTokens、无模型行回退通道、多模型同通道重试与 tester 路径排序（59 例）；残余差异与真实缺口登记为 C179，通道变换选项与流策略强制由 §96 闭合（C180） | 中 | 完成（C179 / C180） |
 | trace / thread 通道粘性路由 | 已由 §91 闭合：prefer_previous_channel 的生效策略优先级、trace → thread 作用域解析、命中仅限候选池、priority 最小候选置首与同通道 fallback 去重、只记账粘性候选、写回条件与 trace 行 thread 优先、30 分钟 TTL（15 + 1 例）；进程内缓存的多实例限制登记为 C181 | — | 完成（C181） |
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），19 个 provider checker 与供应商专属重置未移植（C182）；空注册表下不发起采集、保留既有行 | 中 | 闸门与迁移完成；checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），其余 18 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
