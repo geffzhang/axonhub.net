@@ -191,11 +191,12 @@ public static partial class ManagementAuthHandlers
 
     // go-playground/validator's email tag requires a local part and a
     // dotted hostname (IP literals and quoted locals are not reproduced; see the
-    // sign-in difference entry).
+    // sign-in difference entry). Shared with the invitation registration
+    // binding, whose request carries the same `binding:"required,email"` tag.
     [GeneratedRegex(
         @"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$",
         RegexOptions.CultureInvariant)]
-    private static partial Regex EmailRegex();
+    internal static partial Regex EmailRegex();
 
     /// <summary>objects.UserInfo's JSON shape (internal/objects/user.go).</summary>
     internal sealed record UserRecordDto(

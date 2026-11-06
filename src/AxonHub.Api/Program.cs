@@ -208,6 +208,13 @@ builder.Services.AddScoped<PermissionValidator>();
 builder.Services.AddScoped<UserManagementService>();
 builder.Services.AddScoped<RoleManagementService>();
 
+// Invitations (biz.InvitationService): the REST-only surface of
+// api/invitation.go — creation under the admin JWT gate plus the public
+// lookup/registration pair. Role deletion revokes a role's invitations in the
+// same transaction (role.go:258-265).
+builder.Services.AddScoped<IInvitationStore, InvitationStore>();
+builder.Services.AddScoped<InvitationService>();
+
 // Projects (biz.ProjectService): CRUD over the projects table plus the
 // project-level role presets and the creator's UserProject row. The project
 // cache is not ported (C174).
@@ -417,6 +424,10 @@ app.MapGet("/oauth/oidc/providers", oidcProvidersHandler);
 // one-time exchange code redemption.
 app.MapOidcLoginRoutes();
 
+// Invitations (routes.go:87-88,112): POST /admin/invitations behind the admin
+// JWT gate, and the public GET/register pair under /auth/invitations.
+app.MapInvitationRoutes();
+
 // NewOIDCHandlers warns when providers are configured without a public URL
 // (api/oidc.go:36-41). An empty value still fails each flow at getBaseURL.
 if (oidcProviders.Count > 0 && oidcLoginOptions.PublicUrl.Length == 0)
@@ -474,6 +485,17 @@ app.UseWhen(
     static branch =>
     {
         branch.UseMiddleware<OidcLinkAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+    });
+
+// Invitation creation sits on the admin group (routes.go:106,112): the same
+// plain user-JWT gate and WithProjectID. The public lookup/registration pair
+// (routes.go:87-88) stays outside every auth middleware.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/invitations"),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
         branch.UseMiddleware<ProjectIdMiddleware>();
     });
 

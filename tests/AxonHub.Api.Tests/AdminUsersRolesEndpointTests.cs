@@ -30,6 +30,7 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
 
     private readonly FakeUserAdminStore _users = new();
     private readonly FakeRoleStore _roles = new();
+    private readonly FakeInvitationStore _invitations = new();
 
     private readonly AdminGraphqlGateServices _gate = new();
 
@@ -44,6 +45,7 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         _gate.Register(builder.Services);
         builder.Services.AddSingleton<IUserAdminStore>(_users);
         builder.Services.AddSingleton<IRoleStore>(_roles);
+        builder.Services.AddSingleton<IInvitationStore>(_invitations);
         builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
         builder.Services.AddScoped<PermissionValidator>();
         builder.Services.AddScoped<UserManagementService>();
@@ -1431,6 +1433,16 @@ internal sealed class FakeRoleStore : IRoleStore
 
     public Task<RoleRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => Task.FromResult(Live(id));
+
+    public Task<T> RunInTransactionAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken = default)
+        => action(cancellationToken);
+
+    public Task RunInTransactionAsync(
+        Func<CancellationToken, Task> action,
+        CancellationToken cancellationToken = default)
+        => action(cancellationToken);
 
     public Task<bool> NameExistsAsync(
         string name,

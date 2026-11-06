@@ -29,11 +29,13 @@ public sealed record UpdateRoleCommand
 
 /// <summary>
 /// Port of the management methods of biz.RoleService
-/// (internal/server/biz/role.go:46-312) over <see cref="IRoleStore"/>.
-/// Role-invitation revocation is a no-op until the invitations table is ported.
+/// (internal/server/biz/role.go:46-312) over <see cref="IRoleStore"/>. The two
+/// delete paths run in one transaction that also soft-deletes the role's
+/// invitations (role.go:181-265).
 /// </summary>
 public sealed class RoleManagementService(
     IRoleStore roles,
+    IInvitationStore invitations,
     PermissionValidator validator)
 {
     public const string LevelSystem = "system";
@@ -272,49 +274,61 @@ public sealed class RoleManagementService(
             ?? throw new InvalidOperationException("failed to update role: ent: role not found");
     }
 
-    /// <summary>Port of RoleService.DeleteRole (minus invitation revocation).</summary>
+    /// <summary>Port of RoleService.DeleteRole (role.go:181-226).</summary>
     public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
     {
-        RoleRecord? role;
-        try
-        {
-            role = await roles.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException(
-                "failed to check role existence: " + ex.Message,
-                ex);
-        }
+        await roles.RunInTransactionAsync(
+            async token =>
+            {
+                RoleRecord? role;
+                try
+                {
+                    role = await roles.GetByIdAsync(id, token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "failed to check role existence: " + ex.Message,
+                        ex);
+                }
 
-        if (role is null)
-        {
-            throw new InvalidOperationException(
-                "failed to check role existence: ent: role not found");
-        }
+                if (role is null)
+                {
+                    throw new InvalidOperationException(
+                        "failed to check role existence: ent: role not found");
+                }
 
-        if (role.Name == DefaultRoleName)
-        {
-            throw new InvalidOperationException("cannot delete the default Developer role");
-        }
+                if (role.Name == DefaultRoleName)
+                {
+                    throw new InvalidOperationException("cannot delete the default Developer role");
+                }
 
-        bool deleted;
-        try
-        {
-            deleted = await roles.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException("failed to delete role: " + ex.Message, ex);
-        }
+                await RevokeInvitationsAsync([id], token).ConfigureAwait(false);
 
-        if (!deleted)
-        {
-            throw new InvalidOperationException("failed to delete role: ent: role not found");
-        }
+                bool deleted;
+                try
+                {
+                    deleted = await roles.DeleteAsync(id, token).ConfigureAwait(false);
+                }
+                catch (StoreFailureException ex)
+                {
+                    // The store already produced the reference's final wording.
+                    throw new InvalidOperationException(ex.Message, ex);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException("failed to delete role: " + ex.Message, ex);
+                }
+
+                if (!deleted)
+                {
+                    throw new InvalidOperationException("failed to delete role: ent: role not found");
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Port of RoleService.BulkDeleteRoles (minus invitation revocation).</summary>
+    /// <summary>Port of RoleService.BulkDeleteRoles (role.go:228-256).</summary>
     public async Task BulkDeleteAsync(
         IReadOnlyList<long> ids,
         CancellationToken cancellationToken = default)
@@ -326,37 +340,68 @@ public sealed class RoleManagementService(
             return;
         }
 
-        IReadOnlyList<RoleRecord> found;
+        await roles.RunInTransactionAsync(
+            async token =>
+            {
+                IReadOnlyList<RoleRecord> found;
+                try
+                {
+                    found = await roles.ListByIdsAsync(ids, token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException("failed to query roles: " + ex.Message, ex);
+                }
+
+                if (found.Count != ids.Count)
+                {
+                    throw new InvalidOperationException(
+                        $"expected to find {ids.Count} roles, but found {found.Count}");
+                }
+
+                foreach (var role in found)
+                {
+                    if (role.Name == DefaultRoleName)
+                    {
+                        throw new InvalidOperationException(
+                            "cannot delete the default Developer role");
+                    }
+                }
+
+                await RevokeInvitationsAsync(ids, token).ConfigureAwait(false);
+
+                try
+                {
+                    await roles.DeleteManyAsync(ids, token).ConfigureAwait(false);
+                }
+                catch (StoreFailureException ex)
+                {
+                    // The store already produced the reference's final wording.
+                    throw new InvalidOperationException(ex.Message, ex);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException("failed to delete roles: " + ex.Message, ex);
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Port of revokeRoleInvitations (role.go:258-265).</summary>
+    private async Task RevokeInvitationsAsync(
+        IReadOnlyList<long> roleIds,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            found = await roles.ListByIdsAsync(ids, cancellationToken).ConfigureAwait(false);
+            await invitations.DeleteByRoleIdsAsync(roleIds, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
-        {
-            throw new InvalidOperationException("failed to query roles: " + ex.Message, ex);
-        }
-
-        if (found.Count != ids.Count)
         {
             throw new InvalidOperationException(
-                $"expected to find {ids.Count} roles, but found {found.Count}");
-        }
-
-        foreach (var role in found)
-        {
-            if (role.Name == DefaultRoleName)
-            {
-                throw new InvalidOperationException("cannot delete the default Developer role");
-            }
-        }
-
-        try
-        {
-            await roles.DeleteManyAsync(ids, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException("failed to delete roles: " + ex.Message, ex);
+                "failed to revoke role invitations: " + ex.Message,
+                ex);
         }
     }
 

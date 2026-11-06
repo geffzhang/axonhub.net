@@ -13,6 +13,7 @@ public sealed class ManagementServiceTests
 {
     private readonly FakeUserAdminStore _users = new();
     private readonly FakeRoleStore _roles = new();
+    private readonly FakeInvitationStore _invitations = new();
     private readonly FakeManagementIdentity _identity = new(new ManagementUser(9, IsOwner: true));
     private readonly PermissionValidator _validator;
     private readonly UserManagementService _userService;
@@ -22,7 +23,7 @@ public sealed class ManagementServiceTests
     {
         _validator = new PermissionValidator(_identity, _users, _roles);
         _userService = new UserManagementService(_users, new PasswordHasher(), _validator, _identity, _roles);
-        _roleService = new RoleManagementService(_roles, _validator);
+        _roleService = new RoleManagementService(_roles, _invitations, _validator);
     }
 
     [Fact]
@@ -112,6 +113,64 @@ public sealed class ManagementServiceTests
     public async Task BulkDeleteWithNoIdsIsANoOp()
     {
         await _roleService.BulkDeleteAsync([]);
+    }
+
+    [Fact]
+    public async Task DeletingARoleRevokesItsInvitationsInTheSameTransaction()
+    {
+        var role = await CreateRoleAsync("Alpha", 0);
+        _invitations.Rows.Add(new InvitationRecord
+        {
+            Id = 1,
+            TokenHash = "hash",
+            RoleId = role.Id,
+            ProjectId = 1,
+            MaxUses = 1,
+        });
+
+        await _roleService.DeleteAsync(role.Id);
+
+        Assert.Equal(new[] { role.Id }, _invitations.RevokedRoleIds);
+        Assert.NotEqual(0, _invitations.Rows[0].DeletedAt);
+        Assert.NotEqual(0, _roles.Rows.Single(row => row.Id == role.Id).DeletedAt);
+    }
+
+    [Fact]
+    public async Task BulkDeleteRevokesInvitationsForEveryRole()
+    {
+        var first = await CreateRoleAsync("Alpha", 0);
+        var second = await CreateRoleAsync("Beta", 0);
+
+        await _roleService.BulkDeleteAsync([first.Id, second.Id]);
+
+        Assert.Equal(new[] { first.Id, second.Id }, _invitations.RevokedRoleIds);
+    }
+
+    [Fact]
+    public async Task RevocationFailureAbortsTheRoleDeletion()
+    {
+        // role.go:203-206 wraps the failure and the shared transaction rolls
+        // the role soft delete back.
+        var role = await CreateRoleAsync("Alpha", 0);
+        _invitations.RevokeFailure = new InvalidOperationException("boom");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _roleService.DeleteAsync(role.Id));
+
+        Assert.Equal("failed to revoke role invitations: boom", error.Message);
+        Assert.Equal(0, _roles.Rows.Single(row => row.Id == role.Id).DeletedAt);
+    }
+
+    [Fact]
+    public async Task RoleDeletionStillRejectsTheDefaultDeveloperRoleBeforeRevoking()
+    {
+        var role = await CreateRoleAsync(RoleManagementService.DefaultRoleName, 0);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _roleService.DeleteAsync(role.Id));
+
+        Assert.Equal("cannot delete the default Developer role", error.Message);
+        Assert.Empty(_invitations.RevokedRoleIds);
     }
 
     [Fact]
@@ -284,7 +343,7 @@ public sealed class ManagementServiceTests
         var identity = new FakeManagementIdentity(new ManagementUser(1, IsOwner: false));
         var validator = new PermissionValidator(identity, users, roles);
         var userService = new UserManagementService(users, new PasswordHasher(), validator, identity, roles);
-        var roleService = new RoleManagementService(roles, validator);
+        var roleService = new RoleManagementService(roles, new FakeInvitationStore(), validator);
 
         users.CreateAsync(new UserRecord
         {

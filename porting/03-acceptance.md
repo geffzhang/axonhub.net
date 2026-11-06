@@ -46,6 +46,10 @@ EF 模型（而非 EF 迁移）由 `EfCoreModelTests` 与幂等 DDL 建出的库
 `ApiKeyProfileTemplateStoreTests` 4），按项目规则未运行 lint / build / test；上表仍是 §107 的实测值。§109 落地后的
 静态计数为 `AxonHub.Api.Tests` 2789、`AxonHub.Persistence.Tests` 280、四项目合计 6196，下一次全量运行应以该数字复核。
 
+§110 追加 73 个用例（`InvitationServiceTests` 33、`AdminInvitationEndpointTests` 22、`ManagementServiceTests`
+新增 4、`InvitationStoreTests` 14），按项目规则未运行 lint / build / test；上表仍是 §107 的实测值。§110 落地后的
+静态计数为 `AxonHub.Api.Tests` 2848、`AxonHub.Persistence.Tests` 294、四项目合计 6269，下一次全量运行应以该数字复核。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
@@ -356,7 +360,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C024–C027：鉴权子切片的已接受差异 | noauth key 指向已删除项目时参照触发唯一键冲突返回 500，本实现返回 401 且不改动该行（C024）；owner 选择在参照中无 `ORDER BY`，多 owner 时顺序不定（C025）；无 API key/项目缓存，每次请求读库（C026）；配置载体为 ASP.NET Core 配置而非 YAML 结构体（C027） | 已接受，测试锁定 401 行为（C024/C025），C026/C027 为性能与载体差异 |
 | C028–C029：系统安全设置与 IP 黑名单 | C028 已解决：`systems` 表、`SecuritySettingsOrDefault` 的回退/归一化与 `/v1` 黑名单中间件按参照实现，403 信封逐字节一致；C029 已接受：系统设置无进程内缓存，每个 `/v1` 请求（有 ClientIP 时）读一次库，外部改库立即可见 | 已关闭；缓存随配置/缓存里程碑（C029） |
 | C030–C033：重试策略与上游错误策略 | C030 已解决：`retry_policy` 的读取/归一化与每请求 topK 已接入（49 例 + 3 例），禁用时 1 个候选，策略计数大于默认值时能打满候选；C031 已解决：`upstream_error_policy` 的 hidden/custom 按参照应用到非流与流式错误（含"非流传输错误不被改写"的真实不对称），34 例锁定；C032 已接受：重复键后跟 `null` 时 .NET 与 Go 解码语义不同；C033 已接受：错误体解析用 System.Text.Json 而非 gjson，截断报文与重复键的结果不同 | C030/C031 已关闭；C032/C033 仅手改库或畸形上游报文可触发 |
-| 其余 Ent 表未移植（data_storages / invitations 等） | 依赖这些表的功能不可用 | 随功能落地 |
+| 其余 Ent 表未移植 | `data_storages` 由 §106、`invitations` 由 §110 落地；其余表依赖的功能不可用 | 随功能落地 |
 | C179：orchestrator 模型关联路由切片的已接受差异与真实缺口 | 已接受 + 真实缺口：关联解析缓存省略（实时读通道，C149）；连接内模型按 request model 排序（C177），多模型重试顺序确定；read_channels 在查询前显式判定，类型与文案一致但不产生查询副作用；通道先后沿用 C140。真实缺口：trace 粘性（TraceStickyMode / PreviousChannelProvider）、项目与 API key 激活 profile 的 SelectedChannelsSelector / ChannelTagsFilterSelector、Google / Anthropic 原生工具选择器、StreamPolicySelector 与 QuotaRoutingSelector / 配额门未接入；59 例锁定 | 已接受 + 缺口（C179） |
 | C180：四个未移植的通道变换选项与流策略强制 | 真实缺口：applyTransformOptions（ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem）、applyReasoningEffortMapping（含 output_config.effort 同步）、filterResponseCustomToolMessagesForNonResponsesOutbound、shouldForceStreamingForCandidate（stream=require 时强制流式与 include_usage）仅解析 / 暴露在通道设置与 GraphQL 中，出站变换未应用；默认配置下一致 | 真实缺口（C180） |
 | C186：API key 配额时区按请求读取 | 已接受：参照 `SystemService.TimeLocation` 进程内缓存，端口每次配额检查读取 `system_general_settings`；行缺失 / 读取失败 / 畸形 JSON / 空值 / 未知时区回退 UTC 与 `Local` 映射一致，calendar 零点转换（含 DST 缺口与歧义）由测试锁定；差异仅在设置变更的生效时机与每次检查多一次主键查询 | 已接受（写入即时可见，无陈旧缓存） |
@@ -365,3 +369,4 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C197：备份存储后端、自动备份调度与保留清理 | 已解决（§108）：fs / S3 / GCS / WebDAV 四种后端按 `SaveData` / `SaveDataFromReader` / `LoadData` / `DeleteData` / `afero.ReadDir` 的可观察语义移植（键规范化、错误分层与包装顺序、缺失对象映射、列表只返回直接子项）；非 database 存储的自动备份改为临时文件 + 流式写入；`RetentionDays > 0` 的保留清理按前缀 / 后缀 / 修改时间执行且失败只告警（database 存储下同样执行并吞掉文件系统错误）；`AutoBackupScheduler` 以系统时区每日 02:00 触发且不补跑错过的运行，`Reschedule` 由轮询隐式实现。保留清理与调度由 8 + 5 例锁定，四种后端的键 / 错误 / 协议形状由 12 + 10 例锁定；残余实现差异登记为 C199 | 已关闭（database 存储下的行为与 §107 一致；非 database 存储由 §107 的确定性失败改为可用） |
 | C199：存储后端与调度的实现差异 | 已接受：S3 用 AWSSDK.S3 单次 PutObject 而非参照的 16 MiB multipart（对象存储写入本身原子，字节与键一致）；GCS / WebDAV 为手写 HTTP 客户端（OAuth JWT-bearer / refresh_token、media upload、PROPFIND Depth 1），第三方库的错误文本为语义近似（如 googleapi 的 `Error <code>: <message>, <reason>`、gowebdav 的状态处理）；后端按操作创建并 Dispose 而非进程内缓存（配置即时生效，代价是每次操作一次 TLS 握手）；调度为 1 分钟轮询而非 robfig/cron 精确计时（02:00 最多晚 1 分钟，参照也不保证毫秒级），DST 缺口 / 歧义按 Go `time.Date` 语义；S3 客户端未采用实时上游 `f272549f` 新增的 checksum 关闭配置，以冻结基线 `b8bb3421` 的默认行为为准 | 已接受（协议形状由 10 例脚本化 HttpMessageHandler 用例锁定；误差仅在库内部实现、错误措辞与 ≤1 分钟触发延迟，不改变对象内容、键、列表、保留与触发结果） |
 | C198：备份 GraphQL 接入层 | 已接受：HotChocolate `AddUploadType` / `IFile` 对接 graphql-multipart-request-spec（gqlgen `graphql.Upload` + `io.ReadAll`）；存储的未声明 frequency 输出时报字段错误 `Enum "BackupFrequency" cannot represent value: "hourly"`（gqlgen 原样透出字符串）；`updateAutoBackupSettings` 的输入枚举在 HotChocolate 校验阶段被拒绝（gqlgen 接受任意字符串并落库）；`triggerAutoBackup` 以 `Task.Run` + 新建 DI scope + `CancellationToken.None` 实现（参照 goroutine + `context.WithoutCancel`）；GraphQL Int 32 位（C190）、restore 解码文案（C002 / C141）、取消语义（C155）沿用既有登记；14 例 Api 锁定 | 已接受（合法频率下查询 / 变更契约与参照一致；输入枚举更严格只拒绝参照本就不该接受的值） |
+| C201：邀请与注册 REST 切片的边界差异 | 已接受：(1) 项目被软删时参照对 WithProject 的 nil 边解引用 panic，端口返回空项目名；(2) 时间以 RFC3339Nano 写出，端口为 100ns tick、Postgres 为微秒，仅在纳秒级有效位不同；(3) gin 忽略 JSON 尾随字节而 STJ 拒绝、roleID 显式 null 触发绑定失败（Go 零值语义）、maxUses 缺省为 0；(4) `%w` 包裹的内层文本来自 Npgsql 而非 ent 驱动，外层措辞与顺序一致；(5) 密码哈希在进入注册事务前完成（参照在事务内），回滚时无可观察差异；(6) 提交后的用户边重载经 `IUserProfileStore` 完成（C161/C164）。服务 33 + 端点 22 + 角色撤销 4 + 持久化 14 例锁定 | 已接受（合法输入下响应、状态码、错误文案与事务语义一致；差异仅发生在参照本身会 panic 的软删项目或畸形报文上） |

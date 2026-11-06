@@ -728,3 +728,35 @@ public sealed class DataStorageRecord
     /// <summary>active or archived.</summary>
     public string Status { get; set; } = "active";
 }
+
+/// <summary>
+/// Row of the reference <c>invitations</c> table
+/// (internal/ent/schema/invitation.go): TimeMixin + SoftDeleteMixin, a
+/// sensitive token hash, an optional role and expiry, and the use counter.
+/// </summary>
+public sealed class InvitationRecord
+{
+    public long Id { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>SoftDeleteMixin: 0 means live, Unix seconds means deleted.</summary>
+    public long DeletedAt { get; set; }
+
+    /// <summary>SHA-256 hex of the invitation token (ent's Sensitive field).</summary>
+    public string TokenHash { get; set; } = string.Empty;
+
+    /// <summary>Ent field.Int Optional().Nillable(): legacy rows may have no role.</summary>
+    public long? RoleId { get; set; }
+
+    /// <summary>Null means the invitation never expires.</summary>
+    public DateTime? ExpiresAt { get; set; }
+
+    public long MaxUses { get; set; } = 1;
+
+    public long UsedCount { get; set; }
+
+    public long ProjectId { get; set; }
+}

@@ -66,6 +66,20 @@ public interface IRoleStore
 
     Task<RoleRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Runs <paramref name="action"/> in a transaction, joining the ambient one
+    /// when the caller (RoleManagementService.DeleteRole/BulkDeleteRoles)
+    /// already opened it. The reference's RoleService.RunInTransaction.
+    /// </summary>
+    Task<T> RunInTransactionAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken = default);
+
+    /// <inheritdoc cref="RunInTransactionAsync{T}"/>
+    Task RunInTransactionAsync(
+        Func<CancellationToken, Task> action,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Port of RoleService.RoleNameExists (live rows only).</summary>
     Task<bool> NameExistsAsync(
         string name,
@@ -288,32 +302,95 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
         return await GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<T> RunInTransactionAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        await using var transaction = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+
+        try
+        {
+            var result = await action(cancellationToken).ConfigureAwait(false);
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return result;
+        }
+        catch
+        {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+    }
+
+    public Task RunInTransactionAsync(
+        Func<CancellationToken, Task> action,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        return RunInTransactionAsync(
+            async token =>
+            {
+                await action(token).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken);
+    }
+
     public async Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)
     {
-        await using var transaction = await db.Database
-            .BeginTransactionAsync(cancellationToken)
-            .ConfigureAwait(false);
+        return await RunInTransactionAsync(
+            async token =>
+            {
+                var role = await db.Roles.SingleOrDefaultAsync(
+                    row => row.Id == id && row.DeletedAt == 0,
+                    token).ConfigureAwait(false);
+                if (role is null)
+                {
+                    return false;
+                }
 
-        var role = await db.Roles.SingleOrDefaultAsync(
-            row => row.Id == id && row.DeletedAt == 0,
+                try
+                {
+                    await db.UserRoles
+                        .Where(row => row.RoleId == id)
+                        .ExecuteDeleteAsync(token)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new StoreFailureException(
+                        "failed to delete user role relationships: " + ex.Message,
+                        ex);
+                }
+
+                var now = DateTime.UtcNow;
+                role.DeletedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                role.UpdatedAt = now;
+
+                try
+                {
+                    await db.SaveChangesAsync(token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new StoreFailureException("failed to delete role: " + ex.Message, ex);
+                }
+
+                return true;
+            },
             cancellationToken).ConfigureAwait(false);
-        if (role is null)
-        {
-            return false;
-        }
-
-        await db.UserRoles
-            .Where(row => row.RoleId == id)
-            .ExecuteDeleteAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var now = DateTime.UtcNow;
-        role.DeletedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        role.UpdatedAt = now;
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return true;
     }
 
     public async Task DeleteManyAsync(
@@ -325,27 +402,43 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
             return;
         }
 
-        await using var transaction = await db.Database
-            .BeginTransactionAsync(cancellationToken)
-            .ConfigureAwait(false);
+        await RunInTransactionAsync(
+            async token =>
+            {
+                try
+                {
+                    await db.UserRoles
+                        .Where(row => ids.Contains(row.RoleId))
+                        .ExecuteDeleteAsync(token)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new StoreFailureException(
+                        "failed to delete user role relationships: " + ex.Message,
+                        ex);
+                }
 
-        await db.UserRoles
-            .Where(row => ids.Contains(row.RoleId))
-            .ExecuteDeleteAsync(cancellationToken)
-            .ConfigureAwait(false);
+                var now = DateTime.UtcNow;
+                var deletedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-        var now = DateTime.UtcNow;
-        var deletedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        await db.Roles
-            .Where(row => ids.Contains(row.Id) && row.DeletedAt == 0)
-            .ExecuteUpdateAsync(
-                setters => setters
-                    .SetProperty(row => row.DeletedAt, deletedAt)
-                    .SetProperty(row => row.UpdatedAt, now),
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await db.Roles
+                        .Where(row => ids.Contains(row.Id) && row.DeletedAt == 0)
+                        .ExecuteUpdateAsync(
+                            setters => setters
+                                .SetProperty(row => row.DeletedAt, deletedAt)
+                                .SetProperty(row => row.UpdatedAt, now),
+                            token)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new StoreFailureException("failed to delete roles: " + ex.Message, ex);
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static ListPage<RoleRecord> BuildPage(

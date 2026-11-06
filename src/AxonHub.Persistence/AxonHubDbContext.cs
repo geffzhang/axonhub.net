@@ -66,6 +66,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<OidcIdentityRecord> OidcIdentities => Set<OidcIdentityRecord>();
 
+    public DbSet<InvitationRecord> Invitations => Set<InvitationRecord>();
+
     /// <summary>The transaction Dapper must enlist in, or null when none is open.</summary>
     public DbTransaction? CurrentDbTransaction => Database.CurrentTransaction?.GetDbTransaction();
 
@@ -109,6 +111,49 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureUserRole(modelBuilder.Entity<UserRoleRecord>());
         ConfigureUserProject(modelBuilder.Entity<UserProjectRecord>());
         ConfigureOidcIdentity(modelBuilder.Entity<OidcIdentityRecord>());
+        ConfigureInvitation(modelBuilder.Entity<InvitationRecord>());
+    }
+
+    private static void ConfigureInvitation(EntityTypeBuilder<InvitationRecord> builder)
+    {
+        builder.ToTable("invitations");
+        builder.HasKey(invitation => invitation.Id);
+        builder.Property(invitation => invitation.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(invitation => invitation.CreatedAt)
+            .HasColumnName("created_at")
+            .HasColumnType("timestamptz");
+        builder.Property(invitation => invitation.UpdatedAt)
+            .HasColumnName("updated_at")
+            .HasColumnType("timestamptz");
+        builder.Property(invitation => invitation.DeletedAt)
+            .HasColumnName("deleted_at")
+            .IsRequired();
+        builder.Property(invitation => invitation.TokenHash)
+            .HasColumnName("token_hash")
+            .HasColumnType("varchar")
+            .IsRequired();
+        builder.Property(invitation => invitation.RoleId).HasColumnName("role_id");
+        builder.Property(invitation => invitation.ExpiresAt)
+            .HasColumnName("expires_at")
+            .HasColumnType("timestamptz");
+        builder.Property(invitation => invitation.MaxUses)
+            .HasColumnName("max_uses")
+            .IsRequired();
+        builder.Property(invitation => invitation.UsedCount)
+            .HasColumnName("used_count")
+            .IsRequired();
+        builder.Property(invitation => invitation.ProjectId)
+            .HasColumnName("project_id")
+            .IsRequired();
+
+        builder.HasIndex(invitation => invitation.TokenHash)
+            .HasDatabaseName("invitation_token_hash")
+            .IsUnique();
+        builder.HasIndex(invitation => invitation.ProjectId)
+            .HasDatabaseName("invitation_project_id");
     }
 
     private static void ConfigureOidcIdentity(EntityTypeBuilder<OidcIdentityRecord> builder)

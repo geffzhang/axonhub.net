@@ -16,8 +16,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
     [
         "api_key_profile_templates",
         "api_keys", "channel_model_price_versions", "channel_model_prices",
-        "channel_override_templates", "channels", "data_storages", "models", "oidc_identities",
-        "projects", "prompt_protection_rules", "prompts", "request_executions",
+        "channel_override_templates", "channels", "data_storages", "invitations", "models",
+        "oidc_identities", "projects", "prompt_protection_rules", "prompts", "request_executions",
         "requests", "roles", "systems", "threads", "traces", "usage_logs",
         "user_projects", "user_roles", "users",
     ];
@@ -33,6 +33,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
         [
             "id", "created_at", "updated_at", "deleted_at", "name", "description",
             "profile", "project_id",
+        ],
+        ["invitations"] =
+        [
+            "id", "created_at", "updated_at", "deleted_at", "token_hash", "role_id",
+            "expires_at", "max_uses", "used_count", "project_id",
         ],
         ["projects"] =
         [
@@ -177,6 +182,12 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["timestamp with time zone"] = ["created_at", "updated_at"],
                 ["jsonb"] = ["profile"],
                 ["character varying"] = ["name", "description"],
+            },
+            ["invitations"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "deleted_at", "role_id", "max_uses", "used_count", "project_id"],
+                ["timestamp with time zone"] = ["created_at", "updated_at", "expires_at"],
+                ["character varying"] = ["token_hash"],
             },
             ["projects"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
@@ -390,6 +401,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ("channel_override_templates", true, ["user_id", "name", "deleted_at"]),
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
             ["data_sources_by_name"] = ("data_storages", true, ["name"]),
+            ["invitation_token_hash"] = ("invitations", true, ["token_hash"]),
+            ["invitation_project_id"] = ("invitations", false, ["project_id"]),
             ["models_by_name"] = ("models", true, ["name", "deleted_at"]),
             ["models_by_model_id"] = ("models", true, ["model_id", "deleted_at"]),
             ["oidc_identities_by_issuer_subject_deleted_at"] =
