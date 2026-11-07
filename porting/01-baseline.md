@@ -5769,6 +5769,55 @@ C139 的 `providerQuotaStatus` 缺口闭合并转为 resolved；`QuotaLimitStatu
 差异：C123 由真实缺口转为 resolved（子差异：UTC 渲染、不可表示的年份 / 偏移 / 极端 epoch、超 100ns 小数、
 超范围 JSON 数字的容错）；C182 由 19 个 checker 收窄为剩余 18 个。
 
+## 116. Claude Code 供应商配额检查器（unified ratelimit headers，80 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/claudecode_checker.go:26-260`（`CheckQuota`:26-91、
+`parseResponse`:93-187、`SupportsChannel`:189-191、`buildTokenLimit`:193-236、`getEndpointURL`:238-250、
+`parseUnixTimestamp` / `parseFloat`:252-260）、`llm/transformer/anthropic/claudecode/constants.go` 的配额常量，
+`provider_quota.go:406-407` 的 `registerClaudeCodeSupport`，以及 `period_window_test.go` 与
+`provider_contract_fixtures_test.go` 中的 claudecode 用例。
+
+新增 `src/AxonHub.Api/Orchestration/ClaudeCodeQuotaChecker.cs`（`IQuotaChecker` 实现：凭据优先级、
+one-token Haiku 请求、unified ratelimit 头解析、窗口与状态归一化），`GoCast` 新增
+`ParseFloatIgnoringError`（Go `ParseFloat` 错误被忽略时的上溢 / 下溢语义），`Program.cs` 注册
+`ClaudeCodeQuotaChecker` 与 `ProviderQuotaCheckerRegistration("claudecode", …)`，
+`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code 与 Antigravity 已注册，其余 17 个待切片」。
+
+- 请求：POST `getEndpointURL(BaseUrl)`（空则 `https://api.anthropic.com/v1/messages`；去掉一个尾部 `/`，
+  以 `/v1` 结尾补 `/messages`，否则补 `/v1/messages`），Bearer access token，头 `anthropic-beta`
+  = `ClaudeCodeQuotaCheckHeader`、`anthropic-version`、`anthropic-dangerous-direct-browser-access`、
+  `x-app: cli`、`content-type: application/json`，body 为
+  `{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"limit"}],"max_tokens":1}`
+  （Go map 键序，序列化后按键排序）。
+- 凭据：OAuth 对象存在时优先（即使 access token 为空也不回退 legacy apiKey）；否则把 legacy apiKey 当
+  OAuth JSON 解析；两者都没有 / 仅空白报 `channel has no credentials`，OAuth 对象的 token 为空报
+  `channel credentials missing access token`，legacy 解析失败包装为
+  `failed to parse OAuth credentials: %w`。
+- 传输：通道 `settings.proxy` 存在时经 `IProxyExecutorFactory` 走代理，否则共享 executor；执行错误包装为
+  `HTTP request failed: %w`（含 `HttpClientError` 的 `METHOD - URL with status STATUS`）；非 200（低于
+  400）报 `HTTP %d: %s`。
+- 解析：`Anthropic-Ratelimit-Unified-Status` 为空报 `missing quota headers`；`allowed` → available，
+  `throttled` / `rejected` → exhausted，其余 → unknown；overall available 且 5h 或 7d utilization ≥ 0.8
+  升级为 warning（overage 不触发）；每个有任一头部（status / reset / utilization）的 5h / 7d 窗口生成
+  token limit（utilization ≥ 1 → exhausted，≥ 0.8 → warning），带 5h / 7d period；代表窗口由
+  `representative_claim` 映射（`five_hour`→5h、`seven_day`→7d），未知值按原字符串查 windows；
+  RawData 保留 unified_status / windows（5h、7d、overage 三组 status/reset/utilization）/
+  representative_claim / fallback / fallback_percentage / reset；最后交给 §114 的归一化（最早重置、
+  状态提升 / 合并、period 计算）。
+- 数值解析：`parseUnixTimestamp` = `strconv.ParseInt` 忽略错误（语法错 0，范围错饱和到 int64 极值），
+  `parseFloat` = `strconv.ParseFloat` 忽略错误（语法错 0，上溢 ±Inf，下溢 ±0，接受十六进制浮点与下划线）；
+  `DateTimeOffset` 无法表示的年份范围的 reset 置空（C123 子差异）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（URL、Bearer、四个 Claude Code 头、Content-Type/Accept/User-Agent、body 字节）、base URL 变体、OAuth 对象 / legacy apiKey / 空凭据 / 缺 token / 解析错误包装、HTTP 错误包装与 201 文案、通道代理与畸形设置、unified 状态映射与 0.8 阈值、窗口存在性、代表窗口重置与归一化最早重置、RawData 形状、period 携带、ParseInt / ParseFloat / getEndpointURL 边界 | `tests/AxonHub.Api.Tests/ClaudeCodeQuotaCheckerTests.cs` | 13 + 67 |
+
+`AxonHub.Api.Tests` 由 3145 增至 3225（+80），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由 6591
+增至 6671。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态计数；
+下一次全量运行应以 3225 / 319 / 6671 复核。**
+
+差异：C182 由 18 个 checker 收窄为剩余 17 个；C123 仍为 resolved（claudecode 复用同一时间边界处理）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -5796,7 +5845,7 @@ C139 的 `providerQuotaStatus` 缺口闭合并转为 resolved；`QuotaLimitStatu
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），其余 18 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），其余 17 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |

@@ -257,7 +257,7 @@ builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
 // biz/provider_quota_settings.go, biz/channel_provider_quota_hook.go): the
 // per-channel quota status table, the collection loop and its five-minute UTC
 // schedule, the synchronous routing-gate snapshot and the settings surface.
-// The collection core is ported; the remaining eighteen provider checkers
+// The collection core is ported; the remaining seventeen provider checkers
 // arrive in follow-up slices (C182), so those providers reach the reference's
 // "No checker for provider" branch. The service is a singleton because the
 // routing gate reads its cache synchronously; every database operation runs in
@@ -268,10 +268,18 @@ builder.Services.AddScoped<IProviderQuotaStatusStore, ProviderQuotaStatusStore>(
 builder.Services.AddSingleton<ProviderQuotaSettingsCache>();
 builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaCheckerRegistry>();
 
-// Provider checkers: provider_quota.go:422-424 registers the Antigravity
-// checker, which prefers the quota-summary endpoint and falls back to the
-// legacy per-model session quota. Checkers are stateless singletons sharing
-// the process HTTP executor and the channel-proxy factory.
+// Provider checkers: provider_quota.go:406-407 registers the Claude Code
+// checker (a one-token request whose unified ratelimit headers carry the
+// quota) and provider_quota.go:422-424 the Antigravity checker (summary
+// endpoint first, legacy per-model session quota as fallback). Checkers are
+// stateless singletons sharing the process HTTP executor and the
+// channel-proxy factory.
+builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "claudecode",
+        services.GetRequiredService<ClaudeCodeQuotaChecker>()));
+
 builder.Services.AddSingleton<AntigravityQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(

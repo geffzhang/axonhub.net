@@ -136,6 +136,55 @@ public static class GoCast
     }
 
     /// <summary>
+    /// Port of <c>strconv.ParseFloat(s, 64)</c> for callers that discard the
+    /// error, as the reference's header helpers do
+    /// (<c>v, _ := strconv.ParseFloat(s, 64)</c>): a syntax error yields 0, an
+    /// overflow yields ±Inf and an underflow yields ±0. Go returns those
+    /// values together with <c>ErrRange</c>; <see cref="TryParseFloat"/>
+    /// keeps its "false for range errors" contract for the callers that treat
+    /// them as invalid.
+    /// </summary>
+    public static double ParseFloatIgnoringError(string s)
+    {
+        if (TryParseSpecial(s, out var specialValue, out var specialLength))
+        {
+            return specialLength == s.Length ? specialValue : 0;
+        }
+
+        if (!TryReadFloat(s, out var mantissa, out var exp, out var negative, out var trunc, out var hex, out var dp, out var consumed)
+            || consumed != s.Length)
+        {
+            return 0;
+        }
+
+        if (hex)
+        {
+            return AtofHex(mantissa, exp, negative, trunc).Value;
+        }
+
+        if (mantissa == 0)
+        {
+            return negative ? -0.0 : 0.0;
+        }
+
+        if (dp > 310)
+        {
+            // floatBits takes the overflow branch: ±Inf plus ErrRange.
+            return negative ? double.NegativeInfinity : double.PositiveInfinity;
+        }
+
+        if (dp < -330)
+        {
+            return negative ? -0.0 : 0.0;
+        }
+
+        var literal = s.Replace("_", string.Empty);
+        return double.TryParse(literal, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : 0;
+    }
+
+    /// <summary>
     /// Port of strconv.Quote: Go's exact escaping rules
     /// (\a\b\f\n\r\t\v, \u2028/\u2029, \u007f, \xNN for C0 controls).
     /// </summary>
