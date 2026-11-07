@@ -452,6 +452,56 @@ public static class ChannelCredentials
         }
     }
 
+    /// <summary>
+    /// The optional <c>managementApiKey</c> string of the credentials document
+    /// (objects.ChannelCredentials.ManagementAPIKey, internal/objects/channel.go:493-494,
+    /// used only for server-side quota checks such as ZenMux). A non-string
+    /// value means Ent would have failed to decode the channel; the port treats
+    /// it as absent (C013).
+    /// </summary>
+    public static string GetManagementApiKey(string? credentialsJson)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return string.Empty;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(credentialsJson);
+        }
+        catch (JsonException)
+        {
+            return string.Empty;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return string.Empty;
+            }
+
+            var managementApiKey = string.Empty;
+            foreach (var property in root.EnumerateObject())
+            {
+                // Go binds both the field name and the json tag; folding makes
+                // "ManagementAPIKey" and "managementApiKey" the same key.
+                if (FoldAscii(property.Name) == "managementapikey"
+                    && property.Value.ValueKind == JsonValueKind.String)
+                {
+                    // Go's decoder lets the last duplicate key win; null into a
+                    // string value is a no-op.
+                    managementApiKey = property.Value.GetString() ?? string.Empty;
+                }
+            }
+
+            return managementApiKey;
+        }
+    }
+
     private static string StringValue(JsonElement value, string current)
         => value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? string.Empty

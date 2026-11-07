@@ -257,7 +257,7 @@ builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
 // biz/provider_quota_settings.go, biz/channel_provider_quota_hook.go): the
 // per-channel quota status table, the collection loop and its five-minute UTC
 // schedule, the synchronous routing-gate snapshot and the settings surface.
-// The collection core is ported; the remaining thirteen provider checkers
+// The collection core is ported; the remaining twelve provider checkers
 // arrive in follow-up slices (C182), so those providers reach the reference's
 // "No checker for provider" branch. The service is a singleton because the
 // routing gate reads its cache synchronously; every database operation runs in
@@ -275,11 +275,12 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 // Antigravity checker (summary endpoint first, legacy per-model session quota
 // as fallback), provider_quota.go:426-428 the xAI subscription checker
 // (weekly + monthly billing payloads), provider_quota.go:430-432 the GitHub
-// Copilot checker (the copilot_internal/user quota payload) and
+// Copilot checker (the copilot_internal/user quota payload),
 // provider_quota.go:434-436 the NanoGPT checker (the subscription usage
-// endpoint's daily-image and daily/weekly-token windows). Checkers are
-// stateless singletons sharing the process HTTP executor and the channel-proxy
-// factory.
+// endpoint's daily-image and daily/weekly-token windows) and
+// provider_quota.go:438-440 the ZenMux checker (the management subscription
+// endpoint's 5-hour and 7-day usage windows). Checkers are stateless
+// singletons sharing the process HTTP executor and the channel-proxy factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
@@ -315,6 +316,12 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "nanogpt",
         services.GetRequiredService<NanogptQuotaChecker>()));
+
+builder.Services.AddSingleton<ZenmuxQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "zenmux",
+        services.GetRequiredService<ZenmuxQuotaChecker>()));
 
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(

@@ -6051,6 +6051,67 @@ C013 宽松处理）与 `GoUrl.TryParse`（复用 Codex 的 `net/url.Parse` 端�
 差异：C182 由剩余 14 个 checker 收窄为 13 个；无新增差异（解码文案沿用 C003 / C093、Unix 毫秒与
 RFC3339 解析沿用 C123、畸形 credentials / settings 沿用 C013、rawData 的 double 序列化沿用 C067）。
 
+## 121. ZenMux 供应商配额检查器（管理订阅端点，152 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/zenmux_checker.go`（`CheckQuota`:62-89、
+`SupportsChannel`:91-102、`parseZenmuxQuotaResponse`:104-160、`parseZenmuxResetAt`:162-172、
+`zenmuxWindowStatus`:174-182、`zenmuxAccountStatus`:184-195、`worstZenmuxStatus`:197-205、
+`zenmuxStatusRank`:207-218、报文类型:16-52）、`provider_quota.go:438-440` 的 `registerZenmuxSupport`，
+以及 `provider_contract_fixtures_test.go` 的 zenmux 返回体与 `provider_contract_test.go` 的五行
+`{"zenmux", <type>, "", "zenmux_windows", 2}`（zenmux / zenmux_responses / zenmux_anthropic /
+zenmux_gemini / zenmux_video）与 `TestQuotaCheckers_KeepZenmuxMonthlyQuotaInRawData`。
+
+新增 `src/AxonHub.Api/Orchestration/ZenmuxQuotaChecker.cs`（`IQuotaChecker` 实现、
+`zenmuxSubscriptionResponse` 系列类型与 Go 语义解码、`time.Parse(time.RFC3339)` 的分阶段解析器），
+`ChannelCredentials` 新增 `GetManagementApiKey`（大小写折叠键匹配、重复键 last-wins、非字符串按
+C013 视为缺失），`Program.cs` 在 nanogpt 之后注册 `ZenmuxQuotaChecker` 与
+`ProviderQuotaCheckerRegistration("zenmux", …)`（与参照 `registerZenmuxSupport` 的顺序一致），
+`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code、Codex、Antigravity、xAI Subscription、
+GitHub Copilot、NanoGPT 与 ZenMux 已注册，其余 12 个待切片」。
+
+- 凭据：`strings.TrimSpace(Credentials.ManagementAPIKey)`；为空（含无凭据、非字符串、空白）报
+  `channel has no management API key`，不考虑 legacy `apiKey` / `apiKeys`。
+- 采集：GET `https://zenmux.ai/api/v1/management/subscription/detail`，`WithBearerToken` 写入
+  `Auth`（执行器落成 `Authorization: Bearer`），无 body；`settings.proxy` 存在时**一次**解析代理
+  executor；畸形 settings 视为无代理（C013）。执行错误包装为 `zenmux quota request failed: %w`；
+  状态不在 [200,300)（executor 只对 ≥400 抛错，故覆盖 1xx/3xx）报
+  `zenmux quota request returned HTTP %d`；解码失败包装为 `failed to parse zenmux quota response: %w`。
+- 解码：根 `null` 对 struct 是 no-op；重复对象键合并（Go 复用非 nil 结构体 / 指针），标量
+  last-wins，`data` 的 `null` 重置指针、`plan` / 两个窗口 / `quota_monthly` 的 `null` 是 no-op；
+  键匹配按 ASCII 大小写折叠；非对象根与字段类型不匹配按 Go 文案
+  `json: cannot unmarshal <value> into Go struct field <Struct>.<FieldStack> of type <T>` 报错
+  （文案差异沿用 C003 / C093），`float64` 溢出（如 `1e400`）同样按该文案报错。`success=false` 时
+  `message` 非空报 `zenmux API error: %s`、为空报 `zenmux API returned success=false`；`data` 缺失
+  （含 `null`）报 `zenmux quota response contains no data`。
+- 状态：窗口 ratio ≥ 1 → exhausted、≥ `WarningThresholdRatio`（0.8）→ warning、其余 available；
+  账户状态 `strings.ToLower(strings.TrimSpace(...))` 后 healthy / monitored → available、
+  abusive → warning、suspended / banned → exhausted、其余 unknown；整体取三者最差，排名
+  available 0 < warning 1 < exhausted 2 < unknown 3（unknown 比 exhausted 更差）。
+- 限额：固定两个 token limit，顺序 5h（`QuotaWindow5h`，5 小时）与 7d（`QuotaWindow7d`，7 天），
+  `WithWindow` 由 `reset − 窗口长度` 得 `PeriodStart`；`NextResetAt` 取两个 reset 的最早者（nil 感知，
+  不过滤过去）。归一化沿用共享 `ProviderQuotaData.Normalize`：ratio 截断到 1、≥1 强制 exhausted、
+  丢弃负数 / 非有限 ratio 的 limit、清空过期重置、按 ready 优先级推导总状态并重算总重置；因此
+  未知账户状态通常被 ready 窗口掩盖，仅在两个窗口都被丢弃（ratio 为负）时可见。
+- reset：`time.Parse(time.RFC3339, *resets_at)`（不 trim）；nil → nil；失败报
+  `invalid reset timestamp %q: %w`。端口的分阶段解析器逐字复现 Go 的 `time.Parse` 文案
+  （month / hour / minute / second / 时区偏移范围、`extra text`、`cannot parse ... as ...`），并接受
+  Go 允许的小数秒（`.` / `,`）、一位或两位小时与 ±24:60 偏移；Go 接受但 `DateTimeOffset` 无法
+  表示的值（年份 0000、超出 ±14:00 的偏移、UTC 时刻越界）报端口的范围限制（C123 / C207）。
+- rawData：`plan`、`quota_monthly`、`account_status` 三个键（按 Go map 排序输出），嵌套对象按
+  Go 字段序与 null 输出（`GoJson`；double 格式的已接受差异见 C067）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（固定 URL、Bearer 经 Auth、Accept、无 Content-Type / body）、两条窗口与 PeriodStart / 最早 reset、空 data 的零值窗口、ratio 截断、success=false 四组、缺 data 三组、reset 错误按窗口顺序包装（2 组）、管理 key 缺失（8 组）/ trim / 优先级 / 大小写 / 重复键、传输错误包装与 1xx/3xx 状态（4 组）/ 2xx 接受（3 组）、Go 解码错误 28 组与畸形 JSON、根 null / 重复键合并 / null 重置 / 大小写折叠 / null 后重新赋值、窗口状态 8 组、账户状态 10 组、最差状态排序、unknown 被掩盖 / 被保留、reset 解析 5 组接受 / 29 组 Go 错误文案 / 7 组 DateTimeOffset 范围、契约 fixture 与 rawData 键序、代理路由 / 畸形 settings / 无代理、SupportsChannel 五类型接受与四类型拒绝 | `tests/AxonHub.Api.Tests/ZenmuxQuotaCheckerTests.cs` | 32 + 120 |
+
+`AxonHub.Api.Tests` 由 3534 增至 3686（+152），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+6980 增至 7132。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]`
+的静态计数；下一次全量运行应以 3686 / 319 / 7132 复核。**
+
+差异：C182 由剩余 13 个 checker 收窄为 12 个；新增 C207（ZenMux checker 未移植
+`WithRejectHTTPSDowngrade`，transport 错误内层文本来自 .NET 栈；reset 的年份 0000 / ±24:60 偏移与
+端口 `timestamp is outside the DateTimeOffset range` 回退沿用 C123）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6078,7 +6139,7 @@ RFC3339 解析沿用 C123、畸形 credentials / settings 沿用 C013、rawData 
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），其余 13 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），其余 12 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
