@@ -279,10 +279,12 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 // provider_quota.go:434-436 the NanoGPT checker (the subscription usage
 // endpoint's daily-image and daily/weekly-token windows) and
 // provider_quota.go:438-440 the ZenMux checker (the management subscription
-// endpoint's 5-hour and 7-day usage windows) and provider_quota.go:442-444 the
+// endpoint's 5-hour and 7-day usage windows), provider_quota.go:442-444 the
 // Cline checker (official usage-limits windows plus the account's ClinePass
-// cost ledger). Checkers are stateless singletons sharing the process HTTP
-// executor and the channel-proxy factory.
+// cost ledger) and provider_quota.go:446-448 the Synthetic checker (the fixed
+// /v2/quotas endpoint's rolling five-hour and weekly token pools). Checkers are
+// stateless singletons sharing the process HTTP executor and the
+// channel-proxy factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
@@ -330,6 +332,12 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "cline",
         services.GetRequiredService<ClineQuotaChecker>()));
+
+builder.Services.AddSingleton<SyntheticQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "synthetic",
+        services.GetRequiredService<SyntheticQuotaChecker>()));
 
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(
