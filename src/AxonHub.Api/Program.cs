@@ -281,10 +281,11 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 // provider_quota.go:438-440 the ZenMux checker (the management subscription
 // endpoint's 5-hour and 7-day usage windows), provider_quota.go:442-444 the
 // Cline checker (official usage-limits windows plus the account's ClinePass
-// cost ledger) and provider_quota.go:446-448 the Synthetic checker (the fixed
-// /v2/quotas endpoint's rolling five-hour and weekly token pools). Checkers are
-// stateless singletons sharing the process HTTP executor and the
-// channel-proxy factory.
+// cost ledger), provider_quota.go:446-448 the Synthetic checker (the fixed
+// /v2/quotas endpoint's rolling five-hour and weekly token pools) and
+// provider_quota.go:450-452 the NeuralWatt checker (the fixed /v1/quota
+// endpoint's monthly kWh subscription window). Checkers are stateless
+// singletons sharing the process HTTP executor and the channel-proxy factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
@@ -338,6 +339,12 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "synthetic",
         services.GetRequiredService<SyntheticQuotaChecker>()));
+
+builder.Services.AddSingleton<NeuralWattQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "neuralwatt",
+        services.GetRequiredService<NeuralWattQuotaChecker>()));
 
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(

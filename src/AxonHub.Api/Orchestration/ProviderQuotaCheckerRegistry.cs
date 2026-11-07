@@ -23,10 +23,10 @@ public interface IProviderQuotaCheckerRegistry
 /// <summary>
 /// Registry built from every <see cref="ProviderQuotaCheckerRegistration"/>
 /// found in DI. The Claude Code, Codex, Antigravity, xAI subscription, GitHub
-/// Copilot, NanoGPT, ZenMux, Cline and Synthetic checkers are registered; the
-/// remaining ten provider checkers land in follow-up slices (C182), so a
-/// channel of those providers logs the reference's "No checker for provider"
-/// error and keeps its previous row.
+/// Copilot, NanoGPT, ZenMux, Cline, Synthetic and NeuralWatt checkers are
+/// registered; the remaining nine provider checkers land in follow-up slices
+/// (C182), so a channel of those providers logs the reference's "No checker
+/// for provider" error and keeps its previous row.
 /// </summary>
 public sealed class ProviderQuotaCheckerRegistry : IProviderQuotaCheckerRegistry
 {

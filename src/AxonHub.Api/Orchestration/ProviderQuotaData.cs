@@ -535,15 +535,12 @@ public static class ProviderQuotaData
         var previousMonth = reset.AddMonths(-1);
         var lastDayOfPreviousMonth = DateTime.DaysInMonth(previousMonth.Year, previousMonth.Month);
         var day = Math.Min(reset.Day, lastDayOfPreviousMonth);
-        return new DateTimeOffset(
-            reset.Year,
-            reset.Month,
-            1,
-            reset.Hour,
-            reset.Minute,
-            reset.Second,
-            reset.Millisecond,
-            reset.Offset).AddMonths(-1).AddDays(day - 1);
+        // Add(reset.TimeOfDay) preserves the milliseconds and sub-millisecond
+        // ticks that the DateTimeOffset(year, month, ...) constructor cannot.
+        return new DateTimeOffset(reset.Year, reset.Month, 1, 0, 0, 0, reset.Offset)
+            .AddMonths(-1)
+            .AddDays(day - 1)
+            .Add(reset.TimeOfDay);
     }
 
     /// <summary>Port of QuotaLimitStatus.WithWindow (by value in Go).</summary>
