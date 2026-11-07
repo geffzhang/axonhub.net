@@ -594,7 +594,19 @@ public sealed class ProviderQuotaDomainTests
             Resets = new ResetList
             {
                 Supported = true,
-                Resets = [new QuotaReset { Id = "reset-1", Status = "available" }],
+                Resets =
+                [
+                    new QuotaReset
+                    {
+                        Id = "reset-1",
+                        Status = "available",
+                        Type = "codex_rate_limits",
+                        GrantedAt = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero),
+                        ExpiresAt = new DateTimeOffset(2026, 9, 8, 8, 30, 0, TimeSpan.FromHours(8))
+                            .AddTicks(1_230_000),
+                        Title = "Weekly reset",
+                    },
+                ],
             },
             Limits =
             [
@@ -621,12 +633,19 @@ public sealed class ProviderQuotaDomainTests
         {
             var root = document.RootElement;
             Assert.Equal("user@example.com", root.GetProperty("email").GetString());
-            Assert.Equal(
-                "reset-1",
-                root.GetProperty("_resets")
-                    .GetProperty("resets")[0]
-                    .GetProperty("id")
-                    .GetString());
+
+            // Go marshals Reset times with time.Time.MarshalJSON: RFC3339Nano,
+            // "Z" for a zero offset and the parsed offset otherwise.
+            var resets = root.GetProperty("_resets");
+            Assert.True(resets.GetProperty("supported").GetBoolean());
+            var reset = resets.GetProperty("resets")[0];
+            Assert.Equal("reset-1", reset.GetProperty("id").GetString());
+            Assert.Equal("available", reset.GetProperty("status").GetString());
+            Assert.Equal("codex_rate_limits", reset.GetProperty("type").GetString());
+            Assert.Equal("2026-09-01T00:00:00Z", reset.GetProperty("grantedAt").GetString());
+            Assert.Equal("2026-09-08T08:30:00.123+08:00", reset.GetProperty("expiresAt").GetString());
+            Assert.Equal("Weekly reset", reset.GetProperty("title").GetString());
+            Assert.False(resets.TryGetProperty("error", out _));
 
             var stored = root.GetProperty("_limits")[0];
             Assert.Equal("token", stored.GetProperty("type").GetString());

@@ -5818,6 +5818,68 @@ one-token Haiku 请求、unified ratelimit 头解析、窗口与状态归一化�
 
 差异：C182 由 18 个 checker 收窄为剩余 17 个；C123 仍为 resolved（claudecode 复用同一时间边界处理）。
 
+## 117. Codex 供应商配额检查器（wham usage / reset credits，83 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/codex_checker.go`（`Reset`:75-87、`ListResets`:89-115、
+`listResetCredits`:117-147、`parseCodexResetTime`:149-160、`consumeResetCredit`:162-196、
+`extractCodexCredentials`:198-224、`CheckQuota`:226-251、`parseResponse`:253-304、
+`codexRateLimitExhausted`:306-309、`buildCodexQuotaLimit`:311-346、`codexWindowDuration`:348-359、
+`codexWindowResetAt`:361-373、`codexAggregateStatus`:375-391、`codexEarliestFutureReset`:406-419、
+`SupportsChannel`:421-423、`convertRateLimitToMap`:425-445、`convertWindowToMap`:447-466）、
+`provider_quota.go:418-420` 的注册顺序，以及 `codex_checker_test.go`、`codex_quota_regression_test.go`、
+`period_window_test.go` 与 `provider_contract_fixtures_test.go` 中的 codex 用例。
+
+新增 `src/AxonHub.Api/Orchestration/CodexQuotaChecker.cs`（`IQuotaChecker` + `IQuotaResetter`：usage 采集、
+窗口归一化、重置清单与 consume），`Program.cs` 注册 `CodexQuotaChecker` 与
+`ProviderQuotaCheckerRegistration("codex", …)`（位于 claudecode 与 antigravity 之间，与参照注册顺序一致），
+`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code、Codex 与 Antigravity 已注册，其余 16 个待切片」。
+
+- 凭据：OAuth 对象存在时优先（即使 access token 为空也不回退 legacy apiKey）；否则把 legacy apiKey 当
+  OAuth JSON 解析；两者都没有 / 仅空白报 `channel has no credentials`，OAuth 对象的 token 为空报
+  `OAuth missing access_token`（与 claudecode 的文案不同），legacy 解析失败包装为
+  `failed to parse OAuth credentials: %w`；access token 必须携带 `https://api.openai.com/auth` 下的
+  `chatgpt_account_id` 字符串，否则报 `failed to extract ChatGPT account id from access token`（usage
+  请求不使用该 id，但校验仍发生）。
+- 采集：GET `https://chatgpt.com/backend-api/wham/usage`，Bearer access token，头
+  `Content-Type: application/json`；无 body，因此线上不带 Content-Type（C206）。通道 `settings.proxy`
+  存在时经 `IProxyExecutorFactory` 走代理，否则共享 executor；执行错误包装为
+  `quota request failed: %w`；响应体解析失败包装为 `failed to parse codex usage response: %w`；非 2xx 由
+  executor 抛 `HttpClientError`（`METHOD - URL with status STATUS`）。
+- 解析：rawData 恒含 `plan_type`（缺省空串），`rate_limit` / `code_review_rate_limit` 仅在非 null 时以 Go
+  map 形状加入（`allowed`、`limit_reached`、`primary_window`、`secondary_window` 与窗口四字段，均省略
+  缺省值）；limits 只来自 `rate_limit` 的 primary / secondary 窗口，`code_review_rate_limit` 只进 rawData。
+  窗口：`limit_window_seconds` 缺省为 0、≤0 或 >9223372036（int64 秒上限）视为无效并丢弃；
+  `used_percent` 为 NaN / ±Inf / 负值时丢弃；ratio = min(percent/100, 1)，≥1 exhausted、≥0.8 warning；
+  账户级 `limit_reached` / `allowed=false` 只在本窗口没有百分比时推断 100% exhausted。重置时间优先
+  `reset_at > 0`（Go `time.Unix`），否则 `reset_after_seconds > 0` 按 now+delta；窗口标签由时长归一化为
+  5h / 7d / daily / 30d，否则回退 "primary" / "secondary"。
+- 状态：起始 unknown；`allowed=true` → available；`limit_reached` 或 `allowed=false` → exhausted；再取
+  limits 的最大 rank（exhausted 3 / warning 2 / available 1）。`NextResetAt` 取严格大于 now 的最早窗口重置；
+  最后交给 §114 的归一化（过期重置置空、period 计算、limit 合并）。
+- 重置清单：GET `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`，Bearer + 
+  `ChatGPT-Account-Id` + `Content-Type`；执行错误包装为 `list codex reset credits failed: %w`，解析错误包装为
+  `failed to parse codex reset credits response: %w`；只保留 `status == "available"` 的 credit，时间字段按
+  Go `time.Parse(RFC3339)`（失败 / 空 → null），返回 `supported=true` 且 `resets` 非 null。
+- 重置：`Reset` 先取清单，无可用 credit 报 `no available codex reset credit`；否则 POST
+  `…/rate-limit-reset-credits/consume`，body 为 `{"credit_id":…,"redeem_request_id":<v4 UUID>}`（Go map
+  键序），头同清单；执行 / 解析错误分别包装为 `consume codex reset credit failed: %w` /
+  `failed to parse codex reset consume response: %w`。
+- 时间与序列化：新增 `GoTimeParsing.TryParseRfc3339`（从 Antigravity 的私有解析器提取，供两处共用）与
+  `GoTime.Rfc3339Nano(DateTimeOffset)` / `GoNullableRfc3339NanoConverter`，用于配额重置清单的
+  `grantedAt` / `expiresAt` 按 Go RFC3339Nano 输出（`ProviderQuotaDomainTests` 的 merge round-trip 同步
+  扩展为断言 `_resets` 的完整形状）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（usage / reset-credits 两条 GET 的 URL、Bearer、User-Agent、ChatGPT-Account-Id、无 Originator、无线上 Content-Type 的 C206 锁定）、请求数据保留 Content-Type、通道代理与畸形设置、OAuth 对象 / legacy apiKey / 空凭据 / 缺 token / JWT account id、HTTP 错误与解析错误包装、JSON null 视为零结构体、rawData 形状、拒绝请求的四组窗口状态、period / 双窗口 / 未知窗口标签 / 过期重置 / 无效窗口 / 时长边界 / reset_after_seconds 回退、重置清单过滤与空列表、consume 的键序与 v4 UUID、无 credit 与 consume 错误包装、`parseCodexResetTime` 的 Go 时间边界 | `tests/AxonHub.Api.Tests/CodexQuotaCheckerTests.cs` | 27 + 56 |
+
+`AxonHub.Api.Tests` 由 3225 增至 3308（+83），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由 6671
+增至 6754。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态计数；
+下一次全量运行应以 3308 / 319 / 6754 复核。**
+
+差异：C182 由 17 个 checker 收窄为剩余 16 个；新增 C206（无 body 的 GET 在线上丢掉 Content-Type 头，
+已接受并有锁定测试）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -5845,7 +5907,7 @@ one-token Haiku 请求、unified ratelimit 头解析、窗口与状态归一化�
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），其余 17 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），其余 16 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |

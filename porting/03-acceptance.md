@@ -88,6 +88,11 @@ lint / build / test；§115 落地后的静态计数为 `AxonHub.Api.Tests` 3145
 lint / build / test；§116 落地后的静态计数为 `AxonHub.Api.Tests` 3225、`AxonHub.Persistence.Tests` 319、
 四项目合计 6671，下一次全量运行应以该数字复核。该切片不新增表或 SQL。
 
+§117 追加 83 个用例（`CodexQuotaCheckerTests` 27 + 56 个 InlineData），同样按项目规则未运行
+lint / build / test；§117 落地后的静态计数为 `AxonHub.Api.Tests` 3308、`AxonHub.Persistence.Tests` 319、
+四项目合计 6754，下一次全量运行应以该数字复核。该切片不新增表或 SQL；`ProviderQuotaDomainTests` 的
+既有 merge round-trip 断言扩展为锁定重置清单的 Go RFC3339Nano 序列化（用例数不变）。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

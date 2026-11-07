@@ -270,15 +270,22 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 
 // Provider checkers: provider_quota.go:406-407 registers the Claude Code
 // checker (a one-token request whose unified ratelimit headers carry the
-// quota) and provider_quota.go:422-424 the Antigravity checker (summary
-// endpoint first, legacy per-model session quota as fallback). Checkers are
-// stateless singletons sharing the process HTTP executor and the
-// channel-proxy factory.
+// quota), provider_quota.go:418-420 the Codex checker (usage endpoint plus the
+// optional reset-credit capability) and provider_quota.go:422-424 the
+// Antigravity checker (summary endpoint first, legacy per-model session quota
+// as fallback). Checkers are stateless singletons sharing the process HTTP
+// executor and the channel-proxy factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "claudecode",
         services.GetRequiredService<ClaudeCodeQuotaChecker>()));
+
+builder.Services.AddSingleton<CodexQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "codex",
+        services.GetRequiredService<CodexQuotaChecker>()));
 
 builder.Services.AddSingleton<AntigravityQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(

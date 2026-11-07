@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using AxonHub.Llm.Json;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.Orchestration;
@@ -32,10 +33,12 @@ public sealed class QuotaReset
     public string? Type { get; set; }
 
     [JsonPropertyName("grantedAt")]
+    [JsonConverter(typeof(GoNullableRfc3339NanoConverter))]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? GrantedAt { get; set; }
 
     [JsonPropertyName("expiresAt")]
+    [JsonConverter(typeof(GoNullableRfc3339NanoConverter))]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? ExpiresAt { get; set; }
 
