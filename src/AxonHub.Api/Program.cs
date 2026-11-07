@@ -257,7 +257,7 @@ builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
 // biz/provider_quota_settings.go, biz/channel_provider_quota_hook.go): the
 // per-channel quota status table, the collection loop and its five-minute UTC
 // schedule, the synchronous routing-gate snapshot and the settings surface.
-// The collection core is ported; the remaining seven provider checkers
+// The collection core is ported; the remaining six provider checkers
 // arrive in follow-up slices (C182), so those providers reach the reference's
 // "No checker for provider" branch. The service is a singleton because the
 // routing gate reads its cache synchronously; every database operation runs in
@@ -288,7 +288,9 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 // the Apertis checker (the billing credits endpoint's PAYG token pool, account
 // credits and subscription cycle) and provider_quota.go:458-460 the OpenCode Go
 // checker (the fixed /zen/go/v1/usage endpoint's rolling, weekly and monthly
-// percent windows). Checkers are stateless
+// percent windows) and provider_quota.go:462-464 the Kimi Code checker (the
+// channel base URL's /usages endpoint's usage row, limit rows and booster
+// wallet). Checkers are stateless
 // singletons sharing the process HTTP executor and the channel-proxy factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
@@ -361,6 +363,12 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "opencode_go",
         services.GetRequiredService<OpenCodeGoQuotaChecker>()));
+
+builder.Services.AddSingleton<KimiCodeQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "kimi_code",
+        services.GetRequiredService<KimiCodeQuotaChecker>()));
 
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(

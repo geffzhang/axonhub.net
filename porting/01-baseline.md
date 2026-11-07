@@ -6411,6 +6411,67 @@ OpenCode Go 已注册，其余 7 个待切片」。
 数字 resetsAt 按 UTC 呈现而非 Go 本地时区、超出 DateTimeOffset 年份范围的 resetsAt 跳过、Go 解码语义与
 UTF-8 修复、GetAllApiKeys 的 C149 冻结边界、注入时钟的读取时机）。
 
+## 127. Kimi Code 供应商配额检查器（BaseURL 派生 /v1/usages、usage 行 + limits 行 + boosterWallet，218 例，2026-11-08）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/kimi_code_checker.go`（`CheckQuota`:50-77、
+`SupportsChannel`:79-81、`buildKimiCodeUsageURL`:83-102、`parseKimiCodeUsageResponse`:104-180、
+`parseKimiCodeUsageRow`:182-216、`kimiCodeWindowLength`:218-238、`kimiCodeLimitLabel`:240-267、
+`kimiCodeResetAt`:269-276、`kimiCodeResetAfterSeconds`:278-285、`parseKimiCodeBoosterWallet`:287-315、
+`kimiCodeMoney`:317-325、`kimiCodeFixedPointToCents`:327-332、`kimiCodeInt`:334-344、
+`firstKimiCodeInt`:346-353、`firstKimiCodeString`:355-362、`kimiCodeStatusForUsageRatio`:364-372、
+`worseKimiCodeStatus`:374-381、报文类型:19-40），`provider_quota.go:387` 的 `registerKimiCodeSupport`
+（在 `registerOpenCodeGoSupport` 之后、`registerMinimaxSupport` 之前调用，定义见 `provider_quota.go:462-464`），
+以及 `kimi_code_checker_test.go` 的 3 个测试函数。
+
+新增 `src/AxonHub.Api/Orchestration/KimiCodeQuotaChecker.cs`（`IQuotaChecker` 实现、
+`KimiCodeUsageResponse` / `KimiCodeUsageRow` / `KimiCodeBoosterWallet` 报文类型与 Go 语义 JSON 解码、
+`KimiCodeInt` 的 ParseFloat 与 amd64 饱和转换、`buildKimiCodeUsageURL` 的 URL 重建与 ForceQuery），
+`Program.cs` 在 opencode_go 之后注册 `KimiCodeQuotaChecker` 与 `ProviderQuotaCheckerRegistration("kimi_code", …)`
+（与参照 `registerKimiCodeSupport` 的顺序一致），`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code、
+Codex、Antigravity、xAI Subscription、GitHub Copilot、NanoGPT、ZenMux、Cline、Synthetic、NeuralWatt、
+Apertis、OpenCode Go 与 Kimi Code 已注册，其余 6 个待切片」。
+
+- 凭据：取 legacy `APIKey` 并 `TrimSpace`；为空且 `APIKeys` 非空时取首个 `APIKeys[0]`（不跳过空白项）；
+  仍为空（含无凭据、空白、`apiKeys` 首项空白、OAuth-only、畸形 JSON）时抛出 `channel has no API key`，
+  不发起请求。
+- 采集：GET `buildKimiCodeUsageURL(ch.BaseURL)`，缺省 `https://api.kimi.com/coding/v1/usages`；URL 解析失败、
+  scheme 或 host 为空时回退缺省端点；去掉 query 与 fragment、路径去尾斜杠、缺 `/v1` 时补上、再追加 `/usages`，
+  空查询保留 `?`；头为 `Authorization: Bearer <key>` 与 `Accept: application/json`，无 body；`Settings.Proxy`
+  非空时经代理工厂派生执行器，否则用共享执行器（C213 / C214）。
+- 响应：不做显式状态码检查（Do 已对 >=400 报错），端口把 >=400 的 `HttpClientError` 包装为
+  `kimi code usage request failed: <inner>`；解码失败包装为 `failed to parse kimi code usage response: <inner>`；
+  1xx / 3xx / 非 200 2xx 照常解析。
+- 行解析：usage 行（label 缺省 `Weekly limit`、窗口 7d）先加入；limits 每项的 `detail` 为对象时作为行源、
+  否则用项本身；limit 与 used 至少一个为数字（字符串按 ParseFloat），仅有 limit 时用 `remaining` 推导 used
+  （不做非负检查）；label 取 name / title / scope（键优先，item 先于 detail；行标签不含 scope）；
+  ResetAt 键 reset_at / resetAt / reset_time / resetTime，ResetAfterSeconds 键 reset_in / resetIn / ttl / window
+  （>0）；无数字的行跳过，全部跳过时报 `kimi code usage response contains no quota limits`。
+- 窗口与标签：window.duration / item.duration / detail.duration 取首个正数，单位取 window.timeUnit /
+  item.timeUnit / detail.timeUnit，MINUTE / HOUR / DAY（大小写敏感）换算，其余按秒；标签先按
+  name / title / scope 取非空字符串，缺失时按窗口时长生成 `5h limit` / `90m limit` / `2d limit` / `45s limit`，
+  仍无则 `Limit #<n>`；`NormalizeQuotaWindowLabel` 命中 5h / daily / 7d / 30d 时用归一化标签，否则用行标签。
+- 状态与重置：ratio = used / limit（limit<=0 时为 0），>=1 exhausted、>=0.8 warning、其余 available；总体取本地
+  排名（available 0 / warning 1 / exhausted 2）最高者，Ready 跟随总体状态；`NextResetAt` 取最早的重置时刻；
+  resetAt 字符串按 RFC3339（含亚 tick 小数秒与偏移）解析，存在但不可解析时抑制 reset_in；reset_in 按注入时钟
+  回推（C214）。
+- 钱包与 rawData：`balance.type == "BOOSTER"` 且 amount > 0 时换算 `balanceCents` / `totalCents`
+  （amountLeft 缺省 0；`kimiCodeFixedPointToCents`：`0 < value < 1_000_000` → 1，否则
+  `(value + 500_000) / 1_000_000`，溢出按 int64 回绕），`monthlyChargeLimitEnabled` 仅接受 JSON true，
+  `monthlyChargeLimitCents` / `monthlyUsedCents` 与币种（charge limit → used → `USD`）；rawData 为
+  `{"rows": [...], "boosterWallet": {...}}`（钱包仅在解析成功时出现），随后 `Normalize` 归一化
+  （负 ratio limit 丢弃、ratio>1 截断、过期 reset 清除、rawData 保留原值）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（缺省端点与 BaseURL 派生、Bearer 经 Auth、显式 Accept、无 body）、参照报文完整映射与 rawData 全文、URL 重建 26 组（ForceQuery / encodePath / scheme 大小写 / 尾斜杠 / `/v1` 补全 / userinfo 原始拼写）、缺省端点回退 3 组、凭据 6 组、usage 行数字与 remaining 推导、行标签 name / title（scope 不参与）、reset_at 键 4 组与优先级、reset_in 键 4 组与别名、窗口单位 8 组与数字字符串、时长标签 7 组、`Limit #n` 3 组、detail 继承与 item / detail 标签分歧、无数字行跳过、空限额报错 3 组、used-only / 负 used / >1 ratio、reset_at 抑制 reset_in、注入时钟锚点、最早 reset、亚 tick 小数秒、偏移保留、过期 reset、状态阈值 6 组、`WorseStatus` 5 组（含 unknown）、本地排名 5 组、钱包（BOOSTER 判定 7 组 / 固定点换算 9 组 / 币种回退 5 组 / 字符串金额 / true 门）、Go 解码 null 根、非对象根 4 组、类型不匹配 6 组、重复键合并、嵌套替换、limits 按索引合并截断、显式 null 重置、null 元素、未知键、非法 UTF-8、`KimiCodeInt` 9 组、`GoFloatToInt64` 7 组、畸形 / 空 body、执行器 >=400 4 组 / 传输 1 组 / 2xx 3 组、代理路由 3 组、`SupportsChannel` 6 组 | `tests/AxonHub.Api.Tests/KimiCodeQuotaCheckerTests.cs` | 56 + 162 |
+
+`AxonHub.Api.Tests` 由 4431 增至 4649（+218），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+7877 增至 8095。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态
+计数；下一次全量运行应以 4649 / 319 / 8095 复核。**
+
+差异：C182 由剩余 7 个 checker 收窄为 6 个；新增 C213（Kimi Code 用量 URL 的 authority 保留原始拼写）、
+C214（reset_in 推断时刻的锚点时区与读取时机）与 C215（采集 HTTP 接缝、状态码分类与 Go 解码语义）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6438,7 +6499,7 @@ UTF-8 修复、GetAllApiKeys 的 C149 冻结边界、注入时钟的读取时机
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），其余 7 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），其余 6 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
