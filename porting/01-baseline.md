@@ -6363,6 +6363,54 @@ httpClient、>=400 被还原为 `apertis API returned status`、错误路径数�
 unknown 数据、共享执行器保留 Content-Type 并补默认 Accept、URL host 为 `GoUrl` 子集、Go 解码语义与报文
 文案、`fmt.Sscanf` 近似、嵌套 any 的 1e400 与 100ns 截断）。
 
+## 126. OpenCode Go 供应商配额检查器（固定 /zen/go/v1/usage 端点、rolling / weekly / monthly 百分比窗口，122 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/opencode_go_checker.go`（`CheckQuota`:82-106、
+`SupportsChannel`:109-111、`parseResponse`:113-210、`parseOpenCodeGoResetsAt`:215-246、
+`opencodeGoWindowLabel`:251-262、`opencodeGoPeriodStart`:268-279、`normalizeOpenCodeGoWindowStatus`:281-289、
+`quotaStatusRank`:291-302、`opencodeGoAPIKey`:70-78、报文类型:23-50），
+`provider_quota.go:458-460` 的 `registerOpenCodeGoSupport`（在 `registerApertisSupport` 之后、Kimi 之前调用，
+见 `provider_quota.go:386`），以及 `opencode_go_checker_test.go` 的 16 个测试函数。
+
+新增 `src/AxonHub.Api/Orchestration/OpenCodeGoQuotaChecker.cs`（`IQuotaChecker` 实现、
+`OpenCodeGoUsageResponse` / `OpenCodeGoUsageWindows` / `OpenCodeGoUsageWindow` 报文类型与 Go 语义 JSON 解码、
+`resetsAt` 的 RFC3339 / Unix 秒 / epoch 毫秒三态解析、`GoTimeParsing` 复用与 5h / 7d / 日历月的周期起点），
+`Program.cs` 在 apertis 之后注册 `OpenCodeGoQuotaChecker` 与 `ProviderQuotaCheckerRegistration("opencode_go", …)`
+（与参照 `registerOpenCodeGoSupport` 的顺序一致），`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code、
+Codex、Antigravity、xAI Subscription、GitHub Copilot、NanoGPT、ZenMux、Cline、Synthetic、NeuralWatt、Apertis 与
+OpenCode Go 已注册，其余 7 个待切片」。
+
+- 凭据：遍历 `ChannelCredentials.GetAllApiKeys`，逐个 `strings.TrimSpace`，取第一个非空项；`apiKey` 为
+  OAuth JSON 时被排除，`apiKeys` 依次回退；全部为空（含无凭据、空白、畸形 JSON）时抛出
+  `channel has no API key`，不发起请求。
+- 采集：GET 固定 `https://opencode.ai/zen/go/v1/usage`（不读 BaseURL），头为
+  `Authorization: Bearer <key>` 与 `Accept: application/json`，无 body；`Settings.Proxy` 非空时经代理工厂
+  派生执行器，否则用共享执行器（C212）。
+- 响应：参照不做显式状态码检查（Do 已对 >=400 报错），端口同样把 >=400 的 `HttpClientError` 包装为
+  `opencode go usage request failed: <inner>`，1xx / 3xx / 非 200 2xx 照常解析。
+- 窗口：rolling / weekly / monthly 三个指针窗口；`percent` 缺省为 0，`resetsAt` 解析失败（空、null、
+  负值、超出 1e15、无法识别的字符串或类型）的窗口跳过；全部跳过时报
+  `could not parse OpenCode Go usage windows`；`resetInSec` 为 reset 与 now 之差并夹到 >= 0。
+- 状态：`usageRatio = percent / 100`，`>= 1` exhausted、`>= 0.8` warning、其余 available；总体状态取三个
+  窗口排名最高者（exhausted 2 / warning 1 / available 0），Ready 跟随总体状态；`NextResetAt` 取最早窗口 reset。
+- 限额与 rawData：每个窗口一个 token limit，window 为 `5h` / `weekly` / `monthly`，`PeriodStart` 分别为
+  reset-5h / reset-7d / 上一日历月同日（月末夹紧）；rawData 为 `plan_type:"go"` 与按窗口名索引的
+  `usage_percent` / `reset_in_seconds` / `reset_time`（秒级 RFC3339）/ `status` / `percent_remaining`
+  （`100 - percent`）与可选的 `api_status`（原样透传，不参与状态判定）；随后 `Normalize` 归一化
+  （ratio 截断、负 ratio limit 丢弃、过期 reset 清除、rawData 保留原值）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（固定 URL、Bearer 经 Auth、显式 Accept、无 body）、三窗口完整映射与 rawData 全文、百分比阈值 6 组、负 percent 丢 limit 保 raw、>100 截断、`NormalizeWindowStatus` 6 组、`QuotaStatusRank` 6 组、`ParseResetsAt` 合法 9 组 / 非法 11 组（含范围兜底）、毫秒小数秒与偏移、Unix 秒 / 毫秒等价 2 组、epoch 毫秒参考值、部分窗口、全部不可解析、无 usage、缺失 resetsAt、`api_status`、过期 reset、最早 reset、月度周期起点 4 组、窗口标签 5 组、`FormatRfc3339` 4 组、凭据 8 组、畸形 / 空 body、类型不匹配 4 组、执行器 >=400 4 组 / 传输 1 组 / 2xx 3 组、Go 解码 null 根 / 非对象根 4 组 / 类型不匹配 6 组 / 空窗口 / 合并 / null 重置 / 未知键 / 显式 null resetsAt / 非法 UTF-8、代理路由 3 组、`SupportsChannel` 6 组 | `tests/AxonHub.Api.Tests/OpenCodeGoQuotaCheckerTests.cs` | 34 + 88 |
+
+`AxonHub.Api.Tests` 由 4309 增至 4431（+122），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+7755 增至 7877。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态
+计数；下一次全量运行应以 4431 / 319 / 7877 复核。**
+
+差异：C182 由剩余 8 个 checker 收窄为 7 个；新增 C212（共享执行器接缝、>=400 包装、错误路径数据不可观察、
+数字 resetsAt 按 UTC 呈现而非 Go 本地时区、超出 DateTimeOffset 年份范围的 resetsAt 跳过、Go 解码语义与
+UTF-8 修复、GetAllApiKeys 的 C149 冻结边界、注入时钟的读取时机）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6390,7 +6438,7 @@ unknown 数据、共享执行器保留 Content-Type 并补默认 Accept、URL ho
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），其余 8 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），其余 7 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
