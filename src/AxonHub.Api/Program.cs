@@ -273,9 +273,11 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 // quota), provider_quota.go:418-420 the Codex checker (usage endpoint plus the
 // optional reset-credit capability), provider_quota.go:422-424 the
 // Antigravity checker (summary endpoint first, legacy per-model session quota
-// as fallback) and provider_quota.go:426-428 the xAI subscription checker
-// (weekly + monthly billing payloads). Checkers are stateless singletons
-// sharing the process HTTP executor and the channel-proxy factory.
+// as fallback), provider_quota.go:426-428 the xAI subscription checker
+// (weekly + monthly billing payloads) and provider_quota.go:430-432 the GitHub
+// Copilot checker (the copilot_internal/user quota payload). Checkers are
+// stateless singletons sharing the process HTTP executor and the channel-proxy
+// factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
@@ -299,6 +301,12 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "xai_subscription",
         services.GetRequiredService<XaiSubscriptionQuotaChecker>()));
+
+builder.Services.AddSingleton<GithubCopilotQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "github_copilot",
+        services.GetRequiredService<GithubCopilotQuotaChecker>()));
 
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(

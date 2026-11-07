@@ -98,6 +98,12 @@ lint / build / test；§118 落地后的静态计数为 `AxonHub.Api.Tests` 3354
 四项目合计 6800，下一次全量运行应以该数字复核。该切片不新增表或 SQL；`OAuthCredentialsJson` 新增
 `ResolveChannelCredentials`（`ModelFetcher` 与 `ChannelOutboundFactory` 改为委托），既有用例数不变。
 
+§119 追加 75 个用例（`GithubCopilotQuotaCheckerTests` 28 + 47 个 InlineData），同样按项目规则未运行
+lint / build / test；§119 落地后的静态计数为 `AxonHub.Api.Tests` 3429、`AxonHub.Persistence.Tests` 319、
+四项目合计 6875，下一次全量运行应以该数字复核。该切片不新增表或 SQL；
+`CopilotOutboundTransformer.SetCopilotHeaders` 由 internal 改为 public（供配额检查器复用，参照侧本就是
+导出函数），既有用例数不变。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

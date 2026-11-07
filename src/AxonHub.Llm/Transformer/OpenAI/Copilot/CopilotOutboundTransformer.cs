@@ -390,7 +390,7 @@ public sealed class CopilotOutboundTransformer : IOutboundTransformer
     }
 
     /// <summary>Port of <c>SetCopilotHeaders</c> (outbound.go:160-168).</summary>
-    internal static void SetCopilotHeaders(Dictionary<string, List<string>> headers)
+    public static void SetCopilotHeaders(Dictionary<string, List<string>> headers)
     {
         HttpClientUtils.HeaderSet(headers, CopilotConstants.EditorVersionHeader, CopilotConstants.DefaultEditorVersion);
         HttpClientUtils.HeaderSet(
