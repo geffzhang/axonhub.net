@@ -1,10 +1,33 @@
 using System.Text;
+using AxonHub.Llm.Transformer.OpenAI.Codex;
 
 namespace AxonHub.Llm.Transformer.Shared;
 
 /// <summary>Port of the <c>net/url</c> escaping transformers rely on.</summary>
 public static class GoUrl
 {
+    /// <summary>
+    /// Port of <c>url.Parse</c> for the parts callers inspect: the lowercased
+    /// scheme, the decoded host (port included, userinfo excluded) and the
+    /// decoded path. Returns false where Go's parse returns an error. Reuses
+    /// the Codex port of <c>net/url</c>.
+    /// </summary>
+    public static bool TryParse(string rawUrl, out string scheme, out string host, out string path)
+    {
+        if (CodexUtils.TryParseGoUrl(rawUrl, out var parts))
+        {
+            scheme = parts.Scheme;
+            host = parts.Host;
+            path = parts.Path;
+            return true;
+        }
+
+        scheme = string.Empty;
+        host = string.Empty;
+        path = string.Empty;
+        return false;
+    }
+
     /// <summary>
     /// Port of <c>url.PathEscape</c> (Go's <c>encodePathSegment</c> mode):
     /// unreserved characters and the reserved set <c>$&amp;+:=@</c> stay literal,

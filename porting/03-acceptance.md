@@ -104,6 +104,12 @@ lint / build / test；§119 落地后的静态计数为 `AxonHub.Api.Tests` 3429
 `CopilotOutboundTransformer.SetCopilotHeaders` 由 internal 改为 public（供配额检查器复用，参照侧本就是
 导出函数），既有用例数不变。
 
+§120 追加 105 个用例（`NanogptQuotaCheckerTests` 26 + 79 个 InlineData），同样按项目规则未运行
+lint / build / test；§120 落地后的静态计数为 `AxonHub.Api.Tests` 3534、`AxonHub.Persistence.Tests` 319、
+四项目合计 6980，下一次全量运行应以该数字复核。该切片不新增表或 SQL；`ChannelCredentials` 新增
+`GetApiKeys`（原样读取 `apiKeys` 数组），`AxonHub.Llm` 的 `GoUrl` 新增 `TryParse`（复用 Codex 的
+`net/url.Parse` 端口），既有用例数不变。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

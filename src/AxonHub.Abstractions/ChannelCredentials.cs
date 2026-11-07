@@ -289,6 +289,51 @@ public static class ChannelCredentials
         }
     }
 
+    /// <summary>
+    /// The <c>apiKeys</c> array of the credentials document, in order. The
+    /// reference reads the Ent-decoded field directly; this port decodes it
+    /// leniently and treats a non-array value or non-string elements as
+    /// unusable (C013).
+    /// </summary>
+    public static IReadOnlyList<string> GetApiKeys(string? credentialsJson)
+    {
+        var keys = new List<string>();
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return keys;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(credentialsJson);
+        }
+        catch (JsonException)
+        {
+            return keys;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return keys;
+            }
+
+            foreach (var property in root.EnumerateObject())
+            {
+                if (FoldAscii(property.Name) == "apikeys")
+                {
+                    // Go's decoder lets the last duplicate key win.
+                    keys = ReadStringArray(property.Value);
+                }
+            }
+
+            return keys;
+        }
+    }
+
     /// <summary>The legacy <c>apiKey</c> string of the credentials document (may hold OAuth JSON).</summary>
     public static string GetLegacyApiKey(string? credentialsJson)
     {
