@@ -257,7 +257,7 @@ builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
 // biz/provider_quota_settings.go, biz/channel_provider_quota_hook.go): the
 // per-channel quota status table, the collection loop and its five-minute UTC
 // schedule, the synchronous routing-gate snapshot and the settings surface.
-// The collection core is ported; the remaining twelve provider checkers
+// The collection core is ported; the remaining eight provider checkers
 // arrive in follow-up slices (C182), so those providers reach the reference's
 // "No checker for provider" branch. The service is a singleton because the
 // routing gate reads its cache synchronously; every database operation runs in
@@ -284,7 +284,9 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 // cost ledger), provider_quota.go:446-448 the Synthetic checker (the fixed
 // /v2/quotas endpoint's rolling five-hour and weekly token pools) and
 // provider_quota.go:450-452 the NeuralWatt checker (the fixed /v1/quota
-// endpoint's monthly kWh subscription window). Checkers are stateless
+// endpoint's monthly kWh subscription window) and provider_quota.go:454-456
+// the Apertis checker (the billing credits endpoint's PAYG token pool, account
+// credits and subscription cycle). Checkers are stateless
 // singletons sharing the process HTTP executor and the channel-proxy factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
@@ -345,6 +347,12 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "neuralwatt",
         services.GetRequiredService<NeuralWattQuotaChecker>()));
+
+builder.Services.AddSingleton<ApertisQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "apertis",
+        services.GetRequiredService<ApertisQuotaChecker>()));
 
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(

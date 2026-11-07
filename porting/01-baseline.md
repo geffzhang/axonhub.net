@@ -6304,6 +6304,65 @@ Copilot、NanoGPT、ZenMux、Cline、Synthetic 与 NeuralWatt 已注册，其余
 `Accept`、bodyless GET 的 Content-Type 沿用 C206、URL host 为 `GoUrl` 子集、reset 的亚 100ns 截断与
 DateTimeOffset 范围沿用 C123）。
 
+## 125. Apertis 供应商配额检查器（固定 /v1/dashboard/billing/credits 端点、订阅周期 + PAYG + credits 三族额度，187 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/apertis_checker.go`（`CheckQuota`:77-121、
+`parseResponse`:123-158、`SupportsChannel`:160-162、`buildApertisQuotaURL`:165-189、
+`determineApertisStatus`:192-229、`determineSubscriptionStatus`:231-250、`determinePaygStatus`:252-281、
+`betterStatus`:283-288、`buildApertisLimits`:290-387、`parseApertisCycleStart`:389-401、
+`convertApertisResponseToMap`:403-450、`toFloat64`:452-477、报文类型:27-61、`betterStatusRank`:18-25、
+`apertisAvailabilityGroup`:67），`provider_quota.go:454-456` 的 `registerApertisSupport`（在
+`registerNeuralWattSupport` 之后、`registerOpenCodeGoSupport` 之前调用，见 `provider_quota.go:385`），
+以及 `apertis_checker_test.go` 的 24 个测试函数。
+
+新增 `src/AxonHub.Api/Orchestration/ApertisQuotaChecker.cs`（`IQuotaChecker` 实现、
+`ApertisBillingCreditsResponse` / `ApertisPayg` / `ApertisSubscription` 报文类型与 Go 语义 JSON 解码、
+`fmt.Sscanf("%f")` 的 token 扫描近似、`time.Parse(time.RFC3339)` 复用共享 `GoTimeParsing` 解析器），
+`Program.cs` 在 neuralwatt 之后注册 `ApertisQuotaChecker` 与 `ProviderQuotaCheckerRegistration("apertis", …)`
+（与参照 `registerApertisSupport` 的顺序一致），`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code、
+Codex、Antigravity、xAI Subscription、GitHub Copilot、NanoGPT、ZenMux、Cline、Synthetic、NeuralWatt 与
+Apertis 已注册，其余 8 个待切片」。
+
+- 凭据：`strings.TrimSpace(Credentials.APIKey)`；为空且 `apiKeys` 非空时直接取 `APIKeys[0]`（**不 trim**），
+  都为空（含无凭据、非字符串）时返回 unknown 行（RawData `{"error":"missing API key"}`、Ready=false、
+  NextResetAt=null）且**不返回错误**、不经过 Normalize（C211）。
+- 采集：GET `buildApertisQuotaURL(BaseURL)`，头为 `Content-Type: application/json` 与
+  `Authorization: Bearer <key>`，无 body；不处理 proxy（C211）。
+- URL：trim 后为空或 `url.Parse` 失败回退 `https://api.apertis.ai`；空 scheme 补 `https`；只保留
+  `scheme://host`，固定 path 为 `/v1/dashboard/billing/credits`（base 的 path / query 丢弃）；不做
+  http→https 升级、空 host 不回退（C211）。
+- 状态：`betterStatusRank` available 3 / warning 2 / exhausted 1 / unknown 0；订阅状态先算：suspended /
+  cancelled → exhausted，`cycle_quota_limit <= 0` → unknown，ratio 为 `used / limit`，remaining <= 0 →
+  exhausted，ratio >= 0.8 → warning，否则 available；PAYG 状态：`token_is_unlimited` → available，
+  `account_credits > 0` 时 total 有效且 > 0 则 ratio >= 1 → available、>= 0.8 → warning、其余 available，
+  credits <= 0 时 total 无效或 <= 0 → unknown、否则 exhausted；`shouldSkipPAYG` 仅当
+  `is_subscriber && subscription != nil && !payg_fallback_enabled && status == "active" &&
+  cycle_quota_remaining > 0`（**区分大小写的 "active"**）；`shouldCheckPayg` 在非订阅、订阅回退启用、
+  suspended / cancelled 或周期额度耗尽时为 true；最终状态取订阅与 PAYG 中排名更高者。
+- 限额与重置：PAYG token limit（除非被 shouldSkipPAYG 跳过）、`account_credits > 0` 时的 credits limit、
+  订阅周期 limit（subscriber 且 subscription 非空）三族，group 均为 `apertis_capacity`，window 分别为
+  `pay_as_you_go` / `credits` / `cycle`；订阅 limit 的 Type 为 `subscription_cycle`，PeriodStart 取自
+  `cycle_start`（RFC3339）；`cycle_end` 解析成功时作为 NextResetAt；随后 `Normalize` 归一化（ratio 截断、
+  负 ratio limit 丢弃、过期 reset 清除、显式状态在 limit 被丢弃或 exhausted 后仍保留）。
+- rawData：`is_subscriber`；`payg` 恒有 account_credits / token_used / token_total / token_remaining /
+  token_is_unlimited 与可选的 token_monthly_limit_usd / token_monthly_used_usd / monthly_reset_day；
+  `subscription` 恒有 plan_type / status / cycle_quota_limit / cycle_quota_used / cycle_quota_remaining /
+  cycle_start / cycle_end / payg_fallback_enabled 与可选的 payg_spent_usd / payg_limit_usd；按 Go map
+  排序输出（`GoJson`；double 格式沿用 C067）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（固定 URL、Bearer 经 Auth、Content-Type、默认 Accept、无 body）、PAYG-only available / warning / exhausted / 空源 unknown、订阅五种状态、suspended / cancelled 回退、unlimited PAYG、非订阅 subscription 对象、大小写 "Active" 的跳过分支、状态函数 19 + 11 + 21 组、归一化与 ratio 截断、周期时间 6 组（含亚 tick 与 +05:30）、rawData 全文与重复键 / null 重置、凭据 4 组、畸形 JSON、类型不匹配全文、执行器 >=400 4 组 / 1xx-3xx-2xx 4 组 / 传输 1 组、自定义 base、`buildApertisQuotaURL` 20 组、`SupportsChannel`、Go 解码 10 组、`TryToFloat64` / Sscanf 边界 5 组 | `tests/AxonHub.Api.Tests/ApertisQuotaCheckerTests.cs` | 54 + 82 + 51 |
+
+`AxonHub.Api.Tests` 由 4122 增至 4309（+187），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+7568 增至 7755。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` /
+`MemberData` 的静态计数；下一次全量运行应以 4309 / 319 / 7755 复核。**
+
+差异：C182 由剩余 9 个 checker 收窄为 8 个；新增 C211（Apertis checker 经共享执行器发请求而非直接
+httpClient、>=400 被还原为 `apertis API returned status`、错误路径数据不可观察、缺失 key 返回未归一化的
+unknown 数据、共享执行器保留 Content-Type 并补默认 Accept、URL host 为 `GoUrl` 子集、Go 解码语义与报文
+文案、`fmt.Sscanf` 近似、嵌套 any 的 1e400 与 100ns 截断）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6331,7 +6390,7 @@ DateTimeOffset 范围沿用 C123）。
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），其余 9 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），其余 8 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
