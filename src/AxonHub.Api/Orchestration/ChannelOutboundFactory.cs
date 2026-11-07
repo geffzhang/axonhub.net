@@ -1462,20 +1462,7 @@ public static class ChannelOutboundFactory
     /// parsed as the credentials document.
     /// </summary>
     private static OAuthCredentials ResolveOAuthCredentials(ChannelCandidate candidate)
-    {
-        var oauthJson = ChannelCredentials.GetOAuthObjectJson(candidate.Credentials);
-        if (oauthJson is not null)
-        {
-            var oauth = OAuthCredentialsJson.ParseOAuthObject(oauthJson);
-            if (oauth.AccessToken.Trim().Length > 0)
-            {
-                return oauth;
-            }
-        }
-
-        return OAuthCredentialsJson.ParseCredentialsJson(
-            ChannelCredentials.GetLegacyApiKey(candidate.Credentials));
-    }
+        => OAuthCredentialsJson.ResolveChannelCredentials(candidate.Credentials);
 
     /// <summary>Port of <c>buildCodexOutbound</c> (channel_llm.go:296-387).</summary>
     private static CodexOutboundTransformer CreateCodexOutbound(

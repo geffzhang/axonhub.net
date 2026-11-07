@@ -3,7 +3,9 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AxonHub.Abstractions;
 using AxonHub.Llm.Json;
+using AxonHub.Llm.Transformer.Shared;
 
 namespace AxonHub.Llm.OAuth;
 
@@ -71,7 +73,7 @@ public static class OAuthCredentialsJson
     /// </exception>
     public static OAuthCredentials ParseCredentialsJson(string raw)
     {
-        var trimmed = raw.Trim();
+        var trimmed = GoStrings.TrimSpace(raw);
         if (trimmed.Length == 0)
         {
             throw new InvalidOperationException("empty credentials");
@@ -123,6 +125,30 @@ public static class OAuthCredentialsJson
         creds.TokenType = NonNull(creds.TokenType);
 
         return creds;
+    }
+
+    /// <summary>
+    /// Port of <c>(*objects.ChannelCredentials).ResolveOAuthCredentials</c>
+    /// (internal/objects/channel.go:631-639): a typed <c>oauth</c> object with a
+    /// non-blank access token wins; otherwise the legacy <c>apiKey</c> string is
+    /// parsed as the credentials document (which rejects empty input and an
+    /// empty <c>access_token</c>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Empty input or a missing access token.</exception>
+    /// <exception cref="JsonException">The document is not a decodable object.</exception>
+    public static OAuthCredentials ResolveChannelCredentials(string? credentialsJson)
+    {
+        var oauthJson = ChannelCredentials.GetOAuthObjectJson(credentialsJson);
+        if (oauthJson is not null)
+        {
+            var oauth = ParseOAuthObject(oauthJson);
+            if (GoStrings.TrimSpace(oauth.AccessToken).Length > 0)
+            {
+                return oauth;
+            }
+        }
+
+        return ParseCredentialsJson(ChannelCredentials.GetLegacyApiKey(credentialsJson));
     }
 
     /// <summary>Port of oauth.ParseTokenResponse (llm/oauth/exchange_strategy.go:162-195).</summary>

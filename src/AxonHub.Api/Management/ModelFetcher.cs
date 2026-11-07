@@ -844,20 +844,7 @@ public sealed class ModelFetcher
     }
 
     private static OAuthCredentials ResolveOAuthCredentials(ChannelRecord channel)
-    {
-        var oauthJson = ChannelCredentials.GetOAuthObjectJson(channel.Credentials);
-        if (oauthJson is not null)
-        {
-            var oauth = OAuthCredentialsJson.ParseOAuthObject(oauthJson);
-            if (oauth.AccessToken.Trim().Length > 0)
-            {
-                return oauth;
-            }
-        }
-
-        return OAuthCredentialsJson.ParseCredentialsJson(
-            ChannelCredentials.GetLegacyApiKey(channel.Credentials));
-    }
+        => OAuthCredentialsJson.ResolveChannelCredentials(channel.Credentials);
 
     private static List<ModelIdentify> ParseCodexModels(byte[] body)
         => [.. CodexModels.ParseModelCatalog(body).Select(static id => new ModelIdentify { Id = id })];

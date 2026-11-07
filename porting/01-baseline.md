@@ -5880,6 +5880,54 @@ one-token Haiku 请求、unified ratelimit 头解析、窗口与状态归一化�
 差异：C182 由 17 个 checker 收窄为剩余 16 个；新增 C206（无 body 的 GET 在线上丢掉 Content-Type 头，
 已接受并有锁定测试）。
 
+## 118. xAI Subscription 供应商配额检查器（weekly / monthly billing，46 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/xai_subscription_checker.go`（`CheckQuota`:24-58、
+`SupportsChannel`:57-59、`fetchBilling`:61-85、`xaiBillingQuotaData`:87-133、`xaiBillingWindowStatus`:135-143、
+`parseXAIReset`:145-151、`earliestReset`:153-161）、`provider_quota.go:426-428` 的注册，以及
+`xai_subscription_checker_test.go` 与 `provider_contract_fixtures_test.go` 中的 xai 用例。
+
+新增 `src/AxonHub.Api/Orchestration/XaiSubscriptionQuotaChecker.cs`，`Program.cs` 在 antigravity 之后注册
+`XaiSubscriptionQuotaChecker` 与 `ProviderQuotaCheckerRegistration("xai_subscription", …)`（与参照
+`registerXAISubscriptionSupport` 的顺序一致），`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code、
+Codex、Antigravity 与 xAI Subscription 已注册，其余 15 个待切片」。凭据解析提取为
+`OAuthCredentialsJson.ResolveChannelCredentials`（`internal/objects/channel.go:631-639` 的端口），
+`ModelFetcher` 与 `ChannelOutboundFactory` 的私有副本改为委托，避免三处漂移。
+
+- 凭据：typed `oauth` 对象的 access token 经 `strings.TrimSpace` 后非空则优先；否则把 legacy `apiKey`
+  当作 OAuth JSON 解析（空输入报 `empty credentials`、缺 token 报 `access_token is empty`）。解析失败包装为
+  `parse xAI subscription credentials: %w`；trim 后的 token 为空报
+  `xAI subscription channel has no OAuth access token`。
+- 采集：同一 executor 先 GET `https://cli-chat-proxy.grok.com/v1/billing?format=credits`（weekly），再 GET
+  `https://cli-chat-proxy.grok.com/v1/billing`（monthly）；Bearer token，头 `Accept: application/json`、
+  `Content-Type: application/json`、`x-xai-token-auth: xai-grok-cli`、
+  `x-grok-client-version: 0.2.114`、`User-Agent: grok-pager/0.2.114 grok-shell/0.2.114 (macos; aarch64)`；
+  无 body，因此线上不带 Content-Type（C206）。`settings.proxy` 存在时**一次**解析代理 executor 供两个请求
+  共用，畸形 settings 视为无代理。执行错误分别包装为 `fetch xAI weekly billing: %w` /
+  `fetch xAI monthly billing: %w`；非 [200,300) 状态（executor 只对 ≥400 抛错，故此处覆盖 1xx/3xx）报
+  `HTTP %d` 并同受上述包装。报文合并失败包装为 `parse xAI billing responses: %w`（无 `config` 报
+  `xAI billing responses contain no config`）。
+- 窗口：weekly（存在时）→ 状态 `xaiBillingWindowStatus(usagePercent)`、ratio = percent/100、
+  `WithWindow("weekly", 7d)`（period start = reset − 7d）；monthly（存在时）→ 同状态函数、
+  `Window="monthly"`、`PeriodStartFromMonthlyReset(reset)`。重置时间按 `time.Parse(RFC3339)` 解析
+  （TrimSpace 后，失败 → null）。整体 `usagePercent` 取 weekly 与 monthly 的最大值（起始 −1，NaN 传播），
+  ≥0 才覆盖 unknown；`NextResetAt` 取两个重置中的最早值（不过滤未来，随后由归一化清空过期值）。
+  `plan_type` 恒进 rawData（缺省空串），`billing` 恒为对象（两个窗口都缺失时为空对象），仅非 null 的窗口
+  以 Go `BillingWindow` 形状加入；`PlanFromAccessToken` 的非空结果覆盖 `summary.Plan`。
+- 状态映射：≥100 exhausted、≥80（`WarningThresholdRatio*100`）warning、其余 available；
+  ratio > 1 由归一化截断为 1，负 ratio 的 limit 被丢弃（整体状态仍按原始百分比计算）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（weekly → monthly 顺序、两条 URL、Bearer、Accept、`x-xai-token-auth`、`x-grok-client-version`、CLI User-Agent、无线上 Content-Type 的 C206 锁定）、请求数据保留头与顺序、通道代理只解析一次、畸形设置、OAuth 对象 / legacy apiKey / 空白 token 回退 / 空凭据 / 空白 token 拒绝、传输错误与 1xx/3xx 状态、解析错误包装、JWT tier 覆盖、SupportsChannel、两个窗口的合并与 period、monthly-only / weekly-only / 空 summary / 负值 / 超 1 截断 / 边界状态、重置 TrimSpace 与偏移 / 过期清空 / 最早值、rawData 的 Go `BillingWindow` 字段形状与 plan | `tests/AxonHub.Api.Tests/XaiSubscriptionQuotaCheckerTests.cs` | 25 + 21 |
+
+`AxonHub.Api.Tests` 由 3308 增至 3354（+46），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由 6754
+增至 6800。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态计数；
+下一次全量运行应以 3354 / 319 / 6800 复核。**
+
+差异：C182 由剩余 16 个 checker 收窄为 15 个；无新增差异（无 body GET 的 C206 与 RFC3339 解析的 C123
+沿用既有登记）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
