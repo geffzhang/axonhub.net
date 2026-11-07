@@ -6112,6 +6112,92 @@ GitHub Copilot、NanoGPT 与 ZenMux 已注册，其余 12 个待切片」。
 `WithRejectHTTPSDowngrade`，transport 错误内层文本来自 .NET 栈；reset 的年份 0000 / ±24:60 偏移与
 端口 `timestamp is outside the DateTimeOffset range` 回退沿用 C123）。
 
+## 122. Cline 供应商配额检查器（ClinePass 用量限额端点 + 账本回退，100 例，2026-11-07）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/cline_checker.go`（`CheckQuota`:248-320、
+`getJSON`:322-355、`clineNativeHTTPClient`:357-362、`clineHTTPError`:364-377、`clineAPIKey`:379-392、
+`buildClineQuotaURL`:394-423、`classifyClineModelScope`:425-457、`selectClinePassThreshold`:459-482、
+`fetchUsageLimits`:484-503、`fetchUsageItems`:505-553、`clineLedgerErrorCode`:555-565、
+`oldestClineUsageTime`:567-581、`parseClineTime`:583-595、`parseClineUsageLimits`:597-673、
+`clineUsageLimitWindowKey`:675-686、`buildClineQuotaData`:688-747、`buildClinePassUnavailableQuota`:749-779、
+`buildClineDirectOnlyQuota`:781-795、`buildClineWindow`:797-919、`alignClineWindowStart`:921-945、
+`clineWindowStatus`:947-960、`worstClineStatus`:962-968、`worseQuotaStatus`:970-977、`clineWindowLabel`:979-990、
+`clineLimitStatuses`:992-1018、`earliestClineWindowReset`:1020-1034、`clineWindowsRawData`:1036-1075、
+`clineUsageLimitsFetchRawData`:1077-1085、`clineBalanceRawData`:1087 起、报文类型:64-235）、
+`provider_quota.go:442-444` 的 `registerClineSupport`，以及 `cline_checker_test.go` 的 30 个测试函数。
+
+新增 `src/AxonHub.Api/Orchestration/ClineQuotaChecker.cs`（`IQuotaChecker` 实现、`clineEnvelope<T>`
+系列报文类型与 Go 语义解码、`time.Parse(time.RFC3339)` 复用共享 `GoTimeParsing` 解析器），
+`Program.cs` 在 zenmux 之后注册 `ClineQuotaChecker` 与 `ProviderQuotaCheckerRegistration("cline", …)`
+（与参照 `registerClineSupport` 的顺序一致），`ProviderQuotaCheckerRegistry` 的文档同步为
+「Claude Code、Codex、Antigravity、xAI Subscription、GitHub Copilot、NanoGPT、ZenMux 与 Cline 已注册，
+其余 11 个待切片」。
+
+- 凭据：`strings.TrimSpace(Credentials.APIKey)`；为空时遍历 `credentials.apiKeys` 取首个 trim 非空项，
+  都为空（含无凭据、非字符串、空白）报 `channel has no API key`（C013）。
+- 采集顺序：GET `/api/v1/users/me` → `/api/v1/plans` → `/api/v1/users/{id}/balance`（id 经
+  `url.PathEscape`）；direct_only 在此提前返回；其余范围在无 active ClinePass threshold 时报
+  `Cline plans response does not include an active ClinePass threshold`；随后 GET
+  `/api/v1/users/me/plan/usage-limits`，404 走 pass-unavailable 分支，其余错误使检查失败；再 GET
+  `/api/v1/users/{id}/usages?limit=200`（cursor 非空才带 `cursor`）。四类请求均为 GET，头为
+  `Accept: application/json`、`Authorization: Bearer <key>`、`User-Agent: axonhub/1.0`，无 body；
+  `settings.proxy` 存在时**一次**解析代理 executor，畸形 settings 视为无代理（C013）。
+- URL：base URL trim 后为空回退 `https://api.cline.bot`；`url.Parse` 失败或无 host 同样回退；scheme
+  为空或 `http` 升级为 `https`；只保留 scheme + host（base 的 path / query 丢弃）；path 以 Go
+  `url.URL{Path}` 的转义规则写出（保留字符转义、`%` 二次转义），query 经 `url.Values.Encode`
+  按键排序。
+- getJSON：创建请求失败报 `failed to create Cline quota request`；transport / nil 响应报
+  `Cline quota request failed during transport`；状态不在 [200,300) 时丢弃 body 并报
+  `HTTP <code> <StatusText>`（无文案时 `HTTP <code>`，body 从不进入错误文本）；body 读取失败报
+  `failed to read Cline quota response`；解码失败报 `failed to parse Cline quota response`（Go 解码
+  文案沿用 C003 / C093）。identity / plans / balance 的错误分别包装为
+  `failed to read Cline user identity|plans|balance: %w`；`me.Data.ID` trim 后为空报
+  `Cline user identity response missing id`。
+- 范围：`supportedModels` + `manualModels` 逐个 trim；`cline-pass/` 前缀（大小写敏感）计入 pass 池，
+  其余计入 direct 池；两者都有 → mixed、只有 pass → cline_pass_only、只有 direct → direct_only、
+  全空 → unknown。
+- threshold：遍历 plans，跳过 `type` 非 `cline_pass`、disabled、threshold 为 nil 或 `active=false` 的
+  条目；选首个符合条件的 threshold；plan summaries 为每个符合条件 plan 的 `{type, interval}`。
+- usage limits：`parseClineUsageLimits` 只认 `type` 为三窗口（last5h / last7d / last30d）的条目，
+  每窗口取首个有效 ratio（`percentUsed / 100` 截断到 [0,1]）；reset 状态机 missing → unavailable、
+  null / 空白 → inactive、非字符串 → invalid，且仅当前状态为空 / unavailable / invalid 时被后值覆盖；
+  inactive 且 ratio 为 0 / 缺失保持 inactive，inactive 但 ratio > 0 降为 unavailable；active 的
+  reset 用 `parseClineTime`（RFC3339，失败标 invalid）；只有 ratio 非 null 或状态非 unavailable 的
+  条目才进入结果。字段计数给出 complete（3 窗口 6 字段）/ partial / unusable，无可用数据报
+  `failed to read Cline usage limits: response contains no usable window data`。
+- 账本：`fetchUsageItems` 的 cutoff 为 now − 30 天，每页 `limit=200`，最多 100 页；空 cursor、空页或
+  最旧条目早于 cutoff 时停止，打满 100 页置 `truncated`；按 trim 后的 `aiModelTypeName` 计数
+  cline-pass / 空（unclassified）/ 其他（direct），无效 `created_at` 另行计数。账本失败非致命：
+  `ledger_unavailable=true` 并记 `ledger_error_code`（`rate_limited` / `http_<code>` / `transport`），
+  cost 整体标记不可用，官方窗口仍生效。
+- 窗口：`buildClineWindow` 以官方 ratio / reset 为准；active reset 必须满足
+  `reset > now && reset <= now + duration + 2s`；inactive 且 ratio > 0 为 unavailable，否则 inactive；
+  cost 仅在未 truncated / 账本可用时计算，起点为官方窗口起点对齐到 ±2s 内最近的 cline-pass 条目；
+  只累计起点之后、reset 之前且模型为 `cline-pass` 的条目（空模型清零并停止，其他模型忽略）；
+  `costRatio` 仅在 limit > 0 时给出，官方 usage ratio 缺省时用 costRatio 补。
+- 组装：三个 token limit（5h / 7d / 30d），`PeriodStart = reset − duration`，整体取三窗口最差；
+  pass_only 允许 exhausted，mixed / direct 范围的 pass 池耗尽降为 warning 且 basis 为
+  `mixed_pool_pass_exhausted`；随后经 `ProviderQuotaData.Normalize` 复核 ratio、过期 reset 与总状态。
+  pass-unavailable 分支**不归一化**：pass_only → exhausted、mixed → warning +
+  `cline_pass_unavailable_mixed_pool`、其余 → warning + `cline_pass_unavailable`，rawData 无
+  `cost_scale` / `windows` / `usage_fetch`，另加 `pass_state=unavailable`。direct-only 为 available，
+  rawData 只含 `model_scope` / `status_basis` / `pool` / `pool_note` / `balance` / `plans`。
+- rawData：`model_scope`、`status_basis`、`pool`、`pool_note`、`cost_scale`（100000000）、`balance`、
+  `plans`、`windows`、`usage_fetch`、`usage_limits_fetch`，按 Go map 排序输出（`GoJson`；double 格式
+  沿用 C067）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 五请求 happy path（URL / 头 / 三条 limit / PeriodStart / rawData / usage_fetch meta）、usage-limits 404 三 scope、identity 404、usage-limits 非 404 四状态、503 安全错误、partial fallback、畸形字段、direct-only、凭据矩阵、缺 threshold、空 limits、transport / 429 账本失败、getJSON 分类（403 / transport / read / decode / 1xx / 1 MiB）、解析器 meta / reset 状态机 / 重复键 / inactive / 信封合并 / organizations / plans nil、窗口构建七组、窗口状态与最差状态、mixed 降级、URL 与 scope / threshold 选择、`parseClineTime` 8 组、账本错误码、分页（cursor + 100 页上限）、代理路由、`SupportsChannel` | `tests/AxonHub.Api.Tests/ClineQuotaCheckerTests.cs` | 44 + 56 |
+
+`AxonHub.Api.Tests` 由 3686 增至 3786（+100），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+7132 增至 7232。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]`
+的静态计数；下一次全量运行应以 3786 / 319 / 7232 复核。**
+
+差异：C182 由剩余 12 个 checker 收窄为 11 个；新增 C208（Cline checker 经共享执行器发请求而非
+`*http.Client`、读取错误 / 取消的错误分类、1 MiB 响应截断为近似、URL host 解析为 `GoUrl` 子集、
+reset 的亚 100ns 截断与 DateTimeOffset 范围沿用 C123、`organizations` 数字元素不做 float64 范围校验）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6139,7 +6225,7 @@ GitHub Copilot、NanoGPT 与 ZenMux 已注册，其余 12 个待切片」。
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），其余 12 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），其余 11 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
