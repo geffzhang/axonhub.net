@@ -93,6 +93,73 @@ public sealed class PersistentOutboundRetryTests
     }
 
     [Fact]
+    public void PrepareForRetryStopsTheAbandonedModelTransformer()
+    {
+        var harness = new Harness(CandidateWithModels(941, "m1", "m2"));
+        var request = Request("m1");
+        harness.Transformer.TransformRequest(request);
+        var first = harness.Last;
+
+        Assert.Null(harness.Transformer.TryPrepareForRetry(CancellationToken.None));
+        harness.Transformer.TransformRequest(request);
+
+        // The reference keeps one transformer per channel and stops it only
+        // when the channel cache swaps; the port builds one per attempt, so the
+        // abandoned attempt's WebSocket pool is released as it is replaced
+        // (C072).
+        Assert.Equal(1, first.StopCount);
+        Assert.Equal(0, harness.Last.StopCount);
+    }
+
+    [Fact]
+    public void SwitchingChannelsStopsTheAbandonedTransformers()
+    {
+        var harness = new Harness(
+            CandidateWithModels(942, "a1"),
+            CandidateWithModels(943, "b1"));
+        var request = Request("a1");
+        harness.Transformer.TransformRequest(request);
+        var first = harness.Last;
+
+        Assert.Null(harness.Transformer.TryNextChannel(CancellationToken.None));
+        harness.Transformer.TransformRequest(request);
+
+        // NextChannel builds the next channel's transformer immediately; the
+        // following TransformRequest replaces it again.
+        Assert.Equal(1, first.StopCount);
+        Assert.Equal(1, harness.Created[1].StopCount);
+        Assert.Equal(0, harness.Last.StopCount);
+    }
+
+    [Fact]
+    public void StopStopsTheCurrentAttemptTransformer()
+    {
+        var harness = new Harness(CandidateWithModels(944, "m1"));
+        harness.Transformer.TransformRequest(Request("m1"));
+
+        harness.Transformer.Stop();
+
+        Assert.Equal(1, harness.Last.StopCount);
+    }
+
+    [Fact]
+    public void StopIgnoresTransformersWithoutAStoppableContract()
+    {
+        var transformer = new PersistentOutboundTransformer(
+            [CandidateWithModels(945, "m1")],
+            new TestTimeProvider(Now),
+            new RecordingMetricsRecorder(),
+            (candidate, _, _) => new NonStoppableOutbound(
+                candidate.ApiFormat ?? "openai/chat_completions"));
+
+        transformer.TransformRequest(Request("m1"));
+
+        // stopChannelOutbounds skips transformers that do not implement
+        // interface{ Stop() } (biz/channel.go:326-345).
+        transformer.Stop();
+    }
+
+    [Fact]
     public void RefreshCandidateApiFormatRecomputesFromChannelEndpoints()
     {
         var candidate = CandidateWithModels(921, "alpha");
@@ -300,17 +367,48 @@ public sealed class PersistentOutboundRetryTests
         public RecordingOutbound Last => Created[^1];
     }
 
-    private sealed class RecordingOutbound(string apiFormat) : IOutboundTransformer
+    private sealed class RecordingOutbound(string apiFormat) : IOutboundTransformer, IStoppableOutbound
     {
         public string ApiFormat { get; } = apiFormat;
 
         public List<LlmRequest> Requests { get; } = [];
+
+        public int StopCount { get; private set; }
+
+        public void Stop() => StopCount++;
 
         public HttpRequestData TransformRequest(LlmRequest? request)
         {
             Requests.Add(request!);
             return new HttpRequestData();
         }
+
+        public LlmResponse TransformResponse(HttpResponseData? response)
+            => throw new NotSupportedException("response path not used by these tests");
+
+        public IStream<LlmResponse> TransformStream(
+            HttpRequestData? request,
+            IStream<StreamEvent> stream)
+            => throw new NotSupportedException("stream path not used by these tests");
+
+        public ResponseError TransformError(HttpClientError? error)
+            => throw new NotSupportedException("error path not used by these tests");
+
+        public byte[] AggregateStreamChunks(
+            HttpRequestData? request,
+            IReadOnlyList<StreamEvent> chunks,
+            out ResponseMeta meta)
+        {
+            meta = new ResponseMeta();
+            throw new NotSupportedException("aggregate path not used by these tests");
+        }
+    }
+
+    private sealed class NonStoppableOutbound(string apiFormat) : IOutboundTransformer
+    {
+        public string ApiFormat { get; } = apiFormat;
+
+        public HttpRequestData TransformRequest(LlmRequest? request) => new();
 
         public LlmResponse TransformResponse(HttpResponseData? response)
             => throw new NotSupportedException("response path not used by these tests");

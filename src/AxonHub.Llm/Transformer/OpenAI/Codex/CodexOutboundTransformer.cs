@@ -45,7 +45,8 @@ public sealed class CodexOutboundParams
 /// response are also supported for non-stream callers.
 /// </summary>
 public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPassThroughBodyPolicy,
-    ITransportRequestFinalizer, IChannelCustomizedExecutor, ISupportsCodexResponseHeaders
+    ITransportRequestFinalizer, IChannelCustomizedExecutor, ISupportsCodexResponseHeaders,
+    IStoppableOutbound
 {
     internal const string CodexBaseUrl = "https://chatgpt.com/backend-api/codex#";
 
@@ -599,8 +600,10 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
     }
 
     /// <summary>
-    /// Port of <c>Stop</c>: closes every cached WebSocket executor. The port has
-    /// no channel-teardown hook yet (C072), so nothing calls this in production.
+    /// Port of <c>Stop</c>: closes every cached WebSocket executor. The port
+    /// builds one transformer per attempt instead of per channel, so the
+    /// orchestrator stops the attempt's transformer when the attempt ends or is
+    /// replaced (C072).
     /// </summary>
     public void Stop()
     {

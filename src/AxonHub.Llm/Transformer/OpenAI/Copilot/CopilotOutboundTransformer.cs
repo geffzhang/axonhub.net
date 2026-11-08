@@ -18,6 +18,16 @@ public sealed class CopilotOutboundParams
 
     /// <summary>Optional; defaults to <see cref="CopilotConstants.DefaultCopilotBaseUrl"/>.</summary>
     public string BaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Port-only seam for <c>shared.GetSessionID(ctx)</c>; the reference's inner
+    /// Responses transformer reads it from the context on every request
+    /// (difference C062).
+    /// </summary>
+    public Func<string?>? SessionIdProvider { get; set; }
+
+    /// <summary>Port-only seam for <c>shared.GetSessionScope(ctx)</c> (C062).</summary>
+    public Func<string?>? SessionScopeProvider { get; set; }
 }
 
 /// <summary>
@@ -62,6 +72,10 @@ public sealed class CopilotOutboundTransformer : IOutboundTransformer
             {
                 BaseUrl = baseUrl,
                 ApiKeyProvider = new StaticApiKeyProvider(string.Empty),
+                // The reference delegates to the Responses transformer with the
+                // same ctx, so it reads the trace session (C062).
+                SessionIdProvider = parameters.SessionIdProvider,
+                SessionScopeProvider = parameters.SessionScopeProvider,
             });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)

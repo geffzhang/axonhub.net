@@ -374,10 +374,10 @@ public static class ChannelOutboundFactory
                 => CreateCodexOutbound(candidate, request, provider, tokenRefreshExecutor),
             OpenAiChannelType when apiFormat
                 is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
-                => ResponsesOutboundTransformer.Create(
+                => CreateResponsesOutbound(
+                    request,
                     candidate.BaseUrl ?? string.Empty,
-                    provider,
-                    provider.KeyIndex),
+                    provider),
             OpenAiChannelType when apiFormat == ApiFormats.OpenAIDecisions
                 => DecisionsOutboundTransformer.Create(
                     candidate.BaseUrl ?? string.Empty,
@@ -429,10 +429,10 @@ public static class ChannelOutboundFactory
             // channel_llm.go:855-863: the xAI responses channel has exactly
             // one endpoint, the responses API (channel_endpoint.go:296),
             // served by the shared Responses outbound.
-            XaiResponsesChannelType => ResponsesOutboundTransformer.Create(
+            XaiResponsesChannelType => CreateResponsesOutbound(
+                request,
                 candidate.BaseUrl ?? string.Empty,
-                provider,
-                provider.KeyIndex),
+                provider),
             // channel_llm.go:867-884: xai_subscription wraps the Responses
             // outbound with a refreshing OAuth token provider pinned to the
             // Grok CLI endpoints. The reference also registers the provider's
@@ -440,7 +440,8 @@ public static class ChannelOutboundFactory
             // channel grains run neither yet (C094/C127).
             XaiSubscriptionChannelType => CreateXaiSubscriptionOutbound(
                 candidate,
-                tokenRefreshExecutor),
+                tokenRefreshExecutor,
+                request),
             // channel_llm.go:885-893: longcat_anthropic speaks Anthropic
             // Messages through the LongCat platform (Bearer auth).
             LongcatAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
@@ -520,6 +521,8 @@ public static class ChannelOutboundFactory
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
+                SessionIdProvider = () => request.RawRequest?.SessionId,
+                SessionScopeProvider = () => request.RawRequest?.SessionScope,
             }),
             // channel_llm.go:1170-1181: the anthropic outbound plus OpenCode
             // session affinity.
@@ -595,10 +598,10 @@ public static class ChannelOutboundFactory
             // channel_llm.go:789-799: the nanoGPT responses channel has exactly
             // one endpoint, the responses API, served by the shared Responses
             // outbound (channel_endpoint.go:327).
-            NanogptResponsesChannelType => ResponsesOutboundTransformer.Create(
+            NanogptResponsesChannelType => CreateResponsesOutbound(
+                request,
                 candidate.BaseUrl ?? string.Empty,
-                provider,
-                provider.KeyIndex),
+                provider),
             // channel_llm.go:831-841: OpenAI-compatible with a custom request
             // path (chat only, json_schema downgraded to json_object).
             MoonshotChannelType => new MoonshotOutboundTransformer(new MoonshotOutboundConfig
@@ -613,10 +616,10 @@ public static class ChannelOutboundFactory
             // served by the Responses transformer (channel_llm.go:437-455).
             XaiChannelType when apiFormat is ApiFormats.OpenAIResponse
                 or ApiFormats.OpenAIResponseCompact
-                => ResponsesOutboundTransformer.Create(
+                => CreateResponsesOutbound(
+                    request,
                     candidate.BaseUrl ?? string.Empty,
-                    provider,
-                    provider.KeyIndex),
+                    provider),
             XaiChannelType => new XaiOutboundTransformer(new XaiOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
@@ -723,13 +726,11 @@ public static class ChannelOutboundFactory
             // constructor only fails on a missing key provider, which the key
             // check above rules out, so the reference's error wrap is
             // unreachable here too.
-            OpenaiResponsesChannelType => new ResponsesOutboundTransformer(new ResponsesOutboundConfig
-            {
-                BaseUrl = candidate.BaseUrl ?? string.Empty,
-                ApiKeyProvider = provider,
-                ChannelApiKeyIndex = provider.KeyIndex,
-                Transport = InferTransport(candidate.BaseUrl ?? string.Empty),
-            }),
+            OpenaiResponsesChannelType => CreateResponsesOutbound(
+                request,
+                candidate.BaseUrl ?? string.Empty,
+                provider,
+                InferTransport(candidate.BaseUrl ?? string.Empty)),
             // channel_llm.go:1133-1143: DashScope's OpenAI-compatible outbound
             // with the tool-call merge, enable_thinking mapping and stream
             // filter; the default endpoint set is chat only
@@ -743,10 +744,10 @@ public static class ChannelOutboundFactory
             // channel_llm.go:1145-1155: the Bailian responses channel has
             // exactly one endpoint (channel_endpoint.go:314), served by the
             // shared Responses outbound.
-            BailianResponsesChannelType => ResponsesOutboundTransformer.Create(
+            BailianResponsesChannelType => CreateResponsesOutbound(
+                request,
                 candidate.BaseUrl ?? string.Empty,
-                provider,
-                provider.KeyIndex),
+                provider),
             // channel_llm.go:1157-1167: bailian_anthropic and moonshot_coding
             // share the plain Anthropic direct outbound.
             BailianAnthropicChannelType or MoonshotCodingChannelType
@@ -811,20 +812,20 @@ public static class ChannelOutboundFactory
             // served by the Responses outbound, like the openai channel type.
             ZenmuxChannelType when apiFormat
                 is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
-                => ResponsesOutboundTransformer.Create(
+                => CreateResponsesOutbound(
+                    request,
                     ZenmuxBaseUrl(candidate),
-                    provider,
-                    provider.KeyIndex),
+                    provider),
             ZenmuxChannelType => OpenAiOutboundTransformer.Create(
                 ZenmuxBaseUrl(candidate),
                 provider,
                 provider.KeyIndex),
             // channel_llm.go:789-799: zenmux_responses has exactly one
             // endpoint, the responses API (channel_endpoint.go:279-281).
-            ZenmuxResponsesChannelType => ResponsesOutboundTransformer.Create(
+            ZenmuxResponsesChannelType => CreateResponsesOutbound(
+                request,
                 ZenmuxBaseUrl(candidate),
-                provider,
-                provider.KeyIndex),
+                provider),
             // channel_llm.go:898: zenmux_anthropic is the plain Anthropic
             // direct platform on the ZenMux Anthropic base URL.
             ZenmuxAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
@@ -843,7 +844,7 @@ public static class ChannelOutboundFactory
             // internally, so no ApiFormat branching is needed here
             // (channel_endpoint.go:322).
             GithubCopilotChannelType
-                => CreateGithubCopilotOutbound(candidate, tokenRefreshExecutor),
+                => CreateGithubCopilotOutbound(candidate, tokenRefreshExecutor, request),
             // channel_llm.go:1109-1118: Gemini's OpenAI-compatible endpoint;
             // the default endpoint set is chat only (channel_endpoint.go:253).
             GeminiOpenAiChannelType => CreateGeminiOpenAiOutbound(candidate, provider),
@@ -1326,7 +1327,8 @@ public static class ChannelOutboundFactory
     /// </summary>
     private static CopilotOutboundTransformer CreateGithubCopilotOutbound(
         ChannelCandidate candidate,
-        IExecutor? tokenRefreshExecutor)
+        IExecutor? tokenRefreshExecutor,
+        LlmRequest request)
     {
         if (!ChannelCredentials.IsOAuth(candidate.Credentials))
         {
@@ -1403,6 +1405,10 @@ public static class ChannelOutboundFactory
             {
                 TokenProvider = tokenProvider,
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
+                // The reference's Copilot outbound forwards the ctx to its inner
+                // Responses transformer, so the trace session reaches it (C062).
+                SessionIdProvider = () => request.RawRequest?.SessionId,
+                SessionScopeProvider = () => request.RawRequest?.SessionScope,
             });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -1423,7 +1429,8 @@ public static class ChannelOutboundFactory
     /// </summary>
     private static SubscriptionOutboundTransformer CreateXaiSubscriptionOutbound(
         ChannelCandidate candidate,
-        IExecutor? tokenRefreshExecutor)
+        IExecutor? tokenRefreshExecutor,
+        LlmRequest request)
     {
         OAuthCredentials credentials;
         try
@@ -1446,7 +1453,12 @@ public static class ChannelOutboundFactory
 
         try
         {
-            return SubscriptionOutboundTransformer.NewOutboundTransformer(tokens);
+            // The wrapper forwards the request to its inner Responses outbound,
+            // which reads the trace session from the request context (C062).
+            return SubscriptionOutboundTransformer.NewOutboundTransformer(
+                tokens,
+                () => request.RawRequest?.SessionId,
+                () => request.RawRequest?.SessionScope);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -1518,6 +1530,29 @@ public static class ChannelOutboundFactory
             HttpClient = tokenRefreshExecutor,
         });
     }
+
+    /// <summary>
+    /// Builds the shared Responses outbound with the per-attempt session seam.
+    /// The reference's Responses transformer reads <c>shared.GetSessionID(ctx)</c>
+    /// / <c>GetSessionScope(ctx)</c> on every request; the port threads the trace
+    /// session the chat endpoint captured onto the wire request and reads it
+    /// here (difference C062). Every Responses channel type and every wrapper
+    /// that delegates to this transformer uses this helper.
+    /// </summary>
+    private static ResponsesOutboundTransformer CreateResponsesOutbound(
+        LlmRequest request,
+        string baseUrl,
+        ChannelApiKeyProvider apiKeyProvider,
+        string transport = "")
+        => new(new ResponsesOutboundConfig
+        {
+            BaseUrl = baseUrl,
+            ApiKeyProvider = apiKeyProvider,
+            ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+            Transport = transport,
+            SessionIdProvider = () => request.RawRequest?.SessionId,
+            SessionScopeProvider = () => request.RawRequest?.SessionScope,
+        });
 
     private static string InferTransport(string baseUrl)
     {

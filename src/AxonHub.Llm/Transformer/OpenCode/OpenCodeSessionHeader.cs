@@ -114,7 +114,8 @@ public class OpenCodeSessionHeaderOutbound : IOutboundTransformer, IApiKeyProven
 public sealed class OpenCodeSessionHeaderCustomizedOutbound :
     OpenCodeSessionHeaderOutbound,
     IChannelCustomizedExecutor,
-    ITransportRequestFinalizer
+    ITransportRequestFinalizer,
+    IStoppableOutbound
 {
     private readonly IChannelCustomizedExecutor _customizer;
 
@@ -134,4 +135,13 @@ public sealed class OpenCodeSessionHeaderCustomizedOutbound :
         => Inner is ITransportRequestFinalizer finalizer
             ? finalizer.FinalizeTransportRequest(request)
             : request;
+
+    /// <summary>Port of (*sessionHeaderCustomizedOutbound).Stop: forwards when the wrapped outbound supports it.</summary>
+    public void Stop()
+    {
+        if (Inner is IStoppableOutbound stoppable)
+        {
+            stoppable.Stop();
+        }
+    }
 }

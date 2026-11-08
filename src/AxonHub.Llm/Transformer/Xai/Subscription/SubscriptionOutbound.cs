@@ -23,9 +23,16 @@ public sealed class SubscriptionOutboundTransformer : IOutboundTransformer
         _responses = responses;
     }
 
-    /// <summary>Port of <c>NewOutboundTransformer</c> (outbound.go:22-36).</summary>
+    /// <summary>
+    /// Port of <c>NewOutboundTransformer</c> (outbound.go:22-36). The session
+    /// seams are port-only (C062): the reference's inner Responses transformer
+    /// reads them from the ctx the wrapper forwards.
+    /// </summary>
     /// <exception cref="InvalidOperationException">No token provider was given.</exception>
-    public static SubscriptionOutboundTransformer NewOutboundTransformer(ITokenGetter? tokenProvider)
+    public static SubscriptionOutboundTransformer NewOutboundTransformer(
+        ITokenGetter? tokenProvider,
+        Func<string?>? sessionIdProvider = null,
+        Func<string?>? sessionScopeProvider = null)
     {
         if (tokenProvider is null)
         {
@@ -37,7 +44,9 @@ public sealed class SubscriptionOutboundTransformer : IOutboundTransformer
         // applied below.
         var responses = ResponsesOutboundTransformer.Create(
             SubscriptionConstants.DefaultBaseUrl,
-            "unused");
+            "unused",
+            sessionIdProvider: sessionIdProvider,
+            sessionScopeProvider: sessionScopeProvider);
 
         return new SubscriptionOutboundTransformer(tokenProvider, responses);
     }

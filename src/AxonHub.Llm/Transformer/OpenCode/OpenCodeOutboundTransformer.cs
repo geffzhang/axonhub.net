@@ -41,6 +41,16 @@ public sealed class OpenCodeOutboundConfig
     /// the channel's full key list, or null when the channel has a single key.
     /// </summary>
     public int? ChannelApiKeyIndex { get; set; }
+
+    /// <summary>
+    /// Port-only seam for <c>shared.GetSessionID(ctx)</c>; the reference's inner
+    /// Responses transformer reads it from the context on every request
+    /// (difference C062).
+    /// </summary>
+    public Func<string?>? SessionIdProvider { get; set; }
+
+    /// <summary>Port-only seam for <c>shared.GetSessionScope(ctx)</c> (C062).</summary>
+    public Func<string?>? SessionScopeProvider { get; set; }
 }
 
 /// <summary>
@@ -122,6 +132,10 @@ public sealed class OpenCodeOutboundTransformer : IOutboundTransformer, IApiKeyP
                 BaseUrl = config.BaseUrl,
                 ApiKeyProvider = config.ApiKeyProvider,
                 ChannelApiKeyIndex = config.ChannelApiKeyIndex,
+                // The reference delegates to the Responses transformer with the
+                // same ctx, so it reads the trace session (C062).
+                SessionIdProvider = config.SessionIdProvider,
+                SessionScopeProvider = config.SessionScopeProvider,
             });
         }
         catch (Exception ex) when (IsConfigurationError(ex))

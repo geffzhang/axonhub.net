@@ -749,12 +749,30 @@ public sealed class ChatCompletionOrchestrator
             // Port of orchestrator.Process's error branch: mark the last
             // execution and the request canceled (client cancellation) or failed.
             persistence?.FinalizeFailure(ex);
+
+            // The reference stops each channel's outbound when the enabled
+            // channels cache swaps; the port's transformer lives for one
+            // attempt, so a failed attempt releases its WebSocket pool here
+            // (C072).
+            outbound.Stop();
             throw;
         }
 
-        return result.Stream
-            ? new ChatCompletionResult { Stream = result.EventStream }
-            : new ChatCompletionResult { Response = result.Response };
+        if (result.Stream)
+        {
+            // The stream outlives this method. Stop the attempt's transformer
+            // when the consumer disposes the stream — after completion, error or
+            // cancellation (C072).
+            return new ChatCompletionResult
+            {
+                Stream = new DisposeCallbackStream<StreamEvent>(
+                    result.EventStream!,
+                    outbound.Stop),
+            };
+        }
+
+        outbound.Stop();
+        return new ChatCompletionResult { Response = result.Response };
     }
 
     /// <summary>

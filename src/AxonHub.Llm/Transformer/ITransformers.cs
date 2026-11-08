@@ -72,6 +72,18 @@ public interface ITransportRequestFinalizer
 }
 
 /// <summary>
+/// Port of the structural <c>interface{ Stop() }</c> the reference asserts on
+/// outbound transformers when a channel is torn down
+/// (internal/server/biz/channel.go:326-349): stopping a transformer releases
+/// the WebSocket executors and connection pools it cached.
+/// </summary>
+public interface IStoppableOutbound
+{
+    /// <summary>Releases the connections the transformer owns.</summary>
+    void Stop();
+}
+
+/// <summary>
 /// Port of transformer.PassThroughBodyPolicy (llm/transformer/interfaces.go:65-68):
 /// lets outbound transformers veto raw body pass-through.
 /// </summary>

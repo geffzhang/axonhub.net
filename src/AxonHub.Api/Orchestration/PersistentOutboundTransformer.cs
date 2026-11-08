@@ -220,6 +220,12 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
 
         CurrentChannelId = candidate.ChannelId;
         CurrentModel = entry.ActualModel;
+
+        // The reference keeps one transformer per channel and stops it when the
+        // enabled-channels cache swaps; the port builds one per attempt, so an
+        // abandoned attempt's transformer (and its WebSocket pool) is stopped
+        // here before the next one replaces it (C072).
+        StopTransformer(_current);
         _current = _factory(candidate, request, _timeProvider.GetUtcNow());
 
         // The upstream model is per-entry: the client's requested model is only
@@ -502,6 +508,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         // outbound.go:827-830 — align the protocol with the new candidate's
         // first model and rebuild its transformer before the next attempt.
         RefreshCandidateApiFormat(candidate, _modelIndex, CurrentLlmRequest);
+        StopTransformer(_current);
         _current = CurrentLlmRequest is null
             ? null
             : _factory(candidate, CurrentLlmRequest, _timeProvider.GetUtcNow());
@@ -578,6 +585,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             RefreshCandidateApiFormat(candidate, _modelIndex, CurrentLlmRequest);
             if (CurrentLlmRequest is not null)
             {
+                StopTransformer(_current);
                 _current = _factory(candidate, CurrentLlmRequest, _timeProvider.GetUtcNow());
             }
         }
@@ -588,4 +596,27 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
 
     private void RecordSelection(ChannelCandidate candidate)
         => _metrics.RecordSelection(candidate.ChannelId, _timeProvider.GetUtcNow());
+
+    /// <summary>
+    /// Stops the current attempt's transformer. The reference's
+    /// <c>stopChannelOutbounds</c> runs when the enabled-channels cache swaps
+    /// (internal/server/biz/channel.go:326-349); the port has no channel
+    /// teardown hook and builds one transformer per attempt, so the orchestrator
+    /// stops the attempt's transformer once the attempt ends (C072).
+    /// </summary>
+    public void Stop() => StopTransformer(_current);
+
+    /// <summary>
+    /// Port of the structural <c>interface{ Stop() }</c> check in
+    /// <c>stopChannelOutbounds</c>: only transformers that own connections
+    /// implement <see cref="IStoppableOutbound"/> (responses, codex and the
+    /// opencode session-header wrapper).
+    /// </summary>
+    private static void StopTransformer(IOutboundTransformer? transformer)
+    {
+        if (transformer is IStoppableOutbound stoppable)
+        {
+            stoppable.Stop();
+        }
+    }
 }

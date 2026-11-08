@@ -51,10 +51,11 @@ public sealed class ResponsesOutboundConfig
 
     /// <summary>
     /// Port-only seam for <c>shared.GetSessionID(ctx)</c>. The reference reads
-    /// the trace session from the request context; the port has no trace
-    /// subsystem yet (C013), so the orchestrator supplies it here. Returning
-    /// null means "no session"; an empty string is a present empty session,
-    /// exactly as Go's <c>ok</c> flag distinguishes the two (difference C062).
+    /// the trace session from the request context; the port's trace middleware
+    /// publishes the id and the chat endpoint writes it onto the wire request,
+    /// so the orchestrator supplies it here (difference C062). Returning null
+    /// means "no session"; an empty string is a present empty session, exactly
+    /// as Go's <c>ok</c> flag distinguishes the two.
     /// </summary>
     public Func<string?>? SessionIdProvider { get; set; }
 
@@ -76,14 +77,16 @@ public sealed class ResponsesOutboundConfig
 /// <remarks>
 /// Both transports are ported: HTTP attempts strip WebSocket-only request
 /// metadata (http_executor.go), while <c>websocket</c> attempts run through
-/// <see cref="WebSocketExecutor"/> (websocket_executor.go). Channel endpoint
-/// configuration in the port does not yet carry a transport choice and the
-/// request pipeline does not yet produce a trace session/scope, so the
-/// WebSocket transport and its connection pool stay dormant in production until
-/// those seams are wired (C072, C062).
+/// <see cref="WebSocketExecutor"/> (websocket_executor.go). A channel whose
+/// base URL uses the ws/wss scheme selects the WebSocket transport; endpoint
+/// records (and with them an explicit per-endpoint transport) are not modeled
+/// yet (C072 / C082). The trace session and scope reach the transformer through
+/// <see cref="ResponsesOutboundConfig.SessionIdProvider"/> /
+/// <see cref="ResponsesOutboundConfig.SessionScopeProvider"/>, which the
+/// orchestrator fills from the wire request (C062).
 /// </remarks>
 public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKeyProvenance,
-    IChannelCustomizedExecutor, ITransportRequestFinalizer
+    IChannelCustomizedExecutor, ITransportRequestFinalizer, IStoppableOutbound
 {
     public const string TransportHttp = "http";
 
@@ -124,29 +127,43 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
     }
 
     /// <summary>Port of NewOutboundTransformer(baseURL, apiKey).</summary>
-    public static ResponsesOutboundTransformer Create(string baseUrl, string apiKey)
+    public static ResponsesOutboundTransformer Create(
+        string baseUrl,
+        string apiKey,
+        Func<string?>? sessionIdProvider = null,
+        Func<string?>? sessionScopeProvider = null)
     {
         if (string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(baseUrl))
         {
             throw new ArgumentException("apiKey or baseURL is empty");
         }
 
-        return Create(baseUrl, new StaticApiKeyProvider(apiKey));
+        return Create(
+            baseUrl,
+            new StaticApiKeyProvider(apiKey),
+            sessionIdProvider: sessionIdProvider,
+            sessionScopeProvider: sessionScopeProvider);
     }
 
     /// <summary>
     /// Builds a transformer with a key provider and its audit index
-    /// (the reference's getAPIKeyProvider + channel_api_key_index row).
+    /// (the reference's getAPIKeyProvider + channel_api_key_index row). The
+    /// session seams default to null, which is the reference's "no trace
+    /// session" case (difference C062).
     /// </summary>
     public static ResponsesOutboundTransformer Create(
         string baseUrl,
         IApiKeyProvider apiKeyProvider,
-        int? channelApiKeyIndex = null)
+        int? channelApiKeyIndex = null,
+        Func<string?>? sessionIdProvider = null,
+        Func<string?>? sessionScopeProvider = null)
         => new(new ResponsesOutboundConfig
         {
             BaseUrl = baseUrl,
             ApiKeyProvider = apiKeyProvider,
             ChannelApiKeyIndex = channelApiKeyIndex,
+            SessionIdProvider = sessionIdProvider,
+            SessionScopeProvider = sessionScopeProvider,
         });
 
     public string ApiFormat => ApiFormats.OpenAIResponse;
@@ -865,8 +882,9 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
 
     /// <summary>
     /// Port of OutboundTransformer.Stop: closes every cached WebSocket
-    /// executor. The port has no channel-teardown hook yet (C072), so nothing
-    /// calls this in production.
+    /// executor. The reference calls it when the enabled-channels cache swaps;
+    /// the port builds one transformer per attempt, so the orchestrator stops
+    /// the attempt's transformer when the attempt ends or is replaced (C072).
     /// </summary>
     public void Stop()
     {

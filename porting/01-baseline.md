@@ -7154,6 +7154,61 @@ C223 由 gap 改为 resolved。未移植残余：无。
 
 C022 由 gap 改为 resolved。残余：C224（普通 `List<string>` 的 null 元素保留 null）。
 
+## 141. Responses WebSocket 生产接线：trace 会话注入与按尝试 Stop（C072 收窄，12 例，2026-11-08）
+
+参照：`internal/server/biz/channel.go` 的 `stopChannelOutbounds` / `cleanupSwappedChannels`、
+`internal/server/biz/channel_llm.go` 的 Responses 构造分支、
+`llm/transformer/openai/responses/outbound.go` 的 `Stop`、
+`llm/transformer/openai/codex/outbound.go`、`llm/transformer/opencode/headers.go`、
+`internal/server/orchestrator/outbound.go` 的重试 / 换通道。
+
+参照行为：
+
+| 项 | 参照值 |
+|---|---|
+| Stop 调用点 | 启用通道缓存换入 / 换出时，`stopChannelOutbounds` 对旧通道的 outbounds 逐一调用 `Stop`（`biz/channel.go:326-349`）；`cleanupSwappedChannels` 在候选构建后清理被换下的通道 |
+| 可停对象 | 仅 responses、codex 与 opencode 的 `sessionHeaderCustomizedOutbound` 实现 `interface{ Stop() }`；其余出站跳过 |
+| responses Stop | 关闭并清空 WebSocket 执行器池；各执行器的 `Close` 关闭空闲连接，进行中的连接保留至请求结束 |
+| opencode Stop | 转发给被包裹的出站（仅当内层实现 `Stop`） |
+| 会话来源 | responses builder 从 ctx 读取 `shared.GetSessionID` / `GetSessionScope` 并写入出站配置 |
+| websocket 传输 | 仅 `openai/responses` 格式允许；显式 `endpoint.Transport` 优先，否则由端点 / 通道 base URL 的 ws / wss 推断 |
+
+端口实现：
+
+- `AxonHub.Llm.Transformer.IStoppableOutbound` 复刻上述结构接口；`ResponsesOutboundTransformer`、
+  `CodexOutboundTransformer` 与 `OpenCodeSessionHeaderCustomizedOutbound`（仅当内层实现时转发）
+  实现它；`Stop` 语义沿用执行器 `Close`（关闭全部池化执行器、清空池、幂等）。
+- `ChannelOutboundFactory.CreateResponsesOutbound` 统一构造 8 个 Responses 分支（openai
+  responses、openai_responses、xai、xai_responses、nanogpt_responses、bailian_responses、
+  zenmux、zenmux_responses），注入 `SessionIdProvider = () => request.RawRequest?.SessionId`
+  与 `SessionScopeProvider = () => request.RawRequest?.SessionScope`；opencode_go、
+  github_copilot 与 xai_subscription 包装器把两个 provider 透传给内层 Responses 配置。
+- `PersistentOutboundTransformer` 在 `TransformRequest`（首次或替换 `_current`）、
+  `TryPrepareForRetry`（换模型）与 `TryNextChannel`（换通道）前调用 `StopTransformer`，
+  新增公开 `Stop()`；非 `IStoppableOutbound` 的 transformer 跳过，与参照的结构判断一致。
+- `ChatCompletionOrchestrator.RunPipelineAsync` 在非流式成功返回、pipeline 抛错与流被 Dispose
+  时停止出站；流以 `DisposeCallbackStream` 包装，保证流消费方 Dispose（成功、错误、取消）时
+  触发且只触发一次，源 Dispose 抛错也先执行回调。
+- 端点记录仍未建模（C094 item 1 / C082）：显式 `endpoint.Transport` 未进入通道配置，生产
+  websocket 选择仅由 base URL scheme 推断（`InferTransport`；参照也只允许 `openai/responses`
+  格式使用 websocket）；每次尝试构建 transformer 意味着连接池不跨请求复用，参照的通道级池
+  （空闲 50m、寿命 50m、上限 128）在端口等价于每请求新池。
+
+测试（12 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/ResponsesSessionWiringTests.cs` | 6 | openai / xai / opencode_go / github_copilot / xai_subscription 五条生产链路把 trace 会话写入 `prompt_cache_key` 前缀与 `SessionId` / `SessionScope`；无 trace 时不写 `prompt_cache_key` |
+| `tests/AxonHub.Api.Tests/PersistentOutboundRetryTests.cs` | 4 | 换模型停旧 transformer；换通道停旧与中间 transformer；`Stop` 停当前；非可停 transformer 跳过 |
+| `tests/AxonHub.Llm.Tests/DisposeCallbackStreamTests.cs` | 2 | 透传并在 Dispose 后回调一次（重复 Dispose 不再触发）；源 Dispose 抛错仍回调 |
+
+静态计数：`AxonHub.Llm.Tests` 由 1480 增至 1482（+2），`AxonHub.Api.Tests` 由 5403 增至
+5413（+10），四项目合计由 8894 增至 8906（`AxonHub.Persistence.Tests` 331、
+`AxonHub.Grains.Tests` 1680 不变）。**按项目规则未运行 lint / build / test。**
+
+C072 保持 gap 但收窄：会话注入与 Stop 生命周期完成，残余为端点记录传输与通道级连接复用；
+C062 的残余接线说明、C094 item (12) 与 C096 item (6) 随之关闭。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

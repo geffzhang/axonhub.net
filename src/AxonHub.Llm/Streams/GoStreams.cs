@@ -216,6 +216,47 @@ public sealed class FilterStream<T>(IStream<T> stream, Func<T, bool> predicate) 
     public void Dispose() => stream.Dispose();
 }
 
+/// <summary>
+/// Port-only pass-through stream that runs a callback once when it is disposed.
+/// The orchestrator wraps the final event stream so the attempt's outbound
+/// transformer is stopped when the stream ends, fails or is cancelled — the
+/// per-attempt stand-in for the reference's channel-teardown hook (C072).
+/// </summary>
+public sealed class DisposeCallbackStream<T> : IStream<T>
+    where T : class
+{
+    private readonly IStream<T> _source;
+    private readonly Action _onDispose;
+    private int _disposed;
+
+    public DisposeCallbackStream(IStream<T> source, Action onDispose)
+    {
+        _source = source ?? throw new ArgumentNullException(nameof(source));
+        _onDispose = onDispose ?? throw new ArgumentNullException(nameof(onDispose));
+    }
+
+    public T? Current => _source.Current;
+
+    public Exception? Err => _source.Err;
+
+    public bool Next() => _source.Next();
+
+    public void Dispose()
+    {
+        try
+        {
+            _source.Dispose();
+        }
+        finally
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _onDispose();
+            }
+        }
+    }
+}
+
 public static class GoStreams
 {
     /// <summary>Port of <c>streams.All</c>: drain the stream, surfacing its terminal error.</summary>
