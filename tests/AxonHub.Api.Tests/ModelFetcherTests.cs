@@ -1,6 +1,7 @@
 using System.Net;
 using AxonHub.Api.Management;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer.Cline;
 using AxonHub.Llm.Transformer.Xai.Subscription;
 using AxonHub.Persistence;
@@ -654,6 +655,71 @@ public sealed class ModelFetcherTests
         Assert.Equal(0, executor.Calls);
     }
 
+    /// <summary>
+    /// model_fetcher.go:542-548: a Command Code catalog request is sent by a
+    /// client that refuses HTTPS to HTTP redirects, so the API key is never
+    /// replayed over cleartext.
+    /// </summary>
+    [Fact]
+    public async Task FetchModelsCommandCodeRefusesHttpsDowngradeRedirect()
+    {
+        var handler = new ClaudeCodeQuotaCheckerTests.RecordingHttpHandler
+        {
+            OnSend = _ => RedirectTo("http://api.commandcode.ai/provider/v1/models"),
+        };
+        var executor = new HttpExecutor(new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        });
+        var fetcher = NewFetcher(executor);
+
+        var result = await fetcher.FetchModelsAsync(new FetchModelsInput
+        {
+            ChannelType = "commandcode",
+            BaseUrl = "https://api.commandcode.ai/provider/v1",
+            ApiKey = "test-key",
+        });
+
+        Assert.Equal(
+            """failed to fetch models: HTTP request failed: Get "http://api.commandcode.ai/provider/v1/models": refusing HTTPS to HTTP redirect""",
+            result.Error);
+        Assert.Empty(result.Models);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("https://api.commandcode.ai/provider/v1/models", request.Url);
+    }
+
+    /// <summary>
+    /// The policy is scoped: an ordinary OpenAI channel still follows the same
+    /// redirect, like the reference's shared client.
+    /// </summary>
+    [Fact]
+    public async Task FetchModelsOpenAiChannelFollowsHttpsDowngradeRedirect()
+    {
+        var handler = new ClaudeCodeQuotaCheckerTests.RecordingHttpHandler
+        {
+            OnSend = recorded => recorded.Url == "https://api.openai.test/v1/models"
+                ? RedirectTo("http://api.openai.test/v1/models")
+                : ModelFetchTestResponses.Json("""{"data":[{"id":"gpt-4"}]}"""),
+        };
+        var executor = new HttpExecutor(new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        });
+        var fetcher = NewFetcher(executor);
+
+        var result = await fetcher.FetchModelsAsync(new FetchModelsInput
+        {
+            ChannelType = "openai",
+            BaseUrl = "https://api.openai.test",
+            ApiKey = "test-key",
+        });
+
+        Assert.Null(result.Error);
+        Assert.Equal("gpt-4", Assert.Single(result.Models).Id);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal("http://api.openai.test/v1/models", handler.Requests[1].Url);
+    }
+
     // -- Header overrides ----------------------------------------------------
 
     [Fact]
@@ -761,10 +827,17 @@ public sealed class ModelFetcherTests
     // -- Helpers -------------------------------------------------------------
 
     private static ModelFetcher NewFetcher(
-        ScriptedExecutor executor,
+        IExecutor executor,
         FakeChannelModelCatalogStore? channels = null,
         TimeProvider? time = null)
         => new(executor, channels ?? new FakeChannelModelCatalogStore(), time ?? TimeProvider.System);
+
+    private static HttpResponseMessage RedirectTo(string location)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.Found);
+        response.Headers.TryAddWithoutValidation("Location", location);
+        return response;
+    }
 
     private static string HeaderValue(HttpRequestData request, string name)
         => HttpClientUtils.HeaderGet(request.Headers, name);

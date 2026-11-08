@@ -6789,6 +6789,54 @@ Go map 解码语义与 UTC 重置文本）。
 差异：C182 由剩余 1 个 checker 收窄为 0（C182 resolved，全部 19 个 provider checker 已落地）；
 新增 C221（Ollama 双面凭据回退、HTML 计量抓取、Go 匿名结构体解码与 HTTPS 降级拒绝缺口）。
 
+## 134. HTTP 重定向循环复刻与 HTTPS 降级拒绝策略（24 例，2026-11-08）
+
+参照 `f272549f`：Go `net/http/client.go` 的重定向循环（`do`:597-755、`redirectBehavior`:512、
+`checkRedirect`:502、`uerr`:622-638、`defaultCheckRedirect`:833、`shouldCopyHeaderOnRedirect`:1005、
+`stripPassword`:1047、`refererForURL`:147），`llm/httpclient/client.go` 的策略客户端
+（`WithRejectHTTPSDowngrade`:110-130、`WithRejectRedirects`:132-143、`rejectHTTPSDowngrade`:146-151，
+`NewHttpClientWithProxy`:103-108 在派生代理客户端时保留降级策略），以及四个调用点：
+`internal/server/biz/channel_llm.go:757-763`（命令码通道）、
+`internal/server/biz/model_fetcher.go:542-548`（命令码 / codex / 第三方 codex 目录；`:562` 的
+`WithRejectRedirects` 随冻结基线未移植，C158）、`ollama_checker.go:108-114`、
+`zenmux_checker.go:74-78`。参照测试：`llm/httpclient/client_test.go:424-430`、
+`ollama_checker_test.go:325` 与 `:608`（后两者此前登记为未移植，见 C221）。
+
+重写 `src/AxonHub.Llm/Http/HttpExecutor.cs`：重定向不再交给 `SocketsHttpHandler`，而是在执行器内复刻
+Go 的循环——301/302/303 除 GET/HEAD 外改写为 GET 并丢弃 body 与 Content-Encoding / Content-Language /
+Content-Location / Content-Type；307/308 保留方法与 body（Go 在初始请求的 `GetBody == nil` 且有 body 时
+放弃跟随，端口以字节重放，等价于 `GetBody` 恒存在）；目的地离开初始域名后
+Authorization / Www-Authenticate / Cookie / Cookie2 / Proxy-Authorization / Proxy-Authenticate 粘性剥离，
+子域（IDNA 比较，含 `:` / `%` 不复制）保留；Referer 在 https→http 时抑制、显式 Referer 优先、
+否则取上一跳 URL 去掉 userinfo；无 Location 的 3xx 原样返回；Location 解析失败按 `uerr` 的
+`<op> "<url>": failed to parse Location header "<loc>": ...` 形状报错并丢弃响应；CheckRedirect 拒绝时
+把 3xx 响应头交给 `OnResponseHeaders` 再包装为 `<prefix><op> "<loc>": <reason>`；默认客户端 10 跳上限
+（`stopped after 10 redirects`），安装任一策略后无上限（Go 的策略钩子替换默认钩子）。新增
+`HttpRedirectPolicy`（Follow / RejectHttpsDowngrade / RejectAll）、`HttpRedirectException` 与
+`HttpRedirectPolicies`（`WithRejectHttpsDowngrade` / `WithRejectRedirects` 扩展方法，脚本执行器原样返回）。
+
+接线：`PersistentOutboundTransformer.CustomizeExecutor` 对 commandcode / commandcode_anthropic 候选安装降级
+拒绝（C124 resolved）；`ModelFetcher` 对命令码与 codex 通道安装（C158）；Ollama / Zenmux 检查器在
+`ResolveExecutor` 选择代理之后安装（C221 / C207）。`Program.cs` 的共享 `SocketsHttpHandler`、代理工厂、
+Vertex 与 Antigravity 默认 handler 全部改为 `AllowAutoRedirect = false`（重定向由执行器负责），调用方
+自备的 transport 不强制。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 相对跳转与 GET 保持、302 后 POST→GET 且丢 body 与 body 头、307 保留方法与 body、跨域剥离敏感头、子域保留 Authorization、Referer 取上一跳、10 跳上限与文案、https→http 拒绝与精确文案、https→https 放行、策略客户端无跳数上限、RejectAll 文案、无 Location 的 3xx 原样返回、拒绝时观察 3xx 响应头、DoStream 的 stream 前缀、不可解析 Location 的报错形状、脚本执行器不受策略影响 | `tests/AxonHub.Llm.Tests/HttpRedirectTests.cs` | 16 Fact |
+| 命令码两类候选经 CustomizeExecutor 拒绝降级且只发一次请求、普通候选不受策略影响 | `tests/AxonHub.Api.Tests/PersistentOutboundRetryTests.cs` | 1 Fact + 2 InlineData = 3 |
+| 命令码模型目录拒绝降级且密钥不落入明文、普通 OpenAI 通道照常跟随 | `tests/AxonHub.Api.Tests/ModelFetcherTests.cs` | 2 Fact |
+| Ollama balance（Bearer）与 settings（cookie）两面拒绝降级 | `tests/AxonHub.Api.Tests/OllamaQuotaCheckerTests.cs` | 2 Fact |
+| Zenmux 配额请求拒绝降级 | `tests/AxonHub.Api.Tests/ZenmuxQuotaCheckerTests.cs` | 1 Fact |
+
+`AxonHub.Api.Tests` 由 5288 增至 5296（+8），`AxonHub.Llm.Tests` 新增 16 例，`AxonHub.Persistence.Tests`
+保持 319，四个项目合计由 8734 增至 8750。**本切片按项目规则未运行 lint / build / test，上述数字为
+`[Fact]` / `[InlineData]` 的静态计数；下一次全量运行应以 5296 / 319 / 8750 复核。**
+
+差异：C124 由剩余 1 项（降级拒绝）收窄为 0（resolved）；C158 的第 ③ 项收窄为「按通道代理」，降级拒绝已移植；
+C207 / C221 的降级缺口关闭（accepted，Ollama 125 例）；新增 C222（Go 重定向循环的端口残差：URI 解析、
+错误文案、Referer 渲染与 Host 保留）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

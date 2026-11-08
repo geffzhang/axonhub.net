@@ -316,6 +316,16 @@ public sealed class ModelFetcher
             Headers = authHeaders,
         };
 
+        // model_fetcher.go:542-548: the channel proxy (still unported, C158) is
+        // followed by a client that refuses HTTPS-to-HTTP redirects, so the API
+        // key is never replayed over cleartext by a Command Code or Codex
+        // catalog request.
+        var executor = _executor;
+        if (IsCommandCodeChannelType(channelType) || codexChannel is not null)
+        {
+            executor = executor.WithRejectHttpsDowngrade();
+        }
+
         Func<byte[], List<ModelIdentify>> parse = ParseModelsResponse;
         CancellationTokenSource? codexTimeout = null;
         var effectiveToken = cancellationToken;
@@ -338,7 +348,7 @@ public sealed class ModelFetcher
 
                 try
                 {
-                    request = PrepareCodexModelsRequest(effectiveToken, codexChannel);
+                    request = PrepareCodexModelsRequest(effectiveToken, codexChannel, executor);
                 }
                 catch (Exception)
                 {
@@ -375,7 +385,7 @@ public sealed class ModelFetcher
             {
                 try
                 {
-                    var geminiModels = FetchGeminiModels(effectiveToken, request);
+                    var geminiModels = FetchGeminiModels(effectiveToken, request, executor);
                     return new FetchModelsResult { Models = Uniq(geminiModels) };
                 }
                 catch (Exception ex)
@@ -388,7 +398,7 @@ public sealed class ModelFetcher
                 }
             }
 
-            Func<HttpResponseData> execute = () => _executor.Do(effectiveToken, request);
+            Func<HttpResponseData> execute = () => executor.Do(effectiveToken, request);
             if (UsesAnthropicModelApi(channelType) && !IsCommandCodeChannelType(channelType))
             {
                 execute = () =>
@@ -396,18 +406,18 @@ public sealed class ModelFetcher
                     HttpResponseData response;
                     try
                     {
-                        response = _executor.Do(effectiveToken, request);
+                        response = executor.Do(effectiveToken, request);
                     }
                     catch (Exception)
                     {
                         RetryWithBearerAuth();
-                        return _executor.Do(effectiveToken, request);
+                        return executor.Do(effectiveToken, request);
                     }
 
                     if (response.StatusCode != 200)
                     {
                         RetryWithBearerAuth();
-                        return _executor.Do(effectiveToken, request);
+                        return executor.Do(effectiveToken, request);
                     }
 
                     return response;
@@ -823,13 +833,16 @@ public sealed class ModelFetcher
 
     private HttpRequestData PrepareCodexModelsRequest(
         CancellationToken cancellationToken,
-        ChannelRecord channel)
+        ChannelRecord channel,
+        IExecutor executor)
     {
         var credentials = ResolveOAuthCredentials(channel);
         var parameters = new CodexTokenProviderParams
         {
             Credentials = credentials,
-            HttpClient = _executor,
+            // model_fetcher.go:556 passes the same policy client to the token
+            // provider, so a token refresh cannot be redirected to cleartext.
+            HttpClient = executor,
         };
 
         if (channel.Id != 0)
@@ -870,7 +883,8 @@ public sealed class ModelFetcher
 
     private List<ModelIdentify> FetchGeminiModels(
         CancellationToken cancellationToken,
-        HttpRequestData request)
+        HttpRequestData request,
+        IExecutor executor)
     {
         const int maxPages = 50;
         const int pageSize = 1000;
@@ -883,7 +897,7 @@ public sealed class ModelFetcher
         {
             request.Url = WithGeminiModelsPagination(request.Url, pageSize, pageToken);
 
-            var response = _executor.Do(cancellationToken, request);
+            var response = executor.Do(cancellationToken, request);
             if (response.StatusCode != 200)
             {
                 throw new InvalidOperationException(

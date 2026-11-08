@@ -51,8 +51,13 @@ builder.Services.AddSingleton<IEnabledChannelProvider, PostgresEnabledChannelPro
 builder.Services.AddSingleton(TimeProvider.System);
 
 // The reference's HTTP client has no request timeout (llm/httpclient/client.go);
-// timeouts come from the retry policy scopes inside the pipeline.
-builder.Services.AddSingleton(static _ => new HttpExecutor(new HttpClient(new SocketsHttpHandler())
+// timeouts come from the retry policy scopes inside the pipeline. Redirects are
+// followed by HttpExecutor itself (Go's loop plus the redirect-policy hooks), so
+// the handler must not follow them.
+builder.Services.AddSingleton(static _ => new HttpExecutor(new HttpClient(new SocketsHttpHandler
+{
+    AllowAutoRedirect = false,
+})
 {
     Timeout = Timeout.InfiniteTimeSpan,
 }));

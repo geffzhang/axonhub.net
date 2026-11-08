@@ -109,7 +109,11 @@ public sealed class AntigravityTransformer : IOutboundTransformer, IChannelCusto
             return;
         }
 
-        var httpClient = _httpClient ?? new HttpExecutor(new HttpClient
+        var httpClient = _httpClient ?? new HttpExecutor(new HttpClient(new SocketsHttpHandler
+        {
+            // Redirects are followed by HttpExecutor with Go's loop.
+            AllowAutoRedirect = false,
+        })
         {
             // Appropriate timeouts for token exchange (Go's tokenExchangeTimeout).
             Timeout = TokenExchangeTimeout,

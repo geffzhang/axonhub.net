@@ -40,6 +40,9 @@ public sealed class HttpProxyExecutorFactory : IProxyExecutorFactory
 
         var handler = new SocketsHttpHandler
         {
+            // Redirects are followed by HttpExecutor (Go's loop plus the
+            // redirect-policy hooks); the handler must not follow them.
+            AllowAutoRedirect = false,
             ConnectTimeout = ConnectTimeout,
             PooledConnectionIdleTimeout = disableConnectionReuse
                 ? TimeSpan.Zero

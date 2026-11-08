@@ -138,8 +138,9 @@ public sealed class OllamaQuotaChecker : IQuotaChecker
             throw new InvalidProviderQuotaCredentialsException(NoCredentialError);
         }
 
-        // provider_quota.go:46-48: a channel proxy replaces the shared client.
-        // WithRejectHTTPSDowngrade has no port-to-.NET seam (C124/C207/C221).
+        // provider_quota.go:46-48 and ollama_checker.go:108-114: a channel
+        // proxy replaces the shared client, and the result rejects HTTPS to
+        // HTTP redirects.
         var executor = ResolveExecutor(channel);
 
         if (apiKey.Length != 0)
@@ -1028,9 +1029,17 @@ public sealed class OllamaQuotaChecker : IQuotaChecker
     }
 
     private IExecutor ResolveExecutor(ChannelRecord channel)
-        => ParseSettingsLenient(channel.Settings)?.Proxy is { } proxy
+    {
+        // ollama_checker.go:108-114: the channel proxy replaces the shared
+        // client first, then the HTTPS-downgrade rejection is installed so
+        // neither the API key nor the session cookie can be forwarded over a
+        // redirect to cleartext.
+        var executor = ParseSettingsLenient(channel.Settings)?.Proxy is { } proxy
             ? _proxyExecutors.Create(ToProxyConfig(proxy))
             : _executor;
+
+        return executor.WithRejectHttpsDowngrade();
+    }
 
     private static ChannelSettingsDraft? ParseSettingsLenient(string? raw)
     {

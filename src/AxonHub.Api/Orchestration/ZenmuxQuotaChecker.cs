@@ -75,7 +75,9 @@ public sealed class ZenmuxQuotaChecker : IQuotaChecker
             },
         };
 
-        // provider_quota.go:46-48: a channel proxy replaces the shared client.
+        // provider_quota.go:46-48 and zenmux_checker.go:74-78: a channel proxy
+        // replaces the shared client, and the result rejects HTTPS to HTTP
+        // redirects.
         var executor = ResolveExecutor(channel);
 
         HttpResponseData response;
@@ -1053,9 +1055,16 @@ public sealed class ZenmuxQuotaChecker : IQuotaChecker
     }
 
     private IExecutor ResolveExecutor(ChannelRecord channel)
-        => ParseSettingsLenient(channel.Settings)?.Proxy is { } proxy
+    {
+        // zenmux_checker.go:74-78: the channel proxy replaces the shared
+        // client first, then the HTTPS-downgrade rejection is installed so the
+        // management key cannot be forwarded over a redirect to cleartext.
+        var executor = ParseSettingsLenient(channel.Settings)?.Proxy is { } proxy
             ? _proxyExecutors.Create(ToProxyConfig(proxy))
             : _executor;
+
+        return executor.WithRejectHttpsDowngrade();
+    }
 
     private static ChannelSettingsDraft? ParseSettingsLenient(string? raw)
     {

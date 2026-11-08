@@ -68,7 +68,13 @@ public sealed class VertexExecutor : IExecutor
             // oauth2.Transport).
             var handler = new GcpAuthHandler(
                 credentials.TokenSource,
-                options.Transport ?? new SocketsHttpHandler { UseCookies = false });
+                options.Transport ?? new SocketsHttpHandler
+                {
+                    UseCookies = false,
+                    // HttpExecutor follows redirects with Go's loop, so the
+                    // default transport must not follow them itself.
+                    AllowAutoRedirect = false,
+                });
             _inner = new HttpExecutor(new HttpClient(handler)
             {
                 Timeout = Timeout.InfiniteTimeSpan,

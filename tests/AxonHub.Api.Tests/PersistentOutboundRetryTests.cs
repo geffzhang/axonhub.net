@@ -1,3 +1,4 @@
+using System.Net;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
@@ -175,6 +176,70 @@ public sealed class PersistentOutboundRetryTests
         Assert.Equal(1L, harness.Last.Requests[^1].TransformOptions?.DefaultMaxTokens);
         Assert.Same(options, request.TransformOptions);
         Assert.Equal(1L, options.DefaultMaxTokens);
+    }
+
+    /// <summary>
+    /// channel_llm.go:757-763: both Command Code channel types run their
+    /// inference requests through a client that refuses HTTPS to HTTP
+    /// redirects, so the bearer key is never replayed over cleartext.
+    /// </summary>
+    [Theory]
+    [InlineData("commandcode")]
+    [InlineData("commandcode_anthropic")]
+    public void CommandCodeCandidatesRefuseHttpsDowngradeRedirects(string channelType)
+    {
+        var candidate = CandidateWithModels(941, "m1");
+        candidate.Type = channelType;
+        var harness = new Harness(candidate);
+        harness.Transformer.TransformRequest(Request("m1"));
+
+        var handler = new ClaudeCodeQuotaCheckerTests.RecordingHttpHandler
+        {
+            OnSend = _ => RedirectTo("http://upstream.test/chat"),
+        };
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var executor = harness.Transformer.CustomizeExecutor(new HttpExecutor(client));
+
+        var error = Assert.Throws<HttpRedirectException>(() => executor.Do(
+            CancellationToken.None,
+            new HttpRequestData { Method = "POST", Url = "https://upstream.test/chat" }));
+
+        Assert.Equal(
+            """HTTP request failed: Post "http://upstream.test/chat": refusing HTTPS to HTTP redirect""",
+            error.Message);
+        Assert.Single(handler.Requests);
+    }
+
+    /// <summary>The policy is scoped to Command Code; other channels keep the shared client.</summary>
+    [Fact]
+    public void OtherCandidatesKeepTheUnrestrictedExecutor()
+    {
+        var harness = new Harness(CandidateWithModels(942, "m1"));
+        harness.Transformer.TransformRequest(Request("m1"));
+
+        var handler = new ClaudeCodeQuotaCheckerTests.RecordingHttpHandler
+        {
+            OnSend = recorded => recorded.Url == "https://upstream.test/chat"
+                ? RedirectTo("http://upstream.test/chat")
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") },
+        };
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var executor = harness.Transformer.CustomizeExecutor(new HttpExecutor(client));
+
+        var response = executor.Do(
+            CancellationToken.None,
+            new HttpRequestData { Method = "GET", Url = "https://upstream.test/chat" });
+
+        Assert.Equal(200, response.StatusCode);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal("http://upstream.test/chat", handler.Requests[1].Url);
+    }
+
+    private static HttpResponseMessage RedirectTo(string location)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.Found);
+        response.Headers.TryAddWithoutValidation("Location", location);
+        return response;
     }
 
     // -- Helpers -------------------------------------------------------------

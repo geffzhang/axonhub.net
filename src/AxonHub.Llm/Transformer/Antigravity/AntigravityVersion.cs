@@ -186,7 +186,11 @@ internal sealed class AntigravityVersionFetcher
     {
         VersionURL = versionUrl;
         ChangelogURL = changelogUrl;
-        _executor = executor ?? new HttpExecutor(new HttpClient
+        _executor = executor ?? new HttpExecutor(new HttpClient(new SocketsHttpHandler
+        {
+            // Redirects are followed by HttpExecutor with Go's loop.
+            AllowAutoRedirect = false,
+        })
         {
             Timeout = TimeSpan.FromSeconds(5),
         });

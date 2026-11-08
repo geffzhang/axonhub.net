@@ -439,6 +439,18 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// </summary>
     public IExecutor CustomizeExecutor(IExecutor executor)
     {
+        // channel_llm.go:757-763: both Command Code channel types are built
+        // with a client that refuses HTTPS-to-HTTP redirects, so a
+        // Bearer-bearing inference request can never be replayed in cleartext.
+        // The reference applies this when constructing the channel; the port
+        // has no per-channel client seam, so the per-attempt customization is
+        // the equivalent point.
+        if (CurrentCandidate?.Type is ChannelOutboundFactory.CommandcodeChannelType
+            or ChannelOutboundFactory.CommandcodeAnthropicChannelType)
+        {
+            executor = executor.WithRejectHttpsDowngrade();
+        }
+
         var current = _current;
         return current is IChannelCustomizedExecutor custom
             ? custom.CustomizeExecutor(executor)

@@ -742,6 +742,58 @@ public sealed class OllamaQuotaCheckerTests
         Assert.Equal("Ollama settings request failed: connection refused", error.Message);
     }
 
+    /// <summary>
+    /// ollama_checker.go:108-114 and ollama_checker_test.go:324: the checker's
+    /// client refuses HTTPS to HTTP redirects, so the API key is never replayed
+    /// over cleartext.
+    /// </summary>
+    [Fact]
+    public async Task BalanceDowngradeRedirectIsRefused()
+    {
+        var checker = CreateChecker(out var handler);
+        handler.OnSend = _ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Found);
+            response.Headers.TryAddWithoutValidation("Location", "http://ollama.com/api/balance");
+            return response;
+        };
+
+        var error = await Assert.ThrowsAsync<WrappedException>(
+            () => checker.CheckQuotaAsync(
+                Channel(credentials: """{"apiKey":"ollama-key"}"""),
+                CancellationToken.None));
+
+        Assert.Equal(
+            """Ollama balance request failed: HTTP request failed: Get "http://ollama.com/api/balance": refusing HTTPS to HTTP redirect""",
+            error.Message);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(BalanceUrl, request.Url);
+    }
+
+    /// <summary>Same rejection covers the cookie-bearing settings-page request.</summary>
+    [Fact]
+    public async Task SettingsDowngradeRedirectIsRefused()
+    {
+        var checker = CreateChecker(out var handler);
+        handler.OnSend = _ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Found);
+            response.Headers.TryAddWithoutValidation("Location", "http://ollama.com/settings");
+            return response;
+        };
+
+        var error = await Assert.ThrowsAsync<WrappedException>(
+            () => checker.CheckQuotaAsync(
+                Channel(settings: CookieSettings(CookieHeader)),
+                CancellationToken.None));
+
+        Assert.Equal(
+            """Ollama settings request failed: HTTP request failed: Get "http://ollama.com/settings": refusing HTTPS to HTTP redirect""",
+            error.Message);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(SettingsUrl, request.Url);
+    }
+
     [Fact]
     public async Task ExecutorHttpErrorMapsToTheBalanceStatusError()
     {

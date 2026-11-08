@@ -358,6 +358,31 @@ public sealed class ZenmuxQuotaCheckerTests
         Assert.IsType<IOException>(error.InnerException);
     }
 
+    /// <summary>
+    /// zenmux_checker.go:74-78: the checker's client refuses HTTPS to HTTP
+    /// redirects, so the management key is never replayed over cleartext.
+    /// </summary>
+    [Fact]
+    public void CheckQuotaRefusesHttpsDowngradeRedirects()
+    {
+        var checker = CreateChecker(out var handler);
+        handler.OnSend = _ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Found);
+            response.Headers.TryAddWithoutValidation("Location", "http://zenmux.ai/api/v1/management/subscription/detail");
+            return response;
+        };
+
+        var error = Assert.Throws<WrappedException>(
+            () => checker.CheckQuotaAsync(Channel(), CancellationToken.None).GetAwaiter().GetResult());
+
+        Assert.Equal(
+            """zenmux quota request failed: HTTP request failed: Get "http://zenmux.ai/api/v1/management/subscription/detail": refusing HTTPS to HTTP redirect""",
+            error.Message);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(QuotaUrl, request.Url);
+    }
+
     [Theory]
     [InlineData(199)]
     [InlineData(300)]
