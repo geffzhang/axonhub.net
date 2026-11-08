@@ -68,9 +68,10 @@ public sealed class ClineResponse
             Error = Error,
         };
 
-        foreach (var choice in Choices ?? [])
+        foreach (var rawChoice in Choices ?? [])
         {
-            response.Choices.Add(choice.ToOpenAiChoice());
+            // Go decodes a null element as the zero Choice struct.
+            response.Choices.Add((rawChoice ?? new ClineChoice()).ToOpenAiChoice());
         }
 
         return response;
@@ -81,7 +82,7 @@ public sealed class ClineResponse
 public sealed class ClineChoice
 {
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 
     [JsonPropertyName("message")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -185,7 +186,8 @@ public sealed class ClineMessage
             var reasoningText = new StringBuilder();
             foreach (var detail in details)
             {
-                reasoningText.Append(detail.Text);
+                // Go decodes a null element as the zero ReasoningDetail struct.
+                reasoningText.Append(detail?.Text ?? string.Empty);
             }
 
             message.ReasoningContent = reasoningText.ToString();
@@ -227,5 +229,5 @@ public sealed class ClineReasoningDetail
     public string Format { get; set; } = string.Empty;
 
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 }

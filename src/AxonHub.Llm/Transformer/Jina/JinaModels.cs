@@ -45,7 +45,7 @@ public sealed class JinaRerankResponse
 public sealed class JinaRerankResult
 {
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 
     [JsonPropertyName("relevance_score")]
     public double RelevanceScore { get; set; }
@@ -133,7 +133,7 @@ public sealed class JinaEmbeddingData
     public Embedding Embedding { get; set; } = new();
 
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 }
 
 /// <summary>

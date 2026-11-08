@@ -526,6 +526,26 @@ public sealed class JinaRerankTransformerTests
     }
 
     [Fact]
+    public void OutboundTransformRerankResponse_NullResultElementDecodesAsZeroResult()
+    {
+        var body = Encoding.UTF8.GetBytes(
+            "{\"model\":\"m\",\"object\":\"list\",\"results\":[null]}");
+
+        var resp = JinaOutboundTransformer.Create("https://api.jina.ai/v1", "test-key")
+            .TransformResponse(new HttpResponseData
+            {
+                StatusCode = 200,
+                Body = body,
+                Request = new HttpRequestData { ApiFormat = ApiFormats.JinaRerank },
+            });
+
+        var result = Assert.Single(resp.Rerank!.Results);
+        Assert.Equal(0L, result.Index);
+        Assert.Equal(0d, result.RelevanceScore);
+        Assert.Null(result.Document);
+    }
+
+    [Fact]
     public void OutboundTransformRerankResponse_InvalidJson()
     {
         var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -772,6 +792,28 @@ public sealed class JinaRerankTransformerTests
         Assert.NotNull(resp.Usage);
         Assert.Equal(5L, resp.Usage!.PromptTokens);
         Assert.Equal(5L, resp.Usage.TotalTokens);
+    }
+
+    [Fact]
+    public void OutboundTransformEmbeddingResponse_NullDataElementDecodesAsZeroData()
+    {
+        var body = Encoding.UTF8.GetBytes(
+            "{\"object\":\"list\",\"model\":\"m\",\"data\":[null],"
+            + "\"usage\":{\"prompt_tokens\":5,\"total_tokens\":5}}");
+
+        var resp = JinaOutboundTransformer.Create("https://api.jina.ai/v1", "test-key")
+            .TransformResponse(new HttpResponseData
+            {
+                StatusCode = 200,
+                Body = body,
+                Request = new HttpRequestData { ApiFormat = ApiFormats.JinaEmbedding },
+            });
+
+        var data = Assert.Single(resp.Embedding!.Data);
+        Assert.Equal(string.Empty, data.Object);
+        Assert.Equal(0L, data.Index);
+        Assert.Null(data.Embedding.Values);
+        Assert.Equal(string.Empty, data.Embedding.Base64);
     }
 
     [Fact]

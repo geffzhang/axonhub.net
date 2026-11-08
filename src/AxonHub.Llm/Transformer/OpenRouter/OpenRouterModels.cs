@@ -208,7 +208,7 @@ public sealed class OpenRouterResponse
 public sealed class OpenRouterChoice
 {
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 
     [JsonPropertyName("finish_reason")]
     public string? FinishReason { get; set; }
@@ -361,5 +361,5 @@ public sealed class OpenRouterReasoningDetail
     public string Format { get; set; } = string.Empty;
 
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 }

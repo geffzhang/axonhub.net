@@ -379,8 +379,10 @@ public static class ResponsesImageConvert
             imageResponse.Background = background;
         }
 
-        foreach (var item in upstream.Output ?? [])
+        foreach (var rawItem in upstream.Output ?? [])
         {
+            // Go decodes a null element as the zero Item struct (type "").
+            var item = rawItem ?? new ResponsesItem();
             if (item.Type != "image_generation_call" || string.IsNullOrEmpty(item.Result))
             {
                 continue;

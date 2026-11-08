@@ -899,7 +899,8 @@ public static class ResponsesOutboundConvert
 
         if (src.Sources is { Count: > 0 } sources)
         {
-            action.Sources = [.. sources];
+            // Go decodes a null element as the zero WebSearchSource struct.
+            action.Sources = [.. sources.Select(static source => source ?? new ResponsesWebSearchSource())];
         }
 
         var call = new ResponsesItem
@@ -967,8 +968,10 @@ public static class ResponsesOutboundConvert
             textContent.Clear();
         }
 
-        foreach (var outputItem in output)
+        foreach (var rawOutputItem in output)
         {
+            // Go decodes a null element as the zero Item struct (type "").
+            var outputItem = rawOutputItem ?? new ResponsesItem();
             switch (outputItem.Type)
             {
                 case "message":

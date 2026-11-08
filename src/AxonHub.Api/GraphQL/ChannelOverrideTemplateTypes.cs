@@ -364,7 +364,8 @@ public static class ChannelOverrideTemplateMapping
                     Path = operation.Match.Path ?? string.Empty,
                     Eq = operation.Match.Eq ?? string.Empty,
                 },
-            Index = operation.Index,
+            // Go's int is 64-bit; GraphQL Int is 32-bit (C190).
+            Index = operation.Index is null ? null : checked((int)operation.Index.Value),
             Splat = operation.Splat,
         }),
     ];

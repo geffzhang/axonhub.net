@@ -17,7 +17,8 @@ internal sealed class AnthropicInboundStream : IStream<StreamEvent>
 
     private readonly IStream<LlmResponse> _source;
     private readonly List<StreamEvent> _eventQueue = [];
-    private readonly Dictionary<int, ToolCall> _toolCalls = [];
+    // Go: ToolCall.Index is int (64-bit), so the map key widens with it.
+    private readonly Dictionary<long, ToolCall> _toolCalls = [];
 
     // Responses may interleave summary deltas from different reasoning items.
     // Keep those item-scoped buffers separate until their final signature arrives.
@@ -42,7 +43,7 @@ internal sealed class AnthropicInboundStream : IStream<StreamEvent>
     private AnthropicUsage? _pendingUsage;
 
     // Tool call tracking.
-    private int _currentToolCallIndex;
+    private long _currentToolCallIndex;
     private bool _hasCurrentToolCall;
 
     private string _lastEventType = string.Empty;
@@ -370,7 +371,7 @@ internal sealed class AnthropicInboundStream : IStream<StreamEvent>
         return null;
     }
 
-    private InvalidOperationException? EmitBufferedReadToolArguments(int toolCallIndex)
+    private InvalidOperationException? EmitBufferedReadToolArguments(long toolCallIndex)
     {
         if (!_toolCalls.TryGetValue(toolCallIndex, out var toolCall)
             || !AnthropicJson.IsReadToolName(toolCall.Function.Name))

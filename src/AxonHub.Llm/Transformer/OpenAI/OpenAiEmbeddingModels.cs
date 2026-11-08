@@ -55,7 +55,7 @@ public sealed class OpenAiEmbeddingData
     public Embedding Embedding { get; set; } = new();
 
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 }
 
 /// <summary>Port of openai.EmbeddingUsage (llm/transformer/openai/embedding.go:35-39).</summary>

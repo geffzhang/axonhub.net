@@ -598,8 +598,10 @@ public sealed partial class OpenAiOutboundTransformer
             }
         }
 
-        foreach (var image in imgResp.Data ?? [])
+        foreach (var rawImage in imgResp.Data ?? [])
         {
+            // Go decodes a null element as the zero ImageData struct.
+            var image = rawImage ?? new ImagesResponseData();
             imageResponse.Data.Add(new ImageData
             {
                 B64JSON = ImageNullIfEmpty(image.B64JSON),

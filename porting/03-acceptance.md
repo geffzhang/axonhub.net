@@ -232,6 +232,17 @@ logprob 3 个 InlineData、可空省略 / embedding 向量 / category_scores 字
 九个 instrument、5 秒周期 stdout/OTLP 导出、`WithMetrics()` 等价 HTTP 中间件、gin FullPath
 转换、panic 不记录）已按参照移植，C223 关闭。
 
+§140 追加 13 个用例（`AxonHub.Llm.Tests` 12：`OpenAiRequestTypeCheckTests` 1、
+`OpenAiResponseNullSemanticsTests` 5、`OpenAiImageOutboundTests` 1、`JinaRerankTransformerTests` 2、
+`ClineOutboundTransformerTests` 1、`AnthropicOutboundTransformerTests` 1、
+`ResponsesOutboundTransformerTests` 1；`AxonHub.Api.Tests` 1：`ChannelOverrideOperationsTests`），
+同样按项目规则未运行 lint / build / test；§140 落地后的静态计数为 `AxonHub.Llm.Tests` 1480、
+`AxonHub.Api.Tests` 5403、四项目合计 8894（`AxonHub.Persistence.Tests` 331、
+`AxonHub.Grains.Tests` 1680 不变），下一次全量运行应以该数字复核。该切片不新增表或 SQL；
+统一模型与线上模型的 index 加宽为 long（流聚合字典键同步加宽），响应转换对 Go 值结构切片做
+null→零值替换，`objects.ParseOverrideOperations` 的 index 放宽到 int64，C022 关闭；残余的普通
+`List<string>` null 元素登记为 C224 已接受差异。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

@@ -267,10 +267,10 @@ internal sealed class BailianStreamFilter : IStream<LlmResponse>
     private readonly IStream<LlmResponse> _source;
     private readonly Queue<LlmResponse> _pending = new();
     private readonly StringBuilder _bufferedText = new();
-    private readonly Dictionary<(int ChoiceIndex, int CallIndex), string> _toolArgs = new();
+    private readonly Dictionary<(long ChoiceIndex, long CallIndex), string> _toolArgs = new();
 
     private bool _sawToolCalls;
-    private int _lastTextChoice;
+    private long _lastTextChoice;
 
     public BailianStreamFilter(IStream<LlmResponse> source)
     {
@@ -381,7 +381,7 @@ internal sealed class BailianStreamFilter : IStream<LlmResponse>
     }
 
     /// <summary>Port of filterToolCalls.</summary>
-    private void FilterToolCalls(int choiceIndex, List<ToolCall> toolCalls)
+    private void FilterToolCalls(long choiceIndex, List<ToolCall> toolCalls)
     {
         foreach (var toolCall in toolCalls)
         {
@@ -451,7 +451,7 @@ internal sealed class BailianStreamFilter : IStream<LlmResponse>
     }
 
     /// <summary>Port of buildTextChunk.</summary>
-    private static LlmResponse? BuildTextChunk(LlmResponse baseResponse, int choiceIndex, string text)
+    private static LlmResponse? BuildTextChunk(LlmResponse baseResponse, long choiceIndex, string text)
     {
         return new LlmResponse
         {

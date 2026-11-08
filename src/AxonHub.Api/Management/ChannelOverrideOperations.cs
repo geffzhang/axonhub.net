@@ -384,11 +384,12 @@ public static class ChannelOverrideOperations
 
         if (TryGetProperty(item, "index", out var index) && index.ValueKind != JsonValueKind.Null)
         {
-            // encoding/json only accepts an integer literal for *int.
+            // encoding/json only accepts an integer literal for *int, and Go's
+            // int is 64-bit on the reference platform.
             var raw = index.GetRawText();
             if (index.ValueKind != JsonValueKind.Number
                 || raw.AsSpan().IndexOfAny('.', 'e', 'E') >= 0
-                || !index.TryGetInt32(out var parsed))
+                || !index.TryGetInt64(out var parsed))
             {
                 throw Mismatch(index, "OverrideOperation.index", "int");
             }

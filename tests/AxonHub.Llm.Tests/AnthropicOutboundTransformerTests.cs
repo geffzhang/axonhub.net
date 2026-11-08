@@ -619,6 +619,38 @@ public sealed class AnthropicOutboundTransformerTests
     }
 
     [Fact]
+    public void TransformResponse_NullCitationElementIsIgnored()
+    {
+        var response = new HttpResponseData
+        {
+            StatusCode = 200,
+            Body = Encoding.UTF8.GetBytes(
+                """
+                {
+                    "id": "msg_789",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "cited",
+                            "citations": [null, {"type": "char_location"}]
+                        }
+                    ],
+                    "model": "claude-3-sonnet-20240229",
+                    "stop_reason": "end_turn"
+                }
+                """),
+        };
+
+        var result = Direct().TransformResponse(response);
+
+        var annotation = Assert.Single(result.Choices[0].Message!.Annotations!);
+        Assert.Equal("char_location", annotation.Type);
+        Assert.Null(annotation.UrlCitation);
+    }
+
+    [Fact]
     public void TransformResponse_Errors()
     {
         var transformer = Direct();

@@ -71,7 +71,7 @@ public sealed class NanogptResponse
 public sealed class NanogptChoice
 {
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 
     [JsonPropertyName("finish_reason")]
     public string? FinishReason { get; set; }

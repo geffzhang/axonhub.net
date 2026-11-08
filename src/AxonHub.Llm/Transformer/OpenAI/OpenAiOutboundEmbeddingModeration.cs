@@ -75,11 +75,13 @@ public sealed partial class OpenAiOutboundTransformer
         var data = new List<EmbeddingData>();
         foreach (var item in embeddingResponse.Data ?? [])
         {
+            // Go decodes a null element as the zero EmbeddingData struct.
+            var wire = item ?? new OpenAiEmbeddingData();
             data.Add(new EmbeddingData
             {
-                Object = item.Object,
-                Embedding = item.Embedding,
-                Index = item.Index,
+                Object = wire.Object,
+                Embedding = wire.Embedding,
+                Index = wire.Index,
             });
         }
 

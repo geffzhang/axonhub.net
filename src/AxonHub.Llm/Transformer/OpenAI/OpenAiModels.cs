@@ -535,7 +535,7 @@ public sealed class OpenAiResponse
 public sealed class OpenAiChoice
 {
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 
     [JsonPropertyName("message")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -679,7 +679,7 @@ public sealed class OpenAiToolCall
     public OpenAiFunctionCall Function { get; set; } = new();
 
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 
     [JsonPropertyName("extra_content")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

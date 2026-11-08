@@ -11,7 +11,7 @@
 | `llm/pipeline/pipeline_retry_test.go`（4 个子测试 + 11 个顶层测试 = 15 例） | `tests/AxonHub.Llm.Tests/PipelineRetryTests.cs`（15 个 `[Fact]`） | 15/15 已移植 | 逐条对照：同通道重试、跨通道切换、混合重试、预算耗尽、原始流意图保持、元数据不泄漏、提交前错误重试、内容提交后不重试、预提交缓冲上限（事件数/字节数）、大内容首事件放行、超大 SSE 事件绕过重试。`preReadLlmStream` 通过 `InternalsVisibleTo` 直接驱动，等价于 Go 的同包测试。 |
 | `llm/pipeline/empty_response_test.go`（23 个可执行用例） | `tests/AxonHub.Llm.Tests/EmptyResponseTests.cs`（14 个 `[Fact]`） | 14/23 已移植，9 例顺延 | 已移植：`TestHasResponseContent` 的 4 个 chat 子测试 + 独立签名用例、流式空响应检测 2 例、非流式空响应检测 2 例、音频空响应探测 5 例（speech 音频、transcription 文本/原始体、speech 流事件 audio_base64、speech 二进制块、transcription 流事件，见第 19 节）。顺延的 9 例依赖 rerank / video 等尚未进入统一模型的响应类型（见"覆盖缺口"），属于范围裁剪，非行为差异。 |
 | `internal/server/orchestrator/lb_strategy_rr_test.go`（RoundRobinStrategy 路径）+ `load_balancer_test.go`（排序/健康/topK 子集） | `tests/AxonHub.Grains.Tests/ChannelSelectionTests.cs`（16 个 `[Fact]`） | 16 例已改写（子集） | 覆盖：模型过滤、零请求满分 150、请求数拉低分数、同分保持输入顺序（`WithoutWeightTieBreaker`）、健康通道降级与冷却边界、topK 排除不健康通道、`calculateTopK` 的 1/2/3 截断与非正/超大值归一为全部候选、模型别名解析、10 分钟窗口过期与迟到事件丢弃、不计数模式。C012 已补齐 WeightRoundRobin / error-aware / additive 等策略链（本文件另有 8 例，共 24 例），rate-limit 策略由 §7.1 的 18 例 `RateLimitAwareScorerTests` 单独覆盖；真实数据库用例仍顺延（C014）。 |
-| `llm/transformer/openai/model.go` 的 `encoding/json` 解码语义（上游无对应单测） | `tests/AxonHub.Llm.Tests/OpenAiRequestTypeCheckTests.cs`（101 例） | 已建立（探针证据） | 用独立 Go 探针（`E:\tmp\typrobe`，直接编译参照模块）与 C# 探针对同一 106 条输入逐条比对；锁定错误文案 67 例、Go 接受 32 例、null 零值/tool_choice 回退 2 例。覆盖结构名与标签路径、整数/浮点字面量规则、大小写不敏感匹配、重复键、未知字段、硬错误覆盖软错误。残余差异见 C022。 |
+| `llm/transformer/openai/model.go` 的 `encoding/json` 解码语义（上游无对应单测） | `tests/AxonHub.Llm.Tests/OpenAiRequestTypeCheckTests.cs`（101 例） | 已建立（探针证据） | 用独立 Go 探针（`E:\tmp\typrobe`，直接编译参照模块）与 C# 探针对同一 106 条输入逐条比对；锁定错误文案 67 例、Go 接受 32 例、null 零值/tool_choice 回退 2 例。覆盖结构名与标签路径、整数/浮点字面量规则、大小写不敏感匹配、重复键、未知字段、硬错误覆盖软错误。数值与 null 元素语义见 C022（已闭合），字符串数组的 null 元素见 C224。 |
 | `internal/server/orchestrator/retry_test.go` 的 `TestIsRetryableErrorForChannel`（10 个断言） | `tests/AxonHub.Api.Tests/ChannelRetryPredicateTests.cs`（10 个用例 + 6 个解析/降级用例） | 10/10 已移植 | 逐条对照：nil、默认 5xx、包装的传输错误、配置 400 / 未配置 401、子串匹配、正则匹配、未匹配文本、空 settings、ResponseError 详情文本。另锁定 settings jsonb 解析、损坏 settings 降级、非法正则不匹配（Go 行为）。`Normalize*`（写入侧校验）未移植：本切片无通道写 API。 |
 | `internal/server/middleware/header_test.go`、`auth_test.go` 的鉴权分支 | `tests/AxonHub.Api.Tests/{ApiKeyAuthenticationTests,ClientAddressTests,ApiKeyAuthMiddlewareTests}.cs`（73 例） | 已改写（子集） | `TestExtractAPIKeyFromRequest` 的默认配置分支逐条覆盖：7 个 header 优先级、四种前缀、裸 key、TrimSpace、空值/纯空白跳过（14 例）。`TestIsAnyAllowedIP` 9 例与 `TestIPMatchersMappedIPv4` 的 17 个 allowlist 用例逐条移植（含 `::ffff:` 映射地址、host bits、`/95` 宽前缀与 `::/0` 家族隔离）。`TestIPMatchersWithTrustedProxy` 改写为 `ClientAddress` 的受信/不受信转发用例：默认 `trusted_proxies=[]` 时忽略转发头，受信对端按 gin 的右起“首个不受信跳”规则取客户端地址。`auth_test.go` 的 magic-value 401 与无 header 语义由鉴权器/中间件用例覆盖。JWT/密码/缓存用例顺延（C014）；`ExtractAPIKeyFromHeader`（旧单 header 辅助函数）不在 `WithAPIKeyConfig` 路径，未移植。 |
 | `internal/server/middleware/ip_blocklist_test.go`（`TestIsBlockedIP` 9 例、`TestClientIPCandidates*` 3 例）与 `internal/server/biz/system.go` 的 `SecuritySettingsOrDefault` / `normalizeSecuritySettings` 分支（上游无对应单测） | `tests/AxonHub.Api.Tests/IpBlocklistMiddlewareTests.cs`（14 例）+ `SystemSettingsServiceTests.cs`（15 例）+ `ClientAddressTests` 的前缀边界 6 例 | 已改写（9/9 + 3/3 已移植） | `TestIsBlockedIP` 的 9 个子测试逐条覆盖（精确 / CIDR / Trim / IPv6 / 多 candidate / 非法 candidate / 非法条目 / 不匹配）；`TestClientIPCandidates*` 的三种场景改写为中间件与 `ClientAddress` 用例（不受信对端忽略转发头、受信对端取右起首个不受信跳、单一 candidate 的等价去重）。系统设置无上游单测，按源码分支建立：缺行 / 非法 JSON / JSON null / 空对象 / 缺图标 / 大小写键 / 未知字段 / 重复键 / 存储失败 / 软删除全部回退默认，`blocked_ips` 的 Trim / 去空 / 精确去重 / 保序归一化，以及图标开关覆盖。另补 `netip.ParsePrefix` 的 1-3 位十进制、无前导零 / 符号 / 空白、拒绝 zone 的边界 6 例。`WithIPBlocklist` 的 403 响应体与「ClientIP 为空不读设置」由中间件用例锁定。 |
@@ -7109,6 +7109,50 @@ ASP.NET 管道复现，panic 不记录这一可观察行为一致。
 不变）。**按项目规则未运行 lint / build / test。**
 
 C223 由 gap 改为 resolved。未移植残余：无。
+
+## 140. index 宽度与 Go 值结构 null 语义（C022 闭合，13 例，2026-11-08）
+
+参照：`llm/model` 的统一模型、`llm/transformer/*` 的 wire 模型与响应转换、
+`internal/objects/channel.go` 的 `ParseOverrideOperations`。
+
+参照行为：
+
+| 项 | 参照值 |
+|---|---|
+| 统一模型 index | Go `int`（64 位）：`Choice.Index`、`ToolCall.Index`、`CompletionChoice.Index`、`EmbeddingData.Index`、`RerankResult.Index` |
+| 线上模型 index | 同上：openai choice / tool_call / completion choice / embedding、Jina、Cline、OpenRouter、Nanogpt、Gemini / Ollama 的 index |
+| 入站 index 解码 | `{"index":3000000000}` 被接受，`ToolCall.Index` 为 3000000000 |
+| 值结构切片 null 元素 | `encoding/json` 解码为结构零值：choices、content parts、logprobs、image data、Jina results/data、Cline choice/reasoning_details、Anthropic citations、Responses output/sources |
+| 指针切片 null 元素 | `[]*T` 保持 nil（不补零值） |
+| Api override index | `OverrideOperation.Index` 是 `*int`（64 位），`ParseOverrideOperations` 接受 3000000000 |
+
+端口实现：
+
+- 统一模型与线上模型的 index 全部改为 `long`；流聚合字典（OpenAI / Anthropic / Responses /
+  Gemini / Bailian）的键同步加宽。
+- 响应转换对 Go 值结构切片做 null→零值替换；指针切片（`Candidate`、`Part`、`Embedding`、
+  `RerankDocument`、流式 `TextCitation`）不做替换。
+- `AxonHub.Api/Management/ChannelOverrideOperations.ReadOperation` 改用 `TryGetInt64`，
+  `OverrideOperationDraft.Index` 为 `long?`；GraphQL 输出按 C190 做 checked 截断。
+
+测试（13 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Llm.Tests/OpenAiRequestTypeCheckTests.cs` | 1 | `tool_calls[].index=3000000000` 解码为 3000000000 |
+| `tests/AxonHub.Llm.Tests/OpenAiResponseNullSemanticsTests.cs` | 5 | choices / content parts / logprobs / embedding data / 流式分块中的 null 元素 |
+| `tests/AxonHub.Llm.Tests/OpenAiImageOutboundTests.cs` | 1 | image data null → 零值 `ImageData` |
+| `tests/AxonHub.Llm.Tests/JinaRerankTransformerTests.cs` | 2 | rerank results null → 零值；embedding data null → 零值 |
+| `tests/AxonHub.Llm.Tests/ClineOutboundTransformerTests.cs` | 1 | choice null → 零值；reasoning_details null → 空串 |
+| `tests/AxonHub.Llm.Tests/AnthropicOutboundTransformerTests.cs` | 1 | citation null → 零值类型，不产生注解 |
+| `tests/AxonHub.Llm.Tests/ResponsesOutboundTransformerTests.cs` | 1 | output null → 零值 `Item` |
+| `tests/AxonHub.Api.Tests/ChannelOverrideOperationsTests.cs` | 1 | override index 3000000000 保留为 long |
+
+静态计数：`AxonHub.Llm.Tests` 由 1468 增至 1480（+12），`AxonHub.Api.Tests` 由 5402 增至
+5403（+1），四项目合计由 8881 增至 8894（`AxonHub.Persistence.Tests` 331、
+`AxonHub.Grains.Tests` 1680 不变）。**按项目规则未运行 lint / build / test。**
+
+C022 由 gap 改为 resolved。残余：C224（普通 `List<string>` 的 null 元素保留 null）。
 
 ## 覆盖缺口
 

@@ -265,7 +265,9 @@ public static class OpenAiConvertToLlm
 
         if (c?.MultipleContent is not null)
         {
-            content.MultipleContent = c.MultipleContent.Select(p => p.ToLlmPart()).ToList();
+            content.MultipleContent = c.MultipleContent
+                .Select(p => (p ?? new OpenAiMessageContentPart()).ToLlmPart())
+                .ToList();
         }
 
         return content;
@@ -337,7 +339,8 @@ public static class OpenAiConvertToLlm
             ServiceTier = r.ServiceTier,
         };
 
-        resp.Choices = (r.Choices ?? []).Select(c => c.ToLlmChoice()).ToList();
+        // Go decodes a null element as the zero Choice struct.
+        resp.Choices = (r.Choices ?? []).Select(c => (c ?? new OpenAiChoice()).ToLlmChoice()).ToList();
 
         if (r.Usage is not null)
         {
@@ -400,19 +403,28 @@ public static class OpenAiConvertToLlm
 
         return new LogprobsContent
         {
-            Content = (lp.Content ?? []).Select(t => new TokenLogprob
+            // Go decodes a null element as the zero TokenLogprob / TopLogprob.
+            Content = (lp.Content ?? []).Select(raw =>
             {
-                Token = t.Token,
-                Logprob = t.Logprob,
-                Bytes = t.Bytes is { Count: > 0 } ? t.Bytes : null,
-                TopLogprobs = t.TopLogprobs is { Count: > 0 } top
-                    ? top.Select(tl => new TopLogprob
-                    {
-                        Token = tl.Token,
-                        Logprob = tl.Logprob,
-                        Bytes = tl.Bytes is { Count: > 0 } bytes ? bytes : null,
-                    }).ToList()
-                    : null,
+                var t = raw ?? new OpenAiTokenLogprob();
+                return new TokenLogprob
+                {
+                    Token = t.Token,
+                    Logprob = t.Logprob,
+                    Bytes = t.Bytes is { Count: > 0 } ? t.Bytes : null,
+                    TopLogprobs = t.TopLogprobs is { Count: > 0 } top
+                        ? top.Select(rawTop =>
+                        {
+                            var tl = rawTop ?? new OpenAiTopLogprob();
+                            return new TopLogprob
+                            {
+                                Token = tl.Token,
+                                Logprob = tl.Logprob,
+                                Bytes = tl.Bytes is { Count: > 0 } bytes ? bytes : null,
+                            };
+                        }).ToList()
+                        : null,
+                };
             }).ToList(),
         };
     }

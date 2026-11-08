@@ -76,7 +76,9 @@ public static class AnthropicOutboundResponse
                 {
                     foreach (var citation in citations)
                     {
-                        if (LlmAnnotationFromCitation(citation) is { } annotation)
+                        // Go decodes a null element as the zero TextCitation
+                        // (empty type), which yields no annotation.
+                        if (LlmAnnotationFromCitation(citation ?? new AnthropicTextCitation()) is { } annotation)
                         {
                             annotations.Add(annotation);
                         }

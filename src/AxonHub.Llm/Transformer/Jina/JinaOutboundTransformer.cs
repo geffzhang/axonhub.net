@@ -266,8 +266,10 @@ public sealed class JinaOutboundTransformer : IOutboundTransformer, IApiKeyProve
             Results = new List<RerankResult>(),
         };
 
-        foreach (var result in jinaResp.Results)
+        foreach (var rawResult in jinaResp.Results)
         {
+            // Go decodes a null element as the zero RerankResult struct.
+            var result = rawResult ?? new JinaRerankResult();
             llmRerankResp.Results.Add(new RerankResult
             {
                 Index = result.Index,
@@ -326,8 +328,10 @@ public sealed class JinaOutboundTransformer : IOutboundTransformer, IApiKeyProve
             Data = new List<EmbeddingData>(),
         };
 
-        foreach (var data in jinaResp.Data)
+        foreach (var rawData in jinaResp.Data)
         {
+            // Go decodes a null element as the zero EmbeddingData struct.
+            var data = rawData ?? new JinaEmbeddingData();
             llmEmbeddingResp.Data.Add(new EmbeddingData
             {
                 Object = data.Object,

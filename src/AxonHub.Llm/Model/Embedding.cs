@@ -355,7 +355,7 @@ public sealed class EmbeddingData
     public Embedding Embedding { get; set; } = new();
 
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 }
 
 /// <summary>

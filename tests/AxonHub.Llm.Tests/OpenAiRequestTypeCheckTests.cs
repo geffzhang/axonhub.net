@@ -165,6 +165,21 @@ public sealed class OpenAiRequestTypeCheckTests
     }
 
     [Fact]
+    public void ToolCallIndexBeyondInt32DecodesLikeGoInt()
+    {
+        // Go's `int` is 64-bit on the reference platform; the type check already
+        // accepts the full int64 range, so binding must not narrow it to int32.
+        var request = Transform(
+            "{\"model\":\"m\",\"messages\":[{\"role\":\"assistant\",\"content\":\"hi\","
+            + "\"tool_calls\":[{\"id\":\"1\",\"type\":\"function\","
+            + "\"function\":{\"name\":\"f\",\"arguments\":\"{}\"},"
+            + "\"index\":3000000000}]}]}");
+
+        var toolCall = Assert.Single(request.Messages[0].ToolCalls!);
+        Assert.Equal(3000000000L, toolCall.Index);
+    }
+
+    [Fact]
     public void NullCollectionElementsDecodeAsGoZeroValues()
     {
         var request = Transform(

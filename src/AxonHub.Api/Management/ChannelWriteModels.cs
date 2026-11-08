@@ -369,7 +369,7 @@ public sealed class OverrideOperationDraft
 
     [JsonPropertyName("index")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public int? Index { get; set; }
+    public long? Index { get; set; }
 
     [JsonPropertyName("splat")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

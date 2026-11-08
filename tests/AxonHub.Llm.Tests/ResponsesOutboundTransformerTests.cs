@@ -774,6 +774,39 @@ public sealed class ResponsesOutboundTransformerTests
     }
 
     [Fact]
+    public void TransformsNullOutputItemAsZeroItem()
+    {
+        var transformer = ResponsesOutboundTransformer.Create("https://api.openai.com", "test-api-key");
+        var result = transformer.TransformResponse(new HttpResponseData
+        {
+            StatusCode = 200,
+            Body = Bytes(
+                """
+                {
+                  "id": "resp_null",
+                  "object": "response",
+                  "created_at": 1759161016,
+                  "status": "completed",
+                  "model": "gpt-4o",
+                  "output": [
+                    null,
+                    {
+                      "id": "msg_123",
+                      "type": "message",
+                      "content": [{"type": "output_text", "text": "hi"}],
+                      "role": "assistant"
+                    }
+                  ]
+                }
+                """),
+        });
+
+        var choice = Assert.Single(result.Choices);
+        Assert.Equal("hi", choice.Message!.Content!.Content);
+        Assert.Equal("stop", choice.FinishReason);
+    }
+
+    [Fact]
     public void TransformsImageGenerationOutput()
     {
         var transformer = ResponsesOutboundTransformer.Create("https://api.openai.com", "test-api-key");

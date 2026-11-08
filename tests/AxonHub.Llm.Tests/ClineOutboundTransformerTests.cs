@@ -181,6 +181,48 @@ public sealed class ClineOutboundTransformerTests
     }
 
     [Fact]
+    public void TransformResponse_NullChoiceAndReasoningDetailDecodeAsZeroValues()
+    {
+        var response = Transformer().TransformResponse(new HttpResponseData
+        {
+            StatusCode = 200,
+            Body = Encoding.UTF8.GetBytes(
+                """
+                {
+                    "success": true,
+                    "data": {
+                        "id": "chatcmpl-1",
+                        "object": "chat.completion",
+                        "created": 123,
+                        "model": "cline-pass/deepseek-v4-flash",
+                        "choices": [
+                            null,
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "reasoning_details": [null, {"type": "reasoning.text", "text": "think"}]
+                                },
+                                "finish_reason": "stop"
+                            }
+                        ]
+                    }
+                }
+                """),
+        });
+
+        Assert.Equal(2, response.Choices.Count);
+
+        var zero = response.Choices[0];
+        Assert.Equal(0L, zero.Index);
+        Assert.Null(zero.Message);
+        Assert.Null(zero.FinishReason);
+
+        Assert.Equal("think", response.Choices[1].Message!.ReasoningContent);
+    }
+
+    [Fact]
     public void TransformResponse_UnwrapsBareOpenAiBody()
     {
         // Without a success envelope the reference decodes the body as the

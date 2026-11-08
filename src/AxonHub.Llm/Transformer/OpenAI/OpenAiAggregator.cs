@@ -40,7 +40,7 @@ public static class OpenAiAggregator
         OpenAiUsage? usage = null;
         var systemFingerprint = string.Empty;
         var serviceTier = string.Empty;
-        var choicesAggs = new Dictionary<int, ChoiceAggregator>();
+        var choicesAggs = new Dictionary<long, ChoiceAggregator>();
         var citationsMap = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var chunk in chunks)
@@ -61,8 +61,10 @@ public static class OpenAiAggregator
                 continue; // Skip invalid chunks.
             }
 
-            foreach (var choice in parsed.Choices ?? [])
+            foreach (var rawChoice in parsed.Choices ?? [])
             {
+                // Go decodes a null element as the zero Choice struct.
+                var choice = rawChoice ?? new OpenAiChoice();
                 var choiceIndex = choice.Index;
 
                 if (!choicesAggs.TryGetValue(choiceIndex, out var choiceAgg))
@@ -426,9 +428,9 @@ public static class OpenAiAggregator
     }
 
     /// <summary>Port of openai.choiceAggregator.</summary>
-    private sealed class ChoiceAggregator(int index)
+    private sealed class ChoiceAggregator(long index)
     {
-        public int Index { get; } = index;
+        public long Index { get; } = index;
 
         public StringBuilder Content { get; } = new();
 
@@ -450,7 +452,7 @@ public static class OpenAiAggregator
 
         public List<OpenAiTokenLogprob> Logprobs { get; } = [];
 
-        public Dictionary<int, ToolCall> ToolCalls { get; } = [];
+        public Dictionary<long, ToolCall> ToolCalls { get; } = [];
 
         public string? FinishReason { get; set; }
 

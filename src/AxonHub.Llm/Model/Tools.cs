@@ -216,9 +216,9 @@ public sealed class ToolCall
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ResponseCustomToolCall? ResponseCustomToolCall { get; set; }
 
-    /// <summary>Go: no omitempty — index 0 must survive.</summary>
+    /// <summary>Go: no omitempty — index 0 must survive; Go int is 64-bit here.</summary>
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 
     [JsonPropertyName("cache_control")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

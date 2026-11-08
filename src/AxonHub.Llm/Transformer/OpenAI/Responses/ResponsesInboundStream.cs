@@ -50,9 +50,9 @@ internal sealed class ResponsesInboundStream : IStream<StreamEvent>
     private readonly List<string> _pendingReasoningOrder = [];
 
     // Tool call tracking.
-    private readonly Dictionary<int, ToolCall> _toolCalls = [];
-    private readonly Dictionary<int, bool> _toolCallItemStarted = [];
-    private readonly Dictionary<int, int> _toolCallOutputIndex = [];
+    private readonly Dictionary<long, ToolCall> _toolCalls = [];
+    private readonly Dictionary<long, bool> _toolCallItemStarted = [];
+    private readonly Dictionary<long, int> _toolCallOutputIndex = [];
 
     // Response accumulation using the stream aggregator.
     private Usage? _usage;
@@ -896,7 +896,7 @@ internal sealed class ResponsesInboundStream : IStream<StreamEvent>
         StartToolCallItem(toolCallIndex);
     }
 
-    private void StartToolCallItem(int toolCallIndex)
+    private void StartToolCallItem(long toolCallIndex)
     {
         if (_toolCallItemStarted.TryGetValue(toolCallIndex, out var started) && started)
         {

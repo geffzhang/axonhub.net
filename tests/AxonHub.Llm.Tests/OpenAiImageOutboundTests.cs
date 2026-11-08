@@ -497,6 +497,20 @@ public sealed class OpenAiImageOutboundTests
     }
 
     [Fact]
+    public void TransformImageGenerationResponse_NullDataElementDecodesAsZeroImage()
+    {
+        var body = Encoding.UTF8.GetBytes("{\"created\":1730000000,\"data\":[null]}");
+
+        var resp = OpenAiOutboundTransformer.TransformImageGenerationResponse(
+            new HttpResponseData { StatusCode = 200, Body = body });
+
+        var image = Assert.Single(resp.Image!.Data);
+        Assert.Null(image.B64JSON);
+        Assert.Null(image.URL);
+        Assert.Null(image.RevisedPrompt);
+    }
+
+    [Fact]
     public void TransformImageGenerationResponse_WithUsage()
     {
         var body = Encoding.UTF8.GetBytes(

@@ -112,7 +112,7 @@ public sealed class OpenAiCompletionChoice
     public string Text { get; set; } = string.Empty;
 
     [JsonPropertyName("index")]
-    public int Index { get; set; }
+    public long Index { get; set; }
 
     [JsonPropertyName("logprobs")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

@@ -35,8 +35,8 @@ public sealed class RerankResponse
 /// <summary>Port of llm.RerankResult: a single reranked document result.</summary>
 public sealed class RerankResult
 {
-    /// <summary>The index of the document in the original list.</summary>
-    public int Index { get; set; }
+    /// <summary>The index of the document in the original list; Go int is 64-bit here.</summary>
+    public long Index { get; set; }
 
     /// <summary>The relevance score of the document to the query.</summary>
     public double RelevanceScore { get; set; }

@@ -869,7 +869,7 @@ public static class GeminiOutboundConvert
     {
         var choice = new Choice
         {
-            Index = (int)candidate.Index,
+            Index = candidate.Index,
         };
 
         var hasToolCall = false;

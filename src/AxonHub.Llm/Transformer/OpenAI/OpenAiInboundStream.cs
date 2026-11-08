@@ -14,7 +14,7 @@ public sealed class OpenAiInboundStream : IStream<LlmResponse>
 {
     private readonly IStream<LlmResponse> _source;
     private readonly Queue<LlmResponse> _queue = [];
-    private readonly Dictionary<int, ChoiceState> _choices = [];
+    private readonly Dictionary<long, ChoiceState> _choices = [];
     private bool _usage;
     private bool _done;
     private bool _ended;
@@ -150,7 +150,7 @@ public sealed class OpenAiInboundStream : IStream<LlmResponse>
     /// Object.Finalize destructor clash.</summary>
     private void SynthesizeTerminalChunk()
     {
-        var indexes = new List<int>();
+        var indexes = new List<long>();
 
         foreach (var (index, choice) in _choices)
         {
@@ -214,7 +214,7 @@ public sealed class OpenAiInboundStream : IStream<LlmResponse>
 
         public bool Finished { get; set; }
 
-        public Dictionary<int, ToolCall> Tools { get; } = [];
+        public Dictionary<long, ToolCall> Tools { get; } = [];
     }
 }
 

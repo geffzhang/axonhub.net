@@ -22,9 +22,9 @@ public sealed class GeminiInboundStream : IStream<StreamEvent>
     private Exception? _err;
 
     // choiceIndex -> toolCallIndex -> aggregator
-    private readonly Dictionary<int, Dictionary<int, ToolCallAgg>> _pendingToolCallsByC = [];
+    private readonly Dictionary<long, Dictionary<long, ToolCallAgg>> _pendingToolCallsByC = [];
     // choiceIndex -> last seen reasoning signature delta (may arrive as a standalone chunk)
-    private readonly Dictionary<int, string> _pendingReasoningSignatureByC = [];
+    private readonly Dictionary<long, string> _pendingReasoningSignatureByC = [];
 
     public GeminiInboundStream(GeminiInboundTransformer transformer, IStream<LlmResponse> source)
     {
@@ -316,7 +316,7 @@ public sealed class GeminiInboundStream : IStream<StreamEvent>
 
     private sealed class ToolCallAgg
     {
-        public int Index;
+        public long Index;
         public string Id = string.Empty;
         public string Typ = string.Empty;
         public string Name = string.Empty;
