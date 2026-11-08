@@ -6629,6 +6629,49 @@ providerType `zai`，`SupportsChannel` 只匹配 `zai` / `zai_anthropic`；`Pars
 差异：C182 由剩余 4 个 checker 收窄为 3 个；新增 C218（Zai 复用族采集器的固定主机、provider 标识、
 共享错误文案与 availability group）。
 
+## 131. Charm Hyper 供应商配额检查器（BaseURL 派生 /v1/credits、100 credits 基线与严格 200 判定，67 例，2026-11-08）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/charm_hyper_checker.go`（`charmHyperBaseline`:17、
+`charmHyperWarningThreshold`:20、`CharmHyperCreditsResponse`:23-25、`CharmHyperQuotaChecker`:28-30、
+`NewCharmHyperQuotaChecker`:32-34、`CheckQuota`:37-71、`parseResponse`:73-94、`computeStatus`:96-109、
+`SupportsChannel`:111-116、`extractAPIKey`:118-127、`buildCharmHyperQuotaURL`:129-140），
+`internal/server/biz/provider_quota.go:391` 的 `registerCharmHyperSupport`（定义见
+`provider_quota.go:478-480`，在 `registerZaiSupport` 之后、`registerCommandCodeSupport` 之前调用），
+以及 `charm_hyper_checker_test.go` 的 14 个测试函数。
+
+新增 `src/AxonHub.Api/Orchestration/CharmHyperQuotaChecker.cs`：独立 `IQuotaChecker`（不复用 ZhiPu
+族采集器）。`Program.cs` 在 zai 之后注册 `CharmHyperQuotaChecker` 与
+`ProviderQuotaCheckerRegistration("charm_hyper", …)`（与参照 `registerCharmHyperSupport` 的顺序一致），
+`ProviderQuotaCheckerRegistry` 的文档同步为「… Zai 与 Charm Hyper 已注册，其余 2 个待切片」。
+
+- 采集：`BaseURL == ""` 时先取默认 `https://hyper.charm.land`，再按 Go `url.Parse` 重建
+  `/v1/credits`（路径替换、查询 / userinfo / fragment 清空，C219）；GET、`Bearer <key>`、
+  `Accept: application/json`，无 Content-Type、无 body；`Settings.Proxy` 非空时经代理工厂派生执行器；
+  缺失 key（legacy `apiKey` 与 `apiKeys[0]` 都 TrimSpace 后为空）报
+  `missing API key for Charm Hyper channel` 且不发起请求；`apiKeys` 只取第一个元素，不再扫描后续 key。
+- 判定：transport / >=400 包装为 `executing Charm Hyper quota request: <inner>`（Go httpclient 对
+  >=400 返回 `<method> - <url> with status <status>`）；1xx / 3xx / 非 200 2xx 报
+  `Charm Hyper quota API returned status <code>: <body>`；解码失败包装为
+  `parsing Charm Hyper quota response: <inner>`；缺失 / null 余额报
+  `Charm Hyper quota response missing balance field`。
+- 状态：usageRatio = 1 − balance/100（负值夹 0）；balance == 0 → exhausted / ratio 1 / not ready；
+  balance <= 20 → warning；否则 available；随后 `Normalize` 把 ratio > 1 夹到 1 并令该 limit
+  exhausted，但显式整体 warning 保留（负余额 → 整体 warning、limit exhausted）。单一 `credits` 窗口的
+  token limit、无 reset / period start；rawData `{"balance": <float64>}`。
+- 通道门：`openai` / `openai_responses` 且 `DetectProviderFromURL(BaseURL) == "charm_hyper"`
+  （host 等于 `hyper.charm.land` 或以 `.hyper.charm.land` 结尾）；复用 `ProviderQuotaUrlDetection`。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 缺省 / 自定义主机的 GET 线路（仅 Accept + Bearer、无 body）、Go net/url 重建 13 组（ForceQuery、opaque、相对、userinfo / fragment / 查询清理）、严格 200（>=400 执行器文案 vs <400 的供应商文案 3 组）、Go 解码语义 7 组 + 重复键 / null 2 组 + 缺失余额 3 组、100 credits 基线阈值 6 组与负余额 / 下溢、缺 key 3 组与 key 优先级 3 组、代理路由、通道门 8 组 | `tests/AxonHub.Api.Tests/CharmHyperQuotaCheckerTests.cs` | 14 Fact + 53 InlineData = 67 |
+
+`AxonHub.Api.Tests` 由 4982 增至 5049（+67），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+8428 增至 8495。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态
+计数；下一次全量运行应以 5049 / 319 / 8495 复核。**
+
+差异：C182 由剩余 3 个 checker 收窄为 2 个；新增 C219（Charm Hyper 独立 credits 采集、严格 200 判定、
+Go 解码与 net/url 重建边界）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6656,7 +6699,7 @@ providerType `zai`，`SupportsChannel` 只匹配 `zai` / `zai_anthropic`；`Pars
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），ZhiPu checker 由 §129 落地（144 例），Zai checker 由 §130 落地（28 例），其余 3 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax / zhipu / zai 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），ZhiPu checker 由 §129 落地（144 例），Zai checker 由 §130 落地（28 例），Charm Hyper checker 由 §131 落地（67 例），其余 2 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax / zhipu / zai / charm_hyper 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |

@@ -160,6 +160,11 @@ lint / build / test；§130 落地后的静态计数为 `AxonHub.Api.Tests` 4982
 四项目合计 8428，下一次全量运行应以该数字复核。该切片不新增表或 SQL；只新增检查器、`Program.cs`
 的 zai 注册与注册表文档，既有用例数不变。
 
+§131 追加 67 个用例（`CharmHyperQuotaCheckerTests` 14 + 53 个 InlineData），同样按项目规则未运行
+lint / build / test；§131 落地后的静态计数为 `AxonHub.Api.Tests` 5049、`AxonHub.Persistence.Tests` 319、
+四项目合计 8495，下一次全量运行应以该数字复核。该切片不新增表或 SQL；只新增检查器、`Program.cs`
+的 charm_hyper 注册与注册表文档，既有用例数不变。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
