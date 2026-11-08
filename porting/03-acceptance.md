@@ -275,6 +275,15 @@ transformer 的 `APIFormat()` 在 websocket 传输下返回 `openai/responses-ws
 「非 Responses 端点与部分供应商家族仍按通道类型分派」及通道级连接复用；写入面的端点规范化仍按
 冻结基线（C144/C148）。
 
+§144 追加 14 个用例（`AxonHub.Grains.Tests` 12：`ChannelGrainRateLimitTests` 8、
+`RateLimitAwareScorerTests` 新增 4；`AxonHub.Api.Tests` 2：`ChannelRateLimitRecorderTests`），
+同样按项目规则未运行 lint / build / test；§144 落地后的静态计数为 `AxonHub.Grains.Tests` 1692、
+`AxonHub.Api.Tests` 5432、`AxonHub.Llm.Tests` 1501、四项目合计 8956
+（`AxonHub.Persistence.Tests` 331 不变），下一次全量运行应以该数字复核。该切片不新增表或 SQL；
+限流状态按通道驻留 `IChannelGrain`（RPM/TPM 自然分钟桶、extend-only 冷却、Reset），
+API 中间件经 `IChannelRateLimitRecorder` 写穿、`ChannelPoolGrain` 从 `ChannelMetricsSnapshot`
+评分，阻塞并发 limiter 仍为每 silo 单例（C042）；多 silo 的预算全局化登记为 C225。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

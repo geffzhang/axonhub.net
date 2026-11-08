@@ -8,9 +8,11 @@ namespace AxonHub.Grains.Abstractions;
 /// <remarks>
 /// The reference reads the wall clock directly; the port takes a
 /// <see cref="TimeProvider"/> so tests can move between minute buckets without
-/// sleeping. Registered as a per-silo singleton and shared by RPM admission,
-/// TPM/cooldown tracking and the RateLimitAware load-balancer strategy, exactly
-/// like the reference's per-process instance.
+/// sleeping. The state machine has two hosts: one instance per channel inside
+/// <see cref="IChannelGrain"/> (the serving authority), and the standalone
+/// in-memory instance used by direct test constructions and the API's
+/// in-memory recorder seam. Every public operation has an explicit
+/// <c>now</c> overload so a grain turn and its snapshot observe one instant.
 /// </remarks>
 public sealed class ChannelRequestTracker
 {
@@ -29,6 +31,10 @@ public sealed class ChannelRequestTracker
     /// bucket. A non-positive limit means "no RPM limit", so no slot is consumed.
     /// </summary>
     public bool TryAcquireRequest(long channelId, long limit)
+        => TryAcquireRequest(channelId, limit, _timeProvider.GetUtcNow());
+
+    /// <summary>Explicit-clock overload used by the channel grain.</summary>
+    public bool TryAcquireRequest(long channelId, long limit, DateTimeOffset now)
     {
         if (limit <= 0)
         {
@@ -37,7 +43,7 @@ public sealed class ChannelRequestTracker
 
         lock (_lock)
         {
-            var window = GetOrResetWindow(channelId);
+            var window = GetOrResetWindow(channelId, now);
             if (window.Requests >= limit)
             {
                 return false;
@@ -51,6 +57,10 @@ public sealed class ChannelRequestTracker
 
     /// <summary>Adds tokens to the channel's current window; non-positive values are ignored.</summary>
     public void AddTokens(long channelId, long tokens)
+        => AddTokens(channelId, tokens, _timeProvider.GetUtcNow());
+
+    /// <summary>Explicit-clock overload used by the channel grain.</summary>
+    public void AddTokens(long channelId, long tokens, DateTimeOffset now)
     {
         if (tokens <= 0)
         {
@@ -59,17 +69,21 @@ public sealed class ChannelRequestTracker
 
         lock (_lock)
         {
-            GetOrResetWindow(channelId).Tokens += tokens;
+            GetOrResetWindow(channelId, now).Tokens += tokens;
         }
     }
 
     /// <summary>Requests consumed in the current window; 0 for a stale window.</summary>
     public long GetRequestCount(long channelId)
+        => GetRequestCount(channelId, _timeProvider.GetUtcNow());
+
+    /// <summary>Explicit-clock overload used by the channel grain.</summary>
+    public long GetRequestCount(long channelId, DateTimeOffset now)
     {
         lock (_lock)
         {
             if (!_counters.TryGetValue(channelId, out var window)
-                || window.WindowStart != CurrentWindowStart())
+                || window.WindowStart != WindowStart(now))
             {
                 return 0;
             }
@@ -80,11 +94,15 @@ public sealed class ChannelRequestTracker
 
     /// <summary>Tokens consumed in the current window; 0 for a stale window.</summary>
     public long GetTokenCount(long channelId)
+        => GetTokenCount(channelId, _timeProvider.GetUtcNow());
+
+    /// <summary>Explicit-clock overload used by the channel grain.</summary>
+    public long GetTokenCount(long channelId, DateTimeOffset now)
     {
         lock (_lock)
         {
             if (!_counters.TryGetValue(channelId, out var window)
-                || window.WindowStart != CurrentWindowStart())
+                || window.WindowStart != WindowStart(now))
             {
                 return 0;
             }
@@ -115,11 +133,18 @@ public sealed class ChannelRequestTracker
     /// </summary>
     public bool IsCoolingDown(long channelId) => TryGetCooldownUntil(channelId, out _);
 
+    /// <summary>Explicit-clock overload used by the channel grain.</summary>
+    public bool IsCoolingDown(long channelId, DateTimeOffset now) => TryGetCooldownUntil(channelId, now, out _);
+
     /// <summary>
     /// The cooldown expiration time, or <see langword="false"/> when the channel
     /// is not cooling down (an expired entry is cleaned up first).
     /// </summary>
     public bool TryGetCooldownUntil(long channelId, out DateTimeOffset until)
+        => TryGetCooldownUntil(channelId, _timeProvider.GetUtcNow(), out until);
+
+    /// <summary>Explicit-clock overload used by the channel grain.</summary>
+    public bool TryGetCooldownUntil(long channelId, DateTimeOffset now, out DateTimeOffset until)
     {
         lock (_lock)
         {
@@ -129,7 +154,6 @@ public sealed class ChannelRequestTracker
             }
         }
 
-        var now = _timeProvider.GetUtcNow();
         if (now > until)
         {
             ClearExpiredCooldown(channelId, until, now);
@@ -138,6 +162,16 @@ public sealed class ChannelRequestTracker
         }
 
         return true;
+    }
+
+    /// <summary>Drops the counters and cooldown of one channel (grain reset seam).</summary>
+    public void Clear(long channelId)
+    {
+        lock (_lock)
+        {
+            _counters.Remove(channelId);
+            _cooldowns.Remove(channelId);
+        }
     }
 
     /// <summary>
@@ -169,9 +203,9 @@ public sealed class ChannelRequestTracker
         }
     }
 
-    private RateLimitWindow GetOrResetWindow(long channelId)
+    private RateLimitWindow GetOrResetWindow(long channelId, DateTimeOffset now)
     {
-        var windowStart = CurrentWindowStart();
+        var windowStart = WindowStart(now);
         if (!_counters.TryGetValue(channelId, out var window) || window.WindowStart != windowStart)
         {
             window = new RateLimitWindow { WindowStart = windowStart };
@@ -182,12 +216,8 @@ public sealed class ChannelRequestTracker
     }
 
     /// <summary>Go: <c>time.Now().Truncate(time.Minute)</c> — the natural minute boundary.</summary>
-    private DateTimeOffset CurrentWindowStart()
-    {
-        var now = _timeProvider.GetUtcNow();
-
-        return now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMinute));
-    }
+    private static DateTimeOffset WindowStart(DateTimeOffset now)
+        => now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMinute));
 
     private sealed class RateLimitWindow
     {

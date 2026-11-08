@@ -16,9 +16,10 @@ namespace AxonHub.Grains;
 /// Scores are summed exactly like the reference; strategies whose data source is
 /// not ported yet contribute the reference's neutral score (see
 /// <see cref="LatencyNeutralScore"/> and <see cref="CircuitBreakerClosedScore"/>;
-/// differences C012 residual). The RateLimitAware strategy reads the same
-/// per-silo tracker and limiter manager the API middlewares write
-/// (<see cref="RateLimitAwareScorer"/>).
+/// differences C012 residual). The RateLimitAware strategy reads RPM/TPM and
+/// the 429 cooldown from the per-candidate <see cref="ChannelMetricsSnapshot"/>
+/// (the channel grain's authority) and concurrency from the local per-silo
+/// limiter manager (<see cref="RateLimitAwareScorer"/>).
 /// <para>
 /// The grain key is the request model ID. Orleans serializes calls per key,
 /// which replaces the reference's per-channel metrics locks.
@@ -26,11 +27,10 @@ namespace AxonHub.Grains;
 /// </summary>
 public sealed class ChannelPoolGrain(
     IGrainFactory grainFactory,
-    ChannelRequestTracker rateLimitTracker,
     ChannelLimiterManager channelLimiterManager)
     : Grain, IChannelPoolGrain
 {
-    private readonly RateLimitAwareScorer _rateLimitAware = new(rateLimitTracker, channelLimiterManager);
+    private readonly RateLimitAwareScorer _rateLimitAware = new(channelLimiterManager);
 
     public async Task<ChannelCandidate[]> SortAsync(
         ChannelCandidate[] candidates,

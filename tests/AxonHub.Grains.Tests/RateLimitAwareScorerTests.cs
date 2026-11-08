@@ -345,4 +345,44 @@ public sealed class RateLimitAwareScorerTests
 
         Assert.Equal("RateLimitAware", scorer.Name);
     }
+
+    [Fact]
+    public void SnapshotStateScoresRpmAndTpm()
+    {
+        var scorer = new RateLimitAwareScorer((ChannelLimiterManager?)null);
+        var settings = new ChannelRateLimitSettings { Rpm = 100, Tpm = 1000 };
+
+        // maxRatio = max(2/100, 500/1000) = 0.5 -> score 50.
+        var score = scorer.Score(1, new ChannelRateLimitState(2, 500, null), settings);
+
+        Assert.Equal(50.0, score);
+    }
+
+    [Fact]
+    public void SnapshotCooldownScoresExhausted()
+    {
+        var scorer = new RateLimitAwareScorer((ChannelLimiterManager?)null);
+        var state = new ChannelRateLimitState(0, 0, Start.AddSeconds(30));
+
+        Assert.Equal(RateLimitAwareScorer.ExhaustedScore, scorer.Score(1, state, null));
+    }
+
+    [Fact]
+    public void SnapshotRpmExhaustionScoresExhausted()
+    {
+        var scorer = new RateLimitAwareScorer((ChannelLimiterManager?)null);
+        var settings = new ChannelRateLimitSettings { Rpm = 100 };
+        var state = new ChannelRateLimitState(100, 0, null);
+
+        Assert.Equal(RateLimitAwareScorer.ExhaustedScore, scorer.Score(1, state, settings));
+    }
+
+    [Fact]
+    public void TrackerlessScorerRequiresSnapshotState()
+    {
+        var scorer = new RateLimitAwareScorer((ChannelLimiterManager?)null);
+
+        Assert.Throws<InvalidOperationException>(() => scorer.Score(1, null));
+        Assert.Throws<InvalidOperationException>(() => scorer.ScoreWithDebug(1, null));
+    }
 }

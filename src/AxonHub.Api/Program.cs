@@ -91,12 +91,12 @@ builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorde
 builder.Services.AddSingleton<IChannelPricingSource, PostgresChannelPricingSource>();
 builder.Services.AddSingleton<IUsageCostService, UsageCostService>();
 
-// One rate-limit state per silo, shared by the API middlewares (writes) and the
-// channel pool grain's RateLimitAware scoring (reads) — the reference's
-// per-process ChannelRequestTracker and ChannelLimiterManager
-// (orchestrator.go: loadBalancerConfig).
-builder.Services.AddSingleton(static services => new ChannelRequestTracker(
-    services.GetRequiredService<TimeProvider>()));
+// RPM/TPM/cooldown live in the channel grain (one owner per channel), so the
+// API middlewares write through the same authority ChannelPoolGrain scores
+// from; the reference's per-process tracker remains the in-memory fallback for
+// direct constructions. The blocking limiter stays a per-silo singleton
+// (orchestrator.go: loadBalancerConfig; C042).
+builder.Services.AddSingleton<IChannelRateLimitRecorder, GrainChannelRateLimitRecorder>();
 builder.Services.AddSingleton<ChannelLimiterManager>();
 
 // The reference registers the channel-limiter instruments on the process-wide

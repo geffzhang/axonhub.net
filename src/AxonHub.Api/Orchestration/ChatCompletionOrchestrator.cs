@@ -43,7 +43,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IUsageCostService? _usageCostService;
     private readonly IPassThroughSettingsProvider _passThroughSettings;
     private readonly IPromptProtectionRuleProvider? _promptProtectionRules;
-    private readonly ChannelRequestTracker _rateLimitTracker;
+    private readonly IChannelRateLimitRecorder _rateLimitRecorder;
     private readonly ChannelLimiterManager _channelLimiterManager;
     private readonly ChannelLimiterMetrics? _channelLimiterMetrics;
     private readonly IPreviousChannelProvider? _previousChannels;
@@ -74,7 +74,8 @@ public sealed class ChatCompletionOrchestrator
         IModelSettingsProvider? modelSettings = null,
         IApiKeyQuotaChecker? quotaChecker = null,
         IPromptProvider? promptProvider = null,
-        ChannelLimiterMetrics? channelLimiterMetrics = null)
+        ChannelLimiterMetrics? channelLimiterMetrics = null,
+        IChannelRateLimitRecorder? rateLimitRecorder = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -105,11 +106,12 @@ public sealed class ChatCompletionOrchestrator
             ?? new StaticPassThroughSettingsProvider(PassThroughSettings.Disabled);
 
         // The reference's orchestrator and load balancer share one tracker and
-        // one limiter manager per process. Production registers both as
-        // singletons (Program.cs) so the pool grain scores against the same
-        // state the middlewares mutate; the defaults only serve direct
-        // constructions in tests.
-        _rateLimitTracker = rateLimitTracker ?? new ChannelRequestTracker(timeProvider);
+        // one limiter manager per process. Production routes RPM/TPM/cooldown
+        // through the channel grain (GrainChannelRateLimitRecorder) so the pool
+        // grain scores from the same snapshot the middlewares mutate; direct
+        // constructions keep the in-memory tracker, whose own clock governs.
+        _rateLimitRecorder = rateLimitRecorder
+            ?? new InMemoryChannelRateLimitRecorder(rateLimitTracker ?? new ChannelRequestTracker(timeProvider));
         _channelLimiterManager = channelLimiterManager ?? new ChannelLimiterManager();
 
         // Production registers the same metrics singleton the middlewares emit
@@ -167,7 +169,7 @@ public sealed class ChatCompletionOrchestrator
             _timeProvider,
             _requestChainRecorder,
             _upstreamErrorPolicy,
-            _rateLimitTracker,
+            null, // rateLimitTracker: the recorder below carries the state
             _channelLimiterManager,
             _usageCostService,
             _passThroughSettings,
@@ -177,7 +179,8 @@ public sealed class ChatCompletionOrchestrator
             _quotaRoutingSettings,
             _modelSettingsProvider,
             _quotaChecker,
-            _promptProvider);
+            _promptProvider,
+            rateLimitRecorder: _rateLimitRecorder);
     }
 
     /// <summary>
@@ -724,8 +727,8 @@ public sealed class ChatCompletionOrchestrator
             _timeProvider));
         if (includeRateLimits)
         {
-            options.Middlewares.Add(new RateLimitAdmissionMiddleware(outbound, _rateLimitTracker));
-            options.Middlewares.Add(new RateLimitTrackingMiddleware(outbound, _rateLimitTracker, _timeProvider));
+            options.Middlewares.Add(new RateLimitAdmissionMiddleware(outbound, _rateLimitRecorder, _timeProvider));
+            options.Middlewares.Add(new RateLimitTrackingMiddleware(outbound, _rateLimitRecorder, _timeProvider));
         }
 
         // Response pass-through capture middlewares must be last so they run

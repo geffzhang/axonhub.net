@@ -54,7 +54,15 @@ public static class LoadBalancerScoring
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(rateLimitAware);
 
-        var rateLimitScore = rateLimitAware.Score(candidate.ChannelId, candidate.RateLimitSettings);
+        // The metrics snapshot is the channel grain's rate-limit authority, so
+        // scoring does not reach back into a per-silo tracker.
+        var rateLimitScore = rateLimitAware.Score(
+            candidate.ChannelId,
+            new ChannelRateLimitState(
+                metrics.RateLimitRequests,
+                metrics.RateLimitTokens,
+                metrics.CooldownUntil),
+            candidate.RateLimitSettings);
 
         return loadBalancerStrategy switch
         {

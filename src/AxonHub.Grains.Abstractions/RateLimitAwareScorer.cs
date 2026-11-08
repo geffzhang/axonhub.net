@@ -10,8 +10,30 @@ namespace AxonHub.Grains.Abstractions;
 /// hard limit scores <see cref="ExhaustedScore"/> so the balancer ranks it last
 /// while still keeping it available as a fallback.
 /// </summary>
-public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, ChannelLimiterManager? limiterManager = null)
+public sealed class RateLimitAwareScorer
 {
+    private readonly ChannelRequestTracker? _requestTracker;
+    private readonly ChannelLimiterManager? _limiterManager;
+
+    /// <summary>
+    /// Scorer over an in-process tracker. Kept for direct constructions (tests
+    /// and the in-memory recorder seam); the pool grain uses the snapshot
+    /// overload so it scores from the channel grain's authority.
+    /// </summary>
+    public RateLimitAwareScorer(ChannelRequestTracker requestTracker, ChannelLimiterManager? limiterManager = null)
+    {
+        ArgumentNullException.ThrowIfNull(requestTracker);
+
+        _requestTracker = requestTracker;
+        _limiterManager = limiterManager;
+    }
+
+    /// <summary>Scorer whose RPM/TPM/cooldown state is supplied per call.</summary>
+    public RateLimitAwareScorer(ChannelLimiterManager? limiterManager)
+    {
+        _limiterManager = limiterManager;
+    }
+
     /// <summary>Full score when no limit applies.</summary>
     public const double MaxScore = 100.0;
 
@@ -25,20 +47,35 @@ public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, C
 
     /// <summary>Production-path score with no diagnostic bookkeeping.</summary>
     public double Score(long channelId, ChannelRateLimitSettings? rateLimit)
-        => ScoreCore(channelId, rateLimit, null).Score;
+        => Score(channelId, ReadState(channelId), rateLimit);
+
+    /// <summary>
+    /// Production-path score over a state snapshot. The pool grain already
+    /// fetches <see cref="ChannelMetricsSnapshot"/> per candidate, so the
+    /// rate-limit dimensions add no extra grain call.
+    /// </summary>
+    public double Score(long channelId, ChannelRateLimitState state, ChannelRateLimitSettings? rateLimit)
+        => ScoreCore(channelId, state, rateLimit, null).Score;
 
     /// <summary>
     /// Score plus the reference's <c>StrategyScore.Details</c> map (diagnostic
-    /// path; same arithmetic as <see cref="Score"/>).
+    /// path; same arithmetic as <see cref="Score(long, ChannelRateLimitSettings?)"/>).
     /// </summary>
     public RateLimitScore ScoreWithDebug(long channelId, ChannelRateLimitSettings? rateLimit)
+        => ScoreWithDebug(channelId, ReadState(channelId), rateLimit);
+
+    /// <summary>Diagnostic path over a state snapshot.</summary>
+    public RateLimitScore ScoreWithDebug(
+        long channelId,
+        ChannelRateLimitState state,
+        ChannelRateLimitSettings? rateLimit)
     {
         var details = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["channel_id"] = channelId,
         };
 
-        var (score, exhaustedBy) = ScoreCore(channelId, rateLimit, details);
+        var (score, exhaustedBy) = ScoreCore(channelId, state, rateLimit, details);
 
         if (exhaustedBy is not null)
         {
@@ -52,16 +89,32 @@ public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, C
     }
 
     /// <summary>
+    /// Reads the in-process tracker. A scorer built for snapshot scoring has no
+    /// tracker and must use the state overload.
+    /// </summary>
+    private ChannelRateLimitState ReadState(long channelId)
+    {
+        var tracker = _requestTracker ?? throw new InvalidOperationException(
+            "This RateLimitAwareScorer was built without a request tracker; pass ChannelRateLimitState explicitly.");
+
+        return new ChannelRateLimitState(
+            tracker.GetRequestCount(channelId),
+            tracker.GetTokenCount(channelId),
+            tracker.TryGetCooldownUntil(channelId, out var until) ? until : null);
+    }
+
+    /// <summary>
     /// Unified scorer. <paramref name="details"/> null means no diagnostics.
     /// Returns the final score and, when exhausted, the dimension that exhausted
     /// (<c>cooldown</c>, <c>rpm_or_tpm</c>, <c>concurrency</c>).
     /// </summary>
     private (double Score, string? ExhaustedBy) ScoreCore(
         long channelId,
+        ChannelRateLimitState state,
         ChannelRateLimitSettings? rateLimit,
         Dictionary<string, object?>? details)
     {
-        if (requestTracker.TryGetCooldownUntil(channelId, out var until))
+        if (state.CooldownUntil is { } until)
         {
             if (details is not null)
             {
@@ -72,7 +125,7 @@ public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, C
             return (ExhaustedScore, "cooldown");
         }
 
-        var (rpmTpmScore, rpmTpmExhausted) = ScoreRpmTpm(channelId, rateLimit, details);
+        var (rpmTpmScore, rpmTpmExhausted) = ScoreRpmTpm(state, rateLimit, details);
         if (rpmTpmExhausted)
         {
             return (ExhaustedScore, "rpm_or_tpm");
@@ -95,7 +148,7 @@ public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, C
 
     /// <summary>RPM/TPM sub-score; exhausted when either budget is spent.</summary>
     private (double Score, bool Exhausted) ScoreRpmTpm(
-        long channelId,
+        ChannelRateLimitState state,
         ChannelRateLimitSettings? rateLimit,
         Dictionary<string, object?>? details)
     {
@@ -113,7 +166,7 @@ public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, C
 
         if (rateLimit.Rpm is { } rpmLimit && rpmLimit > 0)
         {
-            var rpm = requestTracker.GetRequestCount(channelId);
+            var rpm = state.RequestCount;
 
             if (details is not null)
             {
@@ -136,7 +189,7 @@ public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, C
 
         if (rateLimit.Tpm is { } tpmLimit && tpmLimit > 0)
         {
-            var tpm = requestTracker.GetTokenCount(channelId);
+            var tpm = state.TokenCount;
 
             if (details is not null)
             {
@@ -177,7 +230,7 @@ public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, C
         ChannelRateLimitSettings? rateLimit,
         Dictionary<string, object?>? details)
     {
-        if (limiterManager is null)
+        if (_limiterManager is null)
         {
             if (details is not null)
             {
@@ -187,7 +240,7 @@ public sealed class RateLimitAwareScorer(ChannelRequestTracker requestTracker, C
             return (MaxScore, false);
         }
 
-        if (!limiterManager.TryGetStats(channelId, out var inFlight, out var waiting))
+        if (!_limiterManager.TryGetStats(channelId, out var inFlight, out var waiting))
         {
             if (details is not null)
             {

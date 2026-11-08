@@ -3,16 +3,28 @@ using AxonHub.Grains.Abstractions;
 namespace AxonHub.Grains;
 
 /// <summary>
-/// Per-channel runtime counters. A port of the reference's
-/// <c>channelMetrics</c> (internal/server/biz/channel_metrics.go): selections,
+/// Per-channel runtime authority. A port of the reference's
+/// <c>channelMetrics</c> (internal/server/biz/channel_metrics.go) plus the
+/// per-channel slice of <c>orchestrator.ChannelRequestTracker</c>: selections,
 /// successes and failures land in per-second slots that expire after ten
-/// minutes, while consecutive failures persist until the next success.
+/// minutes, while consecutive failures persist until the next success; RPM/TPM
+/// live in natural-minute buckets and the 429 cooldown is extended-only.
 /// </summary>
+/// <remarks>
+/// Orleans serializes every turn of one activation, replacing the reference's
+/// per-channel metrics locks and the tracker's process-wide lock. The
+/// rate-limit state is returned in <see cref="GetMetricsAsync"/> so
+/// <c>ChannelPoolGrain</c> scores from the same snapshot it already fetches per
+/// candidate; the limiter itself stays in the per-silo
+/// <c>ChannelLimiterManager</c> because its blocking FIFO gate cannot move into
+/// a grain scheduler (C042).
+/// </remarks>
 public sealed class ChannelGrain : Grain, IChannelGrain
 {
     private const int WindowSeconds = 600;
 
     private readonly SortedDictionary<long, Slot> _slots = [];
+    private readonly ChannelRequestTracker _rateLimit = new();
     private long _windowCutoff;
     private long _requestCount;
     private long _successCount;
@@ -21,19 +33,26 @@ public sealed class ChannelGrain : Grain, IChannelGrain
     private DateTimeOffset? _lastSelectedAt;
     private DateTimeOffset? _lastFailureAt;
 
+    private long ChannelId => this.GetPrimaryKeyLong();
+
     public Task<ChannelMetricsSnapshot> GetMetricsAsync(DateTimeOffset now)
     {
         Prune(now.ToUnixTimeSeconds() - WindowSeconds);
 
+        var hasCooldown = _rateLimit.TryGetCooldownUntil(ChannelId, now, out var cooldownUntil);
+
         return Task.FromResult(new ChannelMetricsSnapshot
         {
-            ChannelId = this.GetPrimaryKeyLong(),
+            ChannelId = ChannelId,
             RequestCount = _requestCount,
             SuccessCount = _successCount,
             FailureCount = _failureCount,
             ConsecutiveFailures = _consecutiveFailures,
             LastSelectedAt = _lastSelectedAt,
             LastFailureAt = _lastFailureAt,
+            RateLimitRequests = _rateLimit.GetRequestCount(ChannelId, now),
+            RateLimitTokens = _rateLimit.GetTokenCount(ChannelId, now),
+            CooldownUntil = hasCooldown ? cooldownUntil : null,
         });
     }
 
@@ -98,6 +117,30 @@ public sealed class ChannelGrain : Grain, IChannelGrain
         _consecutiveFailures = 0;
         _lastSelectedAt = null;
         _lastFailureAt = null;
+
+        return Task.CompletedTask;
+    }
+
+    public Task<bool> TryAcquireRequestAsync(long limit, DateTimeOffset now)
+        => Task.FromResult(_rateLimit.TryAcquireRequest(ChannelId, limit, now));
+
+    public Task AddTokensAsync(long tokens, DateTimeOffset now)
+    {
+        _rateLimit.AddTokens(ChannelId, tokens, now);
+
+        return Task.CompletedTask;
+    }
+
+    public Task SetCooldownAsync(DateTimeOffset until)
+    {
+        _rateLimit.SetCooldown(ChannelId, until);
+
+        return Task.CompletedTask;
+    }
+
+    public Task ResetRateLimitAsync()
+    {
+        _rateLimit.Clear(ChannelId);
 
         return Task.CompletedTask;
     }

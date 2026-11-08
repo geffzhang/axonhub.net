@@ -166,20 +166,43 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
 /// strict per-instance RPM admission before an attempt is sent upstream. It runs
 /// after channel concurrency admission so queue rejections never consume RPM.
 /// </summary>
-internal sealed class RateLimitAdmissionMiddleware(PersistentOutboundTransformer outbound, ChannelRequestTracker tracker)
-    : DummyMiddleware("rate-limit-admission")
+internal sealed class RateLimitAdmissionMiddleware : DummyMiddleware
 {
+    private readonly PersistentOutboundTransformer _outbound;
+    private readonly IChannelRateLimitRecorder _recorder;
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>Direct-construction overload: the tracker's own clock governs.</summary>
+    public RateLimitAdmissionMiddleware(PersistentOutboundTransformer outbound, ChannelRequestTracker tracker)
+        : this(outbound, new InMemoryChannelRateLimitRecorder(tracker), TimeProvider.System)
+    {
+    }
+
+    public RateLimitAdmissionMiddleware(
+        PersistentOutboundTransformer outbound,
+        IChannelRateLimitRecorder recorder,
+        TimeProvider? timeProvider = null)
+        : base("rate-limit-admission")
+    {
+        ArgumentNullException.ThrowIfNull(outbound);
+        ArgumentNullException.ThrowIfNull(recorder);
+
+        _outbound = outbound;
+        _recorder = recorder;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
     public override HttpRequestData TransformOutboundRawRequest(HttpRequestData request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var candidate = outbound.CurrentCandidate;
+        var candidate = _outbound.CurrentCandidate;
         if (candidate?.RateLimitSettings?.Rpm is not { } rpm || rpm <= 0)
         {
             return request;
         }
 
-        if (!tracker.TryAcquireRequest(candidate.ChannelId, rpm))
+        if (!_recorder.TryAcquireRequest(candidate.ChannelId, rpm, _timeProvider.GetUtcNow()))
         {
             throw LocalRpmExhaustedError.Create(candidate.ChannelId, candidate.ChannelName, rpm);
         }
@@ -194,17 +217,42 @@ internal sealed class RateLimitAdmissionMiddleware(PersistentOutboundTransformer
 /// to <see cref="RateLimitAdmissionMiddleware"/>, so request slots are consumed
 /// atomically before an attempt reaches upstream.
 /// </summary>
-internal sealed class RateLimitTrackingMiddleware(
-    PersistentOutboundTransformer outbound,
-    ChannelRequestTracker tracker,
-    TimeProvider timeProvider) : DummyMiddleware("track-rate-limit")
+internal sealed class RateLimitTrackingMiddleware : DummyMiddleware
 {
+    private readonly PersistentOutboundTransformer _outbound;
+    private readonly IChannelRateLimitRecorder _recorder;
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>Direct-construction overload: the tracker's own clock governs.</summary>
+    public RateLimitTrackingMiddleware(
+        PersistentOutboundTransformer outbound,
+        ChannelRequestTracker tracker,
+        TimeProvider timeProvider)
+        : this(outbound, new InMemoryChannelRateLimitRecorder(tracker), timeProvider)
+    {
+    }
+
+    public RateLimitTrackingMiddleware(
+        PersistentOutboundTransformer outbound,
+        IChannelRateLimitRecorder recorder,
+        TimeProvider timeProvider)
+        : base("track-rate-limit")
+    {
+        ArgumentNullException.ThrowIfNull(outbound);
+        ArgumentNullException.ThrowIfNull(recorder);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+
+        _outbound = outbound;
+        _recorder = recorder;
+        _timeProvider = timeProvider;
+    }
+
     public override LlmResponse TransformOutboundLlmResponse(LlmResponse response)
     {
         // The reference tolerates a nil response (it returns it unchanged); the
         // port keeps the same guard instead of throwing on a nil the typed
         // pipeline would never produce.
-        var candidate = outbound.CurrentCandidate;
+        var candidate = _outbound.CurrentCandidate;
         if (response is null || candidate is null || response.Usage is not { } usage || usage.TotalTokens <= 0)
         {
             // Null in, null out: the annotation is non-nullable because the
@@ -212,7 +260,7 @@ internal sealed class RateLimitTrackingMiddleware(
             return response!;
         }
 
-        tracker.AddTokens(candidate.ChannelId, usage.TotalTokens);
+        _recorder.AddTokens(candidate.ChannelId, usage.TotalTokens, _timeProvider.GetUtcNow());
 
         return response;
     }
@@ -221,7 +269,11 @@ internal sealed class RateLimitTrackingMiddleware(
     {
         ArgumentNullException.ThrowIfNull(stream);
 
-        return new RateLimitTrackingStream(stream, tracker, () => outbound.CurrentCandidate);
+        return new RateLimitTrackingStream(
+            stream,
+            _recorder,
+            _timeProvider,
+            () => _outbound.CurrentCandidate);
     }
 
     /// <summary>
@@ -238,25 +290,26 @@ internal sealed class RateLimitTrackingMiddleware(
             return;
         }
 
-        var candidate = outbound.CurrentCandidate;
+        var candidate = _outbound.CurrentCandidate;
         if (candidate is null || !HttpClientErrors.HasRetryAfterHeader(error))
         {
             return;
         }
 
-        var now = timeProvider.GetUtcNow();
+        var now = _timeProvider.GetUtcNow();
         if (!HttpClientErrors.TryParseRetryAfter(error, now, out var cooldown))
         {
             return;
         }
 
-        tracker.SetCooldown(candidate.ChannelId, now + cooldown);
+        _recorder.SetCooldown(candidate.ChannelId, now + cooldown);
     }
 
     /// <summary>Counts tokens carried by streamed chunks, typically the final chunk.</summary>
     private sealed class RateLimitTrackingStream(
         IStream<LlmResponse> inner,
-        ChannelRequestTracker tracker,
+        IChannelRateLimitRecorder recorder,
+        TimeProvider timeProvider,
         Func<ChannelCandidate?> currentCandidate) : IStream<LlmResponse>
     {
         public LlmResponse? Current
@@ -266,7 +319,7 @@ internal sealed class RateLimitTrackingMiddleware(
                 var current = inner.Current;
                 if (current?.Usage is { TotalTokens: > 0 } usage && currentCandidate() is { } candidate)
                 {
-                    tracker.AddTokens(candidate.ChannelId, usage.TotalTokens);
+                    recorder.AddTokens(candidate.ChannelId, usage.TotalTokens, timeProvider.GetUtcNow());
                 }
 
                 return current;

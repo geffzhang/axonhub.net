@@ -7322,6 +7322,53 @@ C094 item (1) 与 C072 残余 (a) 收窄：运行时端点解析、传输与 Res
 BaseURL/Path 已按 live 语义接线；剩余为非 Responses 端点/供应商家族与通道级连接复用。
 C144/C148 的写入面冻结语义不变。
 
+## 144. 限流状态迁入 ChannelGrain（A1，14 例，2026-11-08）
+
+参照：`internal/server/orchestrator/channel_request_tracker.go`（自然分钟桶、RPM 准入、TPM
+记账、extend-only 冷却）、`rate_limit_admission.go`、`rate_limit_tracking.go`、
+`lb_strategy_rate_limit.go`（RPM/TPM 子分与并发子分取 min，耗尽 -10000）。
+
+参照行为：
+
+| 项 | 参照值 |
+|---|---|
+| 桶 | `time.Now().Truncate(time.Minute)` 自然分钟；桶过期按读取时刻判断，旧桶读作 0 |
+| RPM 准入 | `limit <= 0` 旁路且不扣槽；否则 `count >= limit` 拒绝，成功才 `count++` |
+| TPM 记账 | 非正 token 忽略；否则当前桶累加 |
+| 冷却 | 只由带 Retry-After 的上游 429 设置；`SetCooldown` 只延长，过期条目在读取时惰性清理且不覆盖更新的值 |
+| 评分 | 冷却/任一硬上限耗尽 → -10000；否则 `min(RPM/TPM 子分, 并发子分)` |
+
+端口实现：
+
+- 状态机仍是 `ChannelRequestTracker`，新增显式 `now` 重载与 `Clear`，供 grain 在一个回合内用
+  同一时刻完成读写；单参重载保留给直接构造与内存 recorder。
+- `IChannelGrain` 新增 `TryAcquireRequestAsync` / `AddTokensAsync` / `SetCooldownAsync` /
+  `ResetRateLimitAsync`；`ChannelGrain` 组合一个按通道分片的 tracker，`GetMetricsAsync` 额外返回
+  `RateLimitRequests` / `RateLimitTokens` / `CooldownUntil`（`Id(7..9)`）。
+- `RateLimitAwareScorer` 增加快照重载（`ChannelRateLimitState`）；`LoadBalancerScoring.StrategyScore`
+  从 metrics 快照取限流切片，`ChannelPoolGrain` 不再依赖 tracker。
+- API 侧新增 `IChannelRateLimitRecorder`：生产注册 `GrainChannelRateLimitRecorder`（同步桥接，
+  模式与 `GrainChannelMetricsRecorder` 一致），`RateLimitAdmissionMiddleware` /
+  `RateLimitTrackingMiddleware` 改为经 recorder 读写；直接构造的测试仍走
+  `InMemoryChannelRateLimitRecorder`，由 tracker 自己的时钟裁决。
+- 未改动：并发 limiter（`ChannelLimiter` / `ChannelLimiterManager`）仍为每 silo 单例（C042）；
+  `ChannelMetricsSnapshot` 的 10 分钟滑窗字段不变。
+
+测试（14 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Grains.Tests/ChannelGrainRateLimitTests.cs` | 8 | RPM 准入与超限、非正上限旁路、TPM 累加与非法值、自然分钟重置、冷却只延长与过期、Reset、200 并发只放行 100、pool 从 grain 快照把 9/10 的忙通道排在 1/10 之后 |
+| `tests/AxonHub.Grains.Tests/RateLimitAwareScorerTests.cs` | 4（追加） | 快照 RPM/TPM 取 max ratio、快照冷却耗尽、快照 RPM 耗尽、无 tracker 的 scorer 只能走快照重载 |
+| `tests/AxonHub.Api.Tests/ChannelRateLimitRecorderTests.cs` | 2 | grain recorder 写穿后 metrics 可见 2 请求/300 token/冷却；内存 recorder 忽略传入时刻并保持 tracker 时钟 |
+
+静态计数：`AxonHub.Grains.Tests` 由 1680 增至 1692（+12），`AxonHub.Api.Tests` 由 5430 增至
+5432（+2），四项目合计由 8942 增至 8956（`AxonHub.Llm.Tests` 1501、`AxonHub.Persistence.Tests` 331
+不变）。**按项目规则未运行 lint / build / test。**
+
+多 silo 语义登记为 C225：单 silo 与参照逐项等价；多 silo 时同一通道的预算变成集群全局，
+而非参照的每进程分片。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
