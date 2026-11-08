@@ -45,6 +45,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IPromptProtectionRuleProvider? _promptProtectionRules;
     private readonly ChannelRequestTracker _rateLimitTracker;
     private readonly ChannelLimiterManager _channelLimiterManager;
+    private readonly ChannelLimiterMetrics? _channelLimiterMetrics;
     private readonly IPreviousChannelProvider? _previousChannels;
     private readonly IProviderQuotaStatusProvider? _quotaStatusProvider;
     private readonly IQuotaRoutingSettingsProvider? _quotaRoutingSettings;
@@ -72,7 +73,8 @@ public sealed class ChatCompletionOrchestrator
         IQuotaRoutingSettingsProvider? quotaRoutingSettings = null,
         IModelSettingsProvider? modelSettings = null,
         IApiKeyQuotaChecker? quotaChecker = null,
-        IPromptProvider? promptProvider = null)
+        IPromptProvider? promptProvider = null,
+        ChannelLimiterMetrics? channelLimiterMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -109,6 +111,11 @@ public sealed class ChatCompletionOrchestrator
         // constructions in tests.
         _rateLimitTracker = rateLimitTracker ?? new ChannelRequestTracker(timeProvider);
         _channelLimiterManager = channelLimiterManager ?? new ChannelLimiterManager();
+
+        // Production registers the same metrics singleton the middlewares emit
+        // to; direct constructions leave it null, which makes every instrument
+        // call a no-op like the reference's nil *ChannelLimiterMetrics.
+        _channelLimiterMetrics = channelLimiterMetrics;
 
         // Production passes the RequestService equivalent so the persistence
         // middleware can cache the previous channel and the selector can pin it.
@@ -712,7 +719,9 @@ public sealed class ChatCompletionOrchestrator
         options.Middlewares.Add(new ChannelLimiterMiddleware(
             outbound,
             _channelLimiterManager,
-            cancellationToken));
+            cancellationToken,
+            _channelLimiterMetrics,
+            _timeProvider));
         if (includeRateLimits)
         {
             options.Middlewares.Add(new RateLimitAdmissionMiddleware(outbound, _rateLimitTracker));

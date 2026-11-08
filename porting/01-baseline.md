@@ -18,7 +18,7 @@
 | `internal/server/biz/system_test.go` 的 `TestNormalizeRetryPolicy_LoadBalancerStrategy` / `TestNormalizeRetryPolicy_MigratesLegacyStatuses`、`system_retry_policy_test.go`，以及 `system.go:1042-1172` 的读取分支（上游单测仅覆盖归一化） | `tests/AxonHub.Api.Tests/SystemRetryPolicyServiceTests.cs`（49 例）+ `ChatCompletionOrchestratorTests` / `ChannelSelectionTests` 的 topK 3 例 | 已改写（子集） | 逐条对照：策略归一化 7 例（合法四种、`weighted`→failover、非法/空→adaptive）、legacy `statuses`→永久规则（含既有 `rules` 优先）、`custom` 空白消息→hidden；参照未覆盖的读取分支按源码建立：缺行/软删除/读库失败/非法文档回退 `defaultRetryPolicy`，`null` 与 `{}` 的零值策略，`null` 标量保持零值，超时夹取 `[0,600]`，其余字段不夹取，嵌套类型错误回退默认。参照的 API-key principal 回归用例（#2080）在端口无 Ent 隐私层对应物：读取路径不依赖身份，策略值由全字段用例锁定。 | 
 | `internal/server/biz/channel_metrics_test.go` 的 `TestPerformanceRecord_Methods` + `internal/server/orchestrator/outbound.go` 的 `markPerformanceTerminal` 分支 | `tests/AxonHub.Api.Tests/ChannelPerformanceRecordTests.cs`（7 例）+ `ChatCompletionOrchestratorTests` 流式语义 3 例 | 已建立 | 逐条对照 MarkSuccess / MarkFailed / MarkCanceled / IsValid；终态四态映射：completed/incomplete → 成功、canceled → 取消、failed → 失败（500 + 终态文案）、none → 无操作，首次终态后不再改写。端到端锁定：无终态传输错误既不记成功也不记失败；无终态但聚合完整记成功；终态 `[DONE]`/finish_reason 记成功。性能明细字段（首 token/TPS/状态码/错误文本/API key/完成 token）、`extractErrorMessageForMatching` 的 8 KiB 截断、异步 worker 与自动禁用未移植，均不参与当前计数（C017）。 |
 | `internal/server/orchestrator/override_test.go`（30 个顶层测试函数，含 `TestParseOverrideOperations`）+ `internal/server/biz/channel_override.go` 的解析/优先级分支 | `tests/AxonHub.Api.Tests/ChannelOverrideTests.cs`（87 例）+ `ChannelOverrideSettingsTests.cs`（47 例） | 134/134 已移植（C038 已闭合） | 逐条对照 30 个测试函数并补充分支用例：模板（`.Model` / `.RequestModel` / `.Metadata` 嵌套 JSON / `.RequestHeader` / `.PromptCacheKey` / user_id）、映射后的请求模型条件、header 模板与 JSON-like 值、legacy `overrideParameters` 的 set/delete/clear 与非法/空设置、AxonHubClear 5 例、新格式 set/delete/rename/copy/条件、legacy 兼容、`set_if_absent` 的现网与原始入站 body 判定、Issue 632、数组 append/prepend/insert/remove 与 splat、非 JSON/multipart 门槛；设置解析 47 例锁定新格式全字段、legacy map 的 GoPrintf 字符串化、新旧字段优先级、大小写不敏感与解码失败整体降级。参照的 `channel_override_template_test.go`（6 例）属通道管理面，未移植（C014）。 |
-| `internal/server/orchestrator/{channel_limiter,channel_limiter_manager,channel_request_tracker,lb_strategy_rate_limit,rate_limit_tracking,rate_limit_admission,channel_queue_error,connection_tracking}_test.go`（91 个顶层测试函数） | `tests/AxonHub.Grains.Tests/{ChannelLimiterTests,ChannelLimiterManagerTests,ChannelRequestTrackerTests,RateLimitAwareScorerTests}.cs`（64 例）+ `tests/AxonHub.Api.Tests/{RateLimitAdmissionTests,RateLimitTrackingTests,ChannelQueueErrorTests,ChannelLimiterMiddlewareTests}.cs`（5 + 10 + 4 + 7 个函数 / 29 个用例） | 90/91 已移植 | 逐条对照：硬信号量容量、FIFO 让位、有界队列拒绝、队列超时、取消与无槽泄漏；manager 的配置归一化/相等/重建/Forget/Snapshot；tracker 的自然分钟窗口、RPM 原子扣减、TPM 累加、冷却只延长与惰性清理；RateLimitAware 的四个子分与硬耗尽；API 中间件的 RPM 准入、TPM/冷却追踪、队列错误信封与连接让位顺序。未移植/合并：`TestNoopRateLimitTracking`（端口无 nil tracker 分支，C045）；`NoChannel` 与 `NilChannel` 在端口合并为“无候选”状态；`channel_limiter_metrics_test.go` 的 3 例随指标子系统顺延（C044）。另补 1 例冷却只延长的边界（`CooldownOnlyEverExtends`），tracker 共计 24 例。 |
+| `internal/server/orchestrator/{channel_limiter,channel_limiter_manager,channel_request_tracker,lb_strategy_rate_limit,rate_limit_tracking,rate_limit_admission,channel_queue_error,connection_tracking}_test.go`（91 个顶层测试函数） | `tests/AxonHub.Grains.Tests/{ChannelLimiterTests,ChannelLimiterManagerTests,ChannelRequestTrackerTests,RateLimitAwareScorerTests}.cs`（64 例）+ `tests/AxonHub.Api.Tests/{RateLimitAdmissionTests,RateLimitTrackingTests,ChannelQueueErrorTests,ChannelLimiterMiddlewareTests}.cs`（5 + 10 + 4 + 7 个函数 / 29 个用例） | 90/91 已移植 | 逐条对照：硬信号量容量、FIFO 让位、有界队列拒绝、队列超时、取消与无槽泄漏；manager 的配置归一化/相等/重建/Forget/Snapshot；tracker 的自然分钟窗口、RPM 原子扣减、TPM 累加、冷却只延长与惰性清理；RateLimitAware 的四个子分与硬耗尽；API 中间件的 RPM 准入、TPM/冷却追踪、队列错误信封与连接让位顺序。未移植/合并：`TestNoopRateLimitTracking`（端口无 nil tracker 分支，C045）；`NoChannel` 与 `NilChannel` 在端口合并为“无候选”状态；`channel_limiter_metrics_test.go` 的 3 例由 §138 移植（C044 闭合）。另补 1 例冷却只延长的边界（`CooldownOnlyEverExtends`），tracker 共计 24 例。 |
 | `internal/server/biz/cost_calc_test.go`（13 个顶层测试函数） | `tests/AxonHub.Api.Tests/UsageCostCalculatorTests.cs`（26 例） | 13/13 已移植 | 逐条对照：缓存/写缓存 token 从 prompt 数量扣除、全缓存归零、schedule 的 daily time / 跨午夜 / weekdays / date range / priority / timezone / 未知时区回退 / 缺 `when` 恒匹配；另补 flat_fee、tiered 分段、volume 命中档、未知模式/缺失 payload、无 items 与未知 item code，以及 `usage_cost_test.go` 的 4 个写缓存变体用例（five_min / one_hour / 两者并存 / 无变体回退共享价）。 |
 | `internal/server/biz/usage_cost_test.go`（9 个 Ent 集成用例：per-unit / tiered / volume / volume 首档 / 无价格 / 四个写缓存变体） | `tests/AxonHub.Api.Tests/{UsageCostServiceTests,UsageCostCalculatorTests,UsageCostInjectionTests}.cs` + `tests/AxonHub.Persistence.Tests/UsageLogStoreTests.cs` | 已改写（9/9 覆盖） | Ent 内嵌 SQLite 的整链路用例改写为分段锁定的行为测试：价格读取与未知模型/非法通道/损坏价格（Service 12 例）、金额与变体（Calculator 4 例）、响应注入与 usage 行落库（Injection 5 例）、5m/1h 列回环（UsageLogStoreTests）。参照断言的 `total_cost` / `cost_items` 形状 / reference id 与 5m/1h 列均由上述用例覆盖。 |
 | `internal/server/biz/channel_apikey_test.go`（30 个顶层测试：20 个 key 选择/哈希 + 1 个 context provider + 7 个 DeleteDisabledAPIKeys + 2 个 cleanup）与 `request_channel_api_key_index_test.go`（4 个测试函数，含 6 个索引子用例） | `tests/AxonHub.Api.Tests/{ChannelApiKeyProviderTests,ChannelApiKeyAuditTests}.cs`（23 + 7 例） | 选择/审计可执行用例全部覆盖；`AddKey_Stable` 由 rendezvous 稳定性覆盖 | 逐条对照 20 个选择用例：单 key、无 trace 成员、全禁用回退、禁用 key 排除、同 trace 确定性（直接驱动 `RendezvousSelect`）、不同 trace、加 key ≤2/3 重映射、删 key 不影响未命中 trace、顺序无关、FNV-1a 向量；trace 分支由第 32 节接入并按同 trace 稳定、不同 trace 分散锁定。`AddKey_Stable` 依赖的 LRU 在端口不保留（通道重建会新建 provider 与空缓存），加 key 的稳定性由 rendezvous 性质覆盖。索引 4 个函数改写为 7 个端到端审计用例（多 key 位置、单 key 无索引、短 key 无后缀、禁用 key 仍计数、共享后缀按索引区分、OAuth 旧字段排除、每次重试各自审计）；7 个 DeleteDisabledAPIKeys 与 2 个 cleanup 属管理面，未移植（C014）。 |
@@ -152,7 +152,7 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 
 限流状态为 silo 级单例（`Program.cs` 注入 `ChannelRequestTracker` 与 `ChannelLimiterManager`），
 通道池的 RateLimitAware 打分与请求链路中间件共享同一实例；约束并发等待的阻塞模型登记为 C042，
-错误包装的单 `InnerException` 结构登记为 C043，指标缺口 C044、noop 追踪 C045。参照的
+错误包装的单 `InnerException` 结构登记为 C043，指标缺口 C044（后由 §138 闭合）、noop 追踪 C045。参照的
 `channel_limiter_metrics_test.go`（3 例）随指标子系统顺延。
 
 ## 8. HTTP 纵向切片（51 例）
@@ -6977,6 +6977,59 @@ NaN / Infinity 在写出阶段失败。端口此前只在 `cost` 等标注 `GoOp
 应以 5371 / 331 / 1468 / 8850 复核。**
 
 差异：C067 resolved（所有 double 统一为 Go 规则；cost 等属性级 converter 不变）。
+
+## 138. 通道限流可观测性指标（C044 闭合，5 例，2026-11-08）
+
+参照 `internal/server/orchestrator/channel_limiter_metrics.go` 在进程级 meter `axonhub`
+（`internal/metrics/provider.go:27`）上注册五个 instrument，由 orchestrator 构造时创建
+（`orchestrator.go:41-46`；创建失败时告警并继续以 nil 指标运行）：
+
+| instrument | 类型 | 单位 | 描述 |
+|---|---|---|---|
+| `axonhub_channel_inflight` | Int64ObservableGauge | requests | In-flight requests currently holding a channel-limiter slot |
+| `axonhub_channel_queue_waiting` | Int64ObservableGauge | requests | Requests currently waiting in the channel-limiter FIFO queue |
+| `axonhub_channel_queue_full_total` | Int64Counter | requests | Total requests rejected because the channel queue was full |
+| `axonhub_channel_queue_timeout_total` | Int64Counter | requests | Total requests that exited the channel queue via per-channel wait timeout |
+| `axonhub_channel_queue_wait_seconds` | Float64Histogram | s | Wait time from channel-limiter Acquire entry to slot grant, on successful acquisitions |
+
+所有 instrument 带 `channel_id`（int）与 `channel_name`（string）标签；manager 非 nil 时用
+一个 `RegisterCallback` 遍历 `ChannelLimiterManager.Snapshot()`，同时 Observe 两个 gauge。
+`connection_tracking.go:77-100` 在 `lim.Acquire(ctx)` 之前取 `acquireStart`；遇到
+`ChannelQueueError` 时按 reason（full / timeout）递增对应 counter 后返回类型化错误；成功
+获准后 `ObserveQueueWait(time.Since(acquireStart))`。nil meter 返回空结构体，三个记录方法
+对 nil receiver / nil counter / nil channel 均为 no-op。
+
+端口实现：
+
+- `src/AxonHub.Grains.Abstractions/ChannelLimiterMetrics.cs`：`System.Diagnostics.Metrics`
+  的 `Meter("axonhub")` 上注册同名、同单位、同描述的五个 instrument；两个
+  `CreateObservableGauge<long>` 回调分别从 `Snapshot()` 返回 `Measurement<long>` 列表（参照
+  用单个回调同时 Observe 两个 gauge，逐次抓取的观测值一致）；两个 `Counter<long>` 与一个
+  `Histogram<double>` 使用 `channel_id` / `channel_name` 标签；null meter 时所有记录方法为
+  no-op；`CreateDefault(manager)` 供宿主注册进程级单例。
+- `ChannelLimiterMiddleware`（`src/AxonHub.Api/Orchestration/RateLimitMiddlewares.cs`）：
+  新增可选 `ChannelLimiterMetrics` 与 `TimeProvider` 参数；`Acquire` 前取
+  `GetTimestamp()`，按 `ChannelQueueException.Reason` 递增 full / timeout counter，
+  成功获准后以 `GetElapsedTime` 的 `TotalSeconds` 记录等待直方图。
+- `ChatCompletionOrchestrator`：新增可选 `ChannelLimiterMetrics` 构造参数并传给中间件；
+  `Program.cs` 以单例注册 `ChannelLimiterMetrics.CreateDefault(ChannelLimiterManager)`。
+  OTel .NET 按 Meter 名 `axonhub` 收集，与参照的导出面一致。
+
+| 参照测试 | 端口测试 | 例数 |
+|---|---|---|
+| `TestChannelLimiterMetrics_NilMeterIsNoop` | `NilMeterIsNoop` | 1 |
+| `TestChannelLimiterMetrics_GaugeCallbackEmitsLimiterStats` | `GaugeCallbackEmitsLimiterStats` | 1 |
+| `TestChannelLimiterMetrics_CountersAndHistogram` | `CountersAndHistogram` | 1 |
+| 无（接线守卫） | `QueueFullRejectionIncrementsTheCounter` | 1 |
+| 无（接线守卫） | `SuccessfulAcquireRecordsTheWait` | 1 |
+
+静态计数：`AxonHub.Api.Tests` 由 5371 增至 5376（+5），四项目合计由 8850 增至 8855
+（`AxonHub.Llm.Tests` 1468、`AxonHub.Persistence.Tests` 331、`AxonHub.Grains.Tests` 1680
+不变）。**按项目规则未运行 lint / build / test。**
+
+C044 由 gap 改为 resolved。另登记 C223（gap）：参照的通用 metrics 子系统
+（`internal/metrics` provider/config 与 `WithMetrics()` HTTP 中间件）尚未移植，属于本轮
+发现、待决策范围的独立缺口。
 
 ## 覆盖缺口
 

@@ -25,12 +25,16 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
     private readonly PersistentOutboundTransformer _outbound;
     private readonly ChannelLimiterManager _manager;
     private readonly CancellationToken _cancellationToken;
+    private readonly ChannelLimiterMetrics? _metrics;
+    private readonly TimeProvider _timeProvider;
     private LimiterSlot? _current;
 
     public ChannelLimiterMiddleware(
         PersistentOutboundTransformer outbound,
         ChannelLimiterManager manager,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ChannelLimiterMetrics? metrics = null,
+        TimeProvider? timeProvider = null)
         : base("channel-limiter")
     {
         ArgumentNullException.ThrowIfNull(outbound);
@@ -39,6 +43,8 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
         _outbound = outbound;
         _manager = manager;
         _cancellationToken = cancellationToken;
+        _metrics = metrics;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public override HttpRequestData TransformOutboundRawRequest(HttpRequestData request)
@@ -60,14 +66,33 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
             return request;
         }
 
+        // The reference starts the wait clock at Acquire entry and observes it
+        // only on success (connection_tracking.go: withChannelLimiter).
+        var acquireStart = _timeProvider.GetTimestamp();
+
         try
         {
             limiter.Acquire(_cancellationToken);
         }
         catch (ChannelQueueException ex)
         {
+            switch (ex.Reason)
+            {
+                case ChannelQueueReason.QueueFull:
+                    _metrics?.IncQueueFull(candidate.ChannelId, candidate.ChannelName);
+                    break;
+                case ChannelQueueReason.QueueTimeout:
+                    _metrics?.IncQueueTimeout(candidate.ChannelId, candidate.ChannelName);
+                    break;
+            }
+
             throw ChannelQueueError.From(candidate.ChannelId, candidate.ChannelName, ex)!;
         }
+
+        _metrics?.ObserveQueueWait(
+            candidate.ChannelId,
+            candidate.ChannelName,
+            _timeProvider.GetElapsedTime(acquireStart));
 
         _current = new LimiterSlot(limiter);
 

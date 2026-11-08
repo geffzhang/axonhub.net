@@ -97,6 +97,14 @@ builder.Services.AddSingleton(static services => new ChannelRequestTracker(
     services.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<ChannelLimiterManager>();
 
+// The reference registers the channel-limiter instruments on the process-wide
+// OpenTelemetry meter while building the orchestrator (orchestrator.go:41-47).
+// System.Diagnostics.Metrics is the .NET collection surface; OpenTelemetry .NET
+// reads the same "axonhub" meter, and with no listener the instruments are a
+// no-op (difference ledger C044).
+builder.Services.AddSingleton(static services => ChannelLimiterMetrics.CreateDefault(
+    services.GetRequiredService<ChannelLimiterManager>()));
+
 // The reference's RequestService owns the previous-channel cache consumed by
 // trace sticky routing (request.go:1733-1801); one singleton serves the
 // orchestrator's selector reads and the persistence middleware's writes.
