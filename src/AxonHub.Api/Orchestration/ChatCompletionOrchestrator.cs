@@ -758,21 +758,41 @@ public sealed class ChatCompletionOrchestrator
             throw;
         }
 
+        // orchestrator.go:360-375: the API boundary forwards Codex response
+        // headers only when the selected outbound advertises the contract.
+        var codexResponseHeadersSupported = outbound.SupportsCodexResponseHeaders();
+
         if (result.Stream)
         {
             // The stream outlives this method. Stop the attempt's transformer
             // when the consumer disposes the stream — after completion, error or
             // cancellation (C072).
+            IStream<StreamEvent> stream = new DisposeCallbackStream<StreamEvent>(
+                result.EventStream!,
+                outbound.Stop);
+
+            // The teardown wrapper is transparent, but it hides the
+            // responseHeadersProvider interface the pipeline attached to the
+            // stream (httpclient.WithResponseHeaders); re-attach the metadata so
+            // api.writeForwardResponseHeaders can read it (C094).
+            if (ResponseHeaders.GetResponseHeaders(result.EventStream) is { } headers)
+            {
+                stream = ResponseHeaders.WithResponseHeaders(stream, headers);
+            }
+
             return new ChatCompletionResult
             {
-                Stream = new DisposeCallbackStream<StreamEvent>(
-                    result.EventStream!,
-                    outbound.Stop),
+                Stream = stream,
+                CodexResponseHeadersSupported = codexResponseHeadersSupported,
             };
         }
 
         outbound.Stop();
-        return new ChatCompletionResult { Response = result.Response };
+        return new ChatCompletionResult
+        {
+            Response = result.Response,
+            CodexResponseHeadersSupported = codexResponseHeadersSupported,
+        };
     }
 
     /// <summary>
@@ -1064,4 +1084,11 @@ public sealed class ChatCompletionResult
     public HttpResponseData? Response { get; init; }
 
     public IStream<StreamEvent>? Stream { get; init; }
+
+    /// <summary>
+    /// Port of orchestrator.ChatCompletionResult.CodexResponseHeadersSupported:
+    /// whether the successful attempt's outbound participates in the Codex
+    /// response-header contract (codex outbound always true).
+    /// </summary>
+    public bool CodexResponseHeadersSupported { get; init; }
 }

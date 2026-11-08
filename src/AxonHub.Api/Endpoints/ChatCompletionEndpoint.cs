@@ -3,8 +3,11 @@ using AxonHub.Api.Auth;
 using AxonHub.Api.Http;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
+using AxonHub.Llm.Transformer.OpenAI.Codex;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Primitives;
 
 namespace AxonHub.Api.Endpoints;
 
@@ -113,8 +116,13 @@ public static class ChatCompletionEndpoint
             return;
         }
 
+        // api/chat.go:105: forward the small, explicit set of upstream headers
+        // that are safe at the client boundary (codex responses only).
+        WriteForwardResponseHeaders(context, genericRequest, result);
+
         if (result.Response is { } response)
         {
+            CopyCodexTurnStateHeader(context.Response.Headers, response.Headers);
             await WriteResponseAsync(context, response, cancellationToken);
             RecordResponseHeaders(context, orchestrator, requestId);
             return;
@@ -123,6 +131,14 @@ public static class ChatCompletionEndpoint
         if (result.Stream is { } stream)
         {
             context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+
+            // api/chat.go:134-136: the codex turn-state header travels on the
+            // first upstream event's transport headers, and SSE headers must be
+            // sent before the first flush, so prime it here.
+            if (genericRequest.Path.EndsWith("/responses", StringComparison.Ordinal))
+            {
+                stream = PrimeCodexTurnStateHeader(context.Response.Headers, stream);
+            }
 
             var writer = streamWriter ?? new StreamWriterDelegate(SseStreamWriter.WriteAsync);
             try
@@ -203,6 +219,104 @@ public static class ChatCompletionEndpoint
         context.Response.StatusCode = response.StatusCode;
         context.Response.ContentType = contentType;
         await WriteBodyAsync(context, response.Body ?? [], cancellationToken);
+    }
+
+    /// <summary>Port of api.writeForwardResponseHeaders (chat.go:146-159).</summary>
+    internal static void WriteForwardResponseHeaders(
+        HttpContext context,
+        HttpRequestData? request,
+        ChatCompletionResult result)
+    {
+        if (!result.CodexResponseHeadersSupported
+            || request is null
+            || !request.Path.EndsWith("/responses", StringComparison.Ordinal)
+            || CodexHeaders.GetSessionIdFromHeaders(request.Headers).Length == 0)
+        {
+            return;
+        }
+
+        var headers = result.Response is not null
+            ? result.Response.Headers
+            : ResponseHeaders.GetResponseHeaders(result.Stream);
+
+        // httpclient.MergeForwardResponseHeaders copies only the explicit safe
+        // set; the downstream writer has no stale value to remove.
+        if (ResponseHeaders.MergeForwardResponseHeaders(null, headers) is not { } forwarded)
+        {
+            return;
+        }
+
+        foreach (var (name, values) in forwarded)
+        {
+            context.Response.Headers[name] = new StringValues([.. values]);
+        }
+    }
+
+    /// <summary>Port of api.copyCodexTurnStateHeader (chat.go:161-169).</summary>
+    internal static void CopyCodexTurnStateHeader(
+        IHeaderDictionary dst,
+        Dictionary<string, List<string>>? src)
+    {
+        if (src is null)
+        {
+            return;
+        }
+
+        var value = HttpClientUtils.HeaderGet(src, CodexHeaders.TurnStateHeader);
+        if (value.Length > 0)
+        {
+            dst[CodexHeaders.TurnStateHeader] = value;
+        }
+    }
+
+    /// <summary>
+    /// Port of api.primeCodexTurnStateHeader (chat.go:181-192): pull the first
+    /// event so its transport headers can be copied before SSE headers are sent,
+    /// then hand the event back through <see cref="PrimedStream"/>.
+    /// </summary>
+    internal static IStream<StreamEvent> PrimeCodexTurnStateHeader(
+        IHeaderDictionary dst,
+        IStream<StreamEvent> stream)
+    {
+        if (!stream.Next())
+        {
+            return stream;
+        }
+
+        var first = stream.Current;
+        if (first is not null)
+        {
+            CopyCodexTurnStateHeader(dst, first.Headers);
+        }
+
+        return new PrimedStream(stream, first);
+    }
+
+    /// <summary>Port of api.primedStream (chat.go:171-221).</summary>
+    internal sealed class PrimedStream(IStream<StreamEvent> stream, StreamEvent? first)
+        : IStream<StreamEvent>
+    {
+        private bool _pending = true;
+
+        public StreamEvent? Current
+        {
+            get
+            {
+                if (_pending)
+                {
+                    _pending = false;
+                    return first;
+                }
+
+                return stream.Current;
+            }
+        }
+
+        public Exception? Err => stream.Err;
+
+        public bool Next() => _pending || stream.Next();
+
+        public void Dispose() => stream.Dispose();
     }
 
     /// <summary>gin: <c>c.JSON(status, json.RawMessage(httpErr.Body))</c>.</summary>

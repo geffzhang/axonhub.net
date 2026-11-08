@@ -4,6 +4,7 @@ using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.OpenAI;
 
@@ -577,6 +578,61 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
         Assert.Equal("[DONE]", System.Text.Encoding.UTF8.GetString(events[^1].Data));
         Assert.Equal(new long[] { 4601 }, metrics.Successes);
         Assert.Empty(metrics.Failures);
+    }
+
+    /// <summary>
+    /// orchestrator.go:360-375 + api/chat.go:146-159 (C094): the forwardable
+    /// response metadata the pipeline attaches to the inbound stream must
+    /// survive the per-attempt teardown wrapper, otherwise
+    /// writeForwardResponseHeaders has nothing to read and X-Reasoning-Included
+    /// is silently dropped.
+    /// </summary>
+    [Fact]
+    public async Task StreamKeepsForwardableResponseHeadersForTheEndpoint()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(4603, "header-model"));
+
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"header-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}"),
+            TestChannels.Data("{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"header-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}"),
+            TestChannels.Data("[DONE]"),
+        };
+        var upstreamHeaders = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            [ResponseHeaders.ReasoningIncludedHeader] = ["true"],
+        };
+
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => ResponseHeaders.WithResponseHeaders(
+                new ListStream<StreamEvent>(chunks),
+                upstreamHeaders),
+        };
+        var metrics = new RecordingMetricsRecorder();
+        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy());
+
+        var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("header-model", stream: true));
+
+        Assert.NotNull(result.Stream);
+
+        // The openai chat outbound does not advertise the codex contract; the
+        // metadata itself is preserved regardless (C094 item 7).
+        Assert.False(result.CodexResponseHeadersSupported);
+        var attached = ResponseHeaders.GetResponseHeaders(result.Stream);
+        Assert.NotNull(attached);
+        Assert.True(attached.TryGetValue(ResponseHeaders.ReasoningIncludedHeader, out var values));
+        Assert.Equal("true", Assert.Single(values));
+
+        while (result.Stream!.Next())
+        {
+            _ = result.Stream.Current;
+        }
+
+        result.Stream.Dispose();
+        Assert.Equal(new long[] { 4603 }, metrics.Successes);
     }
 
     /// <summary>

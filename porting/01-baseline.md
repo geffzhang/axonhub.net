@@ -7209,6 +7209,43 @@ C022 由 gap 改为 resolved。残余：C224（普通 `List<string>` 的 null �
 C072 保持 gap 但收窄：会话注入与 Stop 生命周期完成，残余为端点记录传输与通道级连接复用；
 C062 的残余接线说明、C094 item (12) 与 C096 item (6) 随之关闭。
 
+## 142. Codex 响应头转发（C094 item 7 关闭，8 例，2026-11-08）
+
+参照：`internal/server/api/chat.go` 的 `writeForwardResponseHeaders` /
+`copyCodexTurnStateHeader` / `primeCodexTurnStateHeader`（含 `primedStream`，chat.go:146-259）、
+`internal/server/orchestrator/orchestrator.go:360-375`、`llm/httpclient/response_headers.go`。
+
+参照行为：
+
+| 项 | 参照值 |
+|---|---|
+| 转发门 | `result.CodexResponseHeadersSupported` 为真、请求路径以 `/responses` 结尾、`codex.GetSessionIDFromHeaders(request.Headers)` 非空，三者同时成立才转发 |
+| 转发集合 | `MergeForwardResponseHeaders` 只复制 `X-Reasoning-Included`，且源值全部为 `true`（Trim + 大小写不敏感）；不合格时删除目标既有值 |
+| 非流头来源 | `result.ChatCompletion.Headers`（pipeline 已把非流式响应头合并为可转发集合） |
+| 流头来源 | `httpclient.GetResponseHeaders(result.ChatCompletionStream)`（pipeline 末尾 `WithResponseHeaders` 附加的元数据） |
+| 非流 turn state | `copyCodexTurnStateHeader`：`resp.Headers.Get(X-Codex-Turn-State)` 非空则写入响应头 |
+| 流 turn state | 仅 `/responses`：`primeCodexTurnStateHeader` 先取第一个事件，把其 `Headers` 中的 `X-Codex-Turn-State` 写入响应头，再以 `primedStream` 回放该事件（SSE 头必须在首 flush 前发送） |
+| 支持方 | 只有 codex 出站实现 `SupportsCodexResponseHeaders() == true`；其余出站恒 false |
+
+端口实现：
+
+- `ChatCompletionResult.CodexResponseHeadersSupported` 由 `PersistentOutboundTransformer.SupportsCodexResponseHeaders()`（`_current is ISupportsCodexResponseHeaders`）在 pipeline 成功后填充；非流与流两个返回点都带该标志。
+- `ChatCompletionEndpoint.WriteForwardResponseHeaders` / `CopyCodexTurnStateHeader` / `PrimeCodexTurnStateHeader`（嵌套 `PrimedStream`）按参照逐行移植；`MergeForwardResponseHeaders(null, headers)` 只读转发集合，端点没有预先存在的 `X-Reasoning-Included` 可删除。
+- 流式响应先经 `DisposeCallbackStream`（§141 的按尝试 Stop 包装），该包装会遮蔽 `IResponseHeadersProvider`；`RunPipelineAsync` 用 `ResponseHeaders.WithResponseHeaders` 把 pipeline 附着的元数据重新挂到包装外层，端点读到的转发集合与参照一致。
+
+测试（8 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/CodexResponseHeaderForwardingTests.cs` | 7 | 首事件 `X-Codex-Turn-State` 复制并完整回放两事件；三条路径门（chat / responses 无会话 / codex responses）；不支持出站的拒绝；流式 provider 读取；缺失或空 turn state 不写入 |
+| `tests/AxonHub.Api.Tests/ChatCompletionOrchestratorTests.cs` | 1 | pipeline 的 `X-Reasoning-Included` 元数据穿过 `DisposeCallbackStream` 仍可被端点读取 |
+
+静态计数：`AxonHub.Api.Tests` 由 5413 增至 5421（+8），`AxonHub.Llm.Tests` 1482、
+`AxonHub.Persistence.Tests` 331、`AxonHub.Grains.Tests` 1680 不变；四项目合计由 8906 增至
+8914。**按项目规则未运行 lint / build / test。**
+
+C094 item (7) 关闭；C094 保持 gap，残余为端点表、OAuth 凭据持久化与自动刷新等。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -7216,7 +7253,7 @@ C062 的残余接线说明、C094 item (12) 与 C096 item (6) 随之关闭。
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求与提示词保护半程已由第 26、28 节闭合 | 低 | 完成（C087、C091、C092） |
 | pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面/预览未移植（C092），codex 出站的 `AllowPassThroughBody` 策略由第 29 节的 61 例 codex 用例锁定（C091 缺口关闭，见 C094） | 中 | 管理面随 C013/C014 |
-| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点表未建模（图片/alpha-search 按通道类型与入站格式分派）、OAuth `TokenProvider` 每次尝试新建、刷新不写回数据库、无后台自动刷新、无按通道代理 client、API 层 codex 响应头未转发、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
+| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点表未建模（图片/alpha-search 按通道类型与入站格式分派）、OAuth `TokenProvider` 每次尝试新建、刷新不写回数据库、无后台自动刷新、无按通道代理 client、codex 响应头转发已由 §142 接线（C094 item 7 关闭）、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |

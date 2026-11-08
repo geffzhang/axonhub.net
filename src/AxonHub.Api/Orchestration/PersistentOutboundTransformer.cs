@@ -433,7 +433,8 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// <summary>
     /// Port of SupportsCodexResponseHeaders (outbound.go:505-510): whether the
     /// current provider transformer advertises the Codex response-header
-    /// contract. The API layer's header forwarding is a registered gap (C094).
+    /// contract. The result carries it to api.writeForwardResponseHeaders,
+    /// which forwards X-Reasoning-Included only when it is true (§142).
     /// </summary>
     public bool SupportsCodexResponseHeaders()
         => _current is ISupportsCodexResponseHeaders supports
