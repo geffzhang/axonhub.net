@@ -6732,6 +6732,63 @@ Command Code 分支改为调用 checker 的 `HasQuotaCredentials`，删除服务
 差异：C182 由剩余 2 个 checker 收窄为 1 个；新增 C220（Command Code 双计费面回退、plan allowance 表、
 Go map 解码语义与 UTC 重置文本）。
 
+## 133. Ollama 供应商配额检查器（API key 余额 / 会话 cookie 计量页双面采集、HTML 抓取与 Go 匿名结构体解码，123 例，2026-11-08）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/ollama_checker.go`（常量 `ollamaProviderType`:22、
+`ollamaBalanceURL`:25、`ollamaSettingsURL`:28、`ollamaQuotaUA`:29、`ollamaCookieName`:30、
+`ollamaCookiePrefix`:31、`ollamaMinCookieLen`:35；`OllamaQuotaChecker`:43-46、`NewOllamaQuotaChecker`:49-54、
+`ollamaAPIKey`:56-66、`ollamaRawCookie`:68-74、`HasOllamaQuotaCredentials`:80-86、`SupportsChannel`:90-96、
+`CheckQuota`:101-132、`fetchBalance`:134-154、`ollamaBalanceStatusError`:156-162、`fetchSettings`:164-191、
+`NormalizeOllamaCookie`:201-241、三个正则:243-247、`ollamaUsageWindow`:249-254、
+`ollamaBalanceResponse`:259-273、`ollamaBalanceWindow`:275-278、`parseBalance`:280-340、
+`clampOllamaPercent`:342-344、`parseResponse`:346-405、`buildOllamaQuotaData`:407-465、
+`ollamaWindowDuration`:469-478、`normalizeOllamaWindowStatus`:480-488、`ollamaLooksLikeLoginPage`:498-514），
+`internal/server/biz/provider_quota.go:393` 的 `registerOllamaSupport`（定义见
+`provider_quota.go:414-416`，在 `registerCommandCodeSupport` 之后调用），以及 `ollama_checker_test.go`
+的 24 个测试函数（其中 `TestOllama_CheckQuota_RejectsHTTPSDowngrade`:325 与
+`TestOllama_CheckQuota_BalanceRejectsHTTPSDowngrade`:608 未移植，见 C221）。
+
+新增 `src/AxonHub.Api/Orchestration/OllamaQuotaChecker.cs`。`Program.cs` 在 commandcode 之后注册
+`OllamaQuotaChecker` 与 `ProviderQuotaCheckerRegistration("ollama", …)`（与参照 `registerOllamaSupport`
+的顺序一致），`ProviderQuotaCheckerRegistry` 的文档同步为「全部 19 个 provider checker 已注册」；
+`ProviderQuotaService.HasCredentialsForProvider` 的 ollama / ollama_anthropic 分支改为调用 checker 的
+`HasQuotaCredentials`。
+
+- 采集：账号 API key（`GetAllApiKeys` 按 legacy 顺序取第一个 TrimSpace 非空且未禁用者，C149）走固定
+  `https://ollama.com/api/balance`（`Authorization: Bearer <key>` 字面头、`Accept: application/json`，
+  无 UA、无 body）；key 面 401/403 且已配置 `Settings.ProviderQuota.Ollama.AuthCookie` 时静默回退到
+  cookie 面；cookie 经 `NormalizeOllamaCookie` 只保留 `__Secure-session`（UTF-8 字节长度 >= 30），
+  GET 固定 `https://ollama.com/settings`（`Cookie`、`Accept: text/html,application/xhtml+xml`、
+  Chrome 126 UA，无 body）；`Settings.Proxy` 非空时经代理工厂派生执行器。双面都缺报
+  `channel has no Ollama API key or quota cookie`；损坏 cookie 报
+  `invalid Ollama auth cookie: <inner>`。
+- 判定：balance 401/403 报 `Ollama balance API returned <code>`（凭据类），其余非 2xx（含 1xx / 3xx）
+  报同名通用错误，transport 包装为 `Ollama balance request failed: <inner>`；settings 401/403 报
+  `Ollama settings page returned <code> (expired session cookie?)`，其余非 2xx 报
+  `Ollama settings page returned <code>`，transport 包装为
+  `Ollama settings request failed: <inner>`；无窗口时命中登录页标记（`<title>sign in`、`sign-in`、
+  `signin`、`wos-session`、`log in to your account`、`/signin`）报
+  `ollama.com/settings returned the sign-in page (expired session cookie?)`，否则报
+  `no Ollama usage windows found in settings page (expired cookie or markup change)`。
+- 解析：balance 报文按 Go 匿名结构体解码（root null 空操作、类型错误逐字复刻 reflect 类型文本、
+  `time.Time` 错误文案、ASCII 折叠、重复键合并、null 指针 / 值字段、下溢归零），月额度 →
+  monthly 百分比窗口、legacy session / weekly → 5h / weekly 窗口、purchased > 0 → `credits` 限额与
+  rawData；HTML 页按 UTF-8 字节定位首个关键字并在 4000 字节窗口内抓 `aria-label` / 百分比 /
+  `data-time`（Go `\s` 为 ASCII 集合）；rawData 的 reset_time 保留输入偏移的 RFC3339 文本（C221）。
+- 通道门：`ollama` / `ollama_anthropic` 且 `HasQuotaCredentials`（有 key 或已配置 cookie，即使损坏）；
+  null 通道 false。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| settings 页双窗口线路与 rawData、警告 / 耗尽阈值、缺凭据 3 组、401/403 与登录页 200 凭据分类、登录页标记、仅 session 窗口 / 无窗口 / 空 body、settings 状态分类 4 组、cookie 归一化 6 + 10 组与 UTF-8 字节长度、balance 月度 / credits / 免费额度耗尽 / legacy 窗口 / 无配额、401/403 2 组、key→cookie 回退与 5xx 不回退、禁用 key 6 组、legacy 耗尽 + credits 2 组、transport 包装与执行器映射、Go 解码文案 29 组与 root null 2 组 / 下溢 / 重复键 / null 字段 / ASCII 折叠 4 组 / 未知字段、时间拼写 4 组 / 亚秒截断 / 不可表示时间 2 组 / 偏移保留 3 组 / 过去 reset、百分比夹紧 2 组、4000 字节窗口 2 组、ASCII 分隔符 2 组、首个关键字、非法 reset 2 组、非法百分比、非法 UTF-8、通道门 8 组与 settings 为 null | `tests/AxonHub.Api.Tests/OllamaQuotaCheckerTests.cs` | 30 Fact + 93 InlineData = 123 |
+
+`AxonHub.Api.Tests` 由 5165 增至 5288（+123），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+8611 增至 8734。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态
+计数；下一次全量运行应以 5288 / 319 / 8734 复核。**
+
+差异：C182 由剩余 1 个 checker 收窄为 0（C182 resolved，全部 19 个 provider checker 已落地）；
+新增 C221（Ollama 双面凭据回退、HTML 计量抓取、Go 匿名结构体解码与 HTTPS 降级拒绝缺口）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6759,7 +6816,7 @@ Go map 解码语义与 UTC 重置文本）。
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），ZhiPu checker 由 §129 落地（144 例），Zai checker 由 §130 落地（28 例），Charm Hyper checker 由 §131 落地（67 例），Command Code checker 由 §132 落地（116 例），其余 1 个 provider checker（ollama）未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax / zhipu / zai / charm_hyper / commandcode 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），ZhiPu checker 由 §129 落地（144 例），Zai checker 由 §130 落地（28 例），Charm Hyper checker 由 §131 落地（67 例），Command Code checker 由 §132 落地（116 例），Ollama checker 由 §133 落地（123 例；全部 19 个 provider checker 已注册，C182 resolved）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax / zhipu / zai / charm_hyper / commandcode / ollama 通道发起采集 | 中 | 闸门、迁移与全部 checker 完成（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |

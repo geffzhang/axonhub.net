@@ -21,11 +21,9 @@ namespace AxonHub.Api.Orchestration;
 /// <remarks>
 /// <para>
 /// The reference constructs its nineteen provider checkers in
-/// <c>registerProviderQuotaSupport</c> (provider_quota.go:374-480). This slice
-/// ports the collection core only; checkers arrive through
-/// <see cref="IProviderQuotaCheckerRegistry"/> in follow-up slices (C182), so
-/// every provider currently reaches the reference's "No checker for provider"
-/// branch.
+/// <c>registerProviderQuotaSupport</c> (provider_quota.go:374-480). The port
+/// registers all of them through <see cref="IProviderQuotaCheckerRegistry"/>;
+/// the registry's key set matches the reference exactly (C182).
 /// </para>
 /// <para>
 /// The reference's <c>ProviderQuotaServiceParams.CheckInterval</c> and
@@ -1040,7 +1038,7 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
 
         if (type is "ollama" or "ollama_anthropic")
         {
-            return HasOllamaQuotaCredentials(channel);
+            return OllamaQuotaChecker.HasQuotaCredentials(channel, _time.GetUtcNow());
         }
 
         return credentials.OAuth is not null
@@ -1055,62 +1053,6 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
         var value = apiKey ?? string.Empty;
         var trimmed = value.Trim();
         return trimmed.StartsWith('{') && value.Contains("access_token", StringComparison.Ordinal);
-    }
-
-    /// <summary>Port of provider_quota.HasOllamaQuotaCredentials (ollama_checker.go:80-86).</summary>
-    private bool HasOllamaQuotaCredentials(ChannelRecord channel)
-        => OllamaApiKey(channel).Length > 0 || OllamaRawCookie(channel).Length > 0;
-
-    /// <summary>Port of ollamaAPIKey (ollama_checker.go:56-66).</summary>
-    private string OllamaApiKey(ChannelRecord channel)
-    {
-        var disabled = OllamaDisabledKeySet(channel);
-        foreach (var candidate in ChannelCredentials.GetAllApiKeys(channel.Credentials))
-        {
-            var trimmed = candidate.Trim();
-            if (trimmed.Length > 0 && !disabled.Contains(trimmed))
-            {
-                return trimmed;
-            }
-        }
-
-        return string.Empty;
-    }
-
-    /// <summary>Port of ollamaRawCookie (ollama_checker.go:68-74).</summary>
-    private static string OllamaRawCookie(ChannelRecord channel)
-    {
-        var settings = ParseSettingsLenient(channel.Settings);
-        return settings?.ProviderQuota?.Ollama?.AuthCookie?.Trim() ?? string.Empty;
-    }
-
-    /// <summary>Port of zhipuDisabledKeySet (zhipu_checker.go:684-697).</summary>
-    private HashSet<string> OllamaDisabledKeySet(ChannelRecord channel)
-    {
-        var disabled = new HashSet<string>(StringComparer.Ordinal);
-        IReadOnlyList<DisabledApiKey> entries;
-        try
-        {
-            entries = ChannelWriteSerialization.ParseDisabledApiKeys(channel.DisabledApiKeys);
-        }
-        catch (JsonException)
-        {
-            return disabled;
-        }
-
-        var now = _time.GetUtcNow();
-        foreach (var entry in entries)
-        {
-            var key = entry.Key.Trim();
-            if (key.Length == 0 || entry.IsExpired(now))
-            {
-                continue;
-            }
-
-            disabled.Add(key);
-        }
-
-        return disabled;
     }
 
     private static ChannelSettingsDraft? ParseSettingsLenient(string? raw)

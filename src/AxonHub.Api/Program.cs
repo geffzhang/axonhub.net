@@ -299,7 +299,9 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 // checker (the /v1/credits balance on the channel's host) and
 // provider_quota.go:392 / 410-412 the Command Code checker (the alpha billing
 // endpoints with the account key, degrading to the Studio cookie's internal
-// endpoints).
+// endpoints) and provider_quota.go:393 / 414-416 the Ollama checker (the
+// balance API authenticated with the account key, degrading to the settings
+// page's session cookie).
 // Checkers are stateless singletons sharing the process HTTP executor and the
 // channel-proxy factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
@@ -409,6 +411,12 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "commandcode",
         services.GetRequiredService<CommandCodeQuotaChecker>()));
+
+builder.Services.AddSingleton<OllamaQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "ollama",
+        services.GetRequiredService<OllamaQuotaChecker>()));
 
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(
