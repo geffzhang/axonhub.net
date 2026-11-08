@@ -91,7 +91,7 @@ internal sealed class FakeDataStorageStore : IDataStorageStore
         _ = cancellationToken;
         return Task.FromResult(
             _rows
-                .Where(static row => row.Primary)
+                .Where(static row => row.Primary && row.DeletedAt == 0)
                 .OrderBy(static row => row.Id)
                 .FirstOrDefault());
     }

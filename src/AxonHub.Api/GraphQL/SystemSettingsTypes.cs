@@ -538,6 +538,16 @@ public sealed class CleanupOptionInput
     public int CleanupDays { get; set; }
 }
 
+/// <summary>
+/// Port of <c>UpdateDefaultDataStorageInput</c> (system.graphql:238-240).
+/// </summary>
+public sealed class UpdateDefaultDataStorageInput
+{
+    [GraphQLName("dataStorageID")]
+    [GraphQLType(typeof(NonNullType<IdType>))]
+    public string DataStorageId { get; set; } = string.Empty;
+}
+
 /// <summary>Port of <c>TriggerGcCleanupInput</c> (system.graphql:377-383).</summary>
 public sealed class TriggerGcCleanupInput
 {

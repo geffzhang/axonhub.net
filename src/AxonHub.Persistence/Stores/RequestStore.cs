@@ -21,14 +21,16 @@ public interface IRequestStore
 
     /// <summary>
     /// Port of UpdateRequestStatusExternalIDAndResponseBody (async video task
-    /// polling): status and external id are always written, the response body
-    /// snapshot under the default storage policy (C020).
+    /// polling): status and external id are always written; the response body
+    /// snapshot only when <paramref name="setResponseBody"/> is set (the
+    /// storage policy is checked, and an external write records its marker).
     /// </summary>
     Task<bool> UpdateStatusExternalIdAndResponseBodyAsync(
         long id,
         string status,
         string externalId,
-        string responseBody,
+        string? responseBody,
+        bool setResponseBody,
         DateTime updatedAt,
         CancellationToken cancellationToken = default);
 
@@ -41,18 +43,30 @@ public interface IRequestStore
 
     /// <summary>
     /// Port of UpdateRequestFinalized: status and external id are always
-    /// written, the body is stored under the default storage policy, metrics
-    /// only when the caller supplies them, and headers never (they go through
-    /// <see cref="UpdateResponseHeadersAsync"/>).
+    /// written, the body only when <paramref name="setResponseBody"/> is set
+    /// (the storage policy is checked, and an external write records its
+    /// marker), metrics only when the caller supplies them, and headers never
+    /// (they go through <see cref="UpdateResponseHeadersAsync"/>).
     /// </summary>
     Task<bool> UpdateResultAsync(
         long id,
         string status,
         string? externalId,
         string? responseBody,
+        bool setResponseBody,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SaveRequestChunks' column write: the marshalled chunk array
+    /// (or the external marker) with a fresh updated_at.
+    /// </summary>
+    Task<bool> UpdateResponseChunksAsync(
+        long id,
+        string responseChunks,
         DateTime updatedAt,
         CancellationToken cancellationToken = default);
 
@@ -132,7 +146,8 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
         long id,
         string status,
         string externalId,
-        string responseBody,
+        string? responseBody,
+        bool setResponseBody,
         DateTime updatedAt,
         CancellationToken cancellationToken = default)
     {
@@ -147,7 +162,12 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
 
         request.Status = status;
         request.ExternalId = externalId;
-        request.ResponseBody = responseBody;
+
+        if (setResponseBody)
+        {
+            request.ResponseBody = responseBody;
+        }
+
         request.UpdatedAt = updatedAt;
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -181,6 +201,7 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
         string status,
         string? externalId,
         string? responseBody,
+        bool setResponseBody,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
@@ -199,10 +220,13 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
         request.Status = status;
         request.ExternalId = externalId;
 
-        // The reference stores the finalized body whenever the storage policy
-        // allows it (default true); response chunks are written only by
-        // SaveRequestChunks, which this slice does not port (C020).
-        request.ResponseBody = responseBody;
+        // Ent only sets the column when the caller supplied the field: the
+        // storage policy may disable it, and a failed external write leaves the
+        // body untouched.
+        if (setResponseBody)
+        {
+            request.ResponseBody = responseBody;
+        }
 
         if (latencyMs is not null)
         {
@@ -219,6 +243,28 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
             request.MetricsReasoningDurationMs = reasoningDurationMs;
         }
 
+        request.UpdatedAt = updatedAt;
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> UpdateResponseChunksAsync(
+        long id,
+        string responseChunks,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var request = await db.Requests
+            .FirstOrDefaultAsync(request => request.Id == id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (request is null)
+        {
+            return false;
+        }
+
+        request.ResponseChunks = responseChunks;
         request.UpdatedAt = updatedAt;
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

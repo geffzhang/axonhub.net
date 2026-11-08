@@ -6837,6 +6837,69 @@ Vertex 与 Antigravity 默认 handler 全部改为 `AllowAutoRedirect = false`�
 C207 / C221 的降级缺口关闭（accepted，Ollama 125 例）；新增 C222（Go 重定向循环的端口残差：URI 解析、
 错误文案、Referer 渲染与 Host 保留）。
 
+## 135. 存储策略与响应分块持久化（C020 闭合，66 + 11 例，2026-11-08）
+
+参照冻结基线 `b8bb3421`（实时上游 `f272549f` 在本切片范围内一致）：`internal/server/biz/system.go:237-243`
+的 `StoragePolicy`（`store_chunks` / `live_preview` / `store_request_body` / `store_response_body` /
+`cleanup_options`）、`system_default.go:71-77` 的默认策略（false / false / true / true）与
+`:11-69` 的 `defaultCleanupOptions` / `mergeCleanupOptions`、`system.go:981-1038` 的读取与写入
+（缺行返回默认策略、旧文档缺两个 body 键时按旧行为回填 true、`cleanup_days <= 0` 拒绝），
+`DataStorageService.GetDefaultDataStorage`（data_storage.go:337-361）与 `getDataStorage` /
+`shouldUseExternalStorage`（request_internal.go:10-22、request.go:64-72）、写路径的策略门禁
+（request.go:198 / 334 / 521 / 539 / 638 / 736 / 830，失败时 body 默认 true、chunks 默认 false）、
+`request.go:1011-1258` 的 `isBinaryStreamChunk` / `shouldSkipStoredStreamChunk` /
+`marshalStreamEventForStorage` / `SaveRequestChunks` / `SaveRequestExecutionChunks`、
+`request.go:1369-1683` 的六个正文 / chunk loader 与 `_ext` 标记折叠、`request.go:725-814` 的
+快照写入，以及 `internal/ent/migrate/datamigrate/v0.4.0.go` 的主存储种子迁移。
+
+实现：新增 `StoragePolicy` / `StoragePolicyCodec`（`AxonHub.Api.Settings`）——键 `storage_policy`，
+缺行返回默认、Go JSON 解码（字段名大小写不敏感、缺省布尔为 false、旧文档按字符串包含回填两个 body
+开关、cleanup 列表按首见顺序合并默认项）、`GoJson.MarshalToString` 序列化；写路径的读取失败被
+`RequestPayloadStorage.TryGetStoragePolicyAsync` 吞掉并按参照默认值继续（取消原样抛出）。新增
+`RequestPayloadStorage`（`AxonHub.Api.Management`）复刻外部存储半边：默认存储 id 读取（缺失视为 0、
+解析失败文案 `failed to parse default data storage ID: expected integer`、外层再包
+`failed to get default data storage ID: `）、`GetDataStorage` / `GetDataStorageByID` /
+`GetPrimaryDataStorage` 的三条缺失文案、`ShouldUseExternalStorage`（非 primary 即外部，type 不参与）、
+`SaveData` / `LoadData` / `DeleteData` 的 database 特例（database 类型下 key 即数据、写入与删除均为
+no-op）、`WriteResponseBodyAsync` 与快照写入的 `_ext` 标记 / 外部写入失败不动列 / 数据库写失败回滚
+外部对象、六个 loader 的状态门（response body 仅 completed、chunks 仅 stream + 终态）、外部 JSON
+合法性校验、`_ext` 标记折叠与 `{}` 空正文回退。新增 `RequestChunkStorage`（`AxonHub.Api.Persistence`）
+复刻分块编组：二进制判定（`audio/` 前缀或 `application/octet-stream`，Trim + 小写）、跳过 nil /
+非二进制 `[DONE]` / `BinaryStreamDoneEventType`、二进制摘要 `{"object":"binary.stream_chunk",
+"content_type":<Trim 后类型>,"bytes":<len(Data) 或 Size>}`、`last_event_id` → `event` → `data` 的
+手写包装（`last_event_id` 空时省略、data 无效 JSON 时整块跳过、空 data 输出 `null`、
+`GoJson.Marshal` 的 HTML 转义与 `MarshalRaw` 的压缩），空结果返回 `[]` 且不写库。`RequestChainRecorder`
+接入 `SaveRequestChunks` / `SaveExecutionChunks`：策略读取 → 编组 → 行读取 → 外部写入 + 标记或
+数据库列写入，错误前缀逐字复刻（`failed to get request:` / `failed to save chunks to external
+storage:` / `failed to mark request chunks as external:` / `failed to mark execution chunks as
+external:` / `failed to save response chunks:`），标记写失败回滚外部对象。新增
+`DataStorageBootstrap.EnsurePrimaryDataStorageAsync`（`AxonHub.Persistence`）在
+`DatabaseMigrator.EnsureCreatedAsync` 之后启动执行：查询 `primary = TRUE AND deleted_at = 0`，
+已存在则跳过；否则单事务插入 Name `Primary` / Description `Primary database storage` /
+Type `database` / Settings `{}` / Status `active` 的行并写 `systems.default_data_storage_id`。
+中间件按参照顺序接线：execution 成功先 `UpdateExecutionResult` 再存 chunk、失败分支先存 chunk 再
+`PersistExecutionFailure`、聚合异常先 `UpdateExecutionStatus` 再存 chunk；request 失败先存 chunk 再
+`UpdateRequestStatus`、成功先 `UpdateRequestResult` 再存 chunk。GraphQL 的 Request / RequestExecution
+正文与 chunk 字段改经 `RequestPayloadStorage` 的 loader，trace 段构建同样改经 `LoadRequestBody` /
+`LoadResponseBody`（外部存储读取随之接入，后端实现差异仍见 C199）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 二进制判定（大小写 / 空白 / octet-stream / 非二进制）、nil 与 `[DONE]` / `binary.done` 的跳过条件、包装字段顺序与 HTML 转义、空 data 与 `last_event_id`、无效 raw JSON 跳过、二进制摘要与 Size 回退、`MarshalChunks` 全过滤与空列表、`_ext` 分块标记 | `tests/AxonHub.Api.Tests/RequestChunkStorageTests.cs` | 13 Fact + 8 InlineData = 21 |
+| 存储策略缺行 / 旧文档 / 畸形 JSON / cleanup 校验与序列化、写路径失败默认值、默认存储 id 与双包裹、按 id / primary 查找的三条缺失文案、database 与外部存储的 Save / Load / Delete、body 写入与 `_ext` 标记、快照写入的门禁 / 外部写失败 / 数据库写失败回滚（含回滚失败）、六个 loader 的状态门 / 标记折叠 / JSON 校验 / 存储查找回退 | `tests/AxonHub.Api.Tests/RequestPayloadStorageTests.cs` | 44 Fact |
+| 成功流的两侧 chunk 归档（含 `[DONE]`）与失败流的 chunk 先于状态写入、无结果 / 无用量写入 | `tests/AxonHub.Api.Tests/RequestChainPersistenceTests.cs` | 新增 1 Fact（既有成功用例追加断言） |
+| 空库种子行与 `default_data_storage_id`、重复执行为 no-op、已有 primary 时不动 `systems`、非 primary 行不抑制种子 | `tests/AxonHub.Persistence.Tests/DataStorageBootstrapTests.cs` | 4 Fact |
+| primary 查询过滤软删行并保持 id 顺序、`setResponseBody=false` 不动正文、chunks 单独写入、`GetById` 缺失返回 null | `tests/AxonHub.Persistence.Tests/DataStorageStoreTests.cs`、`RequestStoreTests.cs`、`RequestExecutionStoreTests.cs` | 1 + 3 + 3 Fact |
+
+`AxonHub.Api.Tests` 由 5296 增至 5362（+66），`AxonHub.Persistence.Tests` 由 319 增至 330（+11），
+`AxonHub.Llm.Tests` 保持 1455，四个项目合计由 8750 增至 8827。**本切片按项目规则未运行
+lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态计数；下一次全量运行应以
+5362 / 330 / 8827 复核。**
+
+差异：C020 resolved（存储策略、分块归档、外部存储读写与 v0.4.0 种子全部接入）；C191 的
+「外部正文 / chunk 读取分支缺席」关闭，剩余顺序加载 / 无日志 / 多错误选择顺序（accepted）；
+C196 的第 (8) 项（主存储种子未移植）关闭；C192 的「DataStorage 子系统尚未移植」原因描述同步更新。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

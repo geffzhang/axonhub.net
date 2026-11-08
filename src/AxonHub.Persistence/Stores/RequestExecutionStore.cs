@@ -186,6 +186,8 @@ public interface IRequestExecutionStore
 
     Task<long> CreateAsync(RequestExecutionRecord execution, CancellationToken cancellationToken = default);
 
+    Task<RequestExecutionRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<RequestExecutionRecord>> ListByRequestIdAsync(
         long requestId,
         CancellationToken cancellationToken = default);
@@ -217,10 +219,11 @@ public interface IRequestExecutionStore
 
     /// <summary>
     /// Port of UpdateRequestExecutionFinalized (response_status_code is never
-    /// set here): status and external id are always written, the body is stored
-    /// under the default storage policy, upstream model / error message only
-    /// when non-empty, metrics only when supplied; headers and chunks go
-    /// through their own updates.
+    /// set here): status and external id are always written, the body only when
+    /// <paramref name="setResponseBody"/> is set (the storage policy is checked,
+    /// and an external write records its marker), upstream model / error
+    /// message only when non-empty, metrics only when supplied; headers and
+    /// chunks go through their own updates.
     /// </summary>
     Task<bool> UpdateResultAsync(
         long id,
@@ -228,10 +231,21 @@ public interface IRequestExecutionStore
         string? externalId,
         string? upstreamModelId,
         string? responseBody,
+        bool setResponseBody,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SaveRequestExecutionChunks' column write: the marshalled chunk
+    /// array (or the external marker) with a fresh updated_at.
+    /// </summary>
+    Task<bool> UpdateResponseChunksAsync(
+        long id,
+        string responseChunks,
         DateTime updatedAt,
         CancellationToken cancellationToken = default);
 
@@ -502,6 +516,21 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
         return execution.Id;
     }
 
+    public async Task<RequestExecutionRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var sql = "SELECT " + Columns + " FROM \"request_executions\" WHERE \"id\" = @Id;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<RequestExecutionRecord>(
+            new CommandDefinition(
+                sql,
+                new { Id = id },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<RequestExecutionRecord>> ListByRequestIdAsync(
         long requestId,
         CancellationToken cancellationToken = default)
@@ -603,6 +632,7 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
         string? externalId,
         string? upstreamModelId,
         string? responseBody,
+        bool setResponseBody,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
@@ -632,10 +662,13 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
             execution.ErrorMessage = errorMessage;
         }
 
-        // Headers and chunks are written by their own updates (and chunks only
-        // when the storage policy enables them, C020), so finalization cannot
-        // clear them.
-        execution.ResponseBody = responseBody;
+        // Ent only sets the column when the caller supplied the field: the
+        // storage policy may disable it, and a failed external write leaves the
+        // body untouched. Headers and chunks have their own updates.
+        if (setResponseBody)
+        {
+            execution.ResponseBody = responseBody;
+        }
 
         if (latencyMs is not null)
         {
@@ -652,6 +685,28 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
             execution.MetricsReasoningDurationMs = reasoningDurationMs;
         }
 
+        execution.UpdatedAt = updatedAt;
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> UpdateResponseChunksAsync(
+        long id,
+        string responseChunks,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var execution = await db.RequestExecutions
+            .FirstOrDefaultAsync(execution => execution.Id == id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (execution is null)
+        {
+            return false;
+        }
+
+        execution.ResponseChunks = responseChunks;
         execution.UpdatedAt = updatedAt;
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

@@ -37,15 +37,11 @@ namespace AxonHub.Api.Traces;
 public sealed class TraceSegmentService(
     ITraceAdminStore traces,
     IRequestSegmentStore requests,
-    TracePrivacy privacy)
+    TracePrivacy privacy,
+    RequestPayloadStorage payloads)
 {
     /// <summary>Port of MaxConcurrentBodyLoads (trace.go:446).</summary>
     public const int MaxConcurrentBodyLoads = 10;
-
-    private const string EmptyJson = "{}";
-
-    /// <summary>Port of request.ExternalResponseBodyMarker (request.go:124).</summary>
-    private const string ExternalResponseBodyMarker = "{\"_ext\":1}";
 
     /// <summary>
     /// Port of TraceService.GetRootSegment (trace.go:448-555).
@@ -103,7 +99,7 @@ public sealed class TraceSegmentService(
         {
             try
             {
-                LoadBodies(request);
+                await LoadBodiesAsync(request, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -222,7 +218,7 @@ public sealed class TraceSegmentService(
             return null;
         }
 
-        LoadBodies(request);
+        await LoadBodiesAsync(request, cancellationToken).ConfigureAwait(false);
         return RequestToSegment(request);
     }
 
@@ -298,7 +294,7 @@ public sealed class TraceSegmentService(
                 return [];
             }
 
-            LoadBodies(lastRequest);
+            await LoadBodiesAsync(lastRequest, cancellationToken).ConfigureAwait(false);
             var segment = RequestToSegment(lastRequest);
             return Concat(segment.RequestSpans, segment.ResponseSpans);
         }
@@ -309,83 +305,16 @@ public sealed class TraceSegmentService(
     }
 
     /// <summary>
-    /// Port of RequestService.LoadRequestBody (request.go:1532-1564). The port
-    /// has no external object storage, so the stored column is authoritative
-    /// (C191).
+    /// Loads the bodies through the request's data storage, mirroring the
+    /// reference's in-place mutation of the ent entity before requestToSegment
+    /// (request.go loaders, C020).
     /// </summary>
-    public static string LoadRequestBody(RequestRecord request)
+    private async Task LoadBodiesAsync(RequestRecord request, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        return string.IsNullOrEmpty(request.RequestBody) ? EmptyJson : request.RequestBody;
-    }
-
-    /// <summary>
-    /// Port of RequestService.LoadResponseBody (request.go:1566-1591) plus
-    /// sanitizeLoadedResponseBody (request.go:141-147).
-    /// </summary>
-    public static string LoadResponseBody(RequestRecord request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        if (request.Status != "completed")
-        {
-            return EmptyJson;
-        }
-
-        var body = request.ResponseBody;
-        if (string.IsNullOrEmpty(body))
-        {
-            return EmptyJson;
-        }
-
-        return IsExternalResponseBodyMarker(body) ? EmptyJson : body;
-    }
-
-    /// <summary>
-    /// Port of RequestService.LoadRequestExecutionRequestBody
-    /// (request.go:1727-1756). The port has no external object storage, so the
-    /// stored column is authoritative (C191).
-    /// </summary>
-    public static string LoadRequestBody(RequestExecutionRecord execution)
-    {
-        ArgumentNullException.ThrowIfNull(execution);
-        return string.IsNullOrEmpty(execution.RequestBody) ? EmptyJson : execution.RequestBody;
-    }
-
-    /// <summary>
-    /// Port of RequestService.LoadRequestExecutionResponseBody
-    /// (request.go:1758-1791) plus sanitizeLoadedResponseBody. The port has no
-    /// external object storage, so the stored column is authoritative (C191).
-    /// </summary>
-    public static string LoadResponseBody(RequestExecutionRecord execution)
-    {
-        ArgumentNullException.ThrowIfNull(execution);
-
-        if (execution.Status != "completed")
-        {
-            return EmptyJson;
-        }
-
-        var body = execution.ResponseBody;
-        if (string.IsNullOrEmpty(body))
-        {
-            return EmptyJson;
-        }
-
-        return IsExternalResponseBodyMarker(body) ? EmptyJson : body;
-    }
-
-    /// <summary>Port of isExternalResponseBodyMarker (request.go:128-138).</summary>
-    public static bool IsExternalResponseBodyMarker(string body)
-        => string.Equals(
-            Encoding.UTF8.GetString(GoJson.Compact(Encoding.UTF8.GetBytes(body))),
-            ExternalResponseBodyMarker,
-            StringComparison.Ordinal);
-
-    private static void LoadBodies(RequestRecord request)
-    {
-        request.RequestBody = LoadRequestBody(request);
-        request.ResponseBody = LoadResponseBody(request);
+        request.RequestBody = await payloads.LoadRequestBodyAsync(request, cancellationToken)
+            .ConfigureAwait(false);
+        request.ResponseBody = await payloads.LoadResponseBodyAsync(request, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Port of requestToSegment (trace.go:640-762).</summary>

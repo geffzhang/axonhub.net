@@ -231,7 +231,8 @@ public sealed class DataStorageStore(AxonHubDbContext db) : IDataStorageStore
         // ent's First() on multiple primary rows is unspecified; the seeded
         // invariant is at most one, and id ASC keeps the port deterministic.
         var sql = "SELECT " + Columns
-            + " FROM \"data_storages\" WHERE \"primary\" = TRUE ORDER BY \"id\" ASC LIMIT 1;";
+            + " FROM \"data_storages\" WHERE \"primary\" = TRUE AND \"deleted_at\" = 0"
+            + " ORDER BY \"id\" ASC LIMIT 1;";
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
         return await connection.QuerySingleOrDefaultAsync<DataStorageRecord>(

@@ -76,6 +76,7 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
             "failed",
             externalId: "resp-2",
             responseBody: """{"error":"boom"}""",
+            setResponseBody: true,
             latencyMs: 88,
             firstTokenLatencyMs: 9,
             reasoningDurationMs: 0,
@@ -96,6 +97,67 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
         // Finalization never clears data captured by the dedicated updates.
         RecordAssert.Json("""{"content-type":"application/json"}""", actual.ResponseHeaders);
         RecordAssert.Json("""[{"delta":"hi"}]""", actual.ResponseChunks);
+    }
+
+    [Fact]
+    public async Task UpdateResultLeavesTheBodyUntouchedWhenNotSet()
+    {
+        // The storage policy can disable body storage and a failed external
+        // write leaves the column alone: the store only writes the body when
+        // the caller sets it.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        var id = await store.CreateAsync(NewRequest());
+        var changedAt = UpdatedAt.AddMinutes(5);
+
+        var updated = await store.UpdateResultAsync(
+            id,
+            "completed",
+            externalId: "resp-3",
+            responseBody: null,
+            setResponseBody: false,
+            latencyMs: 5,
+            firstTokenLatencyMs: null,
+            reasoningDurationMs: null,
+            updatedAt: changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        Assert.Equal("resp-3", actual.ExternalId);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
+        Assert.Equal(5L, actual.MetricsLatencyMs);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateResponseChunksWritesOnlyChunks()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        var id = await store.CreateAsync(NewRequest());
+        var changedAt = UpdatedAt.AddMinutes(5);
+
+        var updated = await store.UpdateResponseChunksAsync(
+            id,
+            """[{"delta":"yo"}]""",
+            changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        RecordAssert.Json("""[{"delta":"yo"}]""", actual.ResponseChunks);
+        Assert.Equal("completed", actual.Status);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
+        Assert.Equal(changedAt, actual.UpdatedAt);
     }
 
     [Fact]
@@ -199,6 +261,7 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
             "completed",
             "video-task",
             """{"id":"video-task","status":"succeeded"}""",
+            setResponseBody: true,
             changedAt);
 
         Assert.True(updated);
@@ -208,6 +271,35 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
         Assert.Equal("completed", actual.Status);
         Assert.Equal("video-task", actual.ExternalId);
         RecordAssert.Json("""{"id":"video-task","status":"succeeded"}""", actual.ResponseBody);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task SnapshotUpdateLeavesTheBodyUntouchedWhenNotSet()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        var id = await store.CreateAsync(NewRequest());
+        var changedAt = UpdatedAt.AddMinutes(5);
+
+        var updated = await store.UpdateStatusExternalIdAndResponseBodyAsync(
+            id,
+            "completed",
+            "video-task",
+            responseBody: null,
+            setResponseBody: false,
+            changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        Assert.Equal("completed", actual.Status);
+        Assert.Equal("video-task", actual.ExternalId);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
         Assert.Equal(changedAt, actual.UpdatedAt);
     }
 
@@ -242,11 +334,12 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
 
         Assert.False(await store.UpdateStatusAsync(12345, "failed", UpdatedAt));
         Assert.False(await store.UpdateResultAsync(
-            12345, "failed", null, null, null, null, null, UpdatedAt));
+            12345, "failed", null, null, true, null, null, null, UpdatedAt));
         Assert.False(await store.UpdateResponseHeadersAsync(12345, "{}", UpdatedAt));
+        Assert.False(await store.UpdateResponseChunksAsync(12345, "[]", UpdatedAt));
         Assert.False(await store.UpdateChannelAsync(12345, 1, UpdatedAt));
         Assert.False(await store.UpdateStatusExternalIdAndResponseBodyAsync(
-            12345, "completed", "video-task", "{}", UpdatedAt));
+            12345, "completed", "video-task", "{}", true, UpdatedAt));
         Assert.Null(await store.GetByIdAsync(12345));
     }
 

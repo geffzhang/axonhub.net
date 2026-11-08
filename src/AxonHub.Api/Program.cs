@@ -630,6 +630,10 @@ var app = builder.Build();
 await using (var connection = await app.Services.GetRequiredService<PostgresConnectionFactory>().OpenAsync())
 {
     await DatabaseMigrator.EnsureCreatedAsync(connection);
+
+    // The v0.4.0 data migration seeds the primary storage and the default
+    // data storage setting; without it the first request has no storage.
+    await DataStorageBootstrap.EnsurePrimaryDataStorageAsync(connection);
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));

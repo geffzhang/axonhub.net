@@ -364,8 +364,84 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
         Assert.Equal(5401L, usage.ChannelId);
         Assert.Equal(request.Id, usage.RequestId);
 
+        // Both sides save the buffered chunks after finalizing their row
+        // (SaveRequestChunks / SaveExecutionChunks); the [DONE] event still
+        // travels here and is filtered inside RequestPayloadStorage when
+        // StoreChunks is off.
+        var requestChunks = Assert.Single(recorder.RequestChunkSaves);
+        Assert.Equal(request.Id, requestChunks.Id);
+        Assert.Equal(4, requestChunks.Chunks.Count);
+        Assert.Equal("[DONE]", Encoding.UTF8.GetString(requestChunks.Chunks[^1].Data));
+
+        var executionChunks = Assert.Single(recorder.ExecutionChunkSaves);
+        Assert.Equal(execution.Id, executionChunks.Id);
+        Assert.Equal(4, executionChunks.Chunks.Count);
+        Assert.Equal("[DONE]", Encoding.UTF8.GetString(executionChunks.Chunks[^1].Data));
+
         Assert.Empty(recorder.ExecutionStatuses);
         Assert.Empty(recorder.RequestStatuses);
+    }
+
+    [Fact]
+    public async Task StreamFailurePersistsBufferedChunksBeforeStatus()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(5501, "persist-stream-fail"));
+
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-8\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"persist-stream-fail\",\"choices\":[{\"index\":0,"
+                + "\"delta\":{\"role\":\"assistant\",\"content\":\"he\"},\"finish_reason\":null}]}"),
+            TestChannels.Data("{\"id\":\"chatcmpl-8\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"persist-stream-fail\",\"choices\":[{\"index\":0,"
+                + "\"delta\":{\"content\":\"llo\"},\"finish_reason\":null}]}"),
+        };
+        var executor = new ScriptedExecutor
+        {
+            // The provider dies before the terminal event.
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(chunks, new IOException("upstream reset")),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+        var orchestrator = NewOrchestrator(executor, FastPolicy(), recorder);
+
+        var result = await orchestrator.ProcessAsync(ClientRequest("persist-stream-fail", stream: true));
+        Assert.NotNull(result.Stream);
+
+        var events = new List<StreamEvent>();
+        while (result.Stream!.Next())
+        {
+            if (result.Stream.Current is { } streamEvent)
+            {
+                events.Add(streamEvent);
+            }
+        }
+
+        result.Stream.Dispose();
+
+        // The client saw the provider's two chunks and nothing synthesized.
+        Assert.Equal(2, events.Count);
+
+        // persistFailureChunks: the provider's partial output is kept for
+        // inspection, and both status writes still record the failure.
+        var execution = Assert.Single(recorder.Executions);
+        var executionChunks = Assert.Single(recorder.ExecutionChunkSaves);
+        Assert.Equal(execution.Id, executionChunks.Id);
+        Assert.Equal(2, executionChunks.Chunks.Count);
+        Assert.NotEmpty(recorder.ExecutionStatuses);
+        Assert.All(recorder.ExecutionStatuses, update => Assert.Equal("failed", update.Status));
+
+        var request = Assert.Single(recorder.Requests);
+        var requestChunks = Assert.Single(recorder.RequestChunkSaves);
+        Assert.Equal(request.Id, requestChunks.Id);
+        Assert.Equal(2, requestChunks.Chunks.Count);
+
+        var status = Assert.Single(recorder.RequestStatuses);
+        Assert.Equal(request.Id, status.RequestId);
+        Assert.Equal("failed", status.Status);
+
+        Assert.Empty(recorder.RequestResults);
+        Assert.Empty(recorder.ExecutionResults);
+        Assert.Empty(recorder.UsageLogs);
     }
 
     private static string? BodyModel(string? body)

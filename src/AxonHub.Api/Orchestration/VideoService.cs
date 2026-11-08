@@ -1,4 +1,5 @@
 using AxonHub.Api.Auth;
+using AxonHub.Api.Management;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
@@ -34,7 +35,8 @@ public sealed class VideoService(
     IRequestExecutionStore executionStore,
     IChannelStore channelStore,
     IExecutor executor,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    RequestPayloadStorage? payloads = null)
 {
     // The reference's request.Status values (ent/request/request.go).
     private const string StatusProcessing = "processing";
@@ -61,13 +63,30 @@ public sealed class VideoService(
         var status = MapVideoStatusToRequestStatus(videoResponse.Status);
         try
         {
-            await requestStore.UpdateStatusExternalIdAndResponseBodyAsync(
-                requestId,
-                status,
-                task.ExternalId!,
-                JsonGoJson.MarshalToString(videoResponse),
-                timeProvider.GetUtcNow().UtcDateTime,
-                cancellationToken).ConfigureAwait(false);
+            if (payloads is null)
+            {
+                await requestStore.UpdateStatusExternalIdAndResponseBodyAsync(
+                    requestId,
+                    status,
+                    task.ExternalId!,
+                    JsonGoJson.MarshalToString(videoResponse),
+                    true,
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // UpdateRequestStatusExternalIDAndResponseBody honours the
+                // storage policy and external data storages (C020).
+                await payloads.SetRequestStatusExternalIdAndResponseBodyAsync(
+                    requestStore,
+                    task,
+                    status,
+                    task.ExternalId!,
+                    JsonGoJson.MarshalToString(videoResponse),
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (Exception)
         {

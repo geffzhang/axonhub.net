@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
@@ -47,6 +48,14 @@ public interface ISystemSettingsAdminService
         StoragePolicy policy,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Port of SystemService.DefaultDataStorageID (system.go:1590-1608).</summary>
+    Task<long> GetDefaultDataStorageIdAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetDefaultDataStorageID (system.go:1610-1613).</summary>
+    Task SetDefaultDataStorageIdAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Port of SystemService.AutoBackupSettings (system.go:1604-1640).</summary>
     Task<AutoBackupSettings> GetAutoBackupSettingsAsync(
         CancellationToken cancellationToken = default);
@@ -67,6 +76,9 @@ public sealed class SystemSettingsAdminService(ISystemStore systems) : ISystemSe
 {
     /// <summary>biz.SystemKeyInitialized.</summary>
     public const string InitializedKey = "system_initialized";
+
+    /// <summary>biz.SystemKeyDefaultDataStorage (system.go:80).</summary>
+    public const string DefaultDataStorageIdKey = "default_data_storage_id";
 
     public async Task<bool> IsInitializedAsync(CancellationToken cancellationToken = default)
     {
@@ -290,6 +302,97 @@ public sealed class SystemSettingsAdminService(ISystemStore systems) : ISystemSe
         await SetValueAsync(StoragePolicyCodec.Key, value, cancellationToken)
             .ConfigureAwait(false);
     }
+
+    public async Task<long> GetDefaultDataStorageIdAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // getSystemValue wraps the lookup; DefaultDataStorageID adds its own
+        // operation prefix, so a storage error carries both.
+        var row = await GetValueAsync(
+                DefaultDataStorageIdKey,
+                "failed to get default data storage ID",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: not set means "no default storage".
+            return 0;
+        }
+
+        try
+        {
+            return ParseDefaultDataStorageId(row.Value);
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to parse default data storage ID: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task SetDefaultDataStorageIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        await SetValueAsync(
+                DefaultDataStorageIdKey,
+                id.ToString(CultureInfo.InvariantCulture),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Port of <c>fmt.Sscanf(value, "%d", &amp;id)</c>: skip spaces, take an
+    /// optional sign and at least one decimal digit, ignore trailing input.
+    /// The reference reports <c>EOF</c> for exhausted input, the scanning
+    /// library's <c>expected integer</c> for a syntactic miss and
+    /// <c>value out of range</c> on overflow.
+    /// </summary>
+    private static long ParseDefaultDataStorageId(string value)
+    {
+        var index = 0;
+        while (index < value.Length && IsGoScanSpace(value[index]))
+        {
+            index++;
+        }
+
+        if (index == value.Length)
+        {
+            throw new FormatException("EOF");
+        }
+
+        var start = index;
+        if (value[index] is '+' or '-')
+        {
+            index++;
+        }
+
+        var digitsStart = index;
+        while (index < value.Length && value[index] is >= '0' and <= '9')
+        {
+            index++;
+        }
+
+        if (index == digitsStart)
+        {
+            throw new FormatException("expected integer");
+        }
+
+        var token = value[start..index];
+        try
+        {
+            return long.Parse(token, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+        }
+        catch (OverflowException ex)
+        {
+            throw new FormatException("value out of range", ex);
+        }
+    }
+
+    private static bool IsGoScanSpace(char c)
+        => c is ' ' or '\t' or '\n' or '\r' or '\v' or '\f' or '\u0085' or '\u00A0';
 
     public async Task<AutoBackupSettings> GetAutoBackupSettingsAsync(
         CancellationToken cancellationToken = default)

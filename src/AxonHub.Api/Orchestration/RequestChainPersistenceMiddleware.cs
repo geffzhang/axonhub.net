@@ -620,7 +620,9 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             if (decision.State != StreamTerminalState.Completed)
             {
                 // Both reference branches (transport/context error and clean EOF
-                // without a terminal event) write the same outcome.
+                // without a terminal event) persist the partial chunks first,
+                // each write logging its own failure.
+                TryPersist(() => _recorder.SaveExecutionChunks(attempt.ExecutionId, attempt.Chunks));
                 PersistExecutionFailure(attempt, decision.Cause, now);
                 return;
             }
@@ -653,7 +655,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             // Aggregation failure must not discard a known terminal outcome or
             // overwrite it with a local processing error. Persist the status
             // alone, without trusting any partial response or usage.
-            _recorder.UpdateExecutionStatus(
+            TryPersist(() => _recorder.UpdateExecutionStatus(
                 attempt.ExecutionId,
                 attempt.TerminalState.ToExecutionStatus(),
                 null,
@@ -661,7 +663,10 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
                 NullIfEmpty(attempt.TerminalError),
                 LatencyMs(attempt.StartedAt, attempt.EndedAt ?? now),
                 FirstTokenLatencyMs(attempt),
-                now.UtcDateTime);
+                now.UtcDateTime));
+
+            // persistFailureChunks: keep what the provider sent for inspection.
+            TryPersist(() => _recorder.SaveExecutionChunks(attempt.ExecutionId, attempt.Chunks));
             return;
         }
 
@@ -680,7 +685,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             LogUsage(usage, attempt);
         }
 
-        _recorder.UpdateExecutionResult(
+        TryPersist(() => _recorder.UpdateExecutionResult(
             attempt.ExecutionId,
             attempt.TerminalState.ToExecutionStatus(),
             meta.Id,
@@ -689,7 +694,11 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
             NullIfEmpty(attempt.TerminalError),
             LatencyMs(attempt.StartedAt, attempt.EndedAt ?? now),
             FirstTokenLatencyMs(attempt),
-            now.UtcDateTime);
+            now.UtcDateTime));
+
+        // Save all response chunks at once; a chunk failure never rolls back
+        // the finalized status.
+        TryPersist(() => _recorder.SaveExecutionChunks(attempt.ExecutionId, attempt.Chunks));
     }
 
     /// <summary>Port of persistRequestExecutionFailure.</summary>
@@ -839,12 +848,16 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
 
             if (decision.State != StreamTerminalState.Completed)
             {
+                // Persist partial chunks for debugging, then keep the request
+                // out of "completed"; each write logs its own failure.
+                TryPersist(() => _recorder.SaveRequestChunks(_requestId, _requestChunks));
+
                 // UpdateRequestStatusFromError, called with a detached context,
                 // only looks at the error itself.
-                _recorder.UpdateRequestStatus(
+                TryPersist(() => _recorder.UpdateRequestStatus(
                     _requestId,
                     RequestChainPayloads.StatusFromError(decision.Cause),
-                    now.UtcDateTime);
+                    now.UtcDateTime));
                 return;
             }
 
@@ -882,14 +895,18 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     {
         var startedAt = _attempt?.StartedAt ?? _requestStartedAt;
 
-        _recorder.UpdateRequestResult(
+        TryPersist(() => _recorder.UpdateRequestResult(
             _requestId,
             _requestTerminalState.ToRequestStatus(),
             meta.Id,
             RequestChainPayloads.JsonBody(responseBody),
             LatencyMs(startedAt, _attempt?.EndedAt ?? now),
             FirstTokenLatencyMs(_attempt),
-            now.UtcDateTime);
+            now.UtcDateTime));
+
+        // Save all response chunks at once; the reference logs a chunk failure
+        // without reverting the finalized request.
+        TryPersist(() => _recorder.SaveRequestChunks(_requestId, _requestChunks));
     }
 
     /// <summary>Port of CreateUsageLogFromRequest for this slice.</summary>

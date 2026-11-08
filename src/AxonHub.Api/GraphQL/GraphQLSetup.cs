@@ -1,3 +1,4 @@
+using AxonHub.Api.Management;
 using HotChocolate.AspNetCore;
 using HotChocolate.Execution;
 using HotChocolate.Execution.Configuration;
@@ -13,7 +14,13 @@ namespace AxonHub.Api.GraphQL;
 public static class GraphQLSetup
 {
     public static IRequestExecutorBuilder AddAxonHubGraphQL(this IServiceCollection services)
-        => services.AddGraphQLServer()
+    {
+        // Bodies and chunks are loaded through the request's data storage
+        // (request.go loaders, C020), so the read side needs the same seam the
+        // recorder uses.
+        services.AddScoped<RequestPayloadStorage>();
+
+        return services.AddGraphQLServer()
             .AddQueryType<AdminQuery>()
             .AddMutationType<AdminMutation>()
             .AddType<CursorType>()
@@ -46,6 +53,7 @@ public static class GraphQLSetup
             .AddTypeExtension<ModelTypeExtensions>()
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
+    }
 }
 
 /// <summary>

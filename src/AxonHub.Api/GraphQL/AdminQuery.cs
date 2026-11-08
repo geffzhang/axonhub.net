@@ -102,6 +102,33 @@ public sealed class AdminQuery
             await settings.GetStoragePolicyAsync(cancellationToken).ConfigureAwait(false));
 
     /// <summary>
+    /// Port of queryResolver.DefaultDataStorageID (system.resolvers.go:540-554):
+    /// the service error is wrapped a second time and id 0 renders as null.
+    /// </summary>
+    [GraphQLName("defaultDataStorageID")]
+    [GraphQLType(typeof(IdType))]
+    public async Task<string?> DefaultDataStorageIdAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        long id;
+        try
+        {
+            id = await settings.GetDefaultDataStorageIdAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to get default data storage ID: %w", err)
+            throw new InvalidOperationException(
+                "failed to get default data storage ID: " + ex.Message,
+                ex);
+        }
+
+        return id == 0 ? null : new GidValue("DataStorage", id).ToString();
+    }
+
+    /// <summary>
     /// Port of queryResolver.QuotaRoutingSettings (system.resolvers.go:705-708):
     /// the strict read, so a malformed or invalid stored mode is a field error.
     /// </summary>

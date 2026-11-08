@@ -106,6 +106,48 @@ public sealed class DataStorageStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task PrimaryLookupIgnoresSoftDeletedRowsAndKeepsIdOrder()
+    {
+        // ent's First() appends deleted_at = 0 and orders by id ASC.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new DataStorageStore(context);
+
+        var first = NewStorage(name: "primary-a");
+        first.Primary = true;
+        var firstId = await store.CreateAsync(first);
+
+        var second = NewStorage(name: "primary-b");
+        second.Primary = true;
+        var secondId = await store.CreateAsync(second);
+
+        var primary = await store.GetPrimaryAsync();
+        Assert.NotNull(primary);
+        Assert.Equal(firstId, primary.Id);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"data_storages\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" IN (@First, @Second);",
+                new { DeletedAt = 1_700_000_000L, First = firstId, Second = secondId });
+        }
+
+        Assert.Null(await store.GetPrimaryAsync());
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"data_storages\" SET \"deleted_at\" = 0 WHERE \"id\" = @Second;",
+                new { Second = secondId });
+        }
+
+        primary = await store.GetPrimaryAsync();
+        Assert.NotNull(primary);
+        Assert.Equal(secondId, primary.Id);
+    }
+
+    [Fact]
     public async Task ExistsByNameExcludesTheGivenId()
     {
         await using var db = new TestDatabase(fixture);

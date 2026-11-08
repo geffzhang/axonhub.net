@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
+using AxonHub.Api.Settings;
+using AxonHub.Api.Storage;
 using AxonHub.Api.Traces;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -42,6 +44,9 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
     private readonly RequestsSliceUsageLogStore _usageLogs = new();
     private readonly FakeChannelStore _channels = new();
     private readonly FakeTraceAdminStore _traces = new();
+    private readonly FakeDataStorageStore _dataStorages = new();
+    private readonly FakeDataStorageBackends _backends = new();
+    private readonly FakeSystemStore _systems = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -58,6 +63,10 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IUsageLogStore>(_usageLogs);
         builder.Services.AddSingleton<IChannelStore>(_channels);
         builder.Services.AddSingleton<ITraceAdminStore>(_traces);
+        builder.Services.AddSingleton<IDataStorageStore>(_dataStorages);
+        builder.Services.AddSingleton<IDataStorageBackendFactory>(_backends);
+        builder.Services.AddSingleton<ISystemSettingsAdminService>(
+            new SystemSettingsAdminService(_systems));
         builder.Services.AddScoped<PermissionValidator>();
         builder.Services.AddScoped<ApiKeyPrivacy>();
         builder.Services.AddScoped<ModelPrivacy>();
@@ -802,6 +811,11 @@ internal sealed class RequestsSliceExecutionStore : IRequestExecutionStore
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("not used by the requests surface");
 
+    public Task<RequestExecutionRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the requests surface");
+
     public Task<IReadOnlyList<RequestExecutionRecord>> ListByRequestIdAsync(
         long requestId,
         CancellationToken cancellationToken = default)
@@ -831,10 +845,18 @@ internal sealed class RequestsSliceExecutionStore : IRequestExecutionStore
         string? externalId,
         string? upstreamModelId,
         string? responseBody,
+        bool setResponseBody,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the requests surface");
+
+    public Task<bool> UpdateResponseChunksAsync(
+        long id,
+        string responseChunks,
         DateTime updatedAt,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("not used by the requests surface");

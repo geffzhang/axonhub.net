@@ -65,7 +65,8 @@ internal sealed class FakeRequestStore : IRequestStore
         long id,
         string status,
         string externalId,
-        string responseBody,
+        string? responseBody,
+        bool setResponseBody,
         DateTime updatedAt,
         CancellationToken cancellationToken = default)
     {
@@ -74,9 +75,14 @@ internal sealed class FakeRequestStore : IRequestStore
             throw new InvalidOperationException("snapshot write failed");
         }
 
-        Snapshots.Add(new SnapshotWrite(id, status, externalId, responseBody, updatedAt));
-
         var row = Rows.FirstOrDefault(row => row.Id == id);
+        Snapshots.Add(new SnapshotWrite(
+            id,
+            status,
+            externalId,
+            setResponseBody ? responseBody ?? "{}" : row?.ResponseBody ?? string.Empty,
+            updatedAt));
+
         if (row is null)
         {
             return Task.FromResult(false);
@@ -84,7 +90,11 @@ internal sealed class FakeRequestStore : IRequestStore
 
         row.Status = status;
         row.ExternalId = externalId;
-        row.ResponseBody = responseBody;
+        if (setResponseBody)
+        {
+            row.ResponseBody = responseBody;
+        }
+
         row.UpdatedAt = updatedAt;
         return Task.FromResult(true);
     }
@@ -118,9 +128,17 @@ internal sealed class FakeRequestStore : IRequestStore
         string status,
         string? externalId,
         string? responseBody,
+        bool setResponseBody,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the video task flow");
+
+    public Task<bool> UpdateResponseChunksAsync(
+        long id,
+        string responseChunks,
         DateTime updatedAt,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("not used by the video task flow");
@@ -183,6 +201,11 @@ internal sealed class FakeRequestExecutionStore : IRequestExecutionStore
         return Task.FromResult(execution.Id);
     }
 
+    public Task<RequestExecutionRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(Rows.FirstOrDefault(row => row.Id == id));
+
     public Task<IReadOnlyList<RequestExecutionRecord>> ListByRequestIdAsync(
         long requestId,
         CancellationToken cancellationToken = default)
@@ -221,10 +244,18 @@ internal sealed class FakeRequestExecutionStore : IRequestExecutionStore
         string? externalId,
         string? upstreamModelId,
         string? responseBody,
+        bool setResponseBody,
         string? errorMessage,
         long? latencyMs,
         long? firstTokenLatencyMs,
         long? reasoningDurationMs,
+        DateTime updatedAt,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("not used by the video task flow");
+
+    public Task<bool> UpdateResponseChunksAsync(
+        long id,
+        string responseChunks,
         DateTime updatedAt,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("not used by the video task flow");

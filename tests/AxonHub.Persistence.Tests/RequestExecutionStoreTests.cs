@@ -90,6 +90,7 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
             externalId: "resp-2",
             upstreamModelId: "gpt-4o-2026-02-01",
             responseBody: null,
+            setResponseBody: true,
             errorMessage: null,
             latencyMs: 55,
             firstTokenLatencyMs: 5,
@@ -117,6 +118,84 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
         RecordAssert.Json("""{"content-type":"application/json"}""", actual.ResponseHeaders);
         RecordAssert.Json("""[{"delta":"hi"}]""", actual.ResponseChunks);
         Assert.Equal(55L, actual.MetricsLatencyMs);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task GetByIdReturnsTheRowOrNull()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var execution = NewExecution(707);
+        var id = await store.CreateAsync(execution);
+        execution.Id = id;
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        RecordAssert.Equivalent(execution, actual);
+
+        Assert.Null(await store.GetByIdAsync(id + 1));
+    }
+
+    [Fact]
+    public async Task UpdateResultLeavesTheBodyUntouchedWhenNotSet()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var id = await store.CreateAsync(NewExecution(808));
+        var changedAt = UpdatedAt.AddMinutes(1);
+
+        var updated = await store.UpdateResultAsync(
+            id,
+            "failed",
+            externalId: null,
+            upstreamModelId: null,
+            responseBody: """{"new":true}""",
+            setResponseBody: false,
+            errorMessage: null,
+            latencyMs: null,
+            firstTokenLatencyMs: null,
+            reasoningDurationMs: null,
+            updatedAt: changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        Assert.Equal("failed", actual.Status);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateResponseChunksWritesOnlyChunks()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var id = await store.CreateAsync(NewExecution(909));
+        var changedAt = UpdatedAt.AddMinutes(4);
+
+        var updated = await store.UpdateResponseChunksAsync(
+            id,
+            """[{"delta":"yo"}]""",
+            changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        RecordAssert.Json("""[{"delta":"yo"}]""", actual.ResponseChunks);
+        Assert.Equal("completed", actual.Status);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
         Assert.Equal(changedAt, actual.UpdatedAt);
     }
 
@@ -223,8 +302,10 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
         Assert.False(await store.UpdateStatusAsync(
             12345, "failed", null, null, null, null, null, null, UpdatedAt));
         Assert.False(await store.UpdateResultAsync(
-            12345, "failed", null, null, null, null, null, null, null, UpdatedAt));
+            12345, "failed", null, null, true, null, null, null, null, UpdatedAt));
         Assert.False(await store.UpdateResponseHeadersAsync(12345, "{}", UpdatedAt));
+        Assert.False(await store.UpdateResponseChunksAsync(12345, "[]", UpdatedAt));
+        Assert.Null(await store.GetByIdAsync(12345));
     }
 
     private static RequestExecutionRecord NewExecution(long requestId) => new()

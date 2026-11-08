@@ -880,27 +880,39 @@ public sealed class RequestExecutionType
         return channel is null ? null : Record.ChannelApiKeySuffix;
     }
 
+    /// <summary>Port of RequestService.LoadRequestExecutionRequestBody.</summary>
     [GraphQLName("requestBody")]
     [GraphQLType(typeof(JsonRawMessageType))]
-    public JsonElement RequestBody
-        => RequestMapping.ParseJson(TraceSegmentService.LoadRequestBody(Record));
+    public async Task<JsonElement> GetRequestBodyAsync(
+        [Service] RequestPayloadStorage payloads,
+        CancellationToken cancellationToken)
+        => RequestMapping.ParseJson(
+            await payloads.LoadExecutionRequestBodyAsync(Record, cancellationToken)
+                .ConfigureAwait(false));
 
     [GraphQLName("responseHeaders")]
     [GraphQLType(typeof(JsonRawMessageType))]
     public JsonElement? ResponseHeaders => RequestMapping.ParseJsonOrNull(Record.ResponseHeaders);
 
+    /// <summary>Port of RequestService.LoadRequestExecutionResponseBody.</summary>
     [GraphQLName("responseBody")]
     [GraphQLType(typeof(JsonRawMessageType))]
-    public JsonElement ResponseBody
-        => RequestMapping.ParseJson(TraceSegmentService.LoadResponseBody(Record));
+    public async Task<JsonElement> GetResponseBodyAsync(
+        [Service] RequestPayloadStorage payloads,
+        CancellationToken cancellationToken)
+        => RequestMapping.ParseJson(
+            await payloads.LoadExecutionResponseBodyAsync(Record, cancellationToken)
+                .ConfigureAwait(false));
 
+    /// <summary>Port of RequestService.LoadRequestExecutionResponseChunks.</summary>
     [GraphQLName("responseChunks")]
     [GraphQLType(typeof(ListType<NonNullType<JsonRawMessageType>>))]
-    public IReadOnlyList<JsonElement> ResponseChunks
-        => RequestMapping.LoadResponseChunks(
-            Record.ResponseChunks,
-            Record.Stream,
-            Record.Status);
+    public async Task<IReadOnlyList<JsonElement>> GetResponseChunksAsync(
+        [Service] RequestPayloadStorage payloads,
+        CancellationToken cancellationToken)
+        => RequestMapping.ParseChunks(
+            await payloads.LoadExecutionResponseChunksAsync(Record, cancellationToken)
+                .ConfigureAwait(false));
 
     [GraphQLName("errorMessage")]
     public string? ErrorMessage => Record.ErrorMessage;
@@ -1127,8 +1139,12 @@ public sealed partial class RequestType
     /// <summary>Port of RequestService.LoadRequestBody (ent.resolvers.go:649-658).</summary>
     [GraphQLName("requestBody")]
     [GraphQLType(typeof(JsonRawMessageType))]
-    public JsonElement RequestBody
-        => RequestMapping.ParseJson(TraceSegmentService.LoadRequestBody(Record));
+    public async Task<JsonElement> GetRequestBodyAsync(
+        [Service] RequestPayloadStorage payloads,
+        CancellationToken cancellationToken)
+        => RequestMapping.ParseJson(
+            await payloads.LoadRequestBodyAsync(Record, cancellationToken)
+                .ConfigureAwait(false));
 
     [GraphQLName("responseHeaders")]
     [GraphQLType(typeof(JsonRawMessageType))]
@@ -1137,14 +1153,22 @@ public sealed partial class RequestType
     /// <summary>Port of RequestService.LoadResponseBody (ent.resolvers.go:660-671).</summary>
     [GraphQLName("responseBody")]
     [GraphQLType(typeof(JsonRawMessageType))]
-    public JsonElement ResponseBody
-        => RequestMapping.ParseJson(TraceSegmentService.LoadResponseBody(Record));
+    public async Task<JsonElement> GetResponseBodyAsync(
+        [Service] RequestPayloadStorage payloads,
+        CancellationToken cancellationToken)
+        => RequestMapping.ParseJson(
+            await payloads.LoadResponseBodyAsync(Record, cancellationToken)
+                .ConfigureAwait(false));
 
     /// <summary>Port of RequestService.LoadResponseChunks (ent.resolvers.go:673-687).</summary>
     [GraphQLName("responseChunks")]
     [GraphQLType(typeof(ListType<NonNullType<JsonRawMessageType>>))]
-    public IReadOnlyList<JsonElement> ResponseChunks
-        => RequestMapping.LoadResponseChunks(Record.ResponseChunks, Record.Stream, Record.Status);
+    public async Task<IReadOnlyList<JsonElement>> GetResponseChunksAsync(
+        [Service] RequestPayloadStorage payloads,
+        CancellationToken cancellationToken)
+        => RequestMapping.ParseChunks(
+            await payloads.LoadResponseChunksAsync(Record, cancellationToken)
+                .ConfigureAwait(false));
 
     /// <summary>The resolver returns nil when the column is zero (ent.resolvers.go:689-699).</summary>
     [GraphQLName("channelID")]
@@ -1274,8 +1298,6 @@ public sealed partial class RequestType
 /// </summary>
 public static class RequestMapping
 {
-    private const string ExternalResponseChunksMarker = "{\"_ext\":1}";
-
     public static RequestExecutionType ToGraphQL(RequestExecutionRecord record)
         => new() { Record = record };
 
@@ -1546,25 +1568,12 @@ public static class RequestMapping
     }
 
     /// <summary>
-    /// Port of sanitizeLoadedResponseChunks (request.go:143-151): the external
-    /// marker collapses to an empty list.
+    /// Parses the raw chunk texts returned by the storage loaders; the
+    /// sanitize/external-marker collapsing happens in RequestPayloadStorage
+    /// (request.go:143-151).
     /// </summary>
-    public static IReadOnlyList<JsonElement> LoadResponseChunks(
-        string? chunksJson,
-        bool stream,
-        string status)
-    {
-        if (!stream || !IsFinishedStatus(status))
-        {
-            return [];
-        }
-
-        var chunks = ParseChunks(chunksJson);
-        return chunks.Count == 1
-            && TraceSegmentService.IsExternalResponseBodyMarker(chunks[0].GetRawText())
-                ? []
-                : chunks;
-    }
+    public static IReadOnlyList<JsonElement> ParseChunks(IReadOnlyList<string> chunks)
+        => chunks.Select(static chunk => ParseJson(chunk)).ToList();
 
     public static CostItemType ToGraphQL(CostItem item) => new()
     {
@@ -1614,24 +1623,6 @@ public static class RequestMapping
         return document.RootElement.Clone();
     }
 
-    private static IReadOnlyList<JsonElement> ParseChunks(string? json)
-    {
-        if (string.IsNullOrEmpty(json))
-        {
-            return [];
-        }
-
-        using var document = JsonDocument.Parse(json);
-        if (document.RootElement.ValueKind != JsonValueKind.Array)
-        {
-            return [];
-        }
-
-        return document.RootElement.EnumerateArray()
-            .Select(static chunk => chunk.Clone())
-            .ToList();
-    }
-
     /// <summary>
     /// Go's int64 is exposed through the SDL's 32-bit Int; values outside the
     /// range fail the response instead of silently wrapping (C190).
@@ -1672,9 +1663,6 @@ public static class RequestMapping
         UsageLogSourceValue.Test => "test",
         _ => "api",
     };
-
-    private static bool IsFinishedStatus(string status)
-        => status is "completed" or "failed" or "canceled";
 
     private static long? ParseId(string? id)
         => id is null ? null : GidValue.Parse(id).Id;

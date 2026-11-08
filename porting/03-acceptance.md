@@ -184,6 +184,15 @@ Ollama 2、Zenmux 1、ModelFetcher 2、PersistentOutboundRetry 的 1 Fact + 2 In
 （`AllowAutoRedirect = false` 由宿主 handler 承担），新增策略类型并把降级拒绝接到命令码 / codex / Ollama /
 Zenmux 四条路径，既有用例数不变。
 
+§135 追加 77 个用例（`AxonHub.Api.Tests` 66：`RequestChunkStorageTests` 13 Fact + 8 InlineData、
+`RequestPayloadStorageTests` 44 Fact、`RequestChainPersistenceTests` 1 Fact；`AxonHub.Persistence.Tests` 11：
+`DataStorageBootstrapTests` 4、`RequestStoreTests` 3、`RequestExecutionStoreTests` 3、`DataStorageStoreTests` 1），
+同样按项目规则未运行 lint / build / test；§135 落地后的静态计数为 `AxonHub.Api.Tests` 5362、
+`AxonHub.Persistence.Tests` 330、四项目合计 8827，下一次全量运行应以该数字复核。该切片不新增表或 SQL；
+新增 `StoragePolicy` / `StoragePolicyCodec`、`RequestPayloadStorage`、`RequestChunkStorage` 与启动期
+`DataStorageBootstrap`（v0.4.0 主存储种子），把 `RequestChainRecorder` 的分块归档、GraphQL / trace 的
+正文加载与存储策略门禁接到请求链路，C020 关闭，既有用例数不变。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
@@ -468,7 +477,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C017：通道性能记录仅成功/失败计数，取消与无终态流语义不同 | 已解决：按 attempt 共享 `ChannelPerformanceRecord`，非流成功与 raw error 由指标中间件标记，流终态分类与聚合完成由持久化副本补记；取消不计故障，无终态且未聚合完整的流不计数。`retry_policy.auto_disable_channel` 的规则已解析并归一化（legacy statuses 迁移），但自动禁用动作未执行；残余还有性能明细字段与异步工作 | 已关闭（7 个记录语义用例 + 2 个端到端用例锁定） |
 | C018：同步 recorder 每次调用一个短生命周期工作单元 | 一次请求链路最多 5 次短事务，request 与 execution 不同事务提交 | 对当前数据路径等价；引入批量/事务需求时重估 |
 | C019：流式响应的 external id / body 与流式 request 响应头未回填 | 已解决：Close 时聚合分块回填两侧归档字段，终态分类与失败路径按参照实现 | 已关闭（测试锁定） |
-| C020：`response_chunks` 与 `store_chunks` / `store_response_body` 存储策略未接入请求链路 | 默认配置下与参照一致（chunks 为空、body 写入）；开启存储策略的部署无分块归档。§113 已接入存储策略的读写、body 清理与 GC，但请求链路的归档开关仍未消费该策略 | 随请求链路存储策略落地；管理面与 GC 已由 §113 闭合 |
+| C020：`response_chunks` 与 `store_chunks` / `store_response_body` 存储策略未接入请求链路 | 已解决：§135 接入 `StoragePolicy` / `StoragePolicyCodec`（缺行默认、旧文档回填、cleanup 校验）、六个正文 / chunk loader（外部存储、`_ext` 标记折叠、状态门禁）、`SaveRequestChunks` / `SaveExecutionChunks` 与 v0.4.0 主存储启动种子；默认配置与参照逐字节一致，开启 store_chunks 后写数据库列或 `[{\"_ext\":1}]` 标记，关闭 store_response_body 后两侧都不写正文。残余：loader 的顺序加载与无日志差异（C191）、后端客户端缓存与分片差异（C199） | 已关闭（§135，66 + 11 例） |
 | C021：下游响应头捕获点与服务器自动头集合不同 | Kestrel 与 gin 注入的自动头不同，落库 JSON 键集合有差异；业务头与脱敏一致 | 已接受（测试锁定业务头） |
 | C008：非法 UTF-8 请求体 | 已解决：字符串字面量内的非法字节与孤立代理项转义按 Go 规则修复（每字节一个 U+FFFD，合法代理对保留），结构错误仍用原始字节报告。残余差异仅 JsonElement 承载的原始片段与请求体归档路径 | 已关闭（C008 残余差异见登记） |
 | C010：非 chat 响应类型的空响应探测与视频端点 | 已解决：embedding 与 moderation 分支由第 17 节闭合（5 例，C076），图片分支由第 16.1 节闭合，decisions / alpha-search 分支由第 18 节闭合（2 例，C077），speech / transcription 分支由第 19 节闭合（5 例，C079），rerank 分支由第 20 节闭合（2 例，C080），video Llm 分支由第 21 节闭合（57 例，C081），video 端点接线（三条路由、biz VideoService 与持久化接缝）由第 22 节闭合（36 例，C082–C085）；doubao 视频变换器（Seedance 出站、client 入站、通道接线与 `/doubao/v3` 任务端点）由第 43 节闭合（C105），zenmux 视频变换器（原生 create/poll/delete、四类通道接线与 delete-unsupported 本地取消）由第 44 节闭合（87 例，C106；`zenmux_gemini` 随 Gemini/Vertex 切片） | 已关闭（doubao 视频 outbound 见第 43 节 / C105；zenmux 见第 44 节 / C106；`zenmux_gemini` 为 Gemini/Vertex 切片的既定范围） |

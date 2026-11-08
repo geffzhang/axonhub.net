@@ -162,6 +162,36 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.UpdateDefaultDataStorage
+    /// (system.resolvers.go:103-110). The gid type is ignored, like UpdateDataStorage.
+    /// </summary>
+    [GraphQLName("updateDefaultDataStorage")]
+    public async Task<bool> UpdateDefaultDataStorageAsync(
+        UpdateDefaultDataStorageInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        // gqlgen coerces input.DataStorageID before the resolver runs, so a
+        // malformed gid is not wrapped with the mutation prefix.
+        var id = GidValue.Parse(input.DataStorageId).Id;
+
+        try
+        {
+            await settings.SetDefaultDataStorageIdAsync(id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to update default data storage: %w", err)
+            throw new InvalidOperationException(
+                "failed to update default data storage: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Port of mutationResolver.UpdateQuotaRoutingSettings
     /// (system.resolvers.go:211-227). The reference guards with
     /// <c>authz.HasScope(write_settings)</c> and starts from the lenient

@@ -135,6 +135,8 @@ internal sealed record ExecutionStatusUpdate(
 
 internal sealed record ExecutionHeaderUpdate(long ExecutionId, string HeadersJson);
 
+internal sealed record ChunkSave(long Id, IReadOnlyList<StreamEvent> Chunks);
+
 /// <summary>
 /// In-memory port of the request-chain write seam. Tests assert the rows the
 /// middleware would write, without a database.
@@ -162,6 +164,10 @@ internal sealed class RecordingRequestChainRecorder : IRequestChainRecorder
     public List<ExecutionResultUpdate> ExecutionResults { get; } = [];
 
     public List<ExecutionHeaderUpdate> ExecutionHeaders { get; } = [];
+
+    public List<ChunkSave> RequestChunkSaves { get; } = [];
+
+    public List<ChunkSave> ExecutionChunkSaves { get; } = [];
 
     public long CreateRequest(RequestRecord request)
     {
@@ -206,6 +212,9 @@ internal sealed class RecordingRequestChainRecorder : IRequestChainRecorder
         _ = updatedAt;
         RequestHeaders.Add(new RequestHeaderUpdate(requestId, responseHeaders));
     }
+
+    public void SaveRequestChunks(long requestId, IReadOnlyList<StreamEvent> chunks)
+        => RequestChunkSaves.Add(new ChunkSave(requestId, chunks));
 
     public long CreateExecution(RequestExecutionRecord execution)
     {
@@ -263,6 +272,9 @@ internal sealed class RecordingRequestChainRecorder : IRequestChainRecorder
         _ = updatedAt;
         ExecutionHeaders.Add(new ExecutionHeaderUpdate(executionId, responseHeaders));
     }
+
+    public void SaveExecutionChunks(long executionId, IReadOnlyList<StreamEvent> chunks)
+        => ExecutionChunkSaves.Add(new ChunkSave(executionId, chunks));
 
     public void CreateUsageLog(UsageLogRecord usageLog)
     {
