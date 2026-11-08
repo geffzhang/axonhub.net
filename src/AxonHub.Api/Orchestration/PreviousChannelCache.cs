@@ -1,3 +1,5 @@
+using AxonHub.Grains.Abstractions;
+
 namespace AxonHub.Api.Orchestration;
 
 /// <summary>
@@ -28,12 +30,16 @@ public interface IPreviousChannelProvider
 
 /// <summary>
 /// In-process port of the reference's <c>previousChannelCache</c>
-/// (<c>xcache.NewFromConfig[int](requestCacheConfig)</c>).
+/// (<c>xcache.NewFromConfig[int](requestCacheConfig)</c>), used by direct
+/// constructions and tests. Production registers
+/// <see cref="GrainPreviousChannelProvider"/>, which keeps one
+/// <see cref="IPreviousChannelGrain"/> per key so the whole cluster shares the
+/// affinity (§147).
 /// </summary>
 /// <remarks>
-/// The reference can back this cache with Redis; the port always keeps it in
-/// process memory (C181). Keys and TTL match the reference so the routing
-/// decisions are the same in a single-silo deployment.
+/// Keys and TTL match the reference's memory backend, so the routing decisions
+/// are the same; the remaining difference to the Redis/two-level xcache modes
+/// is C181.
 /// </remarks>
 public sealed class PreviousChannelCache(TimeProvider timeProvider) : IPreviousChannelProvider
 {
@@ -44,7 +50,7 @@ public sealed class PreviousChannelCache(TimeProvider timeProvider) : IPreviousC
     public const string ThreadKeyPrefix = "axonhub:routing:previous-channel:v1:thread:";
 
     /// <summary>Port of the 30*time.Minute expiry in setPreviousChannelCache.</summary>
-    public static readonly TimeSpan Ttl = TimeSpan.FromMinutes(30);
+    public static readonly TimeSpan Ttl = PreviousChannelOptions.DefaultTtl;
 
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly object _gate = new();

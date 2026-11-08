@@ -103,6 +103,10 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton(RateLimitTracker!);
             services.AddSingleton(ChannelLimiterManager!);
             services.AddSingleton<IChannelTokenSource>(TokenSource!);
+
+            // The previous-channel grain reads the reference's thirty-minute
+            // TTL; the cluster only needs the type registered to activate it.
+            services.AddSingleton(new PreviousChannelOptions());
         });
     }
 }

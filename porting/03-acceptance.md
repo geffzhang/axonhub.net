@@ -308,6 +308,18 @@ fenno / github_copilot / antigravity / ModelFetcher / 端点探测仍用本地 p
 写回语义局部跟进上游 `f272549f`（冻结基线只有无条件写回），漂移记录见 00-reference，
 差异登记为 C227（accepted），C094 item (2)(3)(4) 对三类通道关闭。
 
+§147 追加 9 个用例（`AxonHub.Grains.Tests` 4：`PreviousChannelGrainTests`；
+`AxonHub.Api.Tests` 5：`GrainPreviousChannelProviderTests`），同样按项目规则未运行
+lint / build / test；§147 落地后的静态计数为 `AxonHub.Grains.Tests` 1716、
+`AxonHub.Api.Tests` 5445、`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 336，
+四项目合计 9003，下一次全量运行应以该数字复核。该切片不新增表或 SQL；previous-channel
+粘性缓存按缓存键驻留 `PreviousChannelGrain`（30 分钟 TTL、读取惰性过期、
+`DelayDeactivation` 防止激活在 TTL 前被回收），生产 `IPreviousChannelProvider` 为
+`GrainPreviousChannelProvider`（同步桥接、读取失败返回 0、写入失败丢弃），Orleans 集群内
+共享同一份 trace/thread 亲和；`PreviousChannelCache` 保留给直接构造与测试。
+C181 由 accepted 转为 resolved：多实例不共享的缺口关闭；残余为 Redis / two-level
+xcache 后端不支持（与 C171 同源）与 silo 重启丢失内存条目（参照 memory 模式相同）。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

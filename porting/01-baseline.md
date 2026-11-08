@@ -4418,7 +4418,8 @@ TraceStickyMode 的优先级、`system.go` 的归一化与 `system_default.go` �
   thread_id（request.go:1768-1774），而不是当前请求的 thread 头；TTL 30 分钟；读缓存未命中
   返回 0，不查询历史请求。
 - 缓存后端：键形状 `axonhub:routing:previous-channel:v1:trace|thread:<id>` 与参照一致，
-  进程内字典实现，多实例不共享（C181）。
+  进程内字典实现，多实例不共享（C181）。§147 已把生产路径迁入 `PreviousChannelGrain`
+  （集群内共享），`PreviousChannelCache` 仅保留给直接构造 / 测试，C181 关闭。
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
@@ -7489,6 +7490,54 @@ C144/C148 的写入面冻结语义不变。
 差异登记为 C227：懒激活、1 分钟 timer 粒度、不可取消的 grain 刷新、EF 条件写与日志文案；
 C094 的 (2)(3)(4) 对 codex / claudecode / xai_subscription 关闭，C127 / C158 / C226 补充说明；
 写回语义局部跟进上游 `f272549f`（00-reference 漂移记录）。
+
+## 147. previous-channel 粘性缓存迁入 PreviousChannelGrain（A4，4 + 5 例，2026-11-09）
+
+参照：`internal/server/biz/request.go:1733-1801`（`GetPreviousChannelID` /
+`GetPreviousChannelIDByThread` / `cachePreviousChannelForRequest` / `setPreviousChannelCache` /
+键构造）、`internal/pkg/xcache/config.go` 与 `entry.go`（`cache.mode` 默认 `memory`；memory 后端
+在 Set 时带 30 分钟过期、读取时惰性过期）、`internal/server/orchestrator/candidates.go:815-870`
+（粘性解析的读取）。
+
+| 项 | 参照值 |
+|---|---|
+| 键 | `axonhub:routing:previous-channel:v1:trace:<traceID>` / `:thread:<threadID>` |
+| 值 | 最近一次选择 / 写回的通道 id；每键一个值，后写覆盖 |
+| 写回 | `traceID != 0 && channelID != 0` 时写 trace 键；trace 行 `thread_id != 0` 时再写 thread 键；两者同为 30 分钟 TTL；`Set` 错误丢弃 |
+| 读取 | 只读缓存，未命中返回 0，不查历史请求；TTL 过后视为未命中（亲和重置） |
+| 后端 | `xcache.NewFromConfig`：默认 memory（进程内）；Redis / two-level 由配置选择 |
+
+端口实现：
+
+- 新增 `PreviousChannelOptions` / `IPreviousChannelGrain`（Grains.Abstractions）：string key 即参照
+  缓存键；`RememberAsync(channelId)` 覆盖值并重置 TTL，`GetAsync()` 返回缓存值或 0。
+- 新增 `PreviousChannelGrain`（Grains）：30 分钟 TTL（`PreviousChannelOptions.DefaultTtl`）、读取时
+  惰性过期；`DelayDeactivation(TTL + 1 分钟)` 保证激活活到条目过期（Orleans 默认回收年龄 15 分钟
+  短于 TTL，否则重新激活会遗忘仍有效的条目）。
+- 新增 `GrainPreviousChannelProvider`（Api）：生产 `IPreviousChannelProvider`，把 trace/thread id
+  映射为参照键；写回规则与参照一致（traceId / channelId 零值过滤、thread > 0 才写）；grain 调用
+  同步桥接（中间件与选择器是同步的，C018）；读取失败记 warning 并返回 0，写入失败丢弃（参照
+  `Set` 忽略错误）。
+- 接线：`Program.cs` 注册 grain 提供者与默认 `PreviousChannelOptions`；`PreviousChannelCache`
+  保留为直接构造 / 测试用的进程内实现，TTL 常量改为引用 `PreviousChannelOptions.DefaultTtl`。
+- 测试基建：两个 `GrainClusterFixture` 注册 `PreviousChannelOptions`；Grains 夹具把 TTL 缩短为
+  1 秒，让过期可观察而不必等待 30 分钟。
+
+测试（4 + 5 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Grains.Tests/PreviousChannelGrainTests.cs` | 4 | 未写键返回 0、按键独立存储、后写覆盖、TTL 过期 |
+| `tests/AxonHub.Api.Tests/GrainPreviousChannelProviderTests.cs` | 5 | trace / thread 双写、按作用域覆盖、零值忽略、null thread 仅 trace、未命中返回 0 |
+
+静态计数：`AxonHub.Grains.Tests` 由 1712 增至 1716（+4），`AxonHub.Api.Tests` 由 5440 增至 5445
+（+5），`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 336 不变，四项目合计由 8994 增至
+9003。**按项目规则未运行 lint / build / test。**
+
+差异：C181 由 accepted（多实例不共享）转为 resolved——生产路径经 grain 在 Orleans 集群内共享；
+参照默认 `cache.mode=memory` 本身也是进程内，TTL / 覆盖 / 未命中语义一致。残余：Redis / two-level
+xcache 后端仍未支持（端口无 Redis 缓存后端，与 C171 同源），grain 状态在 silo 重启后丢失（与参照
+memory 模式相同）。
 
 ## 覆盖缺口
 

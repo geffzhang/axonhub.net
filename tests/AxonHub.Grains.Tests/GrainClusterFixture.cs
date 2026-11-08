@@ -34,12 +34,24 @@ public sealed class GrainClusterFixture : IAsyncLifetime
     /// <summary>The silo's token-refresh half, driven by the token grain tests.</summary>
     public FakeChannelTokenSource TokenSource { get; } = new();
 
+    /// <summary>
+    /// The previous-channel grain's settings. Production keeps the reference's
+    /// thirty-minute TTL; the shared cluster shortens it so expiry is observable
+    /// without sleeping for half an hour. Only <c>PreviousChannelGrain</c>
+    /// consumes this type.
+    /// </summary>
+    public PreviousChannelOptions PreviousChannels { get; } = new()
+    {
+        Ttl = TimeSpan.FromSeconds(1),
+    };
+
     public async Task InitializeAsync()
     {
         GrainTestSiloConfigurator.ChannelProvider = Channels;
         GrainTestSiloConfigurator.RateLimitTracker = RateLimitTracker;
         GrainTestSiloConfigurator.ChannelLimiterManager = ChannelLimiterManager;
         GrainTestSiloConfigurator.TokenSource = TokenSource;
+        GrainTestSiloConfigurator.PreviousChannels = PreviousChannels;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -55,6 +67,7 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.RateLimitTracker = null;
         GrainTestSiloConfigurator.ChannelLimiterManager = null;
         GrainTestSiloConfigurator.TokenSource = null;
+        GrainTestSiloConfigurator.PreviousChannels = null;
     }
 }
 
@@ -68,6 +81,8 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static FakeChannelTokenSource? TokenSource { get; set; }
 
+    public static PreviousChannelOptions? PreviousChannels { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
@@ -80,6 +95,7 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton(RateLimitTracker!);
             services.AddSingleton(ChannelLimiterManager!);
             services.AddSingleton<IChannelTokenSource>(TokenSource!);
+            services.AddSingleton(PreviousChannels!);
         });
     }
 }

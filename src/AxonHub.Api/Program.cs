@@ -144,10 +144,14 @@ builder.Services.AddSingleton(_ => new ServerMetrics(serverName));
 builder.Services.AddSingleton(_ => MetricsProvider.Create(metricsOptions, serverName));
 
 // The reference's RequestService owns the previous-channel cache consumed by
-// trace sticky routing (request.go:1733-1801); one singleton serves the
-// orchestrator's selector reads and the persistence middleware's writes.
+// trace sticky routing (request.go:1733-1801); one grain per trace/thread key
+// owns each entry so the selector's reads and the persistence middleware's
+// writes meet in one place across silos (§147; C181 narrowed).
+builder.Services.AddSingleton(new PreviousChannelOptions());
 builder.Services.AddSingleton<IPreviousChannelProvider>(static services
-    => new PreviousChannelCache(services.GetRequiredService<TimeProvider>()));
+    => new GrainPreviousChannelProvider(
+        services.GetRequiredService<IGrainFactory>(),
+        services.GetRequiredService<ILogger<GrainPreviousChannelProvider>>()));
 
 // Dashboard aggregates live in process-local caches in the reference
 // (gql/dashboard_cache.go, gql/dashboard_helpers.go): a shared TTL cache with
