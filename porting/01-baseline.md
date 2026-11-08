@@ -6529,6 +6529,73 @@ MiniMax 已注册，其余 5 个待切片」。
 差异：C182 由剩余 6 个 checker 收窄为 5 个；新增 C216（MiniMax 采集 HTTP 接缝、状态码分类、
 Go 解码语义与转义宿主还原）。
 
+## 129. ZhiPu 供应商配额检查器（固定 open.bigmodel.cn 用量端点、TOKENS_LIMIT / CREDIT_LIMIT 窗口与多 key 可用性组，144 例，2026-11-08）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/zhipu_checker.go`（`CheckQuota`:130-132、
+`SupportsChannel`:134-137、`collectZhipuFamilyQuota`:142-240、`fetchZhipuAccountQuota`:242-262、
+`buildZhipuQuotaData`:269-290、`zhipuAggregateStatus`:292-322、`zhipuChannelLimits`:324-332、
+`zhipuWindowLimits`:334-353、`zhipuBindingLimits`:355-378、`zhipuBindingRow`:380-403、
+`zhipuWorstRows`:405-430、`zhipuAggregateLevel`:432-440、`zhipuEarliestReset`:442-459、
+`zhipuRowResetAt`:461-473、`parseZhipuQuotaResponse`:475-481、`parseZhipuFamilyQuotaResponse`:483-495、
+`parseZhipuAccountSnapshot`:497-537、`zhipuResponseWindow.toRow`:544-568、`zhipuResponseWindows`:570-583、
+`zhipuBuildResponseWindows`:585-605、`zhipuCreditWindowSpec`:607-624、`zhipuWindowSpecForLength`:626-635、
+`zhipuWindowSpecByName`:637-646、`zhipuPositionalSpec`:648-659、`zhipuChannelAPIKeys`:661-682、
+`zhipuDisabledKeySet`:684-698、`zhipuKeyRef`:700-706、`zhipuKeySuffix`:708-715、
+`buildZhipuQuotaURL`:717-723、`zhipuQuotaBaseFromChannelURL`:725-727、`zhipuStatusForRatio`:729-739、
+`worseZhipuStatus`:741-752、`orderZhipuBuckets`:754 起），`internal/server/biz/provider_quota.go:389`
+的 `registerZhipuSupport`（定义见 `provider_quota.go:470-472`，在 `registerMinimaxSupport` 之后、
+`registerZaiSupport` 之前调用），以及 `zhipu_checker_test.go` 的测试函数。
+
+新增 `src/AxonHub.Api/Orchestration/ZhipuQuotaChecker.cs`（`IQuotaChecker` 实现、`ZhipuQuotaResponse` /
+`ZhipuQuotaData` / `ZhipuLimitEntry` 报文类型与 Go 语义 JSON 解码、`ZhipuWindowRow` / `ZhipuAccountQuota`
+的 rawData 形状、供 zai / charm_hyper 复用的 `CollectFamilyQuota` / `ParseFamilyQuotaResponse`），
+`Program.cs` 在 minimax 之后注册 `ZhipuQuotaChecker` 与
+`ProviderQuotaCheckerRegistration("zhipu", …)`（与参照 `registerZhipuSupport` 的顺序一致），
+`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code、Codex、Antigravity、xAI Subscription、
+GitHub Copilot、NanoGPT、ZenMux、Cline、Synthetic、NeuralWatt、Apertis、OpenCode Go、Kimi Code、
+MiniMax 与 ZhiPu 已注册，其余 4 个待切片」。
+
+- 凭据：`ChannelCredentials.GetAllApiKeys` 展开 legacy `APIKey` 与 `APIKeys` 全部条目，逐项
+  `TrimSpace`、去重、跳过空白（C149）；`DisabledApiKeys` 按 `ParseDisabledApiKeys` 宽松解析
+  （畸形 JSON 视为空集，C013 同族），条目 key 经 Go 语义 `TrimSpace` 后标记禁用，过期条目按注入时钟
+  视为可用；无 key 时抛出 `channel has no API key`，不发起请求。
+- 采集：GET 固定 `https://open.bigmodel.cn/api/monitor/usage/quota/limit`（参照
+  `buildZhipuQuotaURL` → `zhipuQuotaBaseFromChannelURL` 恒返回默认 host，忽略通道 BaseURL）；头为
+  原样 key 的 `Authorization`（无 Bearer 前缀）、`Content-Type: application/json` 与
+  `Accept-Language: en-US,en`，无 body；`Settings.Proxy` 非空时经代理工厂派生执行器，否则用共享
+  执行器（C217）。启用 key 全量在前、禁用 key 在后串行采集；禁用池超过 32 个时截断并打印
+  `zhipu quota check truncates disabled keys: channel_id=… disabled_keys=… checked=32` 的 warning。
+- 响应：>=400 的 `HttpClientError` 包装为 `zhipu quota request failed: <inner>`；解码失败包装为
+  `failed to parse zhipu quota response: <inner>`；`success == false` 报
+  `zhipu API error: <msg>`（msg 为空时 `zhipu API error: API error code <code>`）；`data` 为空报
+  `zhipu quota response contains no data`；既无 `CREDIT_LIMIT` 也无 `TOKENS_LIMIT` 条目报
+  `zhipu quota response contains no TOKENS_LIMIT or CREDIT_LIMIT entries`；1xx / 3xx / 非 200 2xx
+  照常解析。全部 key 失败时报 `zhipu quota check failed for all <len(keys)> keys: <首个错误>`；
+  启用 key 全失败（禁用 key 有成功也不掩盖）时报 `… all <len(enabledKeys)> enabled keys: …`。
+- 窗口：`CREDIT_LIMIT` 条目优先（`EqualFold` 大小写不敏感），按 unit/number 以 int64 纳秒乘法
+  （unchecked 回绕）识别 5h / 7d 窗口，无法识别时按索引位置回退（0 → 5h、1 → weekly）；否则读取
+  `TOKENS_LIMIT` 条目并先按 `nextResetTime` 缺失 / 非正者优先排序，再按索引映射 5h / weekly。
+  行字段 `window` / `usedPercent`（percentage/100）/ `status` / `resetAt` / `usage` / `used`
+  （currentValue）/ `remaining`；状态阈值 >=1 exhausted、>=0.8 warning、否则 available。
+- 状态与重置：单个可用账户（启用、无错误、有行）时按窗口给出限额；多账户时汇总为
+  `zhipu_accounts` availability group 的绑定限额（各账户最紧的已知窗口，严格 `>` 保留先者）；
+  总体状态取可用账户最差、全部不可用时 exhausted 且 not ready；`NextResetAt` 取最早非空重置
+  （严格 `<`）；rawData 为 `{"level": …, "rows": [...], "accounts": [...]}`，账户含 ref（SHA-256
+  前 8 位十六进制）、suffix（末尾 4 个 rune）、disabled / status / ready / level / error / rows。
+  行与派生重置按 UTC `yyyy-MM-dd'T'HH:mm:ss'Z'` 写文本（亚秒丢弃，C123 / C217），随后 `Normalize`
+  归一化（负 ratio limit 丢弃、ratio>1 截断、过期 reset 清除、rawData 保留原值）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（固定 URL、raw Authorization、Content-Type、Accept-Language、无 body）、参照报文完整映射与 rawData 全文、CREDIT_LIMIT unit/number 窗口 11 组、禁用 32 上限与 warning、全失败 / 启用失败计数、凭据 10 组、suffix、Go 解码 null 根 / 非对象根 / 类型不匹配 21 组 / 重复字段合并 / null 重置 / 大小写折叠 / int64 边界 2 组 / 浮点 3 组 / 缺失 success 3 组、状态阈值 8 组 + NaN、`WorseStatus` 6 组、排名 6 组、聚合与绑定限额、重置文本 / 越界 / 非正 2 组 / 不可解析 3 组、执行器 >=400 4 组 / 传输 1 组 / 2xx 3 组、代理路由 3 组、`BuildQuotaUrl` 6 组、`SupportsChannel` 6 组 | `tests/AxonHub.Api.Tests/ZhipuQuotaCheckerTests.cs` | 40 + 104 |
+
+`AxonHub.Api.Tests` 由 4810 增至 4954（+144），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+8256 增至 8400。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态
+计数；下一次全量运行应以 4954 / 319 / 8400 复核。**
+
+差异：C182 由剩余 5 个 checker 收窄为 4 个；新增 C217（ZhiPu 采集 HTTP 接缝、raw Authorization、
+Go 解码语义与 UTC 重置文本）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6556,7 +6623,7 @@ Go 解码语义与转义宿主还原）。
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），其余 5 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），ZhiPu checker 由 §129 落地（144 例），其余 4 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax / zhipu 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
