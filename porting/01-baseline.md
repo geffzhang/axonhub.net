@@ -7246,6 +7246,82 @@ C062 的残余接线说明、C094 item (12) 与 C096 item (6) 随之关闭。
 
 C094 item (7) 关闭；C094 保持 gap，残余为端点表、OAuth 凭据持久化与自动刷新等。
 
+## 143. Responses 端点运行时解析与传输保真（28 例，2026-11-08）
+
+参照：live 树（`f272549f`，端点语义来自基线后的 `94cd05b1`，见 `porting/00-reference.md`）
+`internal/server/biz/channel_endpoint_responses.go`（`isResponsesEndpoint` /
+`NormalizeEndpoints` / `Channel.DefaultEndpoints` / `legacyResponsesFormat` /
+`normalizeModelProtocols`）、`internal/server/biz/channel_endpoint.go:455-487`
+（`ResolveEndpoints` = 合并默认端点与归一化用户端点）、`internal/server/biz/channel_llm.go:217-329,431-620`
+（`buildChannelWithOutbounds` / `buildNonDefaultEndpointOutbound` 的端点级 BaseURL/Path/Transport）、
+`internal/server/orchestrator/tester.go:130-221`（`channelTestAPIFormat` /
+`usesResponsesWebSocket`）、`internal/server/gql/axonhub.resolvers.go:34-41`（`defaultEndpoints`
+解析器走 `Channel.DefaultEndpoints()`）、`llm/transformer/openai/responses/outbound.go:168-173`、
+`llm/transformer/openai/codex/outbound.go:154-159`、`llm/transformer/orchestrator/outbound.go:838-840`。
+
+参照行为：
+
+| 项 | 参照值 |
+|---|---|
+| `endpointTransport(ep)` | `api_format == openai/responses-ws` → websocket；否则非空 `transport`；否则 BaseURL（TrimSpace + 小写）以 `ws://` / `wss://` 开头 → websocket；否则空 |
+| `primaryEndpointTransport(c, h)` | 第一条带该格式的原始用户端点（BaseURL 缺省为通道基址）的 transport；对 h，任一原始 w 端点也使其为 websocket；否则 `{BaseURL: 通道基址}` 的 transport |
+| `NormalizeEndpoints` | 只处理 h/w；resolvedBase = 端点 BaseURL 或通道基址；h 的旧式副本带 resolvedBase：transport 为 websocket → APIFormat 改为 w（BaseURL 不变）；否则显式 `transport == http` 时把 wss→https、ws→http（TrimSpace 后按前缀重写）；最后清空 transport；幂等，不修改原始文档 |
+| `Channel.DefaultEndpoints` | 非 codex：默认表中每条 h 的 APIFormat 替换为 `legacyResponsesFormat`；codex：允许集来自归一化后的用户 responses 端点，为空时允许 w 恒真、h 仅在通道基址的 transport 不是 websocket 时允许；删除不被允许的 responses 家族默认项（alpha 与两个图片默认项保留） |
+| `legacyResponsesFormat` | 第一条原始 h 端点的归一化格式；否则任一原始 w → h；否则以通道基址归一化 h |
+| `ResolveEndpoints` | 合并默认端点与归一化用户端点：用户端点覆盖内置位置，其余追加；原始用户文档不被改写 |
+| `normalizeModelProtocols` | 旧式意图为 w 时，把 `settings.modelProtocols` 中启用的 h 改写为 w 供选择/校验（存储不改写） |
+| 出站分派 | 默认端点走 primary；用户端点走 `buildNonDefaultEndpointOutbound`，按归一化格式覆盖（后者胜出）；codex/fenno 的 h/w 走 codex 出站并带端点 BaseURL/Path/Transport，alpha 搜索把端点 Path 作为 alpha 路径、codex 图片走 codex 图片出站；其余格式按家族构造并接收 `ep.Path`（chat 在 Path 非空或基址带家族版本时走家族 chat 出站）；原始格式别名（原始 h 归一化为 w）仅在键缺失时登记 |
+| transformer 标识 | responses 与 codex 出站的 `APIFormat()` 在 transport 为 websocket 时返回 `openai/responses-ws`，否则返回 `openai/responses` |
+| `isResponsesFormat` | h、w 与 compact 都算 Responses 家族 |
+| tester | `channelTestAPIFormat`：强制过滤（收窄到首个匹配）→ decisions → chat → systemone → 回退 chat；`usesResponsesWebSocket`：首个 w 直接为真，否则 h/compact 看显式 transport，再否则看端点 BaseURL 或通道基址的 scheme |
+| `defaultEndpoints`（GraphQL） | `channelResolver.DefaultEndpoints` 返回 `Channel.DefaultEndpoints()`，即已应用存储的 Responses 家族意图的类型默认表；不改写存储 |
+
+端口实现：
+
+- `ChannelEndpoints.Resolve(channelType, endpointsJson, baseUrl)` 按参照合并 `DefaultEndpoints` 与
+  `NormalizeEndpoints`；新增 `IsResponsesEndpoint`、`EndpointTransport`、`NormalizeEndpoints`、
+  `DefaultEndpoints`、`LegacyResponsesFormat`、`PrimaryEndpointTransport`、`FindUserEndpoint`
+  （每个格式最后一次归一化匹配）。解析只读，原始 JSON 不被改写。
+- 所有调用点传入通道基址：`ModelService`、`ModelCandidateSelector`（两处）、
+  `PersistentOutboundTransformer.RefreshCandidateApiFormat`、`ChannelTestService`（三处）与
+  `ChannelEndpointDetectService` / `ChannelTestService.BuildCandidateAsync` 的候选补带
+  `Endpoints` / `Settings`（此前 tester 与检测路径看不到已存端点）。
+- `ChannelOutboundFactory` 每次尝试按入站格式选取用户端点，把端点 BaseURL / Path / Transport
+  交给 codex/fenno 的 responses 与 alpha（alpha 路径只给 codex）、openai 的 h/w/compact、
+  decisions、completion、chat、anthropic、xai responses、nanogpt_responses、openai_responses
+  （无用户端点时用 `PrimaryEndpointTransport`）、bailian_responses 与 zenmux/zenmux_responses；
+  `SelectUserEndpoint` 复刻参照的原始格式别名（原始 h 归一化为 w 且没有原始 w 时，h 查不到则
+  回退到归一化 w）。`CreateCodexOutbound` 把端点 Path 按格式分给 alpha 或 responses。
+- `ResponsesOutboundTransformer.ApiFormat` 与 `CodexOutboundTransformer.ApiFormat` 在
+  websocket transport 下返回 w；`CodexOutboundParams.EndpointPath` 传入内层 Responses 配置。
+- `ApiCapabilities.CapableApiFormats(RequestTypes.Chat)` 接纳 w；`ChannelTransformOptions.IsResponsesFormat`
+  接纳 w；`ChannelEndpointSelection.ForcedApiFormats` 按 `normalizeModelProtocols` 把启用的 h 改写为 w
+  （settings 原文不变）。
+- `ChannelTestService.ChannelTestApiFormat` 顺序改为 decisions → chat → systemone → chat 回退；
+  `UsesResponsesWebSocket` 先看 w，再对 h/compact 看 transport/scheme，全部经 BaseUrl 解析。
+- `ChannelValidation.EndpointTransport`（草稿）把 w 格式视为 websocket，先于显式 transport。
+- GraphQL `Channel.defaultEndpoints` 改走 `ChannelMapping.DefaultEndpoints(type, endpointsJson, baseUrl)`，
+  与 live 解析器一致；校验路径仍使用类型默认表（写入面冻结语义，C144/C148）。
+- 未改动：非 Responses 家族仍按通道类型与通道基址分派（zai/doubao 家族 chat 的端点 Path、
+  minimax/gemini/jina/typesafe 的端点路径、xai_subscription 覆盖、fenno 图片门、codex/fenno 的
+  compact 端点存在性），通道级连接复用仍缺（C094 item 1 / C072）；写入面端点规范化仍冻结
+  （C144/C148）。
+
+测试（28 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Llm.Tests/ChannelEndpointsTests.cs` | 19（7 方法） | 13 行 codex 默认端点矩阵（HTTPS/HTTP/wss/ws 基址、显式 h/http/websocket、端点基址、w 格式、混合清单、无关覆盖；原始文档不被改写）；显式 http 的 wss→https 规范化与幂等；w 格式优先于 legacy http 字段；primary transport 的首个原始端点 / 原始 w / 通道 scheme 三种回退；`Resolve` 的默认与覆盖合并位置；chat 能力包含 w；`FindUserEndpoint` 只取每个格式最后一个归一化匹配 |
+| `tests/AxonHub.Api.Tests/ResponsesEndpointDispatchTests.cs` | 9 | legacy h+websocket+path 进入 codex 出站（ApiFormat w、端点基址与路径）；alpha 端点路径；ws 基址的 openai_responses 传输；chat 端点基址+路径；forced protocols 的 h→w 改写且 settings 不变；无 ws 意图时保持 h；tester 混合表面优先 chat；`UsesResponsesWebSocket` 读取归一化端点；GraphQL `defaultEndpoints` 跟随 codex 存储意图 |
+
+静态计数：`AxonHub.Llm.Tests` 由 1482 增至 1501（+19），`AxonHub.Api.Tests` 由 5421 增至
+5430（+9），四项目合计由 8914 增至 8942（`AxonHub.Persistence.Tests` 331、
+`AxonHub.Grains.Tests` 1680 不变）。**按项目规则未运行 lint / build / test。**
+
+C094 item (1) 与 C072 残余 (a) 收窄：运行时端点解析、传输与 Responses 家族的端点级
+BaseURL/Path 已按 live 语义接线；剩余为非 Responses 端点/供应商家族与通道级连接复用。
+C144/C148 的写入面冻结语义不变。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -7253,11 +7329,11 @@ C094 item (7) 关闭；C094 保持 gap，残余为端点表、OAuth 凭据持久
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求与提示词保护半程已由第 26、28 节闭合 | 低 | 完成（C087、C091、C092） |
 | pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面/预览未移植（C092），codex 出站的 `AllowPassThroughBody` 策略由第 29 节的 61 例 codex 用例锁定（C091 缺口关闭，见 C094） | 中 | 管理面随 C013/C014 |
-| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点表未建模（图片/alpha-search 按通道类型与入站格式分派）、OAuth `TokenProvider` 每次尝试新建、刷新不写回数据库、无后台自动刷新、无按通道代理 client、codex 响应头转发已由 §142 接线（C094 item 7 关闭）、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
+| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点运行时解析已由 §143 按 live 语义接线（`NormalizeEndpoints` / `DefaultEndpoints` / `PrimaryEndpointTransport` / `FindUserEndpoint`；codex/fenno 的 responses 与 alpha 取端点 BaseURL/Path/Transport，openai 的 h/w/compact 等家族同样取端点值；C094 item 1 收窄），残余为非 Responses 端点的家族路由与供应商路径（fenno 图片门、codex/fenno 的 compact 端点存在性、zai/doubao 家族 chat 的 Path、minimax/gemini/jina/typesafe 的路径、xai_subscription 覆盖）、OAuth `TokenProvider` 每次尝试新建、刷新不写回数据库、无后台自动刷新、无按通道代理 client、codex 响应头转发已由 §142 接线（C094 item 7 关闭）、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
-| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
+| Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），端点运行时解析与传输保真由 §143 的 28 例锁定（C094 item 1 / C072 残余收窄），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
 | GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、dashboard、系统设置类查询等）未移植（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入，dashboard 的 21 个根字段由 §105 接入，数据存储管理面（dataStorages / node(DataStorage) / createDataStorage / updateDataStorage）由 §106 接入（14 例），备份与自动备份管理面（autoBackupSettings / backup / restore / updateAutoBackupSettings / triggerAutoBackup）由 §107 接入（57 + 24 例）），API key profile template 管理面（apiKeyProfileTemplates 根字段、四个变更与 linkedProfilesCount）由 §109 接入（21 例），邀请的 REST 面（`POST /admin/invitations`、`GET /auth/invitations/:token`、`POST /auth/invitations/:token/register`，含角色删除同事务撤销）由 §110 接入（59 + 14 例；邀请 schema 标注 entgql.SkipAll，SDL 无邀请成员，故无 GraphQL 面）；前端实际调用的 215 个根字段中 145 个已接入（约 67%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 7 个 ent 类型（ChannelProbe / ChannelOverrideTemplate / RequestExecution / Role / System / UserProject / UserRole）见 C165，node(Channel) 与价格读取边由 §136 接入）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），通道测试由 §76 接入，模型同步由 §77 接入，覆盖模板的 `channel_override_templates` 表、`channelOverrideTemplates` 查询与 create/update/delete/apply/clear 五个变更由 §78 接入（隐私作用域 C161、where 子集 C162、通道顺序 C163），其余通道写操作（C037）未移植 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |

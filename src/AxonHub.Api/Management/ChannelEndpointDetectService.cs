@@ -96,6 +96,8 @@ public sealed class ChannelEndpointDetectService
             Credentials = entity.Credentials,
             DisabledApiKeys = entity.DisabledApiKeys,
             DefaultTestModel = entity.DefaultTestModel,
+            Settings = entity.Settings,
+            Endpoints = entity.Endpoints,
         };
 
         var now = timeProvider.GetUtcNow();

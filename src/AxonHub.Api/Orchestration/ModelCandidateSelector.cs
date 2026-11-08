@@ -433,7 +433,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         foreach (var candidate in candidates)
         {
             var descriptor = DescriptorFor(candidate);
-            var baseEndpoints = ChannelEndpoints.Resolve(descriptor.Type, descriptor.Endpoints);
+            var baseEndpoints = ChannelEndpoints.Resolve(descriptor.Type, descriptor.Endpoints, descriptor.BaseUrl);
 
             if (candidate.Models.Count > 0)
             {
@@ -528,7 +528,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
                 [entry],
                 request.Model,
                 request.RequestType,
-                ChannelEndpoints.Resolve(channel.Type, channel.Endpoints));
+                ChannelEndpoints.Resolve(channel.Type, channel.Endpoints, channel.BaseUrl));
             var apiFormat = ChannelEndpointSelection.SelectApiFormat(endpoints, request);
             if (ChannelEndpointSelection.RequiresExplicitEndpoint(request.RequestType)
                 && apiFormat.Length == 0)

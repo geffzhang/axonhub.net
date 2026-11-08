@@ -885,9 +885,14 @@ public static class ChannelValidation
         return null;
     }
 
-    /// <summary>Port of endpointTransport (channel_llm.go:263-274).</summary>
+    /// <summary>Port of endpointTransport (channel_llm.go:288-302).</summary>
     private static string EndpointTransport(ChannelEndpointDraft endpoint)
     {
+        if (endpoint.ApiFormat == ApiFormats.OpenAIResponseWebSocket)
+        {
+            return ChannelEndpointTransports.WebSocket;
+        }
+
         if (endpoint.Transport is { Length: > 0 } transport)
         {
             return transport;

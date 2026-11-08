@@ -963,6 +963,10 @@ public sealed class ChannelType : INode
     [GraphQLIgnore]
     public string? SupportedModelsJson { get; init; }
 
+    /// <summary>Raw <c>endpoints</c> column used by defaultEndpoints.</summary>
+    [GraphQLIgnore]
+    public string? EndpointsJson { get; init; }
+
     [GraphQLType(typeof(IdType))]
     public string Id { get; init; } = string.Empty;
 
@@ -1011,10 +1015,15 @@ public sealed class ChannelType : INode
 
     public IReadOnlyList<ChannelEndpointType>? Endpoints { get; init; }
 
-    /// <summary>Port of channelResolver.DefaultEndpoints.</summary>
+    /// <summary>
+    /// Port of channelResolver.DefaultEndpoints (axonhub.resolvers.go:34-41):
+    /// the live resolver runs <c>(&amp;biz.Channel{Channel: obj}).DefaultEndpoints()</c>,
+    /// which applies the stored Responses-family intent before returning the
+    /// type defaults.
+    /// </summary>
     [GraphQLName("defaultEndpoints")]
     public IReadOnlyList<ChannelEndpointType> GetDefaultEndpoints()
-        => ChannelMapping.DefaultEndpoints(RawType);
+        => ChannelMapping.DefaultEndpoints(RawType, EndpointsJson, BaseUrl);
 
     /// <summary>Port of channelResolver.AllModelEntries.</summary>
     [GraphQLName("allModelEntries")]

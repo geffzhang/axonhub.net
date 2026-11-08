@@ -166,7 +166,10 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             SessionScopeProvider = sessionScopeProvider,
         });
 
-    public string ApiFormat => ApiFormats.OpenAIResponse;
+    /// <summary>Port of responses.OutboundTransformer.APIFormat (outbound.go:168-173).</summary>
+    public string ApiFormat => _config.Transport == TransportWebSocket
+        ? ApiFormats.OpenAIResponseWebSocket
+        : ApiFormats.OpenAIResponse;
 
     public string? SelectedApiKey => _selectedApiKey;
 

@@ -356,6 +356,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             Name = candidate.ChannelName,
             OrderingWeight = candidate.OrderingWeight,
             Type = candidate.Type,
+            BaseUrl = candidate.BaseUrl,
             Settings = candidate.Settings,
             Endpoints = candidate.Endpoints,
         };
@@ -364,7 +365,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             [entry],
             requestModel,
             request.RequestType,
-            ChannelEndpoints.Resolve(candidate.Type, candidate.Endpoints));
+            ChannelEndpoints.Resolve(candidate.Type, candidate.Endpoints, candidate.BaseUrl));
         candidate.ApiFormat = ChannelEndpointSelection.SelectApiFormat(endpoints, request);
     }
 

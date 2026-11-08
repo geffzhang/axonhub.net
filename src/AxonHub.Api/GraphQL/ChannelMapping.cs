@@ -71,6 +71,7 @@ public static class ChannelMapping
             AutoDisabledAt = record.AutoDisabledAt,
             AutoDisableExpiresAt = record.AutoDisableExpiresAt,
             Remark = record.Remark,
+            EndpointsJson = record.Endpoints,
             Endpoints = ParseEndpoints(record.Endpoints),
             CredentialsJson = record.Credentials,
             DisabledApiKeysJson = record.DisabledApiKeys,
@@ -240,6 +241,26 @@ public static class ChannelMapping
     /// <summary>Port of channelResolver.DefaultEndpoints.</summary>
     public static IReadOnlyList<ChannelEndpointType> DefaultEndpoints(string channelType)
         => [.. ChannelEndpoints.DefaultsForChannelType(channelType)
+            .Select(static endpoint => new ChannelEndpointType
+            {
+                ApiFormat = endpoint.ApiFormat,
+                Path = endpoint.Path,
+                BaseUrl = endpoint.BaseUrl,
+                Transport = endpoint.Transport,
+            })];
+
+    /// <summary>
+    /// Port of the live channelResolver.DefaultEndpoints
+    /// (axonhub.resolvers.go:34-41 → channel_endpoint_responses.go:51-79): the
+    /// stored Responses-family intent rewrites the type defaults (codex keeps
+    /// only the allowed Responses formats; other providers inherit the legacy
+    /// format).
+    /// </summary>
+    public static IReadOnlyList<ChannelEndpointType> DefaultEndpoints(
+        string channelType,
+        string? endpointsJson,
+        string? baseUrl)
+        => [.. ChannelEndpoints.DefaultEndpoints(channelType, endpointsJson, baseUrl)
             .Select(static endpoint => new ChannelEndpointType
             {
                 ApiFormat = endpoint.ApiFormat,

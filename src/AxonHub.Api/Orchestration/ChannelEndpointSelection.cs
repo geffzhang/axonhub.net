@@ -151,12 +151,22 @@ public static class ChannelEndpointSelection
             names.Add(entry.ActualModel);
         }
 
+        // normalizeModelProtocols (channel_endpoint_responses.go:95-110): a
+        // channel whose stored Responses intent is WebSocket rewrites pinned
+        // HTTP Responses formats before they reach endpoint selection.
+        var responsesOverWebSocket =
+            ChannelEndpoints.LegacyResponsesFormat(channel.Endpoints, channel.BaseUrl)
+                == ApiFormats.OpenAIResponseWebSocket;
+
         var forced = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in names)
         {
-            foreach (var format in ChannelModelEntries.ForcedApiFormats(channel, name))
+            foreach (var configuredFormat in ChannelModelEntries.ForcedApiFormats(channel, name))
             {
+                var format = responsesOverWebSocket && configuredFormat == ApiFormats.OpenAIResponse
+                    ? ApiFormats.OpenAIResponseWebSocket
+                    : configuredFormat;
                 if (seen.Add(format))
                 {
                     forced.Add(format);

@@ -304,7 +304,8 @@ public sealed class ModelService(
         {
             var endpoints = ChannelEndpoints.Resolve(
                 connection.Channel.Type,
-                connection.Channel.Endpoints);
+                connection.Channel.Endpoints,
+                connection.Channel.BaseUrl);
             foreach (var endpoint in endpoints)
             {
                 if (allowed.Contains(endpoint.ApiFormat))

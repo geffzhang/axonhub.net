@@ -764,7 +764,7 @@ public sealed class ChannelTestService(
     /// <summary>Port of channelTestAPIFormat (tester.go:130-151).</summary>
     internal static string ChannelTestApiFormat(ChannelDescriptor channel, string model)
     {
-        var endpoints = ChannelEndpoints.Resolve(channel.Type, channel.Endpoints);
+        var endpoints = ChannelEndpoints.Resolve(channel.Type, channel.Endpoints, channel.BaseUrl);
 
         if (!ChannelModelEntries.Build(channel).TryGetValue(model, out var entry)
             && !ChannelModelEntries.BuildDirect(channel).TryGetValue(model, out entry))
@@ -787,7 +787,20 @@ public sealed class ChannelTestService(
             {
                 return ApiFormats.OpenAIDecisions;
             }
+        }
 
+        // Chat is the default test surface, and it wins over System One unless the
+        // channel serves nothing else (tester.go:153-166).
+        foreach (var endpoint in endpoints)
+        {
+            if (endpoint.ApiFormat == ApiFormats.OpenAIChatCompletion)
+            {
+                return ApiFormats.OpenAIChatCompletion;
+            }
+        }
+
+        foreach (var endpoint in endpoints)
+        {
             if (endpoint.ApiFormat == ApiFormats.TypeSafeSystemOne)
             {
                 return ApiFormats.TypeSafeSystemOne;
@@ -803,11 +816,16 @@ public sealed class ChannelTestService(
             ? new DecisionsInboundTransformer()
             : new OpenAiInboundTransformer();
 
-    /// <summary>Port of usesResponsesWebSocket (tester.go:171-201).</summary>
+    /// <summary>Port of usesResponsesWebSocket (tester.go:189-221).</summary>
     internal static bool UsesResponsesWebSocket(ChannelDescriptor channel)
     {
-        foreach (var endpoint in ChannelEndpoints.Resolve(channel.Type, channel.Endpoints))
+        foreach (var endpoint in ChannelEndpoints.Resolve(channel.Type, channel.Endpoints, channel.BaseUrl))
         {
+            if (endpoint.ApiFormat == ApiFormats.OpenAIResponseWebSocket)
+            {
+                return true;
+            }
+
             if (endpoint.ApiFormat is not (ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact))
             {
                 continue;
@@ -953,7 +971,7 @@ public sealed class ChannelTestService(
             [entry],
             model,
             llmRequest.RequestType,
-            ChannelEndpoints.Resolve(descriptor.Type, descriptor.Endpoints));
+            ChannelEndpoints.Resolve(descriptor.Type, descriptor.Endpoints, descriptor.BaseUrl));
 
         // A rejected explicit-format request has no endpoints; SelectAPIFormat
         // then yields "" and the candidate is rejected below.
@@ -987,6 +1005,8 @@ public sealed class ChannelTestService(
             DefaultTestModel = ResolveDefaultTestModel(descriptor),
             ApiFormat = apiFormat,
             ApiKeyOverride = string.IsNullOrEmpty(apiKeyOverride) ? null : apiKeyOverride,
+            Settings = descriptor.Settings,
+            Endpoints = descriptor.Endpoints,
             Tags = descriptor.Tags,
             Policies = descriptor.Policies,
         };

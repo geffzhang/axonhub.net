@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AxonHub.Llm.Transformer.Shared;
 
 namespace AxonHub.Llm;
 
@@ -37,6 +38,9 @@ public static class ChannelEndpointTransports
 /// </summary>
 public static class ChannelEndpoints
 {
+    /// <summary>Port of channel.TypeCodex.</summary>
+    public const string CodexChannelType = "codex";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -216,13 +220,244 @@ public static class ChannelEndpoints
             : [];
 
     /// <summary>
-    /// Port of Channel.ResolveEndpoints: built-in defaults merged with the
-    /// stored user overrides (channel_endpoint.go:440-446).
+    /// Port of Channel.ResolveEndpoints (channel_endpoint.go:460-470): the
+    /// channel's default endpoints (which may already carry the stored
+    /// Responses-family intent) merged with the normalized user overrides.
     /// </summary>
     public static IReadOnlyList<ChannelEndpoint> Resolve(
         string channelType,
-        string? endpointsJson)
-        => Merge(DefaultsForChannelType(channelType), ParseUser(endpointsJson));
+        string? endpointsJson,
+        string? baseUrl)
+        => Merge(DefaultEndpoints(channelType, endpointsJson, baseUrl), NormalizeEndpoints(ParseUser(endpointsJson), baseUrl));
+
+    /// <summary>Port of isResponsesEndpoint (channel_endpoint_responses.go:13-15).</summary>
+    public static bool IsResponsesEndpoint(string? apiFormat)
+        => apiFormat == ApiFormats.OpenAIResponse
+            || apiFormat == ApiFormats.OpenAIResponseWebSocket;
+
+    /// <summary>Port of endpointTransport (channel_llm.go:288-302).</summary>
+    public static string EndpointTransport(ChannelEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (endpoint.ApiFormat == ApiFormats.OpenAIResponseWebSocket)
+        {
+            return ChannelEndpointTransports.WebSocket;
+        }
+
+        if (endpoint.Transport.Length != 0)
+        {
+            return endpoint.Transport;
+        }
+
+        var baseUrl = GoStrings.TrimSpace(endpoint.BaseUrl).ToLowerInvariant();
+        return baseUrl.StartsWith("ws://", StringComparison.Ordinal)
+            || baseUrl.StartsWith("wss://", StringComparison.Ordinal)
+                ? ChannelEndpointTransports.WebSocket
+                : string.Empty;
+    }
+
+    /// <summary>
+    /// Port of NormalizeEndpoints (channel_endpoint_responses.go:17-49). Legacy
+    /// explicit transport takes precedence over the inherited base URL scheme;
+    /// only Responses-family endpoints are rewritten and the returned copies
+    /// never mutate persisted input.
+    /// </summary>
+    public static IReadOnlyList<ChannelEndpoint> NormalizeEndpoints(
+        IReadOnlyList<ChannelEndpoint>? endpoints,
+        string? baseUrl)
+    {
+        if (endpoints is null || endpoints.Count == 0)
+        {
+            return [];
+        }
+
+        var normalized = new List<ChannelEndpoint>(endpoints.Count);
+        foreach (var source in endpoints)
+        {
+            var endpoint = source;
+            if (!IsResponsesEndpoint(endpoint.ApiFormat))
+            {
+                normalized.Add(endpoint);
+                continue;
+            }
+
+            var resolvedBase = endpoint.BaseUrl.Length == 0 ? baseUrl ?? string.Empty : endpoint.BaseUrl;
+            if (endpoint.ApiFormat == ApiFormats.OpenAIResponse)
+            {
+                var legacy = endpoint with { BaseUrl = resolvedBase };
+                if (EndpointTransport(legacy) == ChannelEndpointTransports.WebSocket)
+                {
+                    endpoint = endpoint with { ApiFormat = ApiFormats.OpenAIResponseWebSocket };
+                }
+                else if (endpoint.Transport == ChannelEndpointTransports.Http)
+                {
+                    // Keep explicit HTTP authoritative after omitting the legacy field.
+                    var trimmed = GoStrings.TrimSpace(resolvedBase);
+                    var lowered = trimmed.ToLowerInvariant();
+                    if (lowered.StartsWith("wss://", StringComparison.Ordinal))
+                    {
+                        endpoint = endpoint with { BaseUrl = "https://" + trimmed["wss://".Length..] };
+                    }
+                    else if (lowered.StartsWith("ws://", StringComparison.Ordinal))
+                    {
+                        endpoint = endpoint with { BaseUrl = "http://" + trimmed["ws://".Length..] };
+                    }
+                }
+            }
+
+            normalized.Add(endpoint with { Transport = string.Empty });
+        }
+
+        return normalized;
+    }
+
+    /// <summary>
+    /// Port of Channel.DefaultEndpoints (channel_endpoint_responses.go:51-79).
+    /// Codex's Responses-family defaults are authoritative and filtered by the
+    /// stored intent; every other channel type keeps its defaults but rewrites
+    /// the Responses entry to the stored Responses format.
+    /// </summary>
+    public static IReadOnlyList<ChannelEndpoint> DefaultEndpoints(
+        string channelType,
+        string? endpointsJson,
+        string? baseUrl)
+    {
+        var defaults = DefaultsForChannelType(channelType).ToArray();
+        if (channelType != CodexChannelType)
+        {
+            for (var index = 0; index < defaults.Length; index++)
+            {
+                if (defaults[index].ApiFormat == ApiFormats.OpenAIResponse)
+                {
+                    defaults[index] = defaults[index] with
+                    {
+                        ApiFormat = LegacyResponsesFormat(endpointsJson, baseUrl),
+                    };
+                }
+            }
+
+            return defaults;
+        }
+
+        var allowed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var endpoint in NormalizeEndpoints(ParseUser(endpointsJson), baseUrl))
+        {
+            if (IsResponsesEndpoint(endpoint.ApiFormat))
+            {
+                allowed.Add(endpoint.ApiFormat);
+            }
+        }
+
+        if (allowed.Count == 0)
+        {
+            allowed.Add(ApiFormats.OpenAIResponseWebSocket);
+            if (EndpointTransport(new ChannelEndpoint { BaseUrl = baseUrl ?? string.Empty })
+                != ChannelEndpointTransports.WebSocket)
+            {
+                allowed.Add(ApiFormats.OpenAIResponse);
+            }
+        }
+
+        var filtered = new List<ChannelEndpoint>(defaults.Length);
+        foreach (var endpoint in defaults)
+        {
+            if (!IsResponsesEndpoint(endpoint.ApiFormat) || allowed.Contains(endpoint.ApiFormat))
+            {
+                filtered.Add(endpoint);
+            }
+        }
+
+        return filtered;
+    }
+
+    /// <summary>
+    /// Port of legacyResponsesFormat (channel_endpoint_responses.go:81-93): the
+    /// stored Responses-family intent, read from the raw user endpoints before
+    /// the normal merge.
+    /// </summary>
+    public static string LegacyResponsesFormat(string? endpointsJson, string? baseUrl)
+    {
+        var userEndpoints = ParseUser(endpointsJson);
+        foreach (var endpoint in userEndpoints)
+        {
+            if (endpoint.ApiFormat == ApiFormats.OpenAIResponse)
+            {
+                return NormalizeEndpoints([endpoint], baseUrl)[0].ApiFormat;
+            }
+        }
+
+        foreach (var endpoint in userEndpoints)
+        {
+            if (endpoint.ApiFormat == ApiFormats.OpenAIResponseWebSocket)
+            {
+                return ApiFormats.OpenAIResponse;
+            }
+        }
+
+        return NormalizeEndpoints([new ChannelEndpoint { ApiFormat = ApiFormats.OpenAIResponse }], baseUrl)[0].ApiFormat;
+    }
+
+    /// <summary>
+    /// Port of primaryEndpointTransport (channel_llm.go:304-329): the transport
+    /// of the first raw user endpoint for the format, else a stored WebSocket
+    /// Responses endpoint for the HTTP Responses format, else the channel base
+    /// URL scheme.
+    /// </summary>
+    public static string PrimaryEndpointTransport(
+        string? endpointsJson,
+        string? baseUrl,
+        string apiFormat)
+    {
+        var userEndpoints = ParseUser(endpointsJson);
+        foreach (var endpoint in userEndpoints)
+        {
+            if (endpoint.ApiFormat != apiFormat)
+            {
+                continue;
+            }
+
+            var resolved = endpoint.BaseUrl.Length == 0
+                ? endpoint with { BaseUrl = baseUrl ?? string.Empty }
+                : endpoint;
+            return EndpointTransport(resolved);
+        }
+
+        if (apiFormat == ApiFormats.OpenAIResponse)
+        {
+            foreach (var endpoint in userEndpoints)
+            {
+                if (endpoint.ApiFormat == ApiFormats.OpenAIResponseWebSocket)
+                {
+                    return ChannelEndpointTransports.WebSocket;
+                }
+            }
+        }
+
+        return EndpointTransport(new ChannelEndpoint { BaseUrl = baseUrl ?? string.Empty });
+    }
+
+    /// <summary>
+    /// The normalized user endpoint that supplies outbound details for
+    /// <paramref name="apiFormat"/>, or <see langword="null"/> when the format
+    /// only comes from the built-in defaults. The reference builds a map keyed
+    /// by format, so the last stored endpoint wins.
+    /// </summary>
+    public static ChannelEndpoint? FindUserEndpoint(
+        string? endpointsJson,
+        string? baseUrl,
+        string apiFormat)
+    {
+        ChannelEndpoint? match = null;
+        foreach (var endpoint in NormalizeEndpoints(ParseUser(endpointsJson), baseUrl))
+        {
+            if (endpoint.ApiFormat == apiFormat)
+            {
+                match = endpoint;
+            }
+        }
+
+        return match;
+    }
 
     /// <summary>
     /// Parses the raw <c>channels.endpoints</c> jsonb column. The reference's
@@ -352,6 +587,7 @@ public static class ApiCapabilities
             {
                 ApiFormats.OpenAIChatCompletion,
                 ApiFormats.OpenAIResponse,
+                ApiFormats.OpenAIResponseWebSocket,
                 ApiFormats.AnthropicMessage,
                 ApiFormats.GeminiContents,
                 ApiFormats.OllamaChat,

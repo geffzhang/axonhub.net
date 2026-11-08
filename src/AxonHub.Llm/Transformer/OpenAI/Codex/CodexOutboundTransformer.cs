@@ -21,6 +21,9 @@ public sealed class CodexOutboundParams
 
     public string AlphaSearchPath { get; set; } = string.Empty;
 
+    /// <summary>Endpoint-level path forwarded to the Responses outbound.</summary>
+    public string EndpointPath { get; set; } = string.Empty;
+
     /// <summary>
     /// The resolved channel default test model used to call the image
     /// generation tool. Empty values and image models use the fallback.
@@ -116,6 +119,7 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
         _responsesOutbound = new ResponsesOutboundTransformer(new ResponsesOutboundConfig
         {
             BaseUrl = baseUrl,
+            EndpointPath = parameters.EndpointPath,
             ApiKeyProvider = new StaticApiKeyProvider("dummy"),
             Transport = parameters.Transport,
             // Responses Lite keeps its tool definitions in an `additional_tools`
@@ -138,7 +142,10 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
         _sessionIdProvider = parameters.SessionIdProvider;
     }
 
-    public string ApiFormat => ApiFormats.OpenAIResponse;
+    /// <summary>Port of codex.OutboundTransformer.APIFormat (outbound.go:154-159).</summary>
+    public string ApiFormat => _transport == ResponsesOutboundTransformer.TransportWebSocket
+        ? ApiFormats.OpenAIResponseWebSocket
+        : ApiFormats.OpenAIResponse;
 
     /// <summary>Port of <c>TokenProvider()</c>.</summary>
     public ITokenGetter TokenProvider => _tokens;

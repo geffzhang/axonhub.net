@@ -262,6 +262,19 @@ C072 收窄为端点记录传输与通道级连接复用两项残余。
 response headers 元数据（`X-Reasoning-Included` 与 `/responses` 的 `X-Codex-Turn-State`），
 C094 item (7) 关闭。
 
+§143 追加 28 个用例（`AxonHub.Llm.Tests` 19：`ChannelEndpointsTests` 7 个方法 / 19 例；
+`AxonHub.Api.Tests` 9：`ResponsesEndpointDispatchTests`），同样按项目规则未运行 lint / build / test；
+§143 落地后的静态计数为 `AxonHub.Llm.Tests` 1501、`AxonHub.Api.Tests` 5430、四项目合计 8942
+（`AxonHub.Persistence.Tests` 331、`AxonHub.Grains.Tests` 1680 不变），下一次全量运行应以该数字复核。
+该切片不新增表或 SQL；端点运行时解析按 live 树的 `channel_endpoint_responses.go` /
+`channel_llm.go:217-620` / `tester.go:130-221` 移植（`NormalizeEndpoints`、`DefaultEndpoints`、
+`legacyResponsesFormat`、`PrimaryEndpointTransport`、`FindUserEndpoint` 与 `normalizeModelProtocols`
+的模型协议改写），Responses 家族的出站 base URL / path / transport 由最后一次归一化匹配的端点提供，
+transformer 的 `APIFormat()` 在 websocket 传输下返回 `openai/responses-ws`，GraphQL 的
+`defaultEndpoints` 也跟随存储的 codex 意图；C094 item (1) 与 C072 残余 (a) 收窄为
+「非 Responses 端点与部分供应商家族仍按通道类型分派」及通道级连接复用；写入面的端点规范化仍按
+冻结基线（C144/C148）。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

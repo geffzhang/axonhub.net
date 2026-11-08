@@ -358,46 +358,96 @@ public static class ChannelOutboundFactory
             ? request.ApiFormat
             : candidate.ApiFormat;
 
+        // The reference keys each channel's outbounds by API format and builds
+        // a separate transformer per user-configured endpoint
+        // (buildChannelWithOutbounds / buildNonDefaultEndpointOutbound,
+        // channel_llm.go:431-620). The port re-dispatches per attempt, so the
+        // selected user endpoint supplies the base URL override, path and
+        // transport; null means the built-in default endpoint and the primary
+        // outbound rules apply.
+        var selectedEndpoint = SelectUserEndpoint(candidate, apiFormat);
+        var endpointBaseUrl = selectedEndpoint is { BaseUrl.Length: > 0 }
+            ? selectedEndpoint.BaseUrl
+            : candidate.BaseUrl ?? string.Empty;
+        var endpointPath = selectedEndpoint?.Path ?? string.Empty;
+        var endpointTransport = selectedEndpoint is null
+            ? string.Empty
+            : ChannelEndpoints.EndpointTransport(selectedEndpoint);
+
         return candidate.Type switch
         {
             // channel_llm.go:454/465/497: codex responses, alpha search and the
             // image tool all run through the codex outbound. Fenno shares the
             // responses and image branches but not alpha search.
             CodexChannelType when apiFormat is ApiFormats.OpenAIResponse
+                or ApiFormats.OpenAIResponseWebSocket
                 or ApiFormats.OpenAIAlphaSearch
                 or ApiFormats.OpenAIImageGeneration
                 or ApiFormats.OpenAIImageEdit
-                => CreateCodexOutbound(candidate, request, provider, tokenRefreshExecutor),
+                => CreateCodexOutbound(
+                    candidate,
+                    request,
+                    provider,
+                    tokenRefreshExecutor,
+                    apiFormat,
+                    selectedEndpoint),
             FennoChannelType when apiFormat is ApiFormats.OpenAIResponse
+                or ApiFormats.OpenAIResponseWebSocket
                 or ApiFormats.OpenAIImageGeneration
                 or ApiFormats.OpenAIImageEdit
-                => CreateCodexOutbound(candidate, request, provider, tokenRefreshExecutor),
-            OpenAiChannelType when apiFormat
-                is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
+                => CreateCodexOutbound(
+                    candidate,
+                    request,
+                    provider,
+                    tokenRefreshExecutor,
+                    apiFormat,
+                    selectedEndpoint),
+            OpenAiChannelType when apiFormat is ApiFormats.OpenAIResponse
+                or ApiFormats.OpenAIResponseWebSocket
+                or ApiFormats.OpenAIResponseCompact
                 => CreateResponsesOutbound(
                     request,
-                    candidate.BaseUrl ?? string.Empty,
-                    provider),
-            OpenAiChannelType when apiFormat == ApiFormats.OpenAIDecisions
-                => DecisionsOutboundTransformer.Create(
-                    candidate.BaseUrl ?? string.Empty,
+                    endpointBaseUrl,
                     provider,
-                    provider.KeyIndex),
+                    endpointTransport,
+                    endpointPath),
+            OpenAiChannelType when apiFormat == ApiFormats.OpenAIDecisions
+                => new DecisionsOutboundTransformer(new DecisionsOutboundConfig
+                {
+                    BaseUrl = endpointBaseUrl,
+                    EndpointPath = endpointPath,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
             // channel_llm.go:445: the legacy /completions outbound shares the
             // openai channel's credentials but targets its own path.
             OpenAiChannelType when apiFormat == ApiFormats.OpenAICompletion
-                => CompletionOutboundTransformer.Create(
-                    candidate.BaseUrl ?? string.Empty,
+                => new CompletionOutboundTransformer(new OpenAiOutboundConfig
+                {
+                    BaseUrl = endpointBaseUrl,
+                    EndpointPath = endpointPath,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            OpenAiChannelType => selectedEndpoint is null
+                ? OpenAiOutboundTransformer.Create(
+                    endpointBaseUrl,
                     provider,
-                    provider.KeyIndex),
-            OpenAiChannelType => OpenAiOutboundTransformer.Create(
-                candidate.BaseUrl ?? string.Empty,
-                provider,
-                provider.KeyIndex),
-            AnthropicChannelType => AnthropicOutboundTransformer.Create(
-                candidate.BaseUrl ?? string.Empty,
-                provider,
-                provider.KeyIndex),
+                    provider.KeyIndex)
+                : new OpenAiOutboundTransformer(new OpenAiOutboundConfig
+                {
+                    BaseUrl = endpointBaseUrl,
+                    EndpointPath = endpointPath,
+                    ApiKeyProvider = provider,
+                    ChannelApiKeyIndex = provider.KeyIndex,
+                }),
+            AnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+            {
+                BaseUrl = endpointBaseUrl,
+                EndpointPath = endpointPath,
+                ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
+            }),
             // channel_llm.go:1195-1204: the commandcode channel's primary
             // outbound is the plain OpenAI chat outbound; the default endpoint
             // set is chat only (channel_endpoint.go:339). A custom
@@ -431,8 +481,10 @@ public static class ChannelOutboundFactory
             // served by the shared Responses outbound.
             XaiResponsesChannelType => CreateResponsesOutbound(
                 request,
-                candidate.BaseUrl ?? string.Empty,
-                provider),
+                endpointBaseUrl,
+                provider,
+                endpointTransport,
+                endpointPath),
             // channel_llm.go:867-884: xai_subscription wraps the Responses
             // outbound with a refreshing OAuth token provider pinned to the
             // Grok CLI endpoints. The reference also registers the provider's
@@ -600,8 +652,10 @@ public static class ChannelOutboundFactory
             // outbound (channel_endpoint.go:327).
             NanogptResponsesChannelType => CreateResponsesOutbound(
                 request,
-                candidate.BaseUrl ?? string.Empty,
-                provider),
+                endpointBaseUrl,
+                provider,
+                endpointTransport,
+                endpointPath),
             // channel_llm.go:831-841: OpenAI-compatible with a custom request
             // path (chat only, json_schema downgraded to json_object).
             MoonshotChannelType => new MoonshotOutboundTransformer(new MoonshotOutboundConfig
@@ -615,11 +669,14 @@ public static class ChannelOutboundFactory
             // also owns a peer responses endpoint (channel_endpoint.go:292-296),
             // served by the Responses transformer (channel_llm.go:437-455).
             XaiChannelType when apiFormat is ApiFormats.OpenAIResponse
+                or ApiFormats.OpenAIResponseWebSocket
                 or ApiFormats.OpenAIResponseCompact
                 => CreateResponsesOutbound(
                     request,
-                    candidate.BaseUrl ?? string.Empty,
-                    provider),
+                    endpointBaseUrl,
+                    provider,
+                    endpointTransport,
+                    endpointPath),
             XaiChannelType => new XaiOutboundTransformer(new XaiOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
@@ -728,9 +785,15 @@ public static class ChannelOutboundFactory
             // unreachable here too.
             OpenaiResponsesChannelType => CreateResponsesOutbound(
                 request,
-                candidate.BaseUrl ?? string.Empty,
+                endpointBaseUrl,
                 provider,
-                InferTransport(candidate.BaseUrl ?? string.Empty)),
+                selectedEndpoint is null
+                    ? ChannelEndpoints.PrimaryEndpointTransport(
+                        candidate.Endpoints,
+                        candidate.BaseUrl,
+                        ApiFormats.OpenAIResponse)
+                    : endpointTransport,
+                endpointPath),
             // channel_llm.go:1133-1143: DashScope's OpenAI-compatible outbound
             // with the tool-call merge, enable_thinking mapping and stream
             // filter; the default endpoint set is chat only
@@ -746,8 +809,10 @@ public static class ChannelOutboundFactory
             // shared Responses outbound.
             BailianResponsesChannelType => CreateResponsesOutbound(
                 request,
-                candidate.BaseUrl ?? string.Empty,
-                provider),
+                endpointBaseUrl,
+                provider,
+                endpointTransport,
+                endpointPath),
             // channel_llm.go:1157-1167: bailian_anthropic and moonshot_coding
             // share the plain Anthropic direct outbound.
             BailianAnthropicChannelType or MoonshotCodingChannelType
@@ -810,12 +875,15 @@ public static class ChannelOutboundFactory
             // channel_llm.go:1269-1279: a plain ZenMux channel's primary
             // outbound is the shared OpenAI one; a responses-format request is
             // served by the Responses outbound, like the openai channel type.
-            ZenmuxChannelType when apiFormat
-                is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact
+            ZenmuxChannelType when apiFormat is ApiFormats.OpenAIResponse
+                or ApiFormats.OpenAIResponseWebSocket
+                or ApiFormats.OpenAIResponseCompact
                 => CreateResponsesOutbound(
                     request,
-                    ZenmuxBaseUrl(candidate),
-                    provider),
+                    selectedEndpoint is null ? ZenmuxBaseUrl(candidate) : endpointBaseUrl,
+                    provider,
+                    endpointTransport,
+                    endpointPath),
             ZenmuxChannelType => OpenAiOutboundTransformer.Create(
                 ZenmuxBaseUrl(candidate),
                 provider,
@@ -824,8 +892,10 @@ public static class ChannelOutboundFactory
             // endpoint, the responses API (channel_endpoint.go:279-281).
             ZenmuxResponsesChannelType => CreateResponsesOutbound(
                 request,
-                ZenmuxBaseUrl(candidate),
-                provider),
+                selectedEndpoint is null ? ZenmuxBaseUrl(candidate) : endpointBaseUrl,
+                provider,
+                endpointTransport,
+                endpointPath),
             // channel_llm.go:898: zenmux_anthropic is the plain Anthropic
             // direct platform on the ZenMux Anthropic base URL.
             ZenmuxAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
@@ -1477,27 +1547,48 @@ public static class ChannelOutboundFactory
     private static OAuthCredentials ResolveOAuthCredentials(ChannelCandidate candidate)
         => OAuthCredentialsJson.ResolveChannelCredentials(candidate.Credentials);
 
-    /// <summary>Port of <c>buildCodexOutbound</c> (channel_llm.go:296-387).</summary>
+    /// <summary>Port of <c>buildCodexOutbound</c> (channel_llm.go:331-425).</summary>
     private static CodexOutboundTransformer CreateCodexOutbound(
         ChannelCandidate candidate,
         LlmRequest request,
         ChannelApiKeyProvider apiKeyProvider,
-        IExecutor? tokenRefreshExecutor)
+        IExecutor? tokenRefreshExecutor,
+        string apiFormat,
+        ChannelEndpoint? endpoint)
     {
-        var baseUrl = candidate.BaseUrl ?? string.Empty;
+        var baseUrl = endpoint is { BaseUrl.Length: > 0 }
+            ? endpoint.BaseUrl
+            : candidate.BaseUrl ?? string.Empty;
+
+        // channel_llm.go:288-329: a user endpoint carries its own transport; a
+        // default HTTP Responses endpoint uses primaryEndpointTransport; the
+        // default WebSocket entry is explicit; alpha/image defaults inherit no
+        // transport.
+        var transport = endpoint is not null
+            ? ChannelEndpoints.EndpointTransport(endpoint)
+            : apiFormat == ApiFormats.OpenAIResponseWebSocket
+                ? ChannelEndpointTransports.WebSocket
+                : apiFormat == ApiFormats.OpenAIResponse
+                    ? ChannelEndpoints.PrimaryEndpointTransport(
+                        candidate.Endpoints,
+                        candidate.BaseUrl,
+                        ApiFormats.OpenAIResponse)
+                    : string.Empty;
+
+        // buildNonDefaultEndpointOutbound passes the endpoint path into the
+        // Codex outbound for responses-family formats (channel_llm.go:502) and
+        // as the alpha-search path for alpha search (channel_llm.go:513).
+        var endpointPath = endpoint?.Path ?? string.Empty;
+        var alphaSearchPath = apiFormat == ApiFormats.OpenAIAlphaSearch ? endpointPath : string.Empty;
+        var responsesPath = apiFormat == ApiFormats.OpenAIAlphaSearch ? string.Empty : endpointPath;
 
         return new CodexOutboundTransformer(new CodexOutboundParams
         {
             TokenProvider = CreateCodexTokenProvider(candidate, apiKeyProvider, tokenRefreshExecutor),
             BaseUrl = baseUrl,
-            // channel_llm.go:263-274 (endpointTransport): an endpoint without an
-            // explicit transport infers websocket from its ws/wss scheme. The
-            // slice has no endpoint records, so the scheme is the only source.
-            Transport = InferTransport(baseUrl),
-            // The reference passes the alpha-search endpoint's path here; the
-            // slice has no endpoint records, so the transformer's default
-            // (/alpha/search) applies.
-            AlphaSearchPath = string.Empty,
+            Transport = transport,
+            AlphaSearchPath = alphaSearchPath,
+            EndpointPath = responsesPath,
             ImageMainModel = candidate.DefaultTestModel,
             // The reference reads the trace session from the request context;
             // the port threads the captured session through the wire request
@@ -1505,6 +1596,37 @@ public static class ChannelOutboundFactory
             SessionIdProvider = () => request.RawRequest?.SessionId,
             SessionScopeProvider = () => request.RawRequest?.SessionScope,
         });
+    }
+
+    /// <summary>
+    /// The normalized user endpoint that supplies the outbound for the selected
+    /// format, honoring the reference's raw-format alias: a stored HTTP
+    /// Responses endpoint that normalizes to WebSocket is registered under both
+    /// keys when no stored WebSocket entry exists
+    /// (buildChannelWithOutbounds, channel_llm.go:257-277).
+    /// </summary>
+    private static ChannelEndpoint? SelectUserEndpoint(
+        ChannelCandidate candidate,
+        string apiFormat)
+    {
+        var endpoint = ChannelEndpoints.FindUserEndpoint(
+            candidate.Endpoints,
+            candidate.BaseUrl,
+            apiFormat);
+        if (endpoint is not null || apiFormat != ApiFormats.OpenAIResponse)
+        {
+            return endpoint;
+        }
+
+        var rawEndpoints = ChannelEndpoints.ParseUser(candidate.Endpoints);
+        var hasRawHttp = rawEndpoints.Any(static ep => ep.ApiFormat == ApiFormats.OpenAIResponse);
+        var hasRawWebSocket = rawEndpoints.Any(static ep => ep.ApiFormat == ApiFormats.OpenAIResponseWebSocket);
+        return hasRawHttp && !hasRawWebSocket
+            ? ChannelEndpoints.FindUserEndpoint(
+                candidate.Endpoints,
+                candidate.BaseUrl,
+                ApiFormats.OpenAIResponseWebSocket)
+            : null;
     }
 
     /// <summary>
@@ -1543,10 +1665,12 @@ public static class ChannelOutboundFactory
         LlmRequest request,
         string baseUrl,
         ChannelApiKeyProvider apiKeyProvider,
-        string transport = "")
+        string transport = "",
+        string endpointPath = "")
         => new(new ResponsesOutboundConfig
         {
             BaseUrl = baseUrl,
+            EndpointPath = endpointPath,
             ApiKeyProvider = apiKeyProvider,
             ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
             Transport = transport,

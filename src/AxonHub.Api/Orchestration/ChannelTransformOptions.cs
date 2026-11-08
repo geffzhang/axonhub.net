@@ -179,9 +179,11 @@ internal static class ChannelTransformOptions
         return clone;
     }
 
-    /// <summary>Port of <c>isResponsesFormat</c> (outbound.go:630-633).</summary>
+    /// <summary>Port of <c>isResponsesFormat</c> (outbound.go:838-840).</summary>
     internal static bool IsResponsesFormat(string? format)
-        => format is ApiFormats.OpenAIResponse or ApiFormats.OpenAIResponseCompact;
+        => format is ApiFormats.OpenAIResponse
+            or ApiFormats.OpenAIResponseWebSocket
+            or ApiFormats.OpenAIResponseCompact;
 
     /// <summary>Port of <c>containsResponseCustomToolMessages</c> (outbound.go:635-645).</summary>
     internal static bool ContainsResponseCustomToolMessages(IReadOnlyList<Message> messages)
