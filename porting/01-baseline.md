@@ -6948,6 +6948,36 @@ lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态计数�
 差异：C048 resolved（读取边接入；进程内价格缓存刷新不可观察）；C165 的 Channel `node()` 分支关闭
 （剩余 7 个 ent 类型）；C014 的通道 node / 价格读取边隐私复核项同步更新，根查询隐私与写入门禁仍为裁剪。
 
+## 137. 所有 double 字段的 Go 数序格式化（C067 闭合，13 例，2026-11-08）
+
+参照的每个 wire 结构都由 Go `encoding/json` 序列化，float64 统一使用同一套格式化：
+`1e-6 ≤ |v| < 1e21` 用定点记法，之外用科学计数，负指数去掉前导零（`1e-7`、`1e+21`）；
+NaN / Infinity 在写出阶段失败。端口此前只在 `cost` 等标注 `GoOptionalNumberConverter` 的字段与
+手写 writer 上复刻该规则，其余 `double`（temperature / top_p / penalty / logprob / embedding
+向量 / moderation 分数）仍按 System.Text.Json 的默认格式，`5e-6` 会写成 `5E-06`、`1e21` 写成
+`1E+21`（C067）。
+
+端口在共享的 `LlmJson.Options` 注册 `GoDoubleJsonConverter`：`Write` 经 `GoJsonFloat.Format` 的
+`WriteRawValue` 输出，`Read` 沿用 `Utf8JsonReader.GetDouble()`（与 STJ 内置 converter 相同的数字
+语义，整数与 E/e 指数写法都接受）；System.Text.Json 自动为 `double?` 套用可空包装，字典值与数组
+元素经 `GetConverter` 解析到同一 converter。`Embedding.MarshalJSON` 的向量元素与
+`ModerationClassification` 的 `category_scores` 手写 writer 同步改为 `GoJsonFloat`；属性级
+`GoOptionalNumberConverter`（cost）优先于 options 级 converter，行为不变。非有限值仍由
+`GoJsonFloat.Format` 拒绝，与 Go 的写出失败一致。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 请求标量的 6 种量级（0.000005 / 1e-7 / 1.5e-7 / 1e20 / 1e21 / 0.7）覆盖四个 double 字段 | `tests/AxonHub.Llm.Tests/GoDoubleConverterTests.cs` | 6（Theory） |
+| logprob 与 top_logprobs 的正负小数 | 同上 | 3（Theory） |
+| 可空字段省略、embedding 向量、category_scores 字典、Go / STJ 指数写法的读取往返 | 同上 | 4 Fact |
+
+§137 落地后的静态计数为 `AxonHub.Api.Tests` 5371、`AxonHub.Persistence.Tests` 331、
+`AxonHub.Llm.Tests` 1468（+13）、`AxonHub.Grains.Tests` 1680，四项目合计 8850。**本切片按项目
+规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态计数；下一次全量运行
+应以 5371 / 331 / 1468 / 8850 复核。**
+
+差异：C067 resolved（所有 double 统一为 Go 规则；cost 等属性级 converter 不变）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

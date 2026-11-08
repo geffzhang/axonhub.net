@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AxonHub.Llm.Json;
 
 namespace AxonHub.Llm;
 
@@ -433,7 +434,7 @@ public sealed class EmbeddingJsonConverter : JsonConverter<Embedding>
             writer.WriteStartArray();
             foreach (var item in values)
             {
-                writer.WriteNumberValue(item);
+                writer.WriteRawValue(GoJsonFloat.Format(item), skipInputValidation: true);
             }
 
             writer.WriteEndArray();

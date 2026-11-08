@@ -28,7 +28,7 @@ public static class LlmJson
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         WriteIndented = false,
         // Go sorts map keys on marshal; see GoSortedMapConverterFactory.
-        Converters = { new GoSortedMapConverterFactory() },
+        Converters = { new GoSortedMapConverterFactory(), new GoDoubleJsonConverter() },
     };
 
     /// <summary>Compact-serialize with the shared settings (Go json.Marshal equivalent).</summary>

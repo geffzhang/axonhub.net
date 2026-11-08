@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AxonHub.Llm.Json;
 
 namespace AxonHub.Llm;
 
@@ -531,7 +532,8 @@ public sealed class ModerationClassificationJsonConverter : JsonConverter<Modera
         writer.WriteStartObject();
         foreach (var key in map.Keys.OrderBy(static key => key, StringComparer.Ordinal))
         {
-            writer.WriteNumber(key, map[key]);
+            writer.WritePropertyName(key);
+            writer.WriteRawValue(GoJsonFloat.Format(map[key]), skipInputValidation: true);
         }
 
         writer.WriteEndObject();

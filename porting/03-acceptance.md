@@ -203,6 +203,15 @@ Zenmux 四条路径，既有用例数不变。
 `ChannelModelPrice.channel` / `versions`、`ChannelModelPriceVersion.channelModelPrice` 接到 ent 形状与
 read_channels 查询隐私，C048 关闭（读取面），C165 的 Channel 分支关闭，既有用例数不变。
 
+§137 追加 13 个用例（`AxonHub.Llm.Tests`：`GoDoubleConverterTests` 的请求标量 6 个 InlineData、
+logprob 3 个 InlineData、可空省略 / embedding 向量 / category_scores 字典 / Go 与 STJ 指数往返
+4 个 Fact），同样按项目规则未运行 lint / build / test；§137 落地后的静态计数为
+`AxonHub.Llm.Tests` 1468、四项目合计 8850（`AxonHub.Api.Tests` 5371、`AxonHub.Persistence.Tests`
+331、`AxonHub.Grains.Tests` 1680 不变），下一次全量运行应以该数字复核。该切片不新增表或 SQL；
+`LlmJson.Options` 注册 `GoDoubleJsonConverter`（`Embedding` 向量与 `ModerationClassification`
+的 `category_scores` 手写 writer 同步改用 `GoJsonFloat`），所有 LLM wire 载荷的 double 在任意
+量级都与 Go `encoding/json` 一致，C067 关闭。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
