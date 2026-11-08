@@ -23,6 +23,7 @@ public sealed class ChannelLifecycleService(
     ChannelLimiterManager limiters,
     IChannelModelPriceStore prices,
     IProviderQuotaInvalidator? quotaInvalidator = null,
+    IEnabledChannelsCacheRefresher? enabledChannelsRefresher = null,
     ILogger<ChannelLifecycleService>? logger = null)
 {
     /// <summary>
@@ -42,6 +43,13 @@ public sealed class ChannelLifecycleService(
             LogLevel.Warning,
             new EventId(0, "ChannelProviderQuotaInvalidationFailed"),
             "failed to invalidate provider quota after channel provider change "
+            + "channel_id={ChannelId}");
+
+    private static readonly Action<ILogger, long, Exception?> LogEnabledChannelsReloadFailed =
+        LoggerMessage.Define<long>(
+            LogLevel.Warning,
+            new EventId(0, "ChannelEnabledChannelsReloadFailed"),
+            "failed to synchronously reload channels after API key exhaustion "
             + "channel_id={ChannelId}");
 
     /// <summary>
@@ -92,8 +100,8 @@ public sealed class ChannelLifecycleService(
                 });
         }
 
-        // The reference reloads its in-memory channel cache here; the port
-        // builds limiters lazily, so there is nothing to refresh.
+        // channel.go:700: reloadChannelsAfterCommit once the create commits.
+        RequestEnabledChannelsRefresh();
         return created;
     }
 
@@ -297,6 +305,8 @@ public sealed class ChannelLifecycleService(
                 });
         }
 
+        // channel_duplicate.go:81: reloadChannelsAfterCommit.
+        RequestEnabledChannelsRefresh();
         return duplicated;
     }
 
@@ -503,6 +513,8 @@ public sealed class ChannelLifecycleService(
             throw new InvalidOperationException(ex.Message, ex);
         }
 
+        // channel_bulk.go:158: reloadChannelsAfterCommit once the batch commits.
+        RequestEnabledChannelsRefresh();
         return created;
     }
 
@@ -575,6 +587,13 @@ public sealed class ChannelLifecycleService(
                 errors.Add("Row " + row + " (" + item.Name + "): " + ex.Message);
                 failed++;
             }
+        }
+
+        // channel_bulk.go:556-558: reload only when at least one row was
+        // created.
+        if (created > 0)
+        {
+            RequestEnabledChannelsRefresh();
         }
 
         return new BulkImportChannelsResult(
@@ -994,6 +1013,8 @@ public sealed class ChannelLifecycleService(
                 .ConfigureAwait(false);
         }
 
+        // channel.go:1232: reloadChannelsAfterCommit.
+        RequestEnabledChannelsRefresh();
         return updated;
     }
 
@@ -1023,6 +1044,43 @@ public sealed class ChannelLifecycleService(
         }
     }
 
+    /// <summary>
+    /// <c>ChannelService.asyncReloadChannels</c> (channel.go:1267-1275): a
+    /// committed channel mutation asks the enabled-channel cache for a forced
+    /// reload. The reference publishes a watcher event and batches triggers over
+    /// 500ms, so the mutation never waits for the reload.
+    /// </summary>
+    private void RequestEnabledChannelsRefresh() => enabledChannelsRefresher?.RequestRefresh();
+
+    /// <summary>
+    /// The synchronous reload after API-key exhaustion
+    /// (channel_apikey.go:129-139): detached from the request with a ten second
+    /// budget so selection stops using the channel before the mutation returns.
+    /// The reload failure only warns, because the channel row is already
+    /// committed and the periodic refresh will retry.
+    /// </summary>
+    private async Task ReloadEnabledChannelsAfterApiKeyExhaustionAsync(long channelId)
+    {
+        if (enabledChannelsRefresher is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await enabledChannelsRefresher.ReloadAsync()
+                .WaitAsync(TimeSpan.FromSeconds(10))
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (logger is not null)
+            {
+                LogEnabledChannelsReloadFailed(logger, channelId, ex);
+            }
+        }
+    }
+
     /// <summary>Port of ChannelService.UpdateChannelStatus.</summary>
     public async Task<ChannelRecord> UpdateStatusAsync(
         long id,
@@ -1046,9 +1104,15 @@ public sealed class ChannelLifecycleService(
                 ex);
         }
 
-        return updated
-            ?? throw new InvalidOperationException(
+        if (updated is null)
+        {
+            throw new InvalidOperationException(
                 "failed to update channel status: ent: channel not found");
+        }
+
+        // channel.go:1259: reloadChannelsAfterCommit.
+        RequestEnabledChannelsRefresh();
+        return updated;
     }
 
     /// <summary>Port of ChannelService.DeleteChannel.</summary>
@@ -1074,6 +1138,9 @@ public sealed class ChannelLifecycleService(
         }
 
         limiters.Forget(id);
+
+        // channel.go:1319: reloadChannelsAfterCommit.
+        RequestEnabledChannelsRefresh();
     }
 
     /// <summary>Port of ChannelService.BulkArchiveChannels.</summary>
@@ -1126,6 +1193,9 @@ public sealed class ChannelLifecycleService(
         {
             limiters.Forget(id);
         }
+
+        // channel_bulk.go:360: reloadChannelsAfterCommit.
+        RequestEnabledChannelsRefresh();
     }
 
     /// <summary>Port of ChannelService.BulkAddChannelTags.</summary>
@@ -1184,6 +1254,9 @@ public sealed class ChannelLifecycleService(
         {
             throw new InvalidOperationException(ex.Message, ex);
         }
+
+        // channel_bulk.go:430: reloadChannelsAfterCommit after the tag batch.
+        RequestEnabledChannelsRefresh();
     }
 
     /// <summary>
@@ -1200,8 +1273,13 @@ public sealed class ChannelLifecycleService(
 
         try
         {
-            return await channels.BulkUpdateOrderingAsync(items, cancellationToken)
+            var updated = await channels.BulkUpdateOrderingAsync(items, cancellationToken)
                 .ConfigureAwait(false);
+
+            // channel_bulk.go:44: reloadChannelsAfterCommit once the ordering
+            // batch commits.
+            RequestEnabledChannelsRefresh();
+            return updated;
         }
         catch (StoreFailureException ex)
         {
@@ -1273,12 +1351,16 @@ public sealed class ChannelLifecycleService(
 
         try
         {
-            return await channels.BulkUpdateAutoDisableAsync(
+            var updated = await channels.BulkUpdateAutoDisableAsync(
                     command.ChannelIds,
                     mode,
                     rulesJson,
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            // channel_bulk.go:201/320: reloadChannelsAfterCommit.
+            RequestEnabledChannelsRefresh();
+            return updated;
         }
         catch (StoreFailureException ex)
         {
@@ -1371,15 +1453,19 @@ public sealed class ChannelLifecycleService(
             throw new InvalidOperationException(ex.Message, ex);
         }
 
+        // channel.go:1332: reloadChannelsAfterCommit.
+        RequestEnabledChannelsRefresh();
         return updated;
     }
 
     /// <summary>
     /// Port of ChannelService.DisableAPIKey (channel_apikey.go:23-144): appends
     /// an active disable record for the credential reference and disables the
-    /// whole channel when no enabled credential remains. The reference's
-    /// auto-disable event and cache reload have no counterpart in the port
-    /// (C149).
+    /// whole channel when no enabled credential remains. When the channel is
+    /// disabled the enabled-channel cache is reloaded synchronously so the
+    /// channel stops being selected immediately, then the usual async reload
+    /// notification is sent. The reference's auto-disable event bus has no
+    /// counterpart in the port (C149).
     /// </summary>
     public async Task DisableApiKeyAsync(
         long channelId,
@@ -1449,7 +1535,8 @@ public sealed class ChannelLifecycleService(
                     ChannelWriteSerialization.SerializeDisabledApiKeys(activeKeys),
             };
 
-            if (enabledKeys.Count == 0)
+            var channelDisabled = enabledKeys.Count == 0;
+            if (channelDisabled)
             {
                 state.Status = "disabled";
                 state.ErrorMessage = $"All API keys disabled (last error: {errorCode})";
@@ -1459,6 +1546,17 @@ public sealed class ChannelLifecycleService(
 
             await SaveApiKeyStateAsync(state, "failed to disable api key", cancellationToken)
                 .ConfigureAwait(false);
+
+            if (channelDisabled)
+            {
+                // channel_apikey.go:129-139: synchronous reload, detached with
+                // a ten second budget, so selection stops using the channel.
+                await ReloadEnabledChannelsAfterApiKeyExhaustionAsync(channelId)
+                    .ConfigureAwait(false);
+            }
+
+            // channel_apikey.go:141: asyncReloadChannels.
+            RequestEnabledChannelsRefresh();
         }
         finally
         {
@@ -1511,6 +1609,9 @@ public sealed class ChannelLifecycleService(
                     "failed to enable api key",
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            // channel_apikey.go:189: asyncReloadChannels.
+            RequestEnabledChannelsRefresh();
         }
         finally
         {
@@ -1544,6 +1645,9 @@ public sealed class ChannelLifecycleService(
                     "failed to enable all api keys",
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            // channel_apikey.go:223: asyncReloadChannels.
+            RequestEnabledChannelsRefresh();
         }
         finally
         {
@@ -1599,6 +1703,9 @@ public sealed class ChannelLifecycleService(
                     "failed to enable selected api keys",
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            // channel_apikey.go:275: asyncReloadChannels.
+            RequestEnabledChannelsRefresh();
         }
         finally
         {
@@ -1695,6 +1802,9 @@ public sealed class ChannelLifecycleService(
                     "failed to delete disabled api keys",
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            // channel_apikey.go:389: asyncReloadChannels.
+            RequestEnabledChannelsRefresh();
 
             return new DeleteDisabledApiKeysResult(
                 true,
@@ -1827,6 +1937,9 @@ public sealed class ChannelLifecycleService(
         {
             throw new InvalidOperationException(ex.Message, ex);
         }
+
+        // channel_bulk.go:201: reloadChannelsAfterCommit after the status batch.
+        RequestEnabledChannelsRefresh();
     }
 
     private static List<string> NormalizeTags(IReadOnlyList<string> tags)

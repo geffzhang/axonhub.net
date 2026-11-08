@@ -9,8 +9,8 @@ namespace AxonHub.Grains.Tests;
 /// serialization. The channel grain is the single writer the pool grain scores
 /// from, replacing the shared per-silo tracker.
 /// </summary>
+[Collection(GrainClusterCollection.Name)]
 public sealed class ChannelGrainRateLimitTests(GrainClusterFixture fixture)
-    : IClassFixture<GrainClusterFixture>
 {
     private static readonly DateTimeOffset Start = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
 

@@ -91,15 +91,19 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
         siloBuilder.ConfigureServices(services =>
         {
             services.AddSingleton<IEnabledChannelProvider>(ChannelProvider!);
+            services.AddSingleton<IEnabledChannelSource>(ChannelProvider!);
             services.AddSingleton(RateLimitTracker!);
             services.AddSingleton(ChannelLimiterManager!);
         });
     }
 }
 
-public sealed class FakeEnabledChannelProvider : IEnabledChannelProvider
+public sealed class FakeEnabledChannelProvider : IEnabledChannelProvider, IEnabledChannelSource
 {
     private ChannelDescriptor[] _channels = [];
+
+    /// <summary>The fingerprint query's answer (null for an empty table).</summary>
+    public DateTime? LatestUpdatedAt { get; set; }
 
     public void Set(params ChannelDescriptor[] channels)
     {
@@ -108,4 +112,7 @@ public sealed class FakeEnabledChannelProvider : IEnabledChannelProvider
 
     public Task<ChannelDescriptor[]> ListEnabledAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(_channels);
+
+    public Task<DateTime?> GetLatestUpdatedAtAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(LatestUpdatedAt);
 }

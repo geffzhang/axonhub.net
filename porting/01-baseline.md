@@ -7369,6 +7369,67 @@ C144/C148 的写入面冻结语义不变。
 多 silo 语义登记为 C225：单 silo 与参照逐项等价；多 silo 时同一通道的预算变成集群全局，
 而非参照的每进程分片。
 
+## 145. 启用通道缓存迁入 EnabledChannelsGrain（A2，12 + 2 + 1 例，2026-11-08）
+
+参照：`internal/server/biz/channel.go`（NewChannelService 的 `live.NewCache` 构造与初始
+`Load(force)`、`reloadEnabledChannels` 的指纹查询 / 启用通道查询 / `buildChannelWithOutbounds`
+跳过、`onEnabledChannelsSwap` 的 cacheVersion 递增与资源清理）、`internal/pkg/xcache/live/cache.go`
+（worker、500ms 防抖、30s 刷新超时、singleflight / reloadMu、GetData / GetLastUpdate）、
+`channel_apikey.go:107-141`（全部 key 禁用时的 10s 同步 `Load(force)` 与随后的 asyncReloadChannels）。
+
+参照行为：
+
+| 项 | 参照值 |
+|---|---|
+| 指纹 | 最新 `updated_at`（`Order(ent.Desc(FieldUpdatedAt)).First(SkipSoftDelete)`），空表为零值 |
+| 跳过规则 | `!force` 且指纹未前进（`!latest.After(lastUpdate)`）→ 不交换、不递增版本；空表 + 零 lastUpdate + 空 current 同样跳过 |
+| 强制交换 | `force` → 无论 changed 与否都交换，OnSwap 递增 cacheVersion |
+| 刷新失败 | RefreshFunc 返回错误时保留旧数据，doRefresh 记日志 |
+| 触发 | 变更后 reloadChannelsAfterCommit / asyncReloadChannels；500ms 防抖合并；API key 不可用同步 Load |
+
+端口实现：
+
+- 新增 `IEnabledChannelSource`（AxonHub.Abstractions）：`GetLatestUpdatedAtAsync` +
+  `ListEnabledAsync`；生产实现 `PostgresEnabledChannelSource` 走 `ChannelStore`
+  （新增 `GetLatestUpdatedAtAsync` 的 Dapper 查询，无软删谓词，软删行同样推进指纹）。
+- 新增 `EnabledChannelsGrain`（string key `enabled-channels`）：持有 `EnabledChannelSnapshot`
+  列表、lastUpdate 与 cacheVersion；`GetSnapshotAsync` 首次以 force 懒加载，`RefreshAsync(force)`
+  复用同一 reload 逻辑，`RequestRefreshAsync` 以 500ms 防抖注册一次性 grain timer；周期 timer
+  每分钟做一次非强制刷新；刷新失败只记日志并保留旧快照；单次刷新 30s 上界。
+- 新增 `EnabledChannelSnapshot` / `EnabledChannelsSnapshot`（Grains.Abstractions）：
+  `ChannelDescriptor` 的 Orleans 序列化孪生，逐字段双向映射；快照按调用复制。
+- API 侧：`GrainEnabledChannelProvider` 替换 `PostgresEnabledChannelProvider`；
+  `IEnabledChannelsCacheRefresher`（`RequestRefresh` / `ReloadAsync`）由
+  `GrainEnabledChannelsCacheRefresher` 实现；`ChannelLifecycleService` 的全部变更入口在成功后
+  请求防抖刷新，API key 不可用路径先同步强制刷新（`WaitAsync(10s)`，失败记 warning）；
+  `ChannelModelSyncService` / `ChannelOverrideTemplateService` 的 reload hook 改为
+  `GrainChannelModelSyncReloadHook`。
+- 测试基建：Grain 测试的 cluster fixture 改为 collection fixture（静态注入的假 provider 不能
+  并发建 cluster），两个既有测试类标注 `[Collection]`；假 provider 同时实现
+  `IEnabledChannelProvider` 与 `IEnabledChannelSource`。
+- 未改动：`ModelCandidateSelector` 的关联解析与 `ModelService` 仍实时读库（C149/C178/C179）；
+  `CacheVersion` 尚未被任何消费者使用。
+
+测试（12 + 2 + 1 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Grains.Tests/EnabledChannelsGrainTests.cs` | 12（`EnabledChannelsGrainTests` 11 + 同文件 `EnabledChannelSnapshotTests` 1） | 冷加载与版本 1（含读取不重复查询源）、指纹未变跳过、指纹前进重载、仅删除也重载、空库不重载、强制绕过指纹、空库强制仍递增版本、失败保留旧快照、冷加载失败传播且下次重试、防抖合并为一次强制重载、指纹 UTC 归一、快照往返全字段 |
+| `tests/AxonHub.Api.Tests/EnabledChannelsGrainProviderTests.cs` | 2 | provider 经 Orleans 映射 grain 快照全字段；`ReloadAsync` 在指纹不变时仍强制交换 |
+| `tests/AxonHub.Persistence.Tests/ChannelStoreTests.cs` | 1（追加） | 软删除推进 `GetLatestUpdatedAtAsync` 指纹 |
+
+调用点断言（不新增用例，扩展现有测试）：`AdminChannelApiKeyEndpointTests` 的
+`DisableOfTheLastKeyDisablesTheChannel` 断言一次同步重载 + 一次防抖刷新，
+`DisableAppendsTheRecordAndKeepsTheChannelEnabled` 断言普通禁用只请求防抖刷新；
+`AdminChannelLifecycleEndpointTests` 的 `UpdateChannelStatusClearsTheMarkersAndReturnsTheChannel`
+断言变更后请求刷新。
+
+静态计数：`AxonHub.Grains.Tests` 由 1692 增至 1704（+12），`AxonHub.Api.Tests` 由 5432 增至
+5434（+2），`AxonHub.Persistence.Tests` 由 331 增至 332（+1），四项目合计由 8956 增至 8971
+（`AxonHub.Llm.Tests` 1501 不变）。**按项目规则未运行 lint / build / test。**
+
+差异登记为 C226：集群单激活、懒加载、读者排队、无 OnSwap 资源清理、watcher / 自动禁用事件未移植。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -7384,7 +7445,7 @@ C144/C148 的写入面冻结语义不变。
 | GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、dashboard、系统设置类查询等）未移植（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入，dashboard 的 21 个根字段由 §105 接入，数据存储管理面（dataStorages / node(DataStorage) / createDataStorage / updateDataStorage）由 §106 接入（14 例），备份与自动备份管理面（autoBackupSettings / backup / restore / updateAutoBackupSettings / triggerAutoBackup）由 §107 接入（57 + 24 例）），API key profile template 管理面（apiKeyProfileTemplates 根字段、四个变更与 linkedProfilesCount）由 §109 接入（21 例），邀请的 REST 面（`POST /admin/invitations`、`GET /auth/invitations/:token`、`POST /auth/invitations/:token/register`，含角色删除同事务撤销）由 §110 接入（59 + 14 例；邀请 schema 标注 entgql.SkipAll，SDL 无邀请成员，故无 GraphQL 面）；前端实际调用的 215 个根字段中 145 个已接入（约 67%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 7 个 ent 类型（ChannelProbe / ChannelOverrideTemplate / RequestExecution / Role / System / UserProject / UserRole）见 C165，node(Channel) 与价格读取边由 §136 接入）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），通道测试由 §76 接入，模型同步由 §77 接入，覆盖模板的 `channel_override_templates` 表、`channelOverrideTemplates` 查询与 create/update/delete/apply/clear 五个变更由 §78 接入（隐私作用域 C161、where 子集 C162、通道顺序 C163），其余通道写操作（C037）未移植 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
-| 持久化（channels / projects / users / api_keys / channel_model_prices / models / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads / data_storages / api_key_profile_templates） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`models` 管理存储由 §88 的 7 例锁定，`data_storages` 管理存储由 §106 的 8 例锁定，`api_key_profile_templates` 存储由 §109 的 4 例锁定，`invitations` 存储与注册事务由 §110 的 14 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主用 `PostgresEnabledChannelProvider` 读取通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 的请求链路归档与存储策略的运行时消费未接入（C020）；存储策略的读写、body 清理与 GC 由 §113 接入，响应头捕获点差异已登记（C021） | 低 | 容器化验收；C020 随请求链路存储策略落地 |
+| 持久化（channels / projects / users / api_keys / channel_model_prices / models / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads / data_storages / api_key_profile_templates） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`models` 管理存储由 §88 的 7 例锁定，`data_storages` 管理存储由 §106 的 8 例锁定，`api_key_profile_templates` 存储由 §109 的 4 例锁定，`invitations` 存储与注册事务由 §110 的 14 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主经 `EnabledChannelsGrain`（`PostgresEnabledChannelSource`）读取启用通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 的请求链路归档与存储策略的运行时消费未接入（C020）；存储策略的读写、body 清理与 GC 由 §113 接入，响应头捕获点差异已登记（C021） | 低 | 容器化验收；C020 随请求链路存储策略落地 |
 | usage 成本管理面：`channel_model_prices` 自动定价与读取边 | 写入面已由 §73 接入（`saveChannelModelPrices`、create/update/skip/delete 计划、reference id 轮换、`channel_model_price_versions` 版本行与 GraphQL 定价类型，68 例）；自动定价由 §74 接入（`models` 表、模型卡换算、createChannel / updateChannel 事务内补价，20 例）；ent 的读取边由 §136 接入（`node(Channel)`、`channelModelPrices` / `versions` / `channel` / `channelModelPrice` 四条边与 read_channels 查询隐私，Node 接口与版本状态枚举，10 例），进程内价格缓存刷新不可观察（C048 resolved） | — | 完成（C048） |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）未接入，角色 / 权限校验由 §84 接入（PermissionValidator 与 users / roles 写入接线，25 例），OIDC 登录流程由 §83 接入（提供方配置与 providers 列表由 §82 接入），JWT 登录 / 刷新由 §80 接入，管理员 GraphQL 的 bearer / service_account 门与只读规则由 §81 接入 | 中 | 管理面随 GraphQL/前端里程碑 |
 | 其余 Ent 表 | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74 供自动定价读取，§88 管理面 CRUD）、`channel_override_templates`（§78）、`oidc_identities`（§79）、`data_storages`（§106）、`prompts`（§99）与 `invitations`（§110）已落；其余表未移植 | 中 | 随对应功能落地 |

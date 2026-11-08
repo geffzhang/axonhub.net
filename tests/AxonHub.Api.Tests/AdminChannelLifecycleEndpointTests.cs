@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
+using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -33,6 +34,7 @@ public sealed class AdminChannelLifecycleEndpointTests : IAsyncLifetime
     private readonly FakeChannelWriteStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
     private readonly FakeChannelModelPriceStore _prices = new();
+    private readonly RecordingEnabledChannelsRefresher _refresher = new();
 
     private readonly AdminGraphqlGateServices _gate = new();
 
@@ -48,6 +50,7 @@ public sealed class AdminChannelLifecycleEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
         builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
         builder.Services.AddSingleton(_limiters);
+        builder.Services.AddSingleton<IEnabledChannelsCacheRefresher>(_refresher);
         builder.Services.AddSingleton<ChannelLifecycleService>();
 
         _app = builder.Build();
@@ -94,6 +97,11 @@ public sealed class AdminChannelLifecycleEndpointTests : IAsyncLifetime
 
         var call = Assert.Single(_channels.StatusUpdates);
         Assert.Equal((channel.Id, "enabled"), call);
+
+        // The mutation requests the debounced cache refresh (asyncReloadChannels);
+        // it never blocks on a synchronous reload.
+        Assert.Equal(1, _refresher.RequestCount);
+        Assert.Equal(0, _refresher.ReloadCount);
     }
 
     [Fact]

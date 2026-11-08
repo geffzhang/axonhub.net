@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
+using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -71,6 +72,7 @@ public sealed class AdminChannelApiKeyEndpointTests : IAsyncLifetime
     private readonly FakeChannelWriteStore _channels = new();
     private readonly ChannelLimiterManager _limiters = new();
     private readonly FakeChannelModelPriceStore _prices = new();
+    private readonly RecordingEnabledChannelsRefresher _refresher = new();
 
     private readonly AdminGraphqlGateServices _gate = new();
 
@@ -86,6 +88,7 @@ public sealed class AdminChannelApiKeyEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
         builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
         builder.Services.AddSingleton(_limiters);
+        builder.Services.AddSingleton<IEnabledChannelsCacheRefresher>(_refresher);
         builder.Services.AddSingleton<ChannelLifecycleService>();
 
         _app = builder.Build();
@@ -124,6 +127,11 @@ public sealed class AdminChannelApiKeyEndpointTests : IAsyncLifetime
         Assert.Equal("enabled", channel.Status);
         Assert.Null(channel.ErrorMessage);
         Assert.Null(channel.AutoDisabledAt);
+
+        // Only the asynchronous (debounced) refresh runs; the synchronous
+        // reload is reserved for the exhausted path.
+        Assert.Equal(1, _refresher.RequestCount);
+        Assert.Equal(0, _refresher.ReloadCount);
 
         var call = Assert.Single(_channels.ApiKeyStateCalls);
         Assert.Null(call.CredentialsJson);
@@ -165,6 +173,12 @@ public sealed class AdminChannelApiKeyEndpointTests : IAsyncLifetime
         Assert.Equal("All API keys disabled (last error: 0)", call.ErrorMessage);
         Assert.NotNull(call.AutoDisabledAt);
         Assert.True(call.ClearAutoDisableExpiresAt);
+
+        // The exhausted path force-reloads synchronously so selection stops
+        // using the channel before the mutation returns, then also requests the
+        // debounced refresh (channel_apikey.go:107-141).
+        Assert.Equal(1, _refresher.ReloadCount);
+        Assert.Equal(1, _refresher.RequestCount);
     }
 
     [Fact]

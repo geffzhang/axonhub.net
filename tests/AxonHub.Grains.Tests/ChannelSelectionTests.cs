@@ -16,7 +16,8 @@ namespace AxonHub.Grains.Tests;
 /// <see cref="LoadBalancerScoring"/> so the same values can be asserted without
 /// a silo, and drives <c>ChannelPoolGrain.SortAsync</c> for ordering.
 /// </remarks>
-public sealed class ChannelSelectionTests(GrainClusterFixture fixture) : IClassFixture<GrainClusterFixture>
+[Collection(GrainClusterCollection.Name)]
+public sealed class ChannelSelectionTests(GrainClusterFixture fixture)
 {
     private static readonly DateTimeOffset Now = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
     private static readonly long[] HealthModelOrder = [302L, 301L];

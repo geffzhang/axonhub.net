@@ -48,7 +48,14 @@ if (string.IsNullOrWhiteSpace(connectionString))
 builder.Services.AddSingleton(new PostgresConnectionFactory(connectionString));
 builder.Services.AddSingleton<IAxonHubDbContextFactory>(
     static services => services.GetRequiredService<PostgresConnectionFactory>());
-builder.Services.AddSingleton<IEnabledChannelProvider, PostgresEnabledChannelProvider>();
+
+// Enabled-channel cache: the reference keeps one in-memory snapshot per
+// process (ChannelService.enabledChannelsCache, refreshed every minute and on
+// mutation). The port hosts it in EnabledChannelsGrain; this registration is
+// the grain's database half, and the selection path reads the grain snapshot.
+builder.Services.AddSingleton<IEnabledChannelSource, PostgresEnabledChannelSource>();
+builder.Services.AddSingleton<IEnabledChannelProvider, GrainEnabledChannelProvider>();
+builder.Services.AddSingleton<IEnabledChannelsCacheRefresher, GrainEnabledChannelsCacheRefresher>();
 
 builder.Services.AddSingleton(TimeProvider.System);
 
@@ -484,11 +491,11 @@ builder.Services.AddScoped<IChannelAutoSyncFrequencyProvider>(
 builder.Services.AddScoped<ChannelTestService>();
 
 // Channel model sync (syncChannelModels): the per-channel fetch/merge/price
-// transaction and the hourly schedule guard (channel_model_sync.go). The
-// reference's channel-cache reload becomes a no-op until the cache is ported
-// (C158).
+// transaction and the hourly schedule guard (channel_model_sync.go). A changed
+// sync signals the enabled-channel cache grain, matching the reference's
+// reloadChannelsAfterCommit.
 builder.Services.AddScoped<IChannelModelSyncStore, ChannelModelSyncStore>();
-builder.Services.AddSingleton<IChannelModelSyncReloadHook, NullChannelModelSyncReloadHook>();
+builder.Services.AddSingleton<IChannelModelSyncReloadHook, GrainChannelModelSyncReloadHook>();
 builder.Services.AddScoped<ChannelModelSyncService>();
 
 // Channel price writes (saveChannelModelPrices): the ordered action plan and

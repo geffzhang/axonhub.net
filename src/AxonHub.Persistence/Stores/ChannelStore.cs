@@ -14,6 +14,15 @@ public interface IChannelStore
     Task<IReadOnlyList<ChannelRecord>> ListEnabledAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The largest <c>updated_at</c> across every row, including soft-deleted
+    /// ones, or <see langword="null"/> when the table is empty
+    /// (<c>Channel.Query().Order(ent.Desc(FieldUpdatedAt)).First(SkipSoftDelete)</c>,
+    /// channel.go:242-247). This is the enabled-channel cache fingerprint: a
+    /// soft delete bumps <c>updated_at</c>, so deletions are detected too.
+    /// </summary>
+    Task<DateTime?> GetLatestUpdatedAtAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of the quota collection query
     /// (<c>channel.StatusEQ(enabled)</c> AND <c>channel.TypeIn(types...)</c>).
     /// The reference leaves ordering unspecified; id ASC keeps the port
@@ -86,6 +95,23 @@ public sealed class ChannelStore(AxonHubDbContext db) : IChannelStore
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
         return rows.AsList();
+    }
+
+    public async Task<DateTime?> GetLatestUpdatedAtAsync(CancellationToken cancellationToken = default)
+    {
+        // No soft-delete predicate: the reference deliberately asks for the
+        // latest row including deleted ones so a deletion invalidates the
+        // cache (channel.go:242-247). Equal timestamps tie arbitrarily; the
+        // value returned is the same either way.
+        const string Sql =
+            "SELECT \"updated_at\" FROM \"channels\" ORDER BY \"updated_at\" DESC LIMIT 1;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<DateTime?>(
+            new CommandDefinition(
+                Sql,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<ChannelRecord>> ListEnabledByTypesAsync(

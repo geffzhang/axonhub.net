@@ -183,6 +183,33 @@ public sealed class ChannelStoreTests(PostgresFixture fixture)
         Assert.Empty(await store.ListEnabledByTypesAsync([]));
     }
 
+    [Fact]
+    public async Task GetLatestUpdatedAtSeesSoftDeletedChannels()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelStore(context);
+
+        Assert.Null(await store.GetLatestUpdatedAtAsync());
+
+        var id = await store.CreateAsync(NewChannel());
+
+        Assert.Equal(UpdatedAt, await store.GetLatestUpdatedAtAsync());
+
+        // A soft delete stamps updated_at (ChannelWriteStore does the same), so
+        // the fingerprint must move even though the enabled query hides the row.
+        var deletedAt = UpdatedAt.AddHours(1);
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"channels\" SET \"deleted_at\" = @DeletedAt, \"updated_at\" = @UpdatedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, UpdatedAt = deletedAt, Id = id });
+        }
+
+        Assert.Equal(deletedAt, await store.GetLatestUpdatedAtAsync());
+    }
+
     private static ChannelRecord NewChannel() => new()
     {
         CreatedAt = CreatedAt,

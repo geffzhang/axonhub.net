@@ -284,6 +284,17 @@ transformer 的 `APIFormat()` 在 websocket 传输下返回 `openai/responses-ws
 API 中间件经 `IChannelRateLimitRecorder` 写穿、`ChannelPoolGrain` 从 `ChannelMetricsSnapshot`
 评分，阻塞并发 limiter 仍为每 silo 单例（C042）；多 silo 的预算全局化登记为 C225。
 
+§145 追加 15 个用例（`AxonHub.Grains.Tests` 12：`EnabledChannelsGrainTests` 11、
+`EnabledChannelSnapshotTests` 1；`AxonHub.Api.Tests` 2：`EnabledChannelsGrainProviderTests`；
+`AxonHub.Persistence.Tests` 1：`ChannelStoreTests.GetLatestUpdatedAtSeesSoftDeletedChannels`），
+同样按项目规则未运行 lint / build / test；§145 落地后的静态计数为 `AxonHub.Grains.Tests` 1704、
+`AxonHub.Api.Tests` 5434、`AxonHub.Persistence.Tests` 332、`AxonHub.Llm.Tests` 1501、四项目合计 8971，
+下一次全量运行应以该数字复核。该切片不新增表或 SQL；启用通道缓存以 `EnabledChannelsGrain` 单激活
+持有（1 分钟周期 + `updated_at` 指纹跳过 + 变更后 500ms 防抖强制刷新 + API key 不可用 10s 同步重载），
+选择回退路径经 `GrainEnabledChannelProvider` 读取快照，关联解析与模型列表仍实时读库；
+集群单激活、懒加载、读者排队与资源清理缺口登记为 C226。Grain 测试的 cluster fixture 改为
+collection fixture，避免静态注入的假 provider 在并发建 cluster 时互相覆盖。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

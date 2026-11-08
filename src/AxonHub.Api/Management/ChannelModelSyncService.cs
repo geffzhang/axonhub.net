@@ -11,15 +11,26 @@ namespace AxonHub.Api.Management;
 
 /// <summary>
 /// The reload hook in syncChannelModels (channel_model_sync.go:59-61,
-/// 214-216). The reference swaps its in-memory enabled-channel cache; the port
-/// has no channel cache yet, so the hook is a no-op (C158).
+/// 214-216). The reference reloads its in-memory enabled-channel cache; the
+/// port signals the same cache grain.
 /// </summary>
 public interface IChannelModelSyncReloadHook
 {
     void ReloadAfterModelSync();
 }
 
-/// <summary>No-op reload hook used until the channel cache is ported.</summary>
+/// <summary>
+/// Production reload hook: the model sync wrote a channel row, so the cache's
+/// <c>updated_at</c> fingerprint changed and a force refresh is requested
+/// (debounced like <c>ChannelService.asyncReloadChannels</c>).
+/// </summary>
+public sealed class GrainChannelModelSyncReloadHook(IEnabledChannelsCacheRefresher refresher)
+    : IChannelModelSyncReloadHook
+{
+    public void ReloadAfterModelSync() => refresher.RequestRefresh();
+}
+
+/// <summary>No-op reload hook for hosts that run without the channel cache.</summary>
 public sealed class NullChannelModelSyncReloadHook : IChannelModelSyncReloadHook
 {
     public void ReloadAfterModelSync()
@@ -145,8 +156,9 @@ public sealed class ChannelModelSyncService(
 
         if (changedCount > 0)
         {
-            // asyncReloadChannels: fire-and-forget in the reference; the port's
-            // hook is synchronous and currently a no-op.
+            // asyncReloadChannels: fire-and-forget in the reference; the
+            // production hook only asks the cache grain to schedule its
+            // debounced reload and returns immediately.
             reloadHook.ReloadAfterModelSync();
         }
 
