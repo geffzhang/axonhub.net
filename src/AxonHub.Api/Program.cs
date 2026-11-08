@@ -6,6 +6,7 @@ using AxonHub.Api.Endpoints;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Http;
 using AxonHub.Api.Management;
+using AxonHub.Api.Metrics;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
@@ -30,6 +31,7 @@ using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.TypeSafe;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
+using OpenTelemetry.Metrics;
 using Orleans.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -104,6 +106,26 @@ builder.Services.AddSingleton<ChannelLimiterManager>();
 // no-op (difference ledger C044).
 builder.Services.AddSingleton(static services => ChannelLimiterMetrics.CreateDefault(
     services.GetRequiredService<ChannelLimiterManager>()));
+
+// internal/metrics (conf/conf.go:293-300, cmd/axonhub/main.go:76,105): metrics
+// are off by default. server.name (default "AxonHub") names the meter that
+// carries the nine general instruments; the channel limiter keeps its own
+// "axonhub" meter (C044), and the provider collects both. The provider is
+// always built — disabled means "no reader", like sdk.NewMeterProvider() — and
+// the singleton is resolved after Build so the host owns its shutdown flush.
+var metricsOptions = MetricsOptions.FromConfiguration(builder.Configuration);
+var serverName = builder.Configuration["AXONHUB_SERVER_NAME"];
+if (string.IsNullOrEmpty(serverName))
+{
+    serverName = builder.Configuration["Server:Name"];
+}
+if (string.IsNullOrEmpty(serverName))
+{
+    serverName = "AxonHub";
+}
+
+builder.Services.AddSingleton(_ => new ServerMetrics(serverName));
+builder.Services.AddSingleton(_ => MetricsProvider.Create(metricsOptions, serverName));
 
 // The reference's RequestService owns the previous-channel cache consumed by
 // trace sticky routing (request.go:1733-1801); one singleton serves the
@@ -638,6 +660,11 @@ builder.Host.UseOrleans(silo =>
 
 var app = builder.Build();
 
+// The reference builds the MeterProvider in fx at startup and calls Shutdown
+// from OnStop; resolving the singleton here starts the periodic reader (when
+// enabled) and leaves the final flush to the host's disposal.
+_ = app.Services.GetRequiredService<MeterProvider>();
+
 // Ent runs auto-migration on every startup; the port keeps the idempotent DDL.
 await using (var connection = await app.Services.GetRequiredService<PostgresConnectionFactory>().OpenAsync())
 {
@@ -700,6 +727,12 @@ app.MapGraphQL("/admin/graphql")
 // Global request tracing (routes.go:63): every request gets an ar-<uuid> id
 // echoed in the configured response header and published for error bodies.
 app.UseMiddleware<RequestTracingMiddleware>();
+
+// Global metrics (routes.go:64): WithMetrics follows the logging/tracing
+// middlewares and wraps every route plus the static NoRoute fallback. It
+// records after the response with the gin FullPath() template; the fallback
+// (no gin route) records the empty path.
+app.UseMiddleware<HttpMetricsMiddleware>();
 
 // routes.go:163 mounts POST only, so a non-POST /admin/graphql never matches
 // the route and gin's NoRoute hands it to static.Handler, whose API-prefix
@@ -987,12 +1020,13 @@ app.MapPost("/typesafe/v1/systemone", HandleSystemOneAsync);
 
 // Native Gemini surface (routes.go:266-289): both groups share the handler
 // pair. GenerateContent picks the writer from the alt query parameter;
-// ListModels serves the /v1beta/models and /gemini/{apiVersion}/models
-// literals.
+// ListModels serves the /v1beta/models and /gemini/{gemini-api-version}/models
+// literals. The parameter name keeps gin's spelling so the metrics path tag
+// matches the reference (C223).
 app.MapPost("/v1beta/models/{**action}", GeminiEndpoint.GenerateContentAsync);
 app.MapGet("/v1beta/models", GeminiEndpoint.ListModelsAsync);
-app.MapPost("/gemini/{apiVersion}/models/{**action}", GeminiEndpoint.GenerateContentAsync);
-app.MapGet("/gemini/{apiVersion}/models", GeminiEndpoint.ListModelsAsync);
+app.MapPost("/gemini/{gemini-api-version}/models/{**action}", GeminiEndpoint.GenerateContentAsync);
+app.MapGet("/gemini/{gemini-api-version}/models", GeminiEndpoint.ListModelsAsync);
 
 // The reference attaches its API middlewares to gin groups, so a request that
 // misses every route reaches NoRoute without them (C116).

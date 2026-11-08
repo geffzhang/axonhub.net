@@ -223,6 +223,15 @@ logprob 3 个 InlineData、可空省略 / embedding 向量 / category_scores 字
 成功获准路径上报，等待时长经 `TimeProvider` 计时），C044 关闭；同时把参照通用 metrics 子系统
 （provider / config + `WithMetrics()` HTTP 中间件）登记为 C223 真实缺口。
 
+§139 追加 26 个用例（`ServerMetricsTests` 3、`MetricsOptionsTests` 14、
+`HttpMetricsMiddlewareTests` 9）；参照 `internal/metrics` 无测试文件，这些全部是端口接线/
+行为守卫。同样按项目规则未运行 lint / build / test，§139 落地后的静态计数为
+`AxonHub.Api.Tests` 5402、四项目合计 8881（`AxonHub.Llm.Tests` 1468、
+`AxonHub.Persistence.Tests` 331、`AxonHub.Grains.Tests` 1680 不变），下一次全量运行应以
+该数字复核。该切片不新增表或 SQL；通用 metrics 子系统（`metrics.enabled` / exporter 配置、
+九个 instrument、5 秒周期 stdout/OTLP 导出、`WithMetrics()` 等价 HTTP 中间件、gin FullPath
+转换、panic 不记录）已按参照移植，C223 关闭。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
@@ -502,7 +511,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C012：负载均衡策略链 | 已解决：adaptive / failover / circuit-breaker / round-robin 四条链按参照公式、权重 tie-breaker、健康分区与 topK 实现；策略取自 `retry_policy.load_balancer_strategy`，未知值回退 adaptive；24 个 grain 用例 + 1 个 orchestrator 接线用例锁定 | 已关闭；残余 C034（无延迟样本，LatencyAware 恒 40）与 C036（无模型级熔断状态，按关闭态计分） |
 | C035：RateLimitAware 恒满分 | 已解决：`ChannelRequestTracker`（自然分钟窗口、只延长的冷却、惰性清理）、`ChannelLimiter`/`ChannelLimiterManager`（硬信号量、FIFO、配置重建）、`RateLimitAwareScorer`（RPM/TPM 与并发取最小值、-10000）接入四条策略链；RPM 准入、TPM 追踪与 429 冷却中间件挂在请求链路上；93 个用例锁定（64 grain + 29 API）。残余：C042（阻塞线程）、C043（单 InnerException）、C044（已由 §138 闭合）、C045（nil tracker 的 noop 不可达） | 已关闭；残余已登记 |
 | C013：多 API key 的 trace 粘性 | 已解决：无 trace 时的随机分配、rendezvous/FNV-1a 选择器与 `channel_api_key_suffix`/`channel_api_key_index` 审计列已按参照实现（23 例）；`ChannelApiKeyProvider` 读取 `WithTrace` 发布的 trace id（线上请求 `SessionId` 接缝），多 key 通道按 `traceID|key` 做 rendezvous 固定选择，同一 trace 在重试与跨请求间同一 key，另有 1 例编排端到端锁定；参照的 1024 项 LRU 不单独保留（它只记忆固定启用集合内的 rendezvous 结果，通道重建会新建 provider 与空缓存） | 已关闭；残余 apiKeyOverride（通道 key 测试流程）与 `trace_sticky_mode` 通道粘性未接入 |
-| C042–C045：限流的实现结构差异 | C042 等待中的请求占用线程而非 goroutine；C043 队列错误用 `Cause` 属性承载类型化原因而非多错误 Unwrap；C044 五个 OTel 限流指标已由 §138 按 System.Diagnostics.Metrics 移植，部署方订阅 axonhub Meter 即可获得 inflight/waiting/拒绝计数；C045 nil tracker 的 noop 路径不可达 | 准入与打分行为等价，差异在资源模型与可观测性；已按同名 instrument 与 Snapshot 回调接入（§138） |
+| C042–C045：限流的实现结构差异 | C042 等待中的请求占用线程而非 goroutine；C043 队列错误用 `Cause` 属性承载类型化原因而非多错误 Unwrap；C044 五个 OTel 限流指标已由 §138 按 System.Diagnostics.Metrics 移植，部署方订阅 axonhub Meter 即可获得 inflight/waiting/拒绝计数；C045 nil tracker 的 noop 路径不可达；C223 通用 HTTP metrics 亦已由 §139 按同名 instrument 与 provider 配置移植（默认关闭，开启后导出面一致） | 准入与打分行为等价，差异在资源模型与可观测性；已按同名 instrument 与 Snapshot 回调接入（§138、§139） |
 | C014：成本计费、用户鉴权（JWT/OIDC/角色）与通道管理面未接入 | API key 鉴权与身份传播已接入（C023），系统安全设置与 IP 黑名单已接入（C028）：`/v1` 先过黑名单再过鉴权，request/execution/usage 的 project/api_key 已回填；通道级请求改写已接入（body/header 覆盖、模板渲染、sjson 路径语义，134 例锁定，残余 C037–C041）；通道限流与并发准入已接入（C035，93 例锁定，残余 C042–C045）；usage 成本计费与注入已接入（C046–C049，43 例锁定）；管理面登录（§80）与管理员 GraphQL 鉴权（§81）已接入，OIDC 提供方配置、启动发现与 providers 列表（§82）已接入，登录流程与角色权限仍未接入；通道写入校验已覆盖 createChannel（§67）、updateChannel（§68：部分列更新、乐观守卫与同一套 body/header、限流、设置、端点与凭据校验）与批量排序 / 批量自动禁用（§69）、端点保存（§70：类型与已存 modelProtocols 校验、updated_at 守卫）与 API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key，按冻结语义；live 的 Vertex key 删除与自动禁用事件 / 缓存刷新延后，见 C149）；覆盖模板 CRUD 与 `channel_model_prices` 管理面未接入（C037/C048/C143） | 后续里程碑按参照逐项接入并补测 |
 | C046–C049：成本计费的精度、读取与未命中语义 | C046 已接受：金额用 `System.Decimal`（约 28–29 位有效数字），参照为 shopspring 任意精度，极端乘积可能有末位差异；C047 已接受：价格按请求实时读库（注入开启时最多两次查询），参照为进程内缓存，外部改价立即生效；C048 真实缺口：`channel_model_prices` 管理面（写入、reference-id 轮换、版本表、自动定价）未移植，§67 的 createChannel 与 §68 的 updateChannel 均尚未调用 ensureChannelModelPrices（C143）；C049 推断：未命中价格时 `cost_items` 写 JSON `null`（Ent `SetCostItems(nil)` 语义，Ent 源码不可得） | 读取路径与可观察金额一致；管理面随通道管理面落地；C049 若日后用真实 Ent 数据库核对为 `[]`，只需改中间件字面量并更新条目与测试 |
 | C015：zstd 请求体与压缩错误文案 | 已解决：gzip/x-gzip/deflate/zstd 全部解码；gzip 头错误与 zlib/raw DEFLATE 分支逐字/逐分支对齐。残余差异仅损坏/截断压缩体的错误细节（缺 flate 偏移、gzip 尾部校验、zstd 内层文案） | 已关闭（ZstdSharp.Port；残余差异见 C015） |

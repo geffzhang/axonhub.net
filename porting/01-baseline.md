@@ -152,8 +152,8 @@ grain 键按请求模型/通道 ID 隔离，各用例使用独立 ID 避免状�
 
 限流状态为 silo 级单例（`Program.cs` 注入 `ChannelRequestTracker` 与 `ChannelLimiterManager`），
 通道池的 RateLimitAware 打分与请求链路中间件共享同一实例；约束并发等待的阻塞模型登记为 C042，
-错误包装的单 `InnerException` 结构登记为 C043，指标缺口 C044（后由 §138 闭合）、noop 追踪 C045。参照的
-`channel_limiter_metrics_test.go`（3 例）随指标子系统顺延。
+错误包装的单 `InnerException` 结构登记为 C043，指标缺口 C044（后由 §138 闭合）、通用 metrics 缺口 C223（后由 §139 闭合）、noop 追踪 C045。参照的
+`channel_limiter_metrics_test.go`（3 例）随指标子系统顺延；通用 metrics 参照无测试，端口补 26 例接线/行为守卫。
 
 ## 8. HTTP 纵向切片（51 例）
 
@@ -7029,7 +7029,86 @@ NaN / Infinity 在写出阶段失败。端口此前只在 `cost` 等标注 `GoOp
 
 C044 由 gap 改为 resolved。另登记 C223（gap）：参照的通用 metrics 子系统
 （`internal/metrics` provider/config 与 `WithMetrics()` HTTP 中间件）尚未移植，属于本轮
-发现、待决策范围的独立缺口。
+发现、待决策范围的独立缺口；C223 已由 §139 闭合。
+
+## 139. 通用 HTTP 指标与 OTel metrics provider/config（C223 闭合，26 例，2026-11-08）
+
+参照：`internal/metrics/{config,metrics,provider}.go`、`internal/server/middleware/metrics.go`、
+`internal/server/routes.go:64`、`conf/conf.go`（metrics 默认值）、`cmd/axonhub/main.go`。
+
+参照行为：
+
+| 项 | 参照值 |
+|---|---|
+| `metrics.enabled` | 默认 false；关闭时构造 `sdk.NewMeterProvider()`（无 reader） |
+| `metrics.exporter.type` | `stdout` / `otlpgrpc` / `otlphttp`；仅在启用时校验，未知值启动失败，文案 `unsupported metrics exporter type: "x"` |
+| `metrics.exporter.endpoint` | Go 风格 `host:port`；gRPC 缺省 `localhost:4317`、HTTP 缺省 `localhost:4318` |
+| `metrics.exporter.insecure` | true 用明文 HTTP，false 用 TLS |
+| 导出周期 | `sdk.NewPeriodicReader(exporter, sdk.WithInterval(5*time.Second))` |
+| Meter 名 | `SetupMetrics(provider, server.Config.Name)`；`server.name` 默认 `AxonHub`；通道限流另用全局 `axonhub` Meter（C044），参照的全局 provider 同时收集两者 |
+
+九个 instrument（名称 / 类型 / 单位 / 描述）：
+
+| instrument | 参照类型 | 单位 | 描述 |
+|---|---|---|---|
+| `http_request_count` | Int64Counter | requests | Number of HTTP requests |
+| `http_request_duration_seconds` | Float64Histogram | seconds | HTTP request duration in seconds |
+| `graphql_request_count` | Int64Counter | requests | Number of GraphQL requests |
+| `graphql_request_duration_seconds` | Float64Histogram | seconds | GraphQL request duration in seconds |
+| `chat_request_count` | Int64Counter | requests | Number of chat requests |
+| `chat_request_duration_seconds` | Float64Histogram | seconds | Chat request duration in seconds |
+| `chat_token_count` | Int64Counter | tokens | Number of tokens in chat requests |
+| `chat_success_count` | Int64Counter | requests | Number of successful chat requests |
+| `chat_failure_count` | Int64Counter | requests | Number of failed chat requests |
+
+标签：HTTP 指标为 `method` / `path` / `status_code`（整数）；GraphQL 为 `operation`；chat 为
+`channel_id` / `channel_name`（均为字符串）。
+
+接线：`WithMetrics()` 位于 `routes.go` 的路由中间件链（第 64 行）。中间件在 `c.Next()`
+之前取 `time.Now()`，返回后以 `method`、`c.FullPath()`、`c.Writer.Status()` 与
+`time.Since(start).Seconds()` 记录两个 HTTP instrument。`c.FullPath()` 给出 gin 模板
+（`/v1/videos/:id`、`/v1/models/*model`），未匹配路由为空串。Recovery 位于 `WithMetrics`
+外层，因此 panic 请求在记录前展开，不产生指标。GraphQL / chat 记录函数
+（`RecordGraphQLRequest` / `RecordChatRequest`）在参照内没有调用点。
+
+端口实现：
+
+- `src/AxonHub.Api/Metrics/MetricsOptions.cs`：`AXONHUB_METRICS_*` 优先、`Metrics:*` 次之
+  （Viper AutomaticEnv 语义）；布尔值按 spf13/cast 接受 `1/t/T/TRUE/true/True`，其余为 false；
+  `Validate()` 仅在启用时检查 exporter 类型，未知值抛出与参照一致的文案。
+- `src/AxonHub.Api/Metrics/ServerMetrics.cs`：在 `server.name` Meter 上注册九个同名、
+  同类型（`Counter<long>` / `Histogram<double>`）、同单位、同描述的 instrument；三个记录方法
+  使用与参照相同的标签。`server.name` 缺省 `AxonHub`，环境变量 `AXONHUB_SERVER_NAME` 优先。
+- `src/AxonHub.Api/Metrics/MetricsProvider.cs`：用 OpenTelemetry .NET 1.20.1 的
+  `Sdk.CreateMeterProviderBuilder()` 同时 `AddMeter(server.name)` 与 `AddMeter("axonhub")`；
+  启用时挂 5 秒 `PeriodicExportingMetricReader`（导出超时 30 秒）与 stdout / OTLP gRPC /
+  OTLP HTTP 导出器；关闭时构造无 reader provider。
+- `src/AxonHub.Api/Http/HttpMetricsMiddleware.cs`：挂在 `RequestTracingMiddleware` 之后；
+  ASP.NET 模板按 gin 语法转换（`{p}` / `{p:约束}` → `:p`，`{*p}` / `{**p}` → `*p`），
+  `StaticFallbackMetadata` 的 fallback 记空路径；无 try/finally，panic 不记录。
+- `Program.cs`：解析配置与 `server.name`，单例注册 `ServerMetrics` 与 `MeterProvider`，并在
+  `Build()` 后解析 provider 以启动周期导出，宿主关闭时由 provider 的 dispose 刷新。
+- Gemini 两组路由的参数名改为 `{gemini-api-version}`，使 metrics 的 `path` 标签与参照的
+  gin 模板逐字一致（handler 不读取该参数，无行为影响）。
+
+已接受子差异（C223 decision）：stdout 导出器输出格式不同（Go 输出 OTLP JSON 行，.NET 为
+可读文本）；OTLP endpoint 对空值与已带 scheme 的输入比 Go `WithEndpoint` 更宽松；关闭时的
+no-op provider 由不同实现承担，但两者都不导出任何数据；`routes.go` 的中间件顺序在端口由
+ASP.NET 管道复现，panic 不记录这一可观察行为一致。
+
+测试（26 例；参照 `internal/metrics` 无测试文件，全部为端口接线/行为守卫）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/ServerMetricsTests.cs` | 3 | 九个 instrument 的名称/类型/单位/描述；HTTP 标签；GraphQL/chat 标签与成功/失败分支 |
+| `tests/AxonHub.Api.Tests/MetricsOptionsTests.cs` | 14 | 默认值；`AXONHUB_METRICS_*` 读取；环境变量优先；spf13/cast 布尔语义；三种导出器；未知类型文案；endpoint/insecure/默认端口/已带 scheme 的映射 |
+| `tests/AxonHub.Api.Tests/HttpMetricsMiddlewareTests.cs` | 9 | gin path 转换（6 种模板）；fallback 空 path；panic 不记录；状态码与耗时标签 |
+
+静态计数：`AxonHub.Api.Tests` 由 5376 增至 5402（+26），四项目合计由 8855 增至 8881
+（`AxonHub.Llm.Tests` 1468、`AxonHub.Persistence.Tests` 331、`AxonHub.Grains.Tests` 1680
+不变）。**按项目规则未运行 lint / build / test。**
+
+C223 由 gap 改为 resolved。未移植残余：无。
 
 ## 覆盖缺口
 
