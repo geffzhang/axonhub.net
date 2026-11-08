@@ -6472,6 +6472,63 @@ Apertis、OpenCode Go 与 Kimi Code 已注册，其余 6 个待切片」。
 差异：C182 由剩余 7 个 checker 收窄为 6 个；新增 C213（Kimi Code 用量 URL 的 authority 保留原始拼写）、
 C214（reset_in 推断时刻的锚点时区与读取时机）与 C215（采集 HTTP 接缝、状态码分类与 Go 解码语义）。
 
+## 128. MiniMax 供应商配额检查器（BaseURL 派生 /v1/token_plan/remains、general 模型 5h / weekly 窗口，161 例，2026-11-08）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/minimax_checker.go`（`CheckQuota`:69-96、
+`SupportsChannel`:98-100、`buildMinimaxQuotaURL`:102-114、`minimaxPeriodStart`:119-127、
+`minimaxTotalPercent`:131-136、未被调用的 `minimaxUtilization`:138-147、`minimaxStatusForRatio`:151-165、
+`parseMinimaxResponse`:167-302、局部 `worseStatus`:304-310、报文类型:16-59），`provider_quota.go:387`
+的 `registerMinimaxSupport`（在 `registerKimiCodeSupport` 之后、`registerZhipuSupport` 之前调用，
+定义见 `provider_quota.go:466-468`），以及 `minimax_checker_test.go` 的 15 个测试函数。
+
+新增 `src/AxonHub.Api/Orchestration/MinimaxQuotaChecker.cs`（`IQuotaChecker` 实现、
+`MinimaxResponse` / `MinimaxBaseResp` / `MinimaxModelRemain` 报文类型与 Go 语义 JSON 解码、
+`MinimaxModelRow` 的 rawData 形状），`Program.cs` 在 kimi_code 之后注册 `MinimaxQuotaChecker` 与
+`ProviderQuotaCheckerRegistration("minimax", …)`（与参照 `registerMinimaxSupport` 的顺序一致），
+`ProviderQuotaCheckerRegistry` 的文档同步为「Claude Code、Codex、Antigravity、xAI Subscription、
+GitHub Copilot、NanoGPT、ZenMux、Cline、Synthetic、NeuralWatt、Apertis、OpenCode Go、Kimi Code 与
+MiniMax 已注册，其余 5 个待切片」。
+
+- 凭据：取 legacy `APIKey` 并 `TrimSpace`；为空且 `APIKeys` 非空时取首个 `APIKeys[0]` 并 `TrimSpace`
+  （不跳过空白项）；仍为空（含无凭据、空白、`apiKeys` 首项空白、OAuth-only、畸形 JSON）时抛出
+  `channel has no API key`，不发起请求。
+- 采集：GET `buildMinimaxQuotaURL(ch.BaseURL)`，缺省 `https://www.minimaxi.com/v1/token_plan/remains`；
+  `TrimSpace` 后为空、解析失败、scheme 或 host 为空时回退缺省端点；否则重建为
+  `scheme://parsed.Host + /v1/token_plan/remains`（userinfo、path、query、fragment 全部丢弃；scheme
+  小写、host 大小写保留、端口与 IPv6 保留）；头为 `Authorization: Bearer <key>` 与
+  `Content-Type: application/json`（参照不设 Accept），无 body；`Settings.Proxy` 非空时经代理工厂派生
+  执行器，否则用共享执行器（C216）。
+- 响应：不做显式状态码检查（Do 已对 >=400 报错），端口把 >=400 的 `HttpClientError` 包装为
+  `minimax quota request failed: <inner>`；解码失败包装为 `failed to parse minimax quota response: <inner>`；
+  `base_resp.status_code != 0` 时报 `minimax API error: <status_msg> (code <status_code>)`（先于模型列表
+  检查）；模型列表为空报 `minimax quota response contains no model remains`；找不到 `model_name == "general"`
+  报 `minimax quota response contains no general model`；1xx / 3xx / 非 200 2xx 照常解析。
+- 窗口：5h 窗口恒存在；`intervalTotalPercent = boost>0 ? boost/10.0 : 100.0`，
+  `intervalUsedPercent = 100 - remaining`（不做非负夹紧），`intervalPercent = used/total*100`，
+  ratio = intervalPercent/100；weekly 窗口仅在 `current_weekly_status == 1` 时加入（0 / 2 / 3 均跳过），
+  口径同上（weekly_boost_permille）；窗口标签 `5h` / `weekly`，类型 `Token`。
+- 状态与重置：`minimaxStatusForRatio(apiStatus, ratio)`：apiStatus==3 → exhausted；ratio>=1 → exhausted；
+  ratio>=0.8 → warning；apiStatus==1 → available；其余 unknown。总体状态由局部 `worseStatus`
+  （available 0 / warning 1 / exhausted 2，非表内值按 0）从 available 起取最差；`Ready` 跟随总体状态。
+  `NextResetAt` 取 `end_time` / `weekly_end_time`（毫秒 > 0）中最早者（严格 `Before`，同刻保留先者）；
+  `PeriodStart` 取 `start_time` / `weekly_start_time`（毫秒 > 0，否则 nil）。
+- rawData：`{"rows": [...]}`，行字段与顺序 `modelName, intervalUsedPercent, intervalTotalPercent,
+  intervalPercent, intervalStatus, intervalResetAt(omitempty), weeklyUsedPercent, weeklyTotalPercent,
+  weeklyPercent, weeklyStatus, weeklyResetAt(omitempty), weeklyBoostPermille(omitempty)`；重置时刻按
+  RFC3339 字符串；随后 `Normalize` 归一化（负 ratio limit 丢弃、ratio>1 截断、过期 reset 清除、
+  rawData 保留原值）。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 线路形状（缺省端点与 BaseURL 派生、Bearer 经 Auth、仅 Content-Type、无 body）、参照报文完整映射与 rawData 全文、URL 重建 28 组（userinfo / path / query / fragment 丢弃、scheme 小写与 host 大小写、端口 / IPv6、非法输入回退）、缺省端点回退 3 组、转义宿主逐字节还原、凭据 11 组、weekly boost 与 interval boost、weekly 状态门 3 组、warning / exhausted / apiStatus 3 / boost 后 available、前置于模型列表的 API 错误、最早 reset、首个 general、阈值 11 组、总百分比 6 组、`PeriodStart` 3 组、本地排名 6 组、`WorseStatus` 7 组、负 ratio 丢弃、ratio 截断、unknown 状态、无起点、过期 reset、不可表示 / 非正 end_time 3 组、空列表 2 组、精确 general 4 组、Go 解码 null 根 / 非对象根 6 组 / 类型不匹配 18 组 / null no-op / 显式 null 重置 / 重复切片合并 / 重复字段与大小写折叠 / 未知键 / int64 边界 / 非法 UTF-8 / null 元素 / 解析前缀、畸形 4 组 / 空 body、执行器 >=400 4 组 / 传输 1 组 / 2xx 3 组、代理路由 3 组、`SupportsChannel` 6 组 | `tests/AxonHub.Api.Tests/MinimaxQuotaCheckerTests.cs` | 37 + 124 |
+
+`AxonHub.Api.Tests` 由 4649 增至 4810（+161），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+8095 增至 8256。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态
+计数；下一次全量运行应以 4810 / 319 / 8256 复核。**
+
+差异：C182 由剩余 6 个 checker 收窄为 5 个；新增 C216（MiniMax 采集 HTTP 接缝、状态码分类、
+Go 解码语义与转义宿主还原）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6499,7 +6556,7 @@ C214（reset_in 推断时刻的锚点时区与读取时机）与 C215（采集 H
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），其余 6 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），其余 5 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
