@@ -61,6 +61,14 @@ public sealed class EnabledChannelSnapshot
     [Id(13)]
     public string? Policies { get; set; }
 
+    /// <summary>
+    /// Ent <c>updated_at</c> as read from PostgreSQL (UTC). Carried so the
+    /// per-channel token grain can tell a stale cache snapshot from the row a
+    /// previous refresh persisted against (§146).
+    /// </summary>
+    [Id(14)]
+    public DateTime UpdatedAt { get; set; }
+
     public static EnabledChannelSnapshot FromDescriptor(ChannelDescriptor channel) => new()
     {
         Id = channel.Id,
@@ -77,6 +85,7 @@ public sealed class EnabledChannelSnapshot
         DefaultTestModel = channel.DefaultTestModel,
         Tags = channel.Tags,
         Policies = channel.Policies,
+        UpdatedAt = channel.UpdatedAt,
     };
 
     /// <summary>Rebuilds the in-process view consumed by the load balancer.</summary>
@@ -96,6 +105,7 @@ public sealed class EnabledChannelSnapshot
         DefaultTestModel = DefaultTestModel,
         Tags = Tags,
         Policies = Policies,
+        UpdatedAt = UpdatedAt,
     };
 }
 

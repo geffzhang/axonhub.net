@@ -7430,6 +7430,66 @@ C144/C148 的写入面冻结语义不变。
 
 差异登记为 C226：集群单激活、懒加载、读者排队、无 OnSwap 资源清理、watcher / 自动禁用事件未移植。
 
+## 146. 按通道 OAuth 令牌刷新迁入 ChannelTokenGrain（A3，5 + 8 + 6 + 4 例，2026-11-09）
+
+参照：`llm/oauth/token_provider.go`（`Get` / `EnsureFresh` / `singleflight` / `OnRefreshed` /
+`StartAutoRefresh` / `runAutoRefresh` / `StopAutoRefresh`）、`internal/server/biz/channel_llm.go:1638-1741`
+（`refreshOAuthTokenWithClient` 的乐观写与冲突分支、`channelCredentialsEqual` 及 OAuth / Azure / GCP
+比较）、`internal/server/biz/channel_internal.go:66-76`（`onTokenRefreshed`）、
+`channel_llm.go:331-425 / 924-989 / 867-884`（codex / claudecode / xai_subscription 的 provider
+构造与 `setupAutoRefresh`）。
+
+参照行为（按上游 `f272549f`；冻结基线 `b8bb3421` 只有无条件写回，见 00-reference 漂移记录）：
+
+| 项 | 参照值 |
+|---|---|
+| `Get` | 缓存凭据有效（3 分钟提前过期）→ 直接返回；过期 → singleflight 刷新 |
+| `EnsureFresh` | refresh token 为空 → 不刷新；默认提前 5 分钟，窗口内刷新 |
+| 单飞 | `singleflight.Do("refresh")`，同一 provider 的并发刷新合并为一次 |
+| 写回 | `UpdateOneID(id).Where(UpdatedAtEQ(快照时间)).SetCredentials(...)`；NotFound 时重载当前行 |
+| 重试 | 当前行类型相同且凭据相等（不比较 `vertexApiKeys`）→ 用新 `updated_at` 重试同一 payload |
+| 冲突 | 胜利者同类型且 OAuth → `CredentialConflictError{winner}`；否则空冲突（provider 退休） |
+| 自动刷新 | `delay = ExpiresAt - refreshBefore`；失败后 1 分钟重试；`StopAutoRefresh` 取消 |
+
+端口实现：
+
+- 新增 `ChannelOAuthToken` / `ChannelTokenSeed` / `ChannelTokenRefreshRequest` /
+  `ChannelTokenRefreshResult` / `IChannelTokenSource` / `IChannelTokenGrain`
+  （Grains.Abstractions）：Orleans 序列化孪生；seed 携带凭据、原始 credentials 文档与行 `updated_at`。
+- 新增 `ChannelTokenGrain`（integer key = channel id）：`GetAccessTokenAsync` 采纳较新 seed 后复刻
+  `Get`；`EnsureFreshAsync` 复刻 `EnsureFresh(0)`；`OnActivateAsync` 注册 1 分钟周期 timer，tick 内做
+  窗口检查并在失败时记 warning（保留快照）；grain turn 串行化替代 singleflight；非 OAuth 胜利者令
+  grain 退休（后续读取抛 `credentials is nil`）。
+- 新增 `ChannelTokenSource`（Api）：按通道类型构造一次性 `TokenProvider`（codex / claudecode /
+  xai_subscription），`OnRefreshed` 复刻 `refreshOAuthTokenWithClient` 的乐观重试循环；
+  `ChannelCredentialsComparison` 复刻 `channelCredentialsEqual`（`ExpiresAt` 按时刻比较，scopes
+  nil==empty，跳过 `vertexApiKeys`）；非冲突持久化失败记 warning 并保留刷新后的内存凭据。
+- 新增 `ChannelTokenStore`（Persistence）：Dapper 读 + EF `ExecuteUpdateAsync` 条件写；0 行重读当前行；
+  软删行不可见 / 不可写（`ent: channel not found`）。
+- 接线：`ChannelOutboundFactory.Create` 新增可选 `IGrainFactory`，`ChatCompletionOrchestrator` 传入；
+  codex（fenno 除外）/ claudecode / xai_subscription 的 OAuth 通道用 `GrainTokenGetter`（同步
+  `GetAwaiter().GetResult()`），API key 通道不变；直接调用者（端点探测 / 通道测试）不传 grain 工厂，
+  保留本地 provider。
+- 未迁移：fenno（令牌配方不同）、github_copilot、antigravity（`refreshToken|projectID`）、
+  ModelFetcher 目录刷新、端点探测 / 通道测试（C094 / C158）。
+
+测试（5 + 8 + 6 + 4 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Llm.Tests/OAuthTokenProviderConflictTests.cs` | 5 | 冲突胜利者采纳、过期胜利者二次刷新、空胜利者退休、非冲突失败保留凭据、无 refresh token 的胜利者不重试 |
+| `tests/AxonHub.Grains.Tests/ChannelTokenGrainTests.cs` | 8 | 冷种子不刷新、过期刷新并采纳、较新快照覆盖 / 旧快照忽略、退休后抛错直到更新快照、无 refresh token 不刷新、窗口外不刷新、窗口内刷新、失败保留快照 |
+| `tests/AxonHub.Api.Tests/ChannelTokenSourceTests.cs` | 6 | 轮换凭据写回并保留无关字段、仅元数据变更重试、并发凭据变更返回胜利者、非 OAuth 行退休、持久化失败保留内存凭据、无 refresh token 不刷新 |
+| `tests/AxonHub.Persistence.Tests/ChannelTokenStoreTests.cs` | 4 | 读取、时间戳匹配写入、陈旧时间戳重读、软删不可见 / 不可写 |
+
+静态计数：`AxonHub.Llm.Tests` 由 1501 增至 1506（+5），`AxonHub.Grains.Tests` 由 1704 增至 1712（+8），
+`AxonHub.Api.Tests` 由 5434 增至 5440（+6），`AxonHub.Persistence.Tests` 由 332 增至 336（+4），
+四项目合计由 8971 增至 8994。**按项目规则未运行 lint / build / test。**
+
+差异登记为 C227：懒激活、1 分钟 timer 粒度、不可取消的 grain 刷新、EF 条件写与日志文案；
+C094 的 (2)(3)(4) 对 codex / claudecode / xai_subscription 关闭，C127 / C158 / C226 补充说明；
+写回语义局部跟进上游 `f272549f`（00-reference 漂移记录）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -7437,7 +7497,7 @@ C144/C148 的写入面冻结语义不变。
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求与提示词保护半程已由第 26、28 节闭合 | 低 | 完成（C087、C091、C092） |
 | pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面/预览未移植（C092），codex 出站的 `AllowPassThroughBody` 策略由第 29 节的 61 例 codex 用例锁定（C091 缺口关闭，见 C094） | 中 | 管理面随 C013/C014 |
-| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点运行时解析已由 §143 按 live 语义接线（`NormalizeEndpoints` / `DefaultEndpoints` / `PrimaryEndpointTransport` / `FindUserEndpoint`；codex/fenno 的 responses 与 alpha 取端点 BaseURL/Path/Transport，openai 的 h/w/compact 等家族同样取端点值；C094 item 1 收窄），残余为非 Responses 端点的家族路由与供应商路径（fenno 图片门、codex/fenno 的 compact 端点存在性、zai/doubao 家族 chat 的 Path、minimax/gemini/jina/typesafe 的路径、xai_subscription 覆盖）、OAuth `TokenProvider` 每次尝试新建、刷新不写回数据库、无后台自动刷新、无按通道代理 client、codex 响应头转发已由 §142 接线（C094 item 7 关闭）、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
+| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点运行时解析已由 §143 按 live 语义接线（`NormalizeEndpoints` / `DefaultEndpoints` / `PrimaryEndpointTransport` / `FindUserEndpoint`；codex/fenno 的 responses 与 alpha 取端点 BaseURL/Path/Transport，openai 的 h/w/compact 等家族同样取端点值；C094 item 1 收窄），残余为非 Responses 端点的家族路由与供应商路径（fenno 图片门、codex/fenno 的 compact 端点存在性、zai/doubao 家族 chat 的 Path、minimax/gemini/jina/typesafe 的路径、xai_subscription 覆盖）、OAuth `TokenProvider` 已由 §146 的 `ChannelTokenGrain` 按通道持有（刷新写回、后台预刷新、冲突接管；C094 item 2/3/4 对 codex / claudecode / xai_subscription 关闭，fenno / github_copilot / antigravity / ModelFetcher / 端点探测仍每次新建）、无按通道代理 client、codex 响应头转发已由 §142 接线（C094 item 7 关闭）、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |

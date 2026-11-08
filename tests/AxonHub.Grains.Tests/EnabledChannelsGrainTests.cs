@@ -310,6 +310,7 @@ public sealed class EnabledChannelSnapshotTests
             Name = "round-trip",
             OrderingWeight = 7,
             CreatedAt = new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc),
+            UpdatedAt = new DateTime(2026, 3, 4, 5, 6, 8, DateTimeKind.Utc),
             Type = "anthropic",
             BaseUrl = "https://api.example.com",
             Credentials = """{"api_key":"sk-a","oauth_token":"t"}""",

@@ -131,6 +131,7 @@ public static class ChannelMapping
             Name = record.Name,
             OrderingWeight = record.OrderingWeight,
             CreatedAt = record.CreatedAt,
+            UpdatedAt = record.UpdatedAt,
             Type = record.Type,
             BaseUrl = record.BaseUrl,
             Credentials = record.Credentials,

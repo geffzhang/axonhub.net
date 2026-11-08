@@ -91,6 +91,7 @@ public sealed class ChannelEndpointDetectService
         {
             ChannelId = entity.Id,
             ChannelName = entity.Name,
+            UpdatedAt = entity.UpdatedAt,
             Type = entity.Type,
             BaseUrl = entity.BaseUrl,
             Credentials = entity.Credentials,

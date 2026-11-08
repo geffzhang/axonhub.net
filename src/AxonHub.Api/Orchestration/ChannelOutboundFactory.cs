@@ -36,6 +36,7 @@ using AxonHub.Llm.Transformer.Xai;
 using AxonHub.Llm.Transformer.Xai.Subscription;
 using AxonHub.Llm.Transformer.Zai;
 using AxonHub.Llm.Transformer.Zenmux;
+using Orleans;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -242,11 +243,18 @@ public static class ChannelOutboundFactory
     /// reference passes the channel's proxy-aware client; the port's channels
     /// have no proxy configuration yet, so the API's shared executor is used.
     /// </param>
+    /// <param name="grainFactory">
+    /// When present, the codex, claudecode and xai_subscription OAuth channels
+    /// take their token from <see cref="IChannelTokenGrain"/> instead of a
+    /// throwaway per-attempt <see cref="TokenProvider"/> (§146). Direct callers
+    /// (endpoint detection, tests) leave it null and keep the local provider.
+    /// </param>
     public static IOutboundTransformer Create(
         ChannelCandidate candidate,
         LlmRequest request,
         DateTimeOffset now,
-        IExecutor? tokenRefreshExecutor = null)
+        IExecutor? tokenRefreshExecutor = null,
+        IGrainFactory? grainFactory = null)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(request);
@@ -389,6 +397,7 @@ public static class ChannelOutboundFactory
                     request,
                     provider,
                     tokenRefreshExecutor,
+                    grainFactory,
                     apiFormat,
                     selectedEndpoint),
             FennoChannelType when apiFormat is ApiFormats.OpenAIResponse
@@ -400,6 +409,7 @@ public static class ChannelOutboundFactory
                     request,
                     provider,
                     tokenRefreshExecutor,
+                    grainFactory,
                     apiFormat,
                     selectedEndpoint),
             OpenAiChannelType when apiFormat is ApiFormats.OpenAIResponse
@@ -493,7 +503,8 @@ public static class ChannelOutboundFactory
             XaiSubscriptionChannelType => CreateXaiSubscriptionOutbound(
                 candidate,
                 tokenRefreshExecutor,
-                request),
+                request,
+                grainFactory),
             // channel_llm.go:885-893: longcat_anthropic speaks Anthropic
             // Messages through the LongCat platform (Bearer auth).
             LongcatAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
@@ -566,7 +577,8 @@ public static class ChannelOutboundFactory
             ClaudeCodeChannelType => CreateClaudeCodeOutbound(
                 candidate,
                 provider,
-                tokenRefreshExecutor),
+                tokenRefreshExecutor,
+                grainFactory),
             // channel_llm.go:1183-1194: one outbound dispatching by model family.
             OpenCodeGoChannelType => new OpenCodeOutboundTransformer(new OpenCodeOutboundConfig
             {
@@ -1327,7 +1339,8 @@ public static class ChannelOutboundFactory
     private static ClaudeCodeOutboundTransformer CreateClaudeCodeOutbound(
         ChannelCandidate candidate,
         ChannelApiKeyProvider apiKeyProvider,
-        IExecutor? tokenRefreshExecutor)
+        IExecutor? tokenRefreshExecutor,
+        IGrainFactory? grainFactory)
     {
         var baseUrl = candidate.BaseUrl ?? string.Empty;
         // strconv.Itoa(c.ID): the stable identity behind the deterministic
@@ -1348,13 +1361,20 @@ public static class ChannelOutboundFactory
 
         var credentials = ParseOAuthCredentials(candidate, "claudecode");
 
-        return new ClaudeCodeOutboundTransformer(new ClaudeCodeParams
-        {
-            TokenProvider = ClaudeCodeTokenProvider.Create(new TokenProviderParams
+        // The reference owns one provider per channel; the grain owns it here
+        // (§146). Without a grain factory (endpoint detection, tests) the
+        // throwaway provider keeps the direct path working.
+        ITokenGetter tokenProvider = grainFactory is not null
+            ? new GrainTokenGetter(grainFactory, CreateTokenSeed(candidate, credentials))
+            : ClaudeCodeTokenProvider.Create(new TokenProviderParams
             {
                 Credentials = credentials,
                 HttpClient = tokenRefreshExecutor,
-            }),
+            });
+
+        return new ClaudeCodeOutboundTransformer(new ClaudeCodeParams
+        {
+            TokenProvider = tokenProvider,
             BaseUrl = baseUrl,
             IsOfficial = true,
             AccountIdentity = accountIdentity,
@@ -1500,7 +1520,8 @@ public static class ChannelOutboundFactory
     private static SubscriptionOutboundTransformer CreateXaiSubscriptionOutbound(
         ChannelCandidate candidate,
         IExecutor? tokenRefreshExecutor,
-        LlmRequest request)
+        LlmRequest request,
+        IGrainFactory? grainFactory)
     {
         OAuthCredentials credentials;
         try
@@ -1515,11 +1536,13 @@ public static class ChannelOutboundFactory
                 ex);
         }
 
-        var tokens = SubscriptionToken.NewTokenProvider(new SubscriptionTokenProviderParams
-        {
-            Credentials = credentials,
-            HttpClient = tokenRefreshExecutor,
-        });
+        ITokenGetter tokens = grainFactory is not null
+            ? new GrainTokenGetter(grainFactory, CreateTokenSeed(candidate, credentials))
+            : SubscriptionToken.NewTokenProvider(new SubscriptionTokenProviderParams
+            {
+                Credentials = credentials,
+                HttpClient = tokenRefreshExecutor,
+            });
 
         try
         {
@@ -1553,6 +1576,7 @@ public static class ChannelOutboundFactory
         LlmRequest request,
         ChannelApiKeyProvider apiKeyProvider,
         IExecutor? tokenRefreshExecutor,
+        IGrainFactory? grainFactory,
         string apiFormat,
         ChannelEndpoint? endpoint)
     {
@@ -1584,7 +1608,11 @@ public static class ChannelOutboundFactory
 
         return new CodexOutboundTransformer(new CodexOutboundParams
         {
-            TokenProvider = CreateCodexTokenProvider(candidate, apiKeyProvider, tokenRefreshExecutor),
+            TokenProvider = CreateCodexTokenProvider(
+                candidate,
+                apiKeyProvider,
+                tokenRefreshExecutor,
+                grainFactory),
             BaseUrl = baseUrl,
             Transport = transport,
             AlphaSearchPath = alphaSearchPath,
@@ -1637,7 +1665,8 @@ public static class ChannelOutboundFactory
     private static ITokenGetter CreateCodexTokenProvider(
         ChannelCandidate candidate,
         ChannelApiKeyProvider apiKeyProvider,
-        IExecutor? tokenRefreshExecutor)
+        IExecutor? tokenRefreshExecutor,
+        IGrainFactory? grainFactory)
     {
         if (!ChannelCredentials.IsOAuth(candidate.Credentials))
         {
@@ -1646,12 +1675,36 @@ public static class ChannelOutboundFactory
 
         var credentials = ParseOAuthCredentials(candidate, "codex");
 
+        // Fenno shares the codex outbound but not the codex token recipe, so it
+        // keeps its throwaway provider (§146).
+        if (grainFactory is not null && candidate.Type == CodexChannelType)
+        {
+            return new GrainTokenGetter(grainFactory, CreateTokenSeed(candidate, credentials));
+        }
+
         return new TokenProvider(new TokenProviderParams
         {
             Credentials = credentials,
             HttpClient = tokenRefreshExecutor,
         });
     }
+
+    /// <summary>
+    /// The snapshot handed to the per-channel token grain: the credentials the
+    /// outbound resolved, the raw credentials document they came from, and the
+    /// row timestamp the refresh's optimistic write is based on (§146).
+    /// </summary>
+    private static ChannelTokenSeed CreateTokenSeed(
+        ChannelCandidate candidate,
+        OAuthCredentials credentials)
+        => new()
+        {
+            ChannelId = candidate.ChannelId,
+            ChannelType = candidate.Type,
+            Credentials = ChannelOAuthTokenMapping.ToToken(credentials),
+            CredentialsJson = candidate.Credentials,
+            UpdatedAt = candidate.UpdatedAt,
+        };
 
     /// <summary>
     /// Builds the shared Responses outbound with the per-attempt session seam.

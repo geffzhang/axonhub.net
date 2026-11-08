@@ -591,9 +591,9 @@ public sealed class ChatCompletionOrchestrator
         bool ensureUsage,
         CancellationToken cancellationToken)
     {
-        // Codex OAuth channels refresh their token through the shared executor;
-        // the reference uses the channel's proxy-aware HTTP client instead
-        // (proxy configuration is not ported, C094).
+        // OAuth channels take their token from the per-channel token grain; the
+        // refresh HTTP goes through the shared executor because the reference's
+        // proxy-aware client is not ported (C094).
         var outbound = new PersistentOutboundTransformer(
             candidates,
             _timeProvider,
@@ -602,7 +602,8 @@ public sealed class ChatCompletionOrchestrator
                 candidate,
                 request,
                 now,
-                _executor));
+                _executor,
+                _grainFactory));
 
         // orchestrator.go mounts injectPrompts then protectPrompts as inbound
         // middlewares; the reference reads the enabled prompts and rules from

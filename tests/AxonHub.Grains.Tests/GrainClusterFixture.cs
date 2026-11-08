@@ -31,11 +31,15 @@ public sealed class GrainClusterFixture : IAsyncLifetime
 
     public ChannelLimiterManager ChannelLimiterManager { get; } = new();
 
+    /// <summary>The silo's token-refresh half, driven by the token grain tests.</summary>
+    public FakeChannelTokenSource TokenSource { get; } = new();
+
     public async Task InitializeAsync()
     {
         GrainTestSiloConfigurator.ChannelProvider = Channels;
         GrainTestSiloConfigurator.RateLimitTracker = RateLimitTracker;
         GrainTestSiloConfigurator.ChannelLimiterManager = ChannelLimiterManager;
+        GrainTestSiloConfigurator.TokenSource = TokenSource;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -50,6 +54,7 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.ChannelProvider = null;
         GrainTestSiloConfigurator.RateLimitTracker = null;
         GrainTestSiloConfigurator.ChannelLimiterManager = null;
+        GrainTestSiloConfigurator.TokenSource = null;
     }
 }
 
@@ -60,6 +65,8 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
     public static ChannelRequestTracker? RateLimitTracker { get; set; }
 
     public static ChannelLimiterManager? ChannelLimiterManager { get; set; }
+
+    public static FakeChannelTokenSource? TokenSource { get; set; }
 
     public void Configure(ISiloBuilder siloBuilder)
     {
@@ -72,6 +79,7 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton(TimeProvider.System);
             services.AddSingleton(RateLimitTracker!);
             services.AddSingleton(ChannelLimiterManager!);
+            services.AddSingleton<IChannelTokenSource>(TokenSource!);
         });
     }
 }
@@ -128,5 +136,51 @@ public sealed class FakeEnabledChannelProvider : IEnabledChannelProvider, IEnabl
         return LatestUpdatedAtFailure is null
             ? Task.FromResult(LatestUpdatedAt)
             : Task.FromException<DateTime?>(LatestUpdatedAtFailure);
+    }
+}
+
+/// <summary>
+/// Stands in for the API-side <c>ChannelTokenSource</c>: records the requests
+/// the token grain makes and answers through <see cref="OnRefresh"/> (default:
+/// return the snapshot unchanged, a no-op refresh).
+/// </summary>
+public sealed class FakeChannelTokenSource : IChannelTokenSource
+{
+    public List<ChannelTokenRefreshRequest> Requests { get; } = [];
+
+    public Func<ChannelTokenRefreshRequest, ChannelTokenRefreshResult>? OnRefresh { get; set; }
+
+    public Exception? Failure { get; set; }
+
+    public void Reset()
+    {
+        Requests.Clear();
+        OnRefresh = null;
+        Failure = null;
+    }
+
+    public Task<ChannelTokenRefreshResult> RefreshAsync(
+        ChannelTokenRefreshRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Requests.Add(request);
+
+        if (Failure is not null)
+        {
+            return Task.FromException<ChannelTokenRefreshResult>(Failure);
+        }
+
+        if (OnRefresh is not null)
+        {
+            return Task.FromResult(OnRefresh(request));
+        }
+
+        return Task.FromResult(new ChannelTokenRefreshResult
+        {
+            Credentials = request.Credentials,
+            CredentialsJson = request.CredentialsJson,
+            UpdatedAt = request.UpdatedAt,
+        });
     }
 }

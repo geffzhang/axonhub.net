@@ -12,7 +12,20 @@ public interface ITokenGetter
     OAuthCredentials Get(CancellationToken cancellationToken);
 }
 
-/// <summary>Port of oauth.TokenProviderParams (llm/oauth/token_provider.go:55-65).</summary>
+/// <summary>
+/// Port of oauth.CredentialConflictError (llm/oauth/token_provider.go:55-64):
+/// persistence found newer channel credentials.
+/// <see cref="Credentials"/> is the winner; <see langword="null"/> means the
+/// channel is no longer OAuth and the refreshing provider must retire its
+/// automatic refresh loop.
+/// </summary>
+public sealed class CredentialConflictException(OAuthCredentials? credentials)
+    : Exception("OAuth credentials changed while refreshing")
+{
+    public OAuthCredentials? Credentials { get; } = credentials;
+}
+
+/// <summary>Port of oauth.TokenProviderParams (llm/oauth/token_provider.go:71-81).</summary>
 public sealed class TokenProviderParams
 {
     public OAuthCredentials? Credentials { get; set; }
@@ -24,7 +37,12 @@ public sealed class TokenProviderParams
 
     public string UserAgent { get; set; } = string.Empty;
 
-    /// <summary>Called after a refresh succeeds; a failure is logged and ignored.</summary>
+    /// <summary>
+    /// Called after a refresh succeeds. Returning
+    /// <see cref="CredentialConflictException"/> makes the provider adopt the
+    /// winner; any other failure is logged and ignored, keeping the refreshed
+    /// credentials in memory.
+    /// </summary>
     public Func<CancellationToken, OAuthCredentials, Exception?>? OnRefreshed { get; set; }
 
     /// <summary>Token-endpoint encoding; defaults to <see cref="FormEncodedStrategy"/>.</summary>
@@ -44,7 +62,11 @@ public sealed class TokenProvider : ITokenGetter
     private readonly IExecutor? _httpClient;
     private readonly OAuthUrls _oauthUrls;
     private readonly IExchangeStrategy _strategy;
-    private readonly SingleFlight<OAuthCredentials> _singleFlight = new();
+    /// <summary>
+    /// token_provider.go:41-42: both Get and EnsureFresh share one singleflight
+    /// key. The value carries the reference's refreshResult.retryExpired flag.
+    /// </summary>
+    private readonly SingleFlight<(OAuthCredentials Credentials, bool RetryExpired)> _singleFlight = new();
     private readonly object _sync = new();
     private readonly Func<CancellationToken, OAuthCredentials, Exception?>? _onRefreshed;
     private readonly object _autoSync = new();
@@ -141,7 +163,22 @@ public sealed class TokenProvider : ITokenGetter
             return creds;
         }
 
-        return _singleFlight.Do("refresh", () => RefreshWithinSingleFlight(cancellationToken));
+        // token_provider.go:196-257: a conflict winner that is still expired is
+        // refreshed again, one loop per conflict.
+        while (true)
+        {
+            var (fresh, retryExpired) = _singleFlight.Do(
+                "refresh",
+                () => RefreshWithinSingleFlight(cancellationToken));
+
+            if (retryExpired && fresh.RefreshToken.Length != 0 && fresh.IsExpired(DateTimeOffset.UtcNow))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                continue;
+            }
+
+            return fresh;
+        }
     }
 
     /// <summary>Port of <c>(*TokenProvider).EnsureFresh</c>: proactive refresh window.</summary>
@@ -172,9 +209,21 @@ public sealed class TokenProvider : ITokenGetter
             return creds;
         }
 
-        return _singleFlight.Do(
-            "refresh",
-            () => RefreshWithinSingleFlight(cancellationToken, refreshBefore));
+        // token_provider.go:284-351: same conflict retry as Get.
+        while (true)
+        {
+            var (fresh, retryExpired) = _singleFlight.Do(
+                "refresh",
+                () => RefreshWithinSingleFlight(cancellationToken, refreshBefore));
+
+            if (retryExpired && fresh.RefreshToken.Length != 0 && fresh.IsExpired(DateTimeOffset.UtcNow))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                continue;
+            }
+
+            return fresh;
+        }
     }
 
     /// <summary>Port of <c>(*TokenProvider).StartAutoRefresh</c>.</summary>
@@ -231,7 +280,7 @@ public sealed class TokenProvider : ITokenGetter
         }
     }
 
-    private OAuthCredentials RefreshWithinSingleFlight(
+    private (OAuthCredentials Credentials, bool RetryExpired) RefreshWithinSingleFlight(
         CancellationToken cancellationToken,
         TimeSpan? refreshBefore = null)
     {
@@ -247,7 +296,7 @@ public sealed class TokenProvider : ITokenGetter
         {
             if (current.RefreshToken.Length == 0)
             {
-                return current;
+                return (current, false);
             }
 
             var n = DateTimeOffset.UtcNow;
@@ -255,29 +304,43 @@ public sealed class TokenProvider : ITokenGetter
                 || n.Add(window) > current.ExpiresAt;
             if (!need)
             {
-                return current;
+                return (current, false);
             }
         }
         else if (!current.IsExpired(DateTimeOffset.UtcNow))
         {
-            return current;
+            return (current, false);
         }
 
-        var fresh = Refresh(cancellationToken, current);
+        OAuthCredentials? fresh = Refresh(cancellationToken, current);
+        var retryExpired = false;
+
+        if (onRefreshed is not null)
+        {
+            // token_provider.go:217-228: a credential conflict adopts the
+            // winner (possibly nil, retiring the provider); any other
+            // persistence failure is logged and the refreshed credentials stay
+            // in memory.
+            var error = onRefreshed(cancellationToken, fresh);
+            if (error is CredentialConflictException conflict)
+            {
+                fresh = conflict.Credentials;
+                retryExpired = fresh is not null;
+            }
+        }
 
         lock (_sync)
         {
             _creds = fresh;
         }
 
-        if (onRefreshed is not null)
+        if (fresh is null)
         {
-            // The reference logs a persistence failure and keeps the refreshed
-            // credentials in memory.
-            _ = onRefreshed(cancellationToken, fresh);
+            StopAutoRefresh();
+            throw new InvalidOperationException("credentials is nil");
         }
 
-        return fresh;
+        return (fresh, retryExpired);
     }
 
     /// <summary>Port of <c>(*TokenProvider).refresh</c>.</summary>

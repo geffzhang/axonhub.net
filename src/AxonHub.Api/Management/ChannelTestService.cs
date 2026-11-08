@@ -994,6 +994,7 @@ public sealed class ChannelTestService(
             ActualModel = entry.ActualModel,
             OrderingWeight = descriptor.OrderingWeight,
             Score = 0,
+            UpdatedAt = descriptor.UpdatedAt,
             Type = descriptor.Type,
             BaseUrl = descriptor.BaseUrl,
             Credentials = descriptor.Credentials,

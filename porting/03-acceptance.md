@@ -295,6 +295,19 @@ API 中间件经 `IChannelRateLimitRecorder` 写穿、`ChannelPoolGrain` 从 `Ch
 集群单激活、懒加载、读者排队与资源清理缺口登记为 C226。Grain 测试的 cluster fixture 改为
 collection fixture，避免静态注入的假 provider 在并发建 cluster 时互相覆盖。
 
+§146 追加 23 个用例（`AxonHub.Llm.Tests` 5：`OAuthTokenProviderConflictTests`；
+`AxonHub.Grains.Tests` 8：`ChannelTokenGrainTests`；`AxonHub.Api.Tests` 6：`ChannelTokenSourceTests`；
+`AxonHub.Persistence.Tests` 4：`ChannelTokenStoreTests`），同样按项目规则未运行 lint / build / test；
+§146 落地后的静态计数为 `AxonHub.Llm.Tests` 1506、`AxonHub.Grains.Tests` 1712、
+`AxonHub.Api.Tests` 5440、`AxonHub.Persistence.Tests` 336，四项目合计 8994，
+下一次全量运行应以该数字复核。该切片不新增表或 SQL；OAuth 令牌状态按通道驻留
+`ChannelTokenGrain`（懒种子、grain 串行替代 singleflight、5 分钟窗口、1 分钟周期器、
+冲突胜利者采纳 / 非 OAuth 退休），刷新写回经 `IChannelTokenStore` 的 `updated_at` 乐观条件写，
+codex（fenno 除外）/ claudecode / xai_subscription 的出站经 `GrainTokenGetter` 读取；
+fenno / github_copilot / antigravity / ModelFetcher / 端点探测仍用本地 provider；
+写回语义局部跟进上游 `f272549f`（冻结基线只有无条件写回），漂移记录见 00-reference，
+差异登记为 C227（accepted），C094 item (2)(3)(4) 对三类通道关闭。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

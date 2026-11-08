@@ -261,6 +261,7 @@ public sealed class VideoService(
             {
                 ChannelId = channel.Id,
                 ChannelName = channel.Name,
+                UpdatedAt = channel.UpdatedAt,
                 Type = channel.Type,
                 BaseUrl = channel.BaseUrl,
                 Credentials = channel.Credentials,

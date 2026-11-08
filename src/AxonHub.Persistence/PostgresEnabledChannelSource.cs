@@ -35,6 +35,7 @@ public sealed class PostgresEnabledChannelSource(IAxonHubDbContextFactory dbFact
             OrderingWeight = channel.OrderingWeight,
             // Npgsql reads timestamptz as a UTC DateTime.
             CreatedAt = channel.CreatedAt,
+            UpdatedAt = channel.UpdatedAt,
             Type = channel.Type,
             BaseUrl = channel.BaseUrl,
             Credentials = channel.Credentials,

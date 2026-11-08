@@ -22,6 +22,15 @@ public sealed record ChannelDescriptor
     /// </summary>
     public DateTime CreatedAt { get; init; }
 
+    /// <summary>
+    /// Ent <c>updated_at</c> (timestamptz). The reference's TokenProvider keeps
+    /// a channel snapshot and persists refreshed OAuth credentials with an
+    /// optimistic <c>WHERE updated_at = snapshot.updated_at</c> predicate
+    /// (channel_llm.go:1670); the candidate carries the cached value so the
+    /// token grain can order a stale cache entry against the row it last saw.
+    /// </summary>
+    public DateTime UpdatedAt { get; init; }
+
     /// <summary>Ent channel type, e.g. <c>openai</c>.</summary>
     public string Type { get; init; } = string.Empty;
 

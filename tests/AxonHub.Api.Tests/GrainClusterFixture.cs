@@ -45,6 +45,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
 
     public ChannelLimiterManager ChannelLimiterManager { get; } = new();
 
+    /// <summary>The silo's token-refresh half (ChannelTokenGrain dependency).</summary>
+    public FakeChannelTokenSource TokenSource { get; } = new();
+
     /// <summary>
     /// The orchestrator's model-association selector. The reference's tests
     /// mark the context with <c>authz.WithTestBypass</c>, which allows every
@@ -59,6 +62,7 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.ChannelProvider = Channels;
         GrainTestSiloConfigurator.RateLimitTracker = RateLimitTracker;
         GrainTestSiloConfigurator.ChannelLimiterManager = ChannelLimiterManager;
+        GrainTestSiloConfigurator.TokenSource = TokenSource;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -73,6 +77,7 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.ChannelProvider = null;
         GrainTestSiloConfigurator.RateLimitTracker = null;
         GrainTestSiloConfigurator.ChannelLimiterManager = null;
+        GrainTestSiloConfigurator.TokenSource = null;
     }
 }
 
@@ -84,6 +89,8 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static ChannelLimiterManager? ChannelLimiterManager { get; set; }
 
+    public static FakeChannelTokenSource? TokenSource { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
@@ -92,8 +99,10 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
         {
             services.AddSingleton<IEnabledChannelProvider>(ChannelProvider!);
             services.AddSingleton<IEnabledChannelSource>(ChannelProvider!);
+            services.AddSingleton(TimeProvider.System);
             services.AddSingleton(RateLimitTracker!);
             services.AddSingleton(ChannelLimiterManager!);
+            services.AddSingleton<IChannelTokenSource>(TokenSource!);
         });
     }
 }
@@ -115,4 +124,49 @@ public sealed class FakeEnabledChannelProvider : IEnabledChannelProvider, IEnabl
 
     public Task<DateTime?> GetLatestUpdatedAtAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(LatestUpdatedAt);
+}
+
+/// <summary>
+/// Stands in for the API-side <c>ChannelTokenSource</c> so the silo can
+/// activate <c>ChannelTokenGrain</c> without HTTP or a database.
+/// </summary>
+public sealed class FakeChannelTokenSource : IChannelTokenSource
+{
+    public List<ChannelTokenRefreshRequest> Requests { get; } = [];
+
+    public Func<ChannelTokenRefreshRequest, ChannelTokenRefreshResult>? OnRefresh { get; set; }
+
+    public Exception? Failure { get; set; }
+
+    public void Reset()
+    {
+        Requests.Clear();
+        OnRefresh = null;
+        Failure = null;
+    }
+
+    public Task<ChannelTokenRefreshResult> RefreshAsync(
+        ChannelTokenRefreshRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Requests.Add(request);
+
+        if (Failure is not null)
+        {
+            return Task.FromException<ChannelTokenRefreshResult>(Failure);
+        }
+
+        if (OnRefresh is not null)
+        {
+            return Task.FromResult(OnRefresh(request));
+        }
+
+        return Task.FromResult(new ChannelTokenRefreshResult
+        {
+            Credentials = request.Credentials,
+            CredentialsJson = request.CredentialsJson,
+            UpdatedAt = request.UpdatedAt,
+        });
+    }
 }

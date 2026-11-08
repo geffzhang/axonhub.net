@@ -57,6 +57,11 @@ builder.Services.AddSingleton<IEnabledChannelSource, PostgresEnabledChannelSourc
 builder.Services.AddSingleton<IEnabledChannelProvider, GrainEnabledChannelProvider>();
 builder.Services.AddSingleton<IEnabledChannelsCacheRefresher, GrainEnabledChannelsCacheRefresher>();
 
+// Per-channel OAuth token refresher: ChannelTokenGrain owns the provider state,
+// ChannelTokenStore is its optimistic-write half, and ChannelTokenSource builds
+// the type-specific token recipe and persists a refresh (§146).
+builder.Services.AddSingleton<IChannelTokenStore, ChannelTokenStore>();
+
 builder.Services.AddSingleton(TimeProvider.System);
 
 // The reference's HTTP client has no request timeout (llm/httpclient/client.go);
@@ -71,6 +76,10 @@ builder.Services.AddSingleton(static _ => new HttpExecutor(new HttpClient(new So
     Timeout = Timeout.InfiniteTimeSpan,
 }));
 builder.Services.AddSingleton<IExecutor>(static services => services.GetRequiredService<HttpExecutor>());
+
+// The refresh HTTP goes through the shared executor: the reference uses the
+// channel's proxy-aware client, which is not ported (C094).
+builder.Services.AddSingleton<IChannelTokenSource, ChannelTokenSource>();
 
 builder.Services.AddSingleton<IInboundTransformer, OpenAiInboundTransformer>();
 

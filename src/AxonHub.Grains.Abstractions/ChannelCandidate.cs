@@ -156,6 +156,15 @@ public sealed class ChannelCandidate
     /// </summary>
     [Id(24)]
     public string? Policies { get; set; }
+
+    /// <summary>
+    /// Ent <c>updated_at</c> of the channel row the candidate was built from.
+    /// The reference's per-channel TokenProvider snapshots this value and uses
+    /// it as the optimistic-concurrency predicate when persisting a refreshed
+    /// OAuth token (channel_llm.go:1670); §146 carries it to the token grain.
+    /// </summary>
+    [Id(25)]
+    public DateTime UpdatedAt { get; set; }
 }
 
 /// <summary>
