@@ -112,8 +112,26 @@ public interface IQuotaResetter
 /// Port of provider_quota.ErrInvalidCredentials: credentials that can no longer
 /// produce a trustworthy quota response, so cached data must be discarded.
 /// </summary>
-public class InvalidProviderQuotaCredentialsException()
-    : Exception("provider quota credentials are invalid");
+public class InvalidProviderQuotaCredentialsException : Exception
+{
+    private const string SentinelMessage = "provider quota credentials are invalid";
+
+    /// <summary>The bare sentinel, matching <c>errors.New("provider quota credentials are invalid")</c>.</summary>
+    public InvalidProviderQuotaCredentialsException()
+        : base(SentinelMessage)
+    {
+    }
+
+    /// <summary>
+    /// Port of <c>fmt.Errorf("%w: &lt;detail&gt;", ErrInvalidCredentials)</c>: the
+    /// sentinel text plus the detail, so <see cref="GoErrors.As{T}"/> still
+    /// classifies the failure while the reference message survives.
+    /// </summary>
+    public InvalidProviderQuotaCredentialsException(string detail)
+        : base(SentinelMessage + ": " + detail)
+    {
+    }
+}
 
 /// <summary>Port of provider_quota.ErrResetUnsupported.</summary>
 public class ProviderQuotaResetUnsupportedException()

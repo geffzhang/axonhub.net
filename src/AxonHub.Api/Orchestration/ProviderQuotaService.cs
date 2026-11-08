@@ -1035,7 +1035,7 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
 
         if (ChannelValidation.IsCommandCodeChannelType(type))
         {
-            return HasCommandCodeQuotaCredentials(channel);
+            return CommandCodeQuotaChecker.HasQuotaCredentials(channel);
         }
 
         if (type is "ollama" or "ollama_anthropic")
@@ -1055,57 +1055,6 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
         var value = apiKey ?? string.Empty;
         var trimmed = value.Trim();
         return trimmed.StartsWith('{') && value.Contains("access_token", StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Port of provider_quota.HasCommandCodeQuotaCredentials
-    /// (commandcode_checker.go:110-121).
-    /// </summary>
-    private static bool HasCommandCodeQuotaCredentials(ChannelRecord channel)
-    {
-        if (CommandCodeApiKey(channel).Length > 0)
-        {
-            return true;
-        }
-
-        var cookie = CommandCodeCookie(channel, out var error);
-        return error is not null || cookie.Length > 0;
-    }
-
-    /// <summary>Port of commandCodeAPIKey (commandcode_checker.go:83-93).</summary>
-    private static string CommandCodeApiKey(ChannelRecord channel)
-    {
-        foreach (var candidate in ChannelCredentials.GetAllApiKeys(channel.Credentials))
-        {
-            var trimmed = candidate.Trim();
-            if (trimmed.Length > 0)
-            {
-                return trimmed;
-            }
-        }
-
-        return string.Empty;
-    }
-
-    /// <summary>Port of commandCodeCookie (commandcode_checker.go:95-108).</summary>
-    private static string CommandCodeCookie(ChannelRecord channel, out string? error)
-    {
-        error = null;
-        var settings = ParseSettingsLenient(channel.Settings);
-        var raw = settings?.ProviderQuota?.CommandCode?.AuthCookie?.Trim() ?? string.Empty;
-        if (raw.Length == 0)
-        {
-            return string.Empty;
-        }
-
-        var normalizeError = ChannelValidation.NormalizeCommandCodeCookie(raw, out var normalized);
-        if (normalizeError is not null)
-        {
-            error = normalizeError;
-            return string.Empty;
-        }
-
-        return normalized;
     }
 
     /// <summary>Port of provider_quota.HasOllamaQuotaCredentials (ollama_checker.go:80-86).</summary>

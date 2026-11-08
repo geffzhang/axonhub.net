@@ -257,8 +257,8 @@ builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
 // biz/provider_quota_settings.go, biz/channel_provider_quota_hook.go): the
 // per-channel quota status table, the collection loop and its five-minute UTC
 // schedule, the synchronous routing-gate snapshot and the settings surface.
-// The collection core is ported; the remaining two provider checkers
-// arrive in follow-up slices (C182), so those providers reach the reference's
+// The collection core is ported; the remaining one provider checker
+// arrives in a follow-up slice (C182), so those providers reach the reference's
 // "No checker for provider" branch. The service is a singleton because the
 // routing gate reads its cache synchronously; every database operation runs in
 // its own DI scope. ProviderQuotaService's startup cache load (the reference
@@ -295,9 +295,12 @@ builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaChecke
 // and provider_quota.go:470-472 the ZhiPu checker (open.bigmodel.cn's per-key
 // quota entries folded into rolling five-hour and weekly windows),
 // provider_quota.go:474-476 the Zai checker (the fixed api.z.ai host sharing
-// the ZhiPu-family collector) and provider_quota.go:478-480 the Charm Hyper
-// checker (the /v1/credits balance on the channel's host). Checkers are
-// stateless singletons sharing the process HTTP executor and the
+// the ZhiPu-family collector), provider_quota.go:478-480 the Charm Hyper
+// checker (the /v1/credits balance on the channel's host) and
+// provider_quota.go:392 / 410-412 the Command Code checker (the alpha billing
+// endpoints with the account key, degrading to the Studio cookie's internal
+// endpoints).
+// Checkers are stateless singletons sharing the process HTTP executor and the
 // channel-proxy factory.
 builder.Services.AddSingleton<ClaudeCodeQuotaChecker>();
 builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
@@ -400,6 +403,12 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
     static services => new ProviderQuotaCheckerRegistration(
         "charm_hyper",
         services.GetRequiredService<CharmHyperQuotaChecker>()));
+
+builder.Services.AddSingleton<CommandCodeQuotaChecker>();
+builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
+    static services => new ProviderQuotaCheckerRegistration(
+        "commandcode",
+        services.GetRequiredService<CommandCodeQuotaChecker>()));
 
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(
