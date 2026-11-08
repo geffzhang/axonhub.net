@@ -68,6 +68,38 @@ public sealed class ChannelModelPriceStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task GetByIdReturnsOnlyLiveRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var channels = new ChannelStore(context);
+        var store = new ChannelModelPriceStore(context);
+
+        var channelId = await channels.CreateAsync(NewChannel("price-by-id"));
+        var liveId = await store.CreateAsync(NewPrice(channelId, "gpt-4o", "ref-by-id-live"));
+        var deletedId = await store.CreateAsync(
+            NewPrice(channelId, "gpt-4o-mini", "ref-by-id-deleted"));
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"channel_model_prices\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, Id = deletedId });
+        }
+
+        // ChannelModelPriceVersion.channelModelPrice and
+        // ChannelModelPrice.channel are Only lookups: a soft-deleted or
+        // missing row is null, not a row.
+        var live = await store.GetByIdAsync(liveId);
+        Assert.NotNull(live);
+        Assert.Equal(liveId, live.Id);
+
+        Assert.Null(await store.GetByIdAsync(deletedId));
+        Assert.Null(await store.GetByIdAsync(404_404));
+    }
+
+    [Fact]
     public async Task EnabledPricesRequireALiveEnabledChannel()
     {
         await using var db = new TestDatabase(fixture);

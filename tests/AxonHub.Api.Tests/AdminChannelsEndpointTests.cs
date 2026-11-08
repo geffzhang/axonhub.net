@@ -25,6 +25,9 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
     private static readonly string[] AllChannelTypeNames = ["openai", "codex", "cloudflare"];
 
     private readonly FakeChannelAdminStore _channels = new();
+    private readonly FakeChannelPriceReadStore _prices = new();
+    private readonly FakeUserAdminStore _users = new();
+    private readonly FakeRoleStore _roles = new();
     private readonly ChannelLimiterManager _limiters = new();
     private readonly FakeProviderQuotaStatusStore _quotaStatuses = new();
     private readonly ProviderQuotaSettingsCache _quotaSettingsCache = new();
@@ -41,13 +44,30 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
         builder.Services.AddAxonHubGraphQL();
         _gate.Register(builder.Services);
         builder.Services.AddSingleton<IChannelAdminStore>(_channels);
+        builder.Services.AddSingleton<IChannelModelPriceStore>(_prices);
+        builder.Services.AddSingleton<IUserAdminStore>(_users);
+        builder.Services.AddSingleton<IRoleStore>(_roles);
+        builder.Services.AddScoped<ChannelPrivacy>();
         builder.Services.AddSingleton(_limiters);
-        builder.Services.AddSingleton<ChannelQueryService>();
+        builder.Services.AddScoped<ChannelQueryService>();
         builder.Services.AddSingleton<IProviderQuotaStatusStore>(_quotaStatuses);
         builder.Services.AddSingleton(_quotaSettingsCache);
         builder.Services.AddScoped<
             IProviderQuotaCollectionSettingsService,
             ProviderQuotaCollectionSettingsService>();
+        _users.RolesSource = _roles;
+
+        // The gate's JWT user (id 9, owner) is the caller every fixture client
+        // sends; the channel privacy rules see it as an owner.
+        await _users.CreateAsync(
+            new UserRecord
+            {
+                Id = AdminGraphqlGateServices.UserId,
+                Email = "gate-user@example.com",
+                Status = "activated",
+                IsOwner = true,
+            },
+            roleIds: null);
 
         _app = builder.Build();
         _app.MapAdminGraphql();
@@ -1170,6 +1190,544 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
                 .Select(static value => value.GetProperty("name").GetString()!).ToArray());
     }
 
+    [Fact]
+    public async Task NodeResolvesTheChannelWithTheEntNotFoundMessage()
+    {
+        var channel = SeedChannel(type: "openai", name: "Alpha");
+
+        var data = await QueryDataAsync(
+            """
+            query ChannelNode($id: ID!) {
+              node(id: $id) { id ... on Channel { id name type status } }
+            }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id });
+
+        var node = data.GetProperty("node");
+        Assert.Equal("gid://axonhub/Channel/" + channel.Id, node.GetProperty("id").GetString());
+        Assert.Equal("Alpha", node.GetProperty("name").GetString());
+        Assert.Equal("openai", node.GetProperty("type").GetString());
+        Assert.Equal("enabled", node.GetProperty("status").GetString());
+
+        // gql_node.go:247-255: Channel.Query().Where(channel.ID(id)).Only(ctx)
+        // surfaces ent's NotFoundError.
+        var errors = await QueryErrorsAsync(
+            """
+            query ChannelNode($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/Channel/404" });
+        Assert.Equal(
+            "ent: channel not found",
+            errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task NodeChannelModelPricesMatchesTheFrontendPriceDocument()
+    {
+        var channel = SeedChannel(type: "openai", name: "Alpha");
+
+        // Go stores shopspring decimals as JSON strings; the rows are seeded
+        // with ids 2 then 1 to prove the store's id order, plus a soft-deleted
+        // row the query must skip (SoftDeleteMixin).
+        _prices.SeedPrice(
+            channel.Id,
+            "model-b",
+            """
+            {"items":[{"itemCode":"completion_tokens","pricing":{"mode":"usage_tiered","usageTiered":{"tiers":[{"upTo":1000,"pricePerUnit":"0.5"},{"pricePerUnit":"0.25"}]}}}]}
+            """,
+            "ref-b",
+            id: 2);
+        _prices.SeedPrice(
+            channel.Id,
+            "model-a",
+            """
+            {
+              "items": [
+                {
+                  "itemCode": "prompt_tokens",
+                  "pricing": { "mode": "flat_fee", "flatFee": "1.5" },
+                  "promptWriteCacheVariants": [
+                    {
+                      "variantCode": "one_hour",
+                      "pricing": { "mode": "usage_per_unit", "usagePerUnit": "0.25" }
+                    }
+                  ]
+                }
+              ],
+              "schedule": {
+                "timezone": "Asia/Shanghai",
+                "overrides": [
+                  {
+                    "name": "peak",
+                    "priority": 10,
+                    "when": {
+                      "dailyTime": { "start": "08:00", "end": "18:00" },
+                      "weekdays": [1, 2, 3, 4, 5],
+                      "dateRange": { "start": "2026-01-01", "end": "2026-02-01" }
+                    },
+                    "items": [
+                      {
+                        "itemCode": "completion_tokens",
+                        "pricing": {
+                          "mode": "usage_tiered",
+                          "usageTiered": {
+                            "tiers": [
+                              { "upTo": 1000, "pricePerUnit": "0.5" },
+                              { "pricePerUnit": "0.25" }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+            """,
+            "ref-a",
+            id: 1);
+        _prices.SeedPrice(channel.Id, "model-gone", "null", "ref-gone", id: 3, deletedAt: 7);
+
+        // The exact document frontend/src/features/channels/data/channels.ts
+        // sends (GetChannelModelPrices).
+        var data = await QueryDataAsync(
+            """
+            query GetChannelModelPrices($id: ID!) {
+              node(id: $id) {
+                ... on Channel {
+                  id
+                  channelModelPrices {
+                    id
+                    modelID
+                    price {
+                      items {
+                        itemCode
+                        pricing {
+                          mode
+                          flatFee
+                          usagePerUnit
+                          usageTiered {
+                            tiers {
+                              upTo
+                              pricePerUnit
+                            }
+                          }
+                        }
+                        promptWriteCacheVariants {
+                          variantCode
+                          pricing {
+                            mode
+                            flatFee
+                            usagePerUnit
+                            usageTiered {
+                              tiers {
+                                upTo
+                                pricePerUnit
+                              }
+                            }
+                          }
+                        }
+                      }
+                      schedule {
+                        timezone
+                        overrides {
+                          name
+                          priority
+                          when {
+                            dailyTime {
+                              start
+                              end
+                            }
+                            weekdays
+                            dateRange {
+                              start
+                              end
+                            }
+                          }
+                          items {
+                            itemCode
+                            pricing {
+                              mode
+                              flatFee
+                              usagePerUnit
+                              usageTiered {
+                                tiers {
+                                  upTo
+                                  pricePerUnit
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id });
+
+        var node = data.GetProperty("node");
+        Assert.Equal("gid://axonhub/Channel/" + channel.Id, node.GetProperty("id").GetString());
+
+        // gql_edge.go:131-141 — QueryChannelModelPrices().All(ctx). The
+        // reference leaves the order unspecified; the port's store orders by id.
+        var prices = node.GetProperty("channelModelPrices").EnumerateArray().ToArray();
+        Assert.Equal(2, prices.Length);
+
+        var first = prices[0];
+        Assert.Equal("gid://axonhub/ChannelModelPrice/1", first.GetProperty("id").GetString());
+        Assert.Equal("model-a", first.GetProperty("modelID").GetString());
+
+        var price = first.GetProperty("price");
+        var item = Assert.Single(price.GetProperty("items").EnumerateArray());
+        Assert.Equal("prompt_tokens", item.GetProperty("itemCode").GetString());
+        var pricing = item.GetProperty("pricing");
+        Assert.Equal("flat_fee", pricing.GetProperty("mode").GetString());
+        Assert.Equal(1.5m, pricing.GetProperty("flatFee").GetDecimal());
+        Assert.Equal(JsonValueKind.Null, pricing.GetProperty("usagePerUnit").ValueKind);
+        Assert.Equal(JsonValueKind.Null, pricing.GetProperty("usageTiered").ValueKind);
+
+        var variant = Assert.Single(
+            item.GetProperty("promptWriteCacheVariants").EnumerateArray());
+        Assert.Equal("one_hour", variant.GetProperty("variantCode").GetString());
+        Assert.Equal("usage_per_unit", variant.GetProperty("pricing").GetProperty("mode").GetString());
+        Assert.Equal(0.25m, variant.GetProperty("pricing").GetProperty("usagePerUnit").GetDecimal());
+
+        var schedule = price.GetProperty("schedule");
+        Assert.Equal("Asia/Shanghai", schedule.GetProperty("timezone").GetString());
+        var priceOverride = Assert.Single(schedule.GetProperty("overrides").EnumerateArray());
+        Assert.Equal("peak", priceOverride.GetProperty("name").GetString());
+        Assert.Equal(10, priceOverride.GetProperty("priority").GetInt32());
+
+        var when = priceOverride.GetProperty("when");
+        Assert.Equal("08:00", when.GetProperty("dailyTime").GetProperty("start").GetString());
+        Assert.Equal("18:00", when.GetProperty("dailyTime").GetProperty("end").GetString());
+        Assert.Equal(
+            [1, 2, 3, 4, 5],
+            when.GetProperty("weekdays").EnumerateArray()
+                .Select(static day => day.GetInt32()).ToArray());
+        Assert.Equal("2026-01-01", when.GetProperty("dateRange").GetProperty("start").GetString());
+        Assert.Equal("2026-02-01", when.GetProperty("dateRange").GetProperty("end").GetString());
+
+        var overrideItem = Assert.Single(
+            priceOverride.GetProperty("items").EnumerateArray());
+        Assert.Equal("completion_tokens", overrideItem.GetProperty("itemCode").GetString());
+        var overrideTiers = overrideItem.GetProperty("pricing")
+            .GetProperty("usageTiered").GetProperty("tiers");
+        Assert.Equal(2, overrideTiers.GetArrayLength());
+        Assert.Equal(1000, overrideTiers[0].GetProperty("upTo").GetInt32());
+        Assert.Equal(0.5m, overrideTiers[0].GetProperty("pricePerUnit").GetDecimal());
+        Assert.Equal(JsonValueKind.Null, overrideTiers[1].GetProperty("upTo").ValueKind);
+        Assert.Equal(0.25m, overrideTiers[1].GetProperty("pricePerUnit").GetDecimal());
+
+        var second = prices[1];
+        Assert.Equal("gid://axonhub/ChannelModelPrice/2", second.GetProperty("id").GetString());
+        Assert.Equal("model-b", second.GetProperty("modelID").GetString());
+        Assert.Equal(
+            "usage_tiered",
+            second.GetProperty("price").GetProperty("items")[0]
+                .GetProperty("pricing").GetProperty("mode").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelModelPriceVersionsAndBackEdgesMatchTheReferenceSdl()
+    {
+        var channel = SeedChannel(type: "openai", name: "Alpha");
+        var price = _prices.SeedPrice(
+            channel.Id,
+            "model-a",
+            """{"items":[{"itemCode":"prompt_tokens","pricing":{"mode":"flat_fee","flatFee":"2"}}]}""",
+            "ref-current",
+            id: 1);
+        _prices.SeedVersion(
+            channel.Id,
+            price.Id,
+            "model-a",
+            """{"items":[{"itemCode":"prompt_tokens","pricing":{"mode":"flat_fee","flatFee":"1.5"}}]}""",
+            status: "archived",
+            effectiveStartAt: new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            effectiveEndAt: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            referenceId: "ref-old",
+            id: 1);
+        _prices.SeedVersion(
+            channel.Id,
+            price.Id,
+            "model-a",
+            """{"items":[{"itemCode":"prompt_tokens","pricing":{"mode":"flat_fee","flatFee":"2"}}]}""",
+            status: "active",
+            effectiveStartAt: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            effectiveEndAt: null,
+            referenceId: "ref-current",
+            id: 2);
+
+        var data = await QueryDataAsync(
+            """
+            query PriceVersions($id: ID!) {
+              node(id: $id) {
+                ... on Channel {
+                  channelModelPrices {
+                    id
+                    modelID
+                    channel { id name }
+                    versions {
+                      id
+                      createdAt
+                      updatedAt
+                      channelID
+                      modelID
+                      channelModelPriceID
+                      price { items { itemCode pricing { mode flatFee usagePerUnit } } }
+                      status
+                      effectiveStartAt
+                      effectiveEndAt
+                      referenceID
+                      channelModelPrice { id modelID }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id });
+
+        var priceNode = Assert.Single(
+            data.GetProperty("node").GetProperty("channelModelPrices").EnumerateArray());
+
+        // gql_edge.go:143-149 — ChannelModelPrice.Channel is QueryChannel().Only.
+        var backChannel = priceNode.GetProperty("channel");
+        Assert.Equal("gid://axonhub/Channel/" + channel.Id, backChannel.GetProperty("id").GetString());
+        Assert.Equal("Alpha", backChannel.GetProperty("name").GetString());
+
+        // gql_edge.go:159-169 — Versions is QueryVersions().All, ordered by id
+        // in the port's store.
+        var versions = priceNode.GetProperty("versions").EnumerateArray().ToArray();
+        Assert.Equal(2, versions.Length);
+
+        var archived = versions[0];
+        Assert.Equal(
+            "gid://axonhub/ChannelModelPriceVersion/1",
+            archived.GetProperty("id").GetString());
+        Assert.Equal("2026-01-01T00:00:00Z", archived.GetProperty("createdAt").GetString());
+        Assert.Equal(1, archived.GetProperty("channelID").GetInt32());
+        Assert.Equal("model-a", archived.GetProperty("modelID").GetString());
+        Assert.Equal(
+            "gid://axonhub/ChannelModelPrice/1",
+            archived.GetProperty("channelModelPriceID").GetString());
+        Assert.Equal(
+            1.5m,
+            archived.GetProperty("price").GetProperty("items")[0]
+                .GetProperty("pricing").GetProperty("flatFee").GetDecimal());
+        Assert.Equal("archived", archived.GetProperty("status").GetString());
+        Assert.Equal(
+            "2026-01-01T00:00:00Z",
+            archived.GetProperty("effectiveStartAt").GetString());
+        Assert.Equal(
+            "2026-02-01T00:00:00Z",
+            archived.GetProperty("effectiveEndAt").GetString());
+        Assert.Equal("ref-old", archived.GetProperty("referenceID").GetString());
+
+        // gql_edge.go:171-177 — ChannelModelPriceVersion.ChannelModelPrice.
+        var priceBackEdge = archived.GetProperty("channelModelPrice");
+        Assert.Equal("gid://axonhub/ChannelModelPrice/1", priceBackEdge.GetProperty("id").GetString());
+        Assert.Equal("model-a", priceBackEdge.GetProperty("modelID").GetString());
+
+        var active = versions[1];
+        Assert.Equal(
+            "gid://axonhub/ChannelModelPriceVersion/2",
+            active.GetProperty("id").GetString());
+        Assert.Equal("active", active.GetProperty("status").GetString());
+        Assert.Equal(
+            "2026-02-01T00:00:00Z",
+            active.GetProperty("effectiveStartAt").GetString());
+        Assert.Equal(JsonValueKind.Null, active.GetProperty("effectiveEndAt").ValueKind);
+    }
+
+    [Fact]
+    public async Task ChannelModelPriceVersionFailsLikeTheGqlgenEnumMarshaler()
+    {
+        var channel = SeedChannel(type: "openai", name: "Alpha");
+        var price = _prices.SeedPrice(channel.Id, "model-a", "null", "ref-a", id: 1);
+        _prices.SeedVersion(
+            channel.Id,
+            price.Id,
+            "model-a",
+            "null",
+            status: "bogus",
+            id: 1);
+
+        var errors = await QueryErrorsAsync(
+            """
+            query PriceVersions($id: ID!) {
+              node(id: $id) {
+                ... on Channel {
+                  channelModelPrices { versions { status } }
+                }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id });
+
+        // gqlgen's enum marshaler text for an out-of-range stored value.
+        Assert.Equal(
+            "Enum \"ChannelModelPriceVersionStatus\" cannot represent value: \"bogus\"",
+            errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelBackEdgesReportEntNotFoundWhenTheRowVanishes()
+    {
+        var channel = SeedChannel(type: "openai", name: "Alpha");
+        var price = _prices.SeedPrice(channel.Id, "model-a", "null", "ref-a", id: 1);
+        _prices.SeedVersion(
+            channel.Id,
+            price.Id,
+            "model-a",
+            "null",
+            id: 1);
+
+        // The node lookup succeeds and the edge lookup that follows sees the
+        // row gone, modelling a concurrent soft-delete between the two ent
+        // queries; Only then reports NotFound.
+        _channels.VanishAfterFirstLookup.Add(channel.Id);
+        var channelErrors = await QueryErrorsAsync(
+            """
+            query Prices($id: ID!) {
+              node(id: $id) {
+                ... on Channel { channelModelPrices { channel { id } } }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id });
+        Assert.Equal(
+            "ent: channel not found",
+            channelErrors[0].GetProperty("message").GetString());
+
+        _channels.VanishAfterFirstLookup.Clear();
+        _prices.HideFromGetById.Add(price.Id);
+        var priceErrors = await QueryErrorsAsync(
+            """
+            query Prices($id: ID!) {
+              node(id: $id) {
+                ... on Channel {
+                  channelModelPrices { versions { channelModelPrice { id } } }
+                }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id });
+        Assert.Equal(
+            "ent: channel_model_price not found",
+            priceErrors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelNodeRequiresTheReadChannelsScopeForServiceAccountKeys()
+    {
+        var channel = SeedChannel(type: "openai", name: "Alpha");
+
+        // The gate's default key carries read_channels; strip it so the
+        // APIKeyScopeQueryRule is the rule that denies.
+        _gate.AddServiceAccountKey(
+            configure: key => key.Scopes = """["read_models"]""");
+
+        var errors = await QueryErrorsAsync(
+            """
+            query ChannelNode($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id },
+            token: "sk-service-account");
+        Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelNodeAllowsAServiceAccountKeyWithTheReadChannelsScope()
+    {
+        var channel = SeedChannel(type: "openai", name: "Alpha");
+        _prices.SeedPrice(channel.Id, "model-a", "null", "ref-a", id: 1);
+        _gate.AddServiceAccountKey();
+
+        // The nested price edge evaluates the ChannelModelPrice policy too;
+        // rule 1 allows both queries with the same scope.
+        var data = await QueryDataAsync(
+            """
+            query ChannelNode($id: ID!) {
+              node(id: $id) {
+                ... on Channel { id channelModelPrices { id } }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id },
+            token: "sk-service-account");
+
+        var node = data.GetProperty("node");
+        Assert.Equal("gid://axonhub/Channel/" + channel.Id, node.GetProperty("id").GetString());
+        Assert.Single(node.GetProperty("channelModelPrices").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ChannelNodeDeniesUsersWithoutTheReadChannelsScope()
+    {
+        // OwnerRule skips a non-owner and UserReadScopeRule only skips when the
+        // user has no scope; QueryPolicy then denies by default.
+        var member = await SeedMemberAsync("member@example.com", scopes: null);
+
+        var errors = await QueryErrorsAsync(
+            """
+            query ChannelNode($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/Channel/1" },
+            token: _gate.IssueJwt(member));
+        Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelNodeAllowsAUserWithTheReadChannelsScope()
+    {
+        var channel = SeedChannel(type: "openai", name: "Alpha");
+        var member = await SeedMemberAsync(
+            "scoped@example.com",
+            scopes: """["read_channels"]""");
+
+        var data = await QueryDataAsync(
+            """
+            query ChannelNode($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/Channel/" + channel.Id },
+            token: _gate.IssueJwt(member));
+
+        Assert.Equal(
+            "gid://axonhub/Channel/" + channel.Id,
+            data.GetProperty("node").GetProperty("id").GetString());
+    }
+
+    private async Task<UserRecord> SeedMemberAsync(string email, string? scopes)
+    {
+        var member = _gate.Users.Add(user =>
+        {
+            user.Id = 77;
+            user.Email = email;
+            user.Status = "activated";
+            user.IsOwner = false;
+        });
+
+        // The privacy rules read scopes through IUserAdminStore (ent scopes
+        // edge), not the gate's auth store.
+        await _users.CreateAsync(
+            new UserRecord
+            {
+                Id = member.Id,
+                Email = email,
+                Status = "activated",
+                IsOwner = false,
+                Scopes = scopes,
+            },
+            roleIds: null);
+
+        return member;
+    }
+
     private ChannelRecord SeedChannel(
         string type,
         string name,
@@ -1210,29 +1768,42 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
 
     private async Task<JsonElement> QueryDataAsync(
         string query,
-        object? variables = null)
+        object? variables = null,
+        string? token = null)
     {
-        var root = await ExecuteAsync(query, variables);
-        Assert.False(root.TryGetProperty("errors", out _), root.ToString());
+        var root = await ExecuteAsync(query, variables, token);
+        Assert.False(root.TryGetProperty("errors", out var errors), errors.ToString());
         return root.GetProperty("data");
     }
 
     private async Task<JsonElement[]> QueryErrorsAsync(
         string query,
-        object? variables = null)
+        object? variables = null,
+        string? token = null)
     {
-        var root = await ExecuteAsync(query, variables);
+        var root = await ExecuteAsync(query, variables, token);
         Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
         return errors.EnumerateArray().Select(static error => error.Clone()).ToArray();
     }
 
-    private async Task<JsonElement> ExecuteAsync(string query, object? variables)
+    private async Task<JsonElement> ExecuteAsync(
+        string query,
+        object? variables,
+        string? token)
     {
-        var payload = JsonSerializer.Serialize(new { query, variables });
-        using var response = await _client.PostAsync(
-            "/admin/graphql",
-            new StringContent(payload, Encoding.UTF8, "application/json"));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql")
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new { query, variables }),
+                Encoding.UTF8,
+                "application/json"),
+        };
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Bearer",
+                token ?? _gate.Jwt);
 
+        using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
         Assert.True(response.StatusCode == HttpStatusCode.OK, body);
 
@@ -1263,10 +1834,34 @@ internal sealed class FakeChannelAdminStore : IChannelAdminStore
 
     public Exception? CountFailure { get; set; }
 
+    /// <summary>
+    /// Ids returned on their first GetByIdAsync lookup and missing on the
+    /// next, modelling a concurrent soft-delete between an edge query and the
+    /// back-reference it issues (ent's Only then reports NotFound).
+    /// </summary>
+    public HashSet<long> VanishAfterFirstLookup { get; } = [];
+
+    private readonly HashSet<long> _servedById = [];
+
     public void Seed(ChannelRecord record)
     {
         record.Id = _nextId++;
         _rows.Add(record);
+    }
+
+    public Task<ChannelRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var row = _rows.SingleOrDefault(candidate => candidate.Id == id && candidate.DeletedAt == 0);
+        if (row is not null
+            && VanishAfterFirstLookup.Contains(id)
+            && !_servedById.Add(id))
+        {
+            return Task.FromResult<ChannelRecord?>(null);
+        }
+
+        return Task.FromResult(row);
     }
 
     public Task<ListPage<ChannelRecord>> ListAsync(
@@ -1492,4 +2087,162 @@ internal sealed class FakeChannelAdminStore : IChannelAdminStore
 
         return true;
     }
+}
+
+/// <summary>
+/// In-memory IChannelModelPriceStore for the channel read edges: prices and
+/// versions are seeded directly and only the three read seams are implemented.
+/// The write seams are unreachable from the management read surface.
+/// </summary>
+internal sealed class FakeChannelPriceReadStore : IChannelModelPriceStore
+{
+    private readonly List<ChannelModelPriceRecord> _prices = [];
+    private readonly List<ChannelModelPriceVersionRecord> _versions = [];
+    private long _nextPriceId = 1;
+    private long _nextVersionId = 1;
+
+    /// <summary>
+    /// Ids hidden from GetByIdAsync only; the version back-edge is the first
+    /// GetByIdAsync lookup for its parent price, so this models a concurrent
+    /// soft-delete (ent's Only then reports NotFound).
+    /// </summary>
+    public HashSet<long> HideFromGetById { get; } = [];
+
+    public ChannelModelPriceRecord SeedPrice(
+        long channelId,
+        string modelId,
+        string priceJson,
+        string referenceId,
+        long? id = null,
+        long deletedAt = 0,
+        DateTime? createdAt = null,
+        DateTime? updatedAt = null)
+    {
+        var created = createdAt ?? new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var row = new ChannelModelPriceRecord
+        {
+            Id = id ?? _nextPriceId++,
+            CreatedAt = created,
+            UpdatedAt = updatedAt ?? created,
+            DeletedAt = deletedAt,
+            ModelId = modelId,
+            Price = priceJson,
+            ReferenceId = referenceId,
+            ChannelId = channelId,
+        };
+
+        if (row.Id >= _nextPriceId)
+        {
+            _nextPriceId = row.Id + 1;
+        }
+
+        _prices.Add(row);
+        return row;
+    }
+
+    public ChannelModelPriceVersionRecord SeedVersion(
+        long channelId,
+        long priceId,
+        string modelId,
+        string priceJson,
+        string status = "active",
+        DateTime? effectiveStartAt = null,
+        DateTime? effectiveEndAt = null,
+        string referenceId = "",
+        long? id = null,
+        DateTime? createdAt = null,
+        DateTime? updatedAt = null)
+    {
+        var created = createdAt ?? new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var row = new ChannelModelPriceVersionRecord
+        {
+            Id = id ?? _nextVersionId++,
+            CreatedAt = created,
+            UpdatedAt = updatedAt ?? created,
+            ChannelId = channelId,
+            ModelId = modelId,
+            ChannelModelPriceId = priceId,
+            Price = priceJson,
+            Status = status,
+            EffectiveStartAt = effectiveStartAt ?? created,
+            EffectiveEndAt = effectiveEndAt,
+            ReferenceId = referenceId,
+        };
+
+        if (row.Id >= _nextVersionId)
+        {
+            _nextVersionId = row.Id + 1;
+        }
+
+        _versions.Add(row);
+        return row;
+    }
+
+    public Task<ChannelModelPriceRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(HideFromGetById.Contains(id)
+            ? null
+            : _prices.SingleOrDefault(row => row.Id == id && row.DeletedAt == 0));
+
+    public Task<IReadOnlyList<ChannelModelPriceRecord>> ListByChannelAsync(
+        long channelId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<ChannelModelPriceRecord>>(
+            _prices.Where(row => row.ChannelId == channelId && row.DeletedAt == 0)
+                .OrderBy(static row => row.Id)
+                .ToList());
+
+    public Task<IReadOnlyList<ChannelModelPriceVersionRecord>> ListVersionsAsync(
+        long channelModelPriceId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<ChannelModelPriceVersionRecord>>(
+            _versions.Where(row => row.ChannelModelPriceId == channelModelPriceId)
+                .OrderBy(static row => row.Id)
+                .ToList());
+
+    public Task<long> CreateAsync(
+        ChannelModelPriceRecord price,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel read surface never creates a price");
+
+    public Task<IReadOnlyList<ChannelModelPriceRecord>> ListEnabledChannelPricesAsync(
+        long channelId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel read surface never preloads enabled prices");
+
+    public Task<IReadOnlyList<ChannelModelPriceRecord?>> ApplyAsync(
+        long channelId,
+        IReadOnlyList<ChannelModelPriceChange> changes,
+        DateTime now,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel read surface never applies a price plan");
+
+    public Task<bool> EnsureAutoPricesAsync(
+        long channelId,
+        IReadOnlyList<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel read surface never auto-prices");
+
+    public Task<IReadOnlyList<ChannelModelPriceTemplate>> ResolveAutoPriceTemplatesAsync(
+        IReadOnlyList<string> modelIds,
+        ModelCardPriceJsonFactory modelCardToPriceJson,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel read surface never resolves price templates");
+
+    public Task<bool> ApplyAutoPriceTemplatesAsync(
+        long channelId,
+        IReadOnlyList<ChannelModelPriceTemplate> templates,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel read surface never applies price templates");
+
+    public Task CopyChannelPricesAsync(
+        long sourceChannelId,
+        long targetChannelId,
+        ChannelPriceReferenceIdFactory referenceIdFactory,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel read surface never copies prices");
 }

@@ -239,7 +239,11 @@ builder.Services.AddScoped<AntigravityOAuthService>();
 builder.Services.AddScoped<ProjectManagementService>();
 
 // Channel management reads (entgql channels / queryChannels / aggregates).
+// ChannelPrivacy evaluates the Channel / ChannelModelPrice /
+// ChannelModelPriceVersion query policies for node(Channel) and the price read
+// edges (§136); the channel mutation policy stays with the C014 scope cut.
 builder.Services.AddScoped<IChannelAdminStore, ChannelAdminStore>();
+builder.Services.AddScoped<ChannelPrivacy>();
 builder.Services.AddScoped<ChannelQueryService>();
 
 // Channel lifecycle writes (status / delete / bulk status / bulk delete /

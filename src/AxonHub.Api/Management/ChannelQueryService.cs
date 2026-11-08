@@ -10,12 +10,32 @@ namespace AxonHub.Api.Management;
 /// biz.ChannelService.QueryChannels, plus the allChannelSummarys /
 /// allChannelTags / countChannelsByType query resolvers.
 /// </summary>
-public sealed class ChannelQueryService(IChannelAdminStore channels)
+public sealed class ChannelQueryService(
+    IChannelAdminStore channels,
+    ChannelPrivacy privacy)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
     };
+
+    /// <summary>
+    /// Port of the entgql Node lookup for Channel (gql_node.go:247-255):
+    /// <c>Channel.Query().Where(channel.ID(id)).Only(ctx)</c> with the query
+    /// policy applied. A missing live row surfaces ent's NotFoundError.
+    /// </summary>
+    /// <exception cref="PrivacyDenyException">The query policy denied.</exception>
+    public async Task<ChannelType> GetNodeAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var record = await channels.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        return record is null
+            ? throw new InvalidOperationException("ent: channel not found")
+            : ChannelMapping.ToGraphQL(record);
+    }
 
     /// <summary>Port of queryResolver.Channels (entgql Paginate).</summary>
     public async Task<ChannelConnectionType> ChannelsAsync(

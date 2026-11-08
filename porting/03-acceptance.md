@@ -193,6 +193,16 @@ Zenmux 四条路径，既有用例数不变。
 `DataStorageBootstrap`（v0.4.0 主存储种子），把 `RequestChainRecorder` 的分块归档、GraphQL / trace 的
 正文加载与存储策略门禁接到请求链路，C020 关闭，既有用例数不变。
 
+§136 追加 10 个用例（`AxonHub.Api.Tests` 9：`AdminChannelsEndpointTests` 的 node(Channel)、
+前端 `GetChannelModelPrices` 文档、版本 / 反向边、枚举失败、反向边 NotFound 与 4 个隐私分支；
+`AxonHub.Persistence.Tests` 1：`ChannelModelPriceStoreTests.GetByIdReturnsOnlyLiveRows`），同样按项目
+规则未运行 lint / build / test；§136 落地后的静态计数为 `AxonHub.Api.Tests` 5371、
+`AxonHub.Persistence.Tests` 331、四项目合计 8837，下一次全量运行应以该数字复核。该切片不新增表或 SQL；
+新增 `ChannelPrivacy`、`ChannelQueryService.GetNodeAsync`、`ChannelAdminStore.GetByIdAsync` 与
+`ChannelModelPriceStore.GetByIdAsync`，把 `node(Channel)`、`Channel.channelModelPrices`、
+`ChannelModelPrice.channel` / `versions`、`ChannelModelPriceVersion.channelModelPrice` 接到 ent 形状与
+read_channels 查询隐私，C048 关闭（读取面），C165 的 Channel 分支关闭，既有用例数不变。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
@@ -212,9 +222,12 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
   系统安全设置读取与 `/v1` IP 黑名单中间件、Billing（成本计算器、价格读取/注入接缝与 CostItem JSON 形状）、
   通道 API key 选择（`ChannelApiKeyProvider` 与 `IApiKeyProvenance` 审计接缝））
 - `AxonHub.Api` 的管理面 channels 读取面：`channels` / `queryChannels` /
-  `allChannelSummarys` / `allChannelTags` / `countChannelsByType`、Channel 输出类型与
+  `allChannelSummarys` / `allChannelTags` / `countChannelsByType`、`node(Channel)`、Channel 输出类型与
   字段解析器（policies / settings / credentials / disabledAPIKeys / liveLimiterStats /
-  defaultEndpoints / allModelEntries / providerQuotaStatus）、`ChannelAdminStore`
+  defaultEndpoints / allModelEntries / providerQuotaStatus / channelModelPrices）、
+  `ChannelModelPrice` / `ChannelModelPriceVersion` 输出类型与读取边（channel / versions /
+  channelModelPrice，含 `ChannelModelPriceVersionStatus` 枚举）、`ChannelPrivacy` 的
+  read_channels 查询策略、`ChannelAdminStore`
   （Dapper 键集分页与四条聚合 SQL）、`ChannelQueryService`、`CursorCodec` 的
   time / string / int 值类型与 `Map` 标量
 - `AxonHub.Api` 的管理面 channels 生命周期写入面：`ChannelLifecycleService`（状态 / 删除 / 批量状态 / 批量删除 / 批量标签的 biz 错误前缀与 `ChannelLimiterManager.Forget`）、`IChannelWriteStore` 的 EF 实现（软删除 Unix 秒、批量数量的 `ExpectedRowsMismatchException`、标签管理的 `updated_at` 乐观守卫）以及 10 个 GraphQL 变更（updateChannelStatus / deleteChannel / bulkArchiveChannels / bulkDisableChannels / bulkEnableChannels / bulkRecoverChannels / bulkDeleteChannels / bulkAddChannelTags / bulkRemoveChannelTags / bulkManageChannelTags）

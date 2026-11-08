@@ -1287,6 +1287,11 @@ internal sealed class FakeChannelModelPriceStore : IChannelModelPriceStore
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("the channel lifecycle never creates a price directly");
 
+    public Task<ChannelModelPriceRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("the channel lifecycle never reads a price by id");
+
     public Task<IReadOnlyList<ChannelModelPriceRecord>> ListByChannelAsync(
         long channelId,
         CancellationToken cancellationToken = default)

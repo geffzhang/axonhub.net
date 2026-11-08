@@ -163,12 +163,26 @@ public sealed class PromptWriteCacheVariantType
     public PricingType Pricing { get; init; } = new();
 }
 
+/// <summary>Port of the ChannelModelPriceVersionStatus enum (ent.graphql:720-723).</summary>
+[GraphQLName("ChannelModelPriceVersionStatus")]
+public enum ChannelModelPriceVersionStatusValue
+{
+    [GraphQLName("active")]
+    Active,
+
+    [GraphQLName("archived")]
+    Archived,
+}
+
 /// <summary>Port of objects.ModelPrice's ent GraphQL type (ent.graphql:574-590).</summary>
 [GraphQLName("ChannelModelPrice")]
-public sealed class ChannelModelPriceType
+public sealed class ChannelModelPriceType : INode
 {
     [GraphQLIgnore]
     public long DbId { get; init; }
+
+    [GraphQLIgnore]
+    public long DbChannelId { get; init; }
 
     [GraphQLType(typeof(IdType))]
     public string Id { get; init; } = string.Empty;
@@ -190,6 +204,108 @@ public sealed class ChannelModelPriceType
 
     [GraphQLName("referenceID")]
     public string ReferenceID { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Port of the generated edge accessor (gql_edge.go:151-157):
+    /// <c>QueryChannel().Only(ctx)</c> with the Channel query policy applied.
+    /// </summary>
+    [GraphQLName("channel")]
+    public async Task<ChannelType> GetChannelAsync(
+        [Service] ChannelPrivacy privacy,
+        [Service] IChannelAdminStore channels,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var record = await channels.GetByIdAsync(DbChannelId, cancellationToken)
+            .ConfigureAwait(false);
+        return record is null
+            ? throw new InvalidOperationException("ent: channel not found")
+            : ChannelMapping.ToGraphQL(record);
+    }
+
+    /// <summary>
+    /// Port of the generated edge accessor (gql_edge.go:159-169):
+    /// <c>QueryVersions().All(ctx)</c> with the ChannelModelPriceVersion query
+    /// policy applied.
+    /// </summary>
+    [GraphQLName("versions")]
+    public async Task<IReadOnlyList<ChannelModelPriceVersionType>> GetVersionsAsync(
+        [Service] ChannelPrivacy privacy,
+        [Service] IChannelModelPriceStore prices,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var rows = await prices.ListVersionsAsync(DbId, cancellationToken)
+            .ConfigureAwait(false);
+        return [.. rows.Select(PriceMapping.ToGraphQL)];
+    }
+}
+
+/// <summary>Port of the ChannelModelPriceVersion type (ent.graphql:667-705).</summary>
+[GraphQLName("ChannelModelPriceVersion")]
+public sealed class ChannelModelPriceVersionType : INode
+{
+    [GraphQLIgnore]
+    public long DbId { get; init; }
+
+    [GraphQLIgnore]
+    public long DbChannelModelPriceId { get; init; }
+
+    [GraphQLType(typeof(IdType))]
+    public string Id { get; init; } = string.Empty;
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime CreatedAt { get; init; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime UpdatedAt { get; init; }
+
+    [GraphQLName("channelID")]
+    public int ChannelID { get; init; }
+
+    [GraphQLName("modelID")]
+    public string ModelID { get; init; } = string.Empty;
+
+    [GraphQLName("channelModelPriceID")]
+    [GraphQLType(typeof(IdType))]
+    public string ChannelModelPriceID { get; init; } = string.Empty;
+
+    public ModelPriceType Price { get; init; } = new();
+
+    public ChannelModelPriceVersionStatusValue Status { get; init; }
+
+    [GraphQLName("effectiveStartAt")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime EffectiveStartAt { get; init; }
+
+    [GraphQLName("effectiveEndAt")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveEndAt { get; init; }
+
+    [GraphQLName("referenceID")]
+    public string ReferenceID { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Port of the generated edge accessor (gql_edge.go:171-177):
+    /// <c>QueryChannelModelPrice().Only(ctx)</c> with the ChannelModelPrice
+    /// query policy applied.
+    /// </summary>
+    [GraphQLName("channelModelPrice")]
+    public async Task<ChannelModelPriceType> GetChannelModelPriceAsync(
+        [Service] ChannelPrivacy privacy,
+        [Service] IChannelModelPriceStore prices,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var record = await prices.GetByIdAsync(DbChannelModelPriceId, cancellationToken)
+            .ConfigureAwait(false);
+        return record is null
+            ? throw new InvalidOperationException("ent: channel_model_price not found")
+            : PriceMapping.ToGraphQL(record);
+    }
 }
 
 /// <summary>Input types of the price SDL (price.graphql:83-148).</summary>
@@ -328,12 +444,38 @@ public static class PriceMapping
         return new ChannelModelPriceType
         {
             DbId = record.Id,
+            DbChannelId = record.ChannelId,
             Id = new GidValue("ChannelModelPrice", record.Id).ToString(),
             CreatedAt = record.CreatedAt,
             UpdatedAt = record.UpdatedAt,
             ChannelID = new GidValue("Channel", record.ChannelId).ToString(),
             ModelID = record.ModelId,
             Price = ToGraphQL(ChannelModelPriceService.DeserializePrice(record.Price)),
+            ReferenceID = record.ReferenceId,
+        };
+    }
+
+    public static ChannelModelPriceVersionType ToGraphQL(
+        ChannelModelPriceVersionRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        return new ChannelModelPriceVersionType
+        {
+            DbId = record.Id,
+            DbChannelModelPriceId = record.ChannelModelPriceId,
+            Id = new GidValue("ChannelModelPriceVersion", record.Id).ToString(),
+            CreatedAt = record.CreatedAt,
+            UpdatedAt = record.UpdatedAt,
+            ChannelID = checked((int)record.ChannelId),
+            ModelID = record.ModelId,
+            ChannelModelPriceID = new GidValue(
+                "ChannelModelPrice",
+                record.ChannelModelPriceId).ToString(),
+            Price = ToGraphQL(ChannelModelPriceService.DeserializePrice(record.Price)),
+            Status = VersionStatusFromWire(record.Status),
+            EffectiveStartAt = record.EffectiveStartAt,
+            EffectiveEndAt = record.EffectiveEndAt,
             ReferenceID = record.ReferenceId,
         };
     }
@@ -529,6 +671,20 @@ public static class PriceMapping
         PriceItemCodes.PromptWriteCachedTokens => PriceItemCodeValue.PromptWriteCachedTokens,
         _ => throw new InvalidOperationException("unknown price item code: " + code),
     };
+
+    /// <summary>
+    /// Maps the stored version status to the GraphQL enum; an unknown stored
+    /// value fails the field like gqlgen's enum marshaler does.
+    /// </summary>
+    private static ChannelModelPriceVersionStatusValue VersionStatusFromWire(string status)
+        => status switch
+        {
+            "active" => ChannelModelPriceVersionStatusValue.Active,
+            "archived" => ChannelModelPriceVersionStatusValue.Archived,
+            _ => throw new InvalidOperationException(
+                "Enum \"ChannelModelPriceVersionStatus\" cannot represent value: \""
+                + status + "\""),
+        };
 
     private static string ToWire(PromptWriteCacheVariantCodeValue code) => code switch
     {

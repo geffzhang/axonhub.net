@@ -84,6 +84,14 @@ public sealed record ChannelTypeCount(string Type, int Count);
 /// <summary>Management read seam for the reference <c>channels</c> table.</summary>
 public interface IChannelAdminStore
 {
+    /// <summary>
+    /// Port of the entgql Node lookup for Channel: the live row with the given
+    /// id, or null when neither the id nor the soft-delete predicate matches.
+    /// </summary>
+    Task<ChannelRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Port of entgql's ChannelQuery.Paginate.</summary>
     Task<ListPage<ChannelRecord>> ListAsync(
         ChannelListQuery query,
@@ -129,6 +137,22 @@ public sealed class ChannelAdminStore(AxonHubDbContext db) : IChannelAdminStore
         "policies", "settings", "ordering_weight", "error_message", "auto_disabled_at",
         "auto_disable_expires_at", "remark", "endpoints"
         """;
+
+    public async Task<ChannelRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var sql = "SELECT " + Columns
+            + " FROM \"channels\" WHERE \"id\" = @Id AND \"deleted_at\" = 0;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<ChannelRecord>(
+            new CommandDefinition(
+                sql,
+                new { Id = id },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
 
     public async Task<ListPage<ChannelRecord>> ListAsync(
         ChannelListQuery query,

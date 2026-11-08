@@ -6,9 +6,10 @@ using AxonHub.Persistence;
 namespace AxonHub.Api.GraphQL;
 
 /// <summary>
-/// Port of the Relay <c>Node</c> interface (ent.graphql:2580-2586). Only the
-/// management-slice types implement it so far; node() resolves Project and User
-/// and reports every other ent type as "unknown node type: %s" (C165).
+/// Port of the Relay <c>Node</c> interface (ent.graphql:2580-2586). Every
+/// management-slice type that ent generates as a Node implementor does;
+/// node() resolves the types listed in <c>AdminQuery.NodeAsync</c> and reports
+/// the remaining ent types as "unknown node type: %s" (C165).
 /// </summary>
 [InterfaceType("Node")]
 public interface INode

@@ -648,15 +648,16 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     [Fact]
     public async Task NodeReportsUnknownTypesAndMissingNodesLikeTheReference()
     {
-        // The reference maps every ent type to a Noder lookup; the port only
-        // resolves Project and User (C165).
+        // The reference maps every ent type to a Noder lookup; the port does
+        // not resolve ChannelProbe, ChannelOverrideTemplate, RequestExecution,
+        // Role, System, UserProject or UserRole yet (C165).
         var unknown = await QueryErrorsAsync(
             """
             query Node($id: ID!) { node(id: $id) { id } }
             """,
-            new { id = "gid://axonhub/Channel/1" });
+            new { id = "gid://axonhub/ChannelProbe/1" });
         Assert.Equal(
-            "unknown node type: Channel",
+            "unknown node type: ChannelProbe",
             unknown[0].GetProperty("message").GetString());
 
         var missingProject = await QueryErrorsAsync(

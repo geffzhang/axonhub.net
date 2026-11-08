@@ -2,6 +2,7 @@ using System.Text.Json;
 using HotChocolate;
 using HotChocolate.Types;
 using HotChocolate.Types.Relay;
+using AxonHub.Api.Management;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
@@ -940,7 +941,7 @@ public sealed class BulkImportChannelsResultType
 
 /// <summary>Port of the <c>Channel</c> object type (ent.graphql:407-543).</summary>
 [GraphQLName("Channel")]
-public sealed class ChannelType
+public sealed class ChannelType : INode
 {
     [GraphQLIgnore]
     public long DbId { get; init; }
@@ -1029,6 +1030,25 @@ public sealed class ChannelType
     [GraphQLName("disabledAPIKeys")]
     public IReadOnlyList<DisabledApiKeyType>? GetDisabledApiKeys()
         => ChannelMapping.ToDisabledApiKeys(DisabledApiKeysJson);
+
+    /// <summary>
+    /// Port of the generated edge accessor (gql_edge.go:131-141):
+    /// <c>QueryChannelModelPrices().All(ctx)</c> with the ChannelModelPrice
+    /// query policy applied. The reference leaves the row order unspecified;
+    /// the port's store orders by id (C048).
+    /// </summary>
+    [GraphQLName("channelModelPrices")]
+    public async Task<IReadOnlyList<ChannelModelPriceType>> GetChannelModelPricesAsync(
+        [Service] ChannelPrivacy privacy,
+        [Service] IChannelModelPriceStore prices,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var rows = await prices.ListByChannelAsync(DbId, cancellationToken)
+            .ConfigureAwait(false);
+        return [.. rows.Select(PriceMapping.ToGraphQL)];
+    }
 
     /// <summary>Port of channelResolver.LiveLimiterStats.</summary>
     [GraphQLName("liveLimiterStats")]

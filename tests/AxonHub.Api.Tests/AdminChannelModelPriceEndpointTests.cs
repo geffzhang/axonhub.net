@@ -108,7 +108,15 @@ public sealed class AdminChannelModelPriceEndpointTests : IAsyncLifetime
     private static readonly string[] VariantCodeValues = ["five_min", "one_hour"];
 
     private static readonly string[] ChannelPriceFields =
-        ["id", "createdAt", "updatedAt", "channelID", "modelID", "price", "referenceID"];
+        ["id", "createdAt", "updatedAt", "channelID", "modelID", "price", "referenceID",
+            "channel", "versions"];
+
+    private static readonly string[] ChannelPriceVersionFields =
+        ["id", "createdAt", "updatedAt", "channelID", "modelID", "channelModelPriceID",
+            "price", "status", "effectiveStartAt", "effectiveEndAt", "referenceID",
+            "channelModelPrice"];
+
+    private static readonly string[] ChannelPriceVersionStatusValues = ["active", "archived"];
 
     private readonly FakePriceStore _prices = new();
 
@@ -602,6 +610,14 @@ public sealed class AdminChannelModelPriceEndpointTests : IAsyncLifetime
               variantCode: __type(name: "PromptWriteCacheVariantCode") { enumValues { name } }
               channelPrice: __type(name: "ChannelModelPrice") {
                 fields { name type { kind name ofType { kind name } } }
+                interfaces { name }
+              }
+              priceVersion: __type(name: "ChannelModelPriceVersion") {
+                fields { name type { kind name ofType { kind name } } }
+                interfaces { name }
+              }
+              versionStatus: __type(name: "ChannelModelPriceVersionStatus") {
+                enumValues { name }
               }
             }
             """,
@@ -652,6 +668,24 @@ public sealed class AdminChannelModelPriceEndpointTests : IAsyncLifetime
         var channelPriceFields = data.GetProperty("channelPrice").GetProperty("fields")
             .EnumerateArray().Select(field => field.GetProperty("name").GetString()).ToArray();
         Assert.Equal(ChannelPriceFields, channelPriceFields);
+
+        // Both edge types implement Node in the SDL (ent.graphql:574,641).
+        Assert.Equal(
+            ["Node"],
+            data.GetProperty("channelPrice").GetProperty("interfaces").EnumerateArray()
+                .Select(static type => type.GetProperty("name").GetString()!).ToArray());
+        Assert.Equal(
+            ChannelPriceVersionFields,
+            data.GetProperty("priceVersion").GetProperty("fields").EnumerateArray()
+                .Select(static field => field.GetProperty("name").GetString()!).ToArray());
+        Assert.Equal(
+            ["Node"],
+            data.GetProperty("priceVersion").GetProperty("interfaces").EnumerateArray()
+                .Select(static type => type.GetProperty("name").GetString()!).ToArray());
+        Assert.Equal(
+            ChannelPriceVersionStatusValues,
+            data.GetProperty("versionStatus").GetProperty("enumValues").EnumerateArray()
+                .Select(static value => value.GetProperty("name").GetString()!).ToArray());
     }
 
     [Fact]
@@ -809,6 +843,12 @@ public sealed class AdminChannelModelPriceEndpointTests : IAsyncLifetime
             Rows.Add(price);
             return Task.FromResult(price.Id);
         }
+
+        public Task<ChannelModelPriceRecord?> GetByIdAsync(
+            long id,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(
+                Rows.SingleOrDefault(row => row.Id == id && row.DeletedAt == 0));
 
         public Task<IReadOnlyList<ChannelModelPriceRecord>> ListByChannelAsync(
             long channelId,

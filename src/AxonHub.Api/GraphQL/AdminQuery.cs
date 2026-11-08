@@ -787,9 +787,9 @@ public sealed class AdminQuery
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves Project, User, APIKey, Model, Prompt, DataStorage, Trace,
-    /// Thread, Request and UsageLog so far and reports every other type as
-    /// "unknown node type: %s" (C165).
+    /// port resolves Project, User, APIKey, APIKeyProfileTemplate, Model,
+    /// Prompt, DataStorage, Channel, Trace, Thread, Request and UsageLog so far
+    /// and reports every other type as "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -862,6 +862,13 @@ public sealed class AdminQuery
                 var storage = await storages.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return DataStorageMapping.ToGraphQL(storage);
+            }
+
+            case "Channel":
+            {
+                var channels = services.GetRequiredService<ChannelQueryService>();
+                return await channels.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             case "Trace":

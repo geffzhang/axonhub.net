@@ -50,6 +50,14 @@ public interface IChannelModelPriceStore
         ChannelModelPriceRecord price,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Live (not soft-deleted) price row by id, or null when absent. This is
+    /// the ChannelModelPrice.channelModelPrice back-edge lookup.
+    /// </summary>
+    Task<ChannelModelPriceRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Live (not soft-deleted) prices of one channel, ordered by id.</summary>
     Task<IReadOnlyList<ChannelModelPriceRecord>> ListByChannelAsync(
         long channelId,
@@ -181,6 +189,23 @@ public sealed class ChannelModelPriceStore(AxonHubDbContext db) : IChannelModelP
         db.ChannelModelPrices.Add(price);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return price.Id;
+    }
+
+    public async Task<ChannelModelPriceRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var sql = "SELECT " + Columns
+            + " FROM \"channel_model_prices\" WHERE \"id\" = @Id"
+            + " AND \"deleted_at\" = 0;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<ChannelModelPriceRecord>(
+            new CommandDefinition(
+                sql,
+                new { Id = id },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<ChannelModelPriceRecord>> ListByChannelAsync(
