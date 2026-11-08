@@ -320,6 +320,21 @@ lint / build / test；§147 落地后的静态计数为 `AxonHub.Grains.Tests` 1
 C181 由 accepted 转为 resolved：多实例不共享的缺口关闭；残余为 Redis / two-level
 xcache 后端不支持（与 C171 同源）与 silo 重启丢失内存条目（参照 memory 模式相同）。
 
+§148 追加 9 个用例（`AxonHub.Grains.Tests` 5：`ChannelModelSyncGrainTests`；
+`AxonHub.Api.Tests` 4：`GrainChannelModelSyncGuardTests` 1 与 `ChannelModelSyncTests` 3），
+同样按项目规则未运行 lint / build / test；§148 落地后的静态计数为
+`AxonHub.Grains.Tests` 1721、`AxonHub.Api.Tests` 5449、`AxonHub.Llm.Tests` 1506、
+`AxonHub.Persistence.Tests` 336，四项目合计 9012，下一次全量运行应以该数字复核。
+该切片不新增表或 SQL；参照的 cron `11 * * * *`（UTC）由 `ChannelModelSyncScheduler` 复刻
+（注册时不运行、错过不补跑），执行窗口驻留单例 `ChannelModelSyncGrain`
+（`now.Truncate(interval)` 对齐、每窗口一次、grain turn 替代 `modelSyncMu`、
+`DelayDeactivation` 跨 tick 保活），生产 `IChannelModelSyncGuard` 为
+`GrainChannelModelSyncGuard`（频率映射 60/360/1440 分钟、分派失败跳过本 tick），
+`ChannelModelSyncService` 在无守卫的直接构造下回退进程内窗口。C158 的第 ① 项
+（后台周期注册缺失）关闭，仅剩按通道代理与 live-only 分支；新增 C228（accepted）：
+执行窗口由每进程一份收窄为集群单激活，单 silo 等价，多 silo 下参照可能每个进程各跑一遍，
+端口整个集群只跑一遍。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

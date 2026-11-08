@@ -506,10 +506,17 @@ builder.Services.AddScoped<ChannelTestService>();
 // Channel model sync (syncChannelModels): the per-channel fetch/merge/price
 // transaction and the hourly schedule guard (channel_model_sync.go). A changed
 // sync signals the enabled-channel cache grain, matching the reference's
-// reloadChannelsAfterCommit.
+// reloadChannelsAfterCommit. The execution window lives in the singleton
+// ChannelModelSyncGrain so every silo shares one gate (§148; C228); the hosted
+// service is the reference's scheduler.TaskSpec registration.
 builder.Services.AddScoped<IChannelModelSyncStore, ChannelModelSyncStore>();
 builder.Services.AddSingleton<IChannelModelSyncReloadHook, GrainChannelModelSyncReloadHook>();
+builder.Services.AddSingleton<IChannelModelSyncGuard>(static services
+    => new GrainChannelModelSyncGuard(
+        services.GetRequiredService<IGrainFactory>(),
+        services.GetRequiredService<ILogger<GrainChannelModelSyncGuard>>()));
 builder.Services.AddScoped<ChannelModelSyncService>();
+builder.Services.AddHostedService<ChannelModelSyncScheduler>();
 
 // Channel price writes (saveChannelModelPrices): the ordered action plan and
 // its active/archived version history run in one store transaction

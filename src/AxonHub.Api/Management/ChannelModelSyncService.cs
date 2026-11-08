@@ -38,6 +38,25 @@ public sealed class NullChannelModelSyncReloadHook : IChannelModelSyncReloadHook
     }
 }
 
+/// <summary>
+/// The reference's <c>modelSyncMu</c> + <c>lastModelSyncExecutionTime</c>
+/// (channel_internal.go:33-46). Production wires
+/// <see cref="GrainChannelModelSyncGuard"/>, which keeps the gate in the
+/// singleton <see cref="AxonHub.Grains.Abstractions.IChannelModelSyncGrain"/>;
+/// direct constructions keep the service's in-process lock.
+/// </summary>
+public interface IChannelModelSyncGuard
+{
+    /// <summary>
+    /// <c>shouldRunModelSync</c>: true exactly once per aligned auto-sync
+    /// interval window.
+    /// </summary>
+    Task<bool> TryBeginRunAsync(
+        DateTimeOffset now,
+        AutoSyncFrequency autoSyncFrequency,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>Aggregate counters returned by the sync-all pass (biz logs them only).</summary>
 public sealed record ChannelModelSyncSummary(int SuccessCount, int FailureCount, int ChangedCount);
 
@@ -60,7 +79,9 @@ public sealed record ChannelModelSyncResult(
 /// <remarks>
 /// Each channel gets a fresh ModelFetcher, like the reference's
 /// NewModelFetcher call inside syncChannelModelsForChannel. Per-channel proxy
-/// settings and the scheduled cron registration are not ported (C158).
+/// settings are not ported (C158); the cron registration lives in
+/// <see cref="ChannelModelSyncScheduler"/> and the execution window in the
+/// singleton grain (§148).
 /// </remarks>
 public sealed class ChannelModelSyncService(
     IChannelModelSyncStore store,
@@ -68,9 +89,11 @@ public sealed class ChannelModelSyncService(
     IExecutor executor,
     TimeProvider time,
     IChannelAutoSyncFrequencyProvider frequency,
-    IChannelModelSyncReloadHook reloadHook)
+    IChannelModelSyncReloadHook reloadHook,
+    IChannelModelSyncGuard? modelSyncGuard = null)
 {
     private readonly object _modelSyncGate = new();
+    private readonly IChannelModelSyncGuard? _modelSyncGuard = modelSyncGuard;
     private DateTimeOffset? _lastModelSyncExecutionTime;
 
     /// <summary>
@@ -236,6 +259,8 @@ public sealed class ChannelModelSyncService(
     /// <summary>
     /// Port of shouldRunModelSync (channel_internal.go:33-46): run at most once
     /// per aligned interval window. Go's zero-time check maps to a null field.
+    /// This is the direct-construction fallback; production defers to
+    /// <see cref="IChannelModelSyncGuard"/> so the window is cluster-wide.
     /// </summary>
     public bool ShouldRunModelSync(DateTimeOffset now, AutoSyncFrequency autoSyncFrequency)
     {
@@ -258,15 +283,24 @@ public sealed class ChannelModelSyncService(
     /// <summary>
     /// Port of ChannelService.runSyncChannelModelsPeriodically
     /// (channel_internal.go:23-31). The reference registers it at cron
-    /// <c>11 * * * *</c> in UTC; host scheduling is not ported yet (C158).
+    /// <c>11 * * * *</c> in UTC (<see cref="ChannelModelSyncScheduler"/>); the
+    /// settings read comes first, then the execution gate. Production uses the
+    /// cluster-wide grain guard; a direct construction without one keeps the
+    /// reference's in-process lock.
     /// </summary>
     public async Task RunSyncChannelModelsPeriodicallyAsync(
         CancellationToken cancellationToken = default)
     {
         var autoSyncFrequency = await frequency.GetAutoSyncFrequencyAsync(cancellationToken)
             .ConfigureAwait(false);
+        var now = time.GetUtcNow();
 
-        if (!ShouldRunModelSync(time.GetUtcNow(), autoSyncFrequency))
+        var shouldRun = _modelSyncGuard is null
+            ? ShouldRunModelSync(now, autoSyncFrequency)
+            : await _modelSyncGuard.TryBeginRunAsync(now, autoSyncFrequency, cancellationToken)
+                .ConfigureAwait(false);
+
+        if (!shouldRun)
         {
             return;
         }

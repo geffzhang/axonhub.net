@@ -253,6 +253,27 @@ internal sealed class FakeAutoSyncFrequencyProvider(AutoSyncFrequency frequency)
         => Task.FromResult(Frequency);
 }
 
+/// <summary>
+/// Records the periodic pass's execution-gate calls (§148). The production
+/// guard is the singleton grain; the fake lets the service's guard path run
+/// without Orleans.
+/// </summary>
+internal sealed class FakeChannelModelSyncGuard(bool result) : IChannelModelSyncGuard
+{
+    public List<(DateTimeOffset Now, AutoSyncFrequency Frequency)> Calls { get; } = [];
+
+    public bool Result { get; set; } = result;
+
+    public Task<bool> TryBeginRunAsync(
+        DateTimeOffset now,
+        AutoSyncFrequency autoSyncFrequency,
+        CancellationToken cancellationToken = default)
+    {
+        Calls.Add((now, autoSyncFrequency));
+        return Task.FromResult(Result);
+    }
+}
+
 /// <summary>Counts the reload notifications the sync pass emits.</summary>
 internal sealed class RecordingModelSyncReloadHook : IChannelModelSyncReloadHook
 {

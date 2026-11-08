@@ -316,6 +316,95 @@ public sealed class ChannelModelSyncTests
     }
 
     [Fact]
+    public async Task PeriodicRunAsksTheGuardBeforeSyncing()
+    {
+        var channels = new FakeChannelModelSyncStore();
+        var guard = new FakeChannelModelSyncGuard(result: false);
+        var service = NewService(channels, new FakeChannelModelPriceStore(), guard: guard);
+
+        await service.RunSyncChannelModelsPeriodicallyAsync(CancellationToken.None);
+
+        // runSyncChannelModelsPeriodically reads the settings first, then asks
+        // shouldRunModelSync; a closed window never reaches the sync pass.
+        var call = Assert.Single(guard.Calls);
+        Assert.Equal(AutoSyncFrequency.OneHour, call.Frequency);
+        Assert.Empty(channels.SyncCalls);
+    }
+
+    [Fact]
+    public async Task PeriodicRunSyncsWhenTheGuardAllows()
+    {
+        var executor = new ScriptedExecutor();
+        executor.OnDo = (_, _, _) => ModelFetchTestResponses.Json(
+            """{"data":[{"id":"guard-model"}]}""");
+
+        var channels = new FakeChannelModelSyncStore();
+        channels.Seed(new ChannelRecord
+        {
+            Id = 1,
+            Name = "Guarded periodic sync",
+            Type = "openai",
+            BaseUrl = "https://provider.test/v1",
+            Status = "enabled",
+            Credentials = """{"apiKey":"test-key"}""",
+            SupportedModels = """["old-model"]""",
+            ManualModels = "[]",
+            DefaultTestModel = "old-model",
+            AutoSyncSupportedModels = true,
+        });
+
+        var guard = new FakeChannelModelSyncGuard(result: true);
+        var service = NewService(
+            channels,
+            new FakeChannelModelPriceStore(),
+            executor,
+            guard: guard);
+
+        await service.RunSyncChannelModelsPeriodicallyAsync(CancellationToken.None);
+
+        Assert.Single(guard.Calls);
+        Assert.Equal([1], channels.SyncCalls);
+    }
+
+    [Fact]
+    public async Task PeriodicRunWithoutAGuardUsesTheLocalWindow()
+    {
+        var executor = new ScriptedExecutor();
+        executor.OnDo = (_, _, _) => ModelFetchTestResponses.Json(
+            """{"data":[{"id":"local-model"}]}""");
+
+        var channels = new FakeChannelModelSyncStore();
+        channels.Seed(new ChannelRecord
+        {
+            Id = 1,
+            Name = "Local window sync",
+            Type = "openai",
+            BaseUrl = "https://provider.test/v1",
+            Status = "enabled",
+            Credentials = """{"apiKey":"test-key"}""",
+            SupportedModels = """["old-model"]""",
+            ManualModels = "[]",
+            DefaultTestModel = "old-model",
+            AutoSyncSupportedModels = true,
+        });
+
+        var time = new ManualTimeProvider(new DateTimeOffset(2024, 1, 1, 10, 2, 0, TimeSpan.Zero));
+        var service = NewService(
+            channels,
+            new FakeChannelModelPriceStore(),
+            executor,
+            time: time);
+
+        await service.RunSyncChannelModelsPeriodicallyAsync(CancellationToken.None);
+        time.UtcNow = time.UtcNow.AddMinutes(2);
+        await service.RunSyncChannelModelsPeriodicallyAsync(CancellationToken.None);
+
+        // The direct-construction service keeps the reference's in-process
+        // window: the second tick inside the hour does not sync again.
+        Assert.Equal([1], channels.SyncCalls);
+    }
+
+    [Fact]
     public async Task SyncChannelModelsKeepsManualModelsSavedDuringFetch()
     {
         var channels = new FakeChannelModelSyncStore();
@@ -499,14 +588,16 @@ public sealed class ChannelModelSyncTests
         FakeChannelModelPriceStore prices,
         ScriptedExecutor? executor = null,
         RecordingModelSyncReloadHook? hook = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        FakeChannelModelSyncGuard? guard = null)
         => new(
             store,
             prices,
             executor ?? new ScriptedExecutor(),
             time ?? TimeProvider.System,
             new FakeAutoSyncFrequencyProvider(AutoSyncFrequency.OneHour),
-            hook ?? new RecordingModelSyncReloadHook());
+            hook ?? new RecordingModelSyncReloadHook(),
+            guard);
 
     private static List<string> ParseModelList(string? raw)
         => string.IsNullOrWhiteSpace(raw)

@@ -7539,6 +7539,59 @@ C094 的 (2)(3)(4) 对 codex / claudecode / xai_subscription 关闭，C127 / C15
 xcache 后端仍未支持（端口无 Redis 缓存后端，与 C171 同源），grain 状态在 silo 重启后丢失（与参照
 memory 模式相同）。
 
+## 148. 模型同步调度与执行窗口迁入 ChannelModelSyncGrain（B1，5 + 4 例，2026-11-09）
+
+参照：`internal/server/biz/channel.go:204-212`（`RegisterScheduledTasks` 注册
+`{Name:"channel-model-sync", CronExpr:"11 * * * *", Timezone:"UTC"}`）、
+`internal/server/biz/channel_internal.go:23-31`（`runSyncChannelModelsPeriodically`：系统绕过 →
+读 `ChannelSettingOrDefault` → `shouldRunModelSync(xtime.UTCNow(), setting.AutoSync.Frequency)` →
+`syncChannelModels`）、`channel_internal.go:33-46`（`shouldRunModelSync`：按间隔截断 now，互斥量
+保护 `lastModelSyncExecutionTime`，同一对齐窗口只放行一次）、`channel_internal.go:48-59`
+（频率 → 60 / 360 / 1440 分钟，未知值回退 60）、`channel_model_sync.go:15-67`（同步遍）。
+
+| 项 | 参照值 |
+|---|---|
+| 触发 | 每个进程向共享 scheduler 注册 cron `11 * * * *`（UTC），每小时第 11 分钟触发 |
+| 窗口 | `now.Truncate(interval)` 对齐到 UTC 绝对时间；同一对齐值只运行一次，跨窗口后再次放行 |
+| 间隔 | 1 小时 → 60 分钟、6 小时 → 360、1 天 → 1440、未知 → 60 |
+| 执行顺序 | 先读系统设置的频率，再判断窗口；窗口关闭时不做任何同步 |
+| 状态 | `modelSyncMu` + `lastModelSyncExecutionTime` 在 `ChannelService` 内，进程重启即清空 |
+| 注册语义 | 注册时不立即运行；下一匹配时刻触发；停机期间错过的不补跑 |
+
+端口实现：
+
+- 新增 `IChannelModelSyncGrain`（Grains.Abstractions，string key `"model-sync"` 单例）与
+  `ChannelModelSyncGrain`（Grains）：`TryBeginRunAsync(now, intervalMinutes)` 复刻
+  `shouldRunModelSync` 的截断与一次性放行；grain turn 串行化替代 `modelSyncMu`；
+  `DelayDeactivation(2 小时)` 让激活跨过每小时 tick 存活（默认回收年龄 15 分钟会丢失窗口，
+  导致 6 小时 / 1 天频率退化为每小时运行）。
+- 新增 `IChannelModelSyncGuard`（Api）与 `GrainChannelModelSyncGuard`：把
+  `AutoSyncFrequency` 映射为分钟数并调用单例 grain；分派失败记 warning 并跳过本 tick（参照的
+  进程内互斥量不会失败；跳过比多 silo 同时运行更保守）。
+- `ChannelModelSyncService` 增加可选的 `IChannelModelSyncGuard`：生产注入 grain 守卫；
+  直接构造（测试 / 旧宿主）保留进程内 `_modelSyncGate` 与 `ShouldRunModelSync`。
+- 新增 `ChannelModelSyncScheduler`（BackgroundService）：按参照 cron `11 * * * *`（UTC）触发，
+  向作用域请求 `ChannelModelSyncService` 并调用 `RunSyncChannelModelsPeriodicallyAsync`；
+  复用 `GcCronSchedule` 的五字段解析（C132），注册时不立即运行、错过不补跑。
+- 接线：`Program.cs` 注册 grain 守卫与 hosted service。
+
+测试（5 + 4 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Grains.Tests/ChannelModelSyncGrainTests.cs` | 5 | 同窗口仅首次放行、跨窗口再次放行、6 小时 / 1 天对齐、并发调用只有一个赢家 |
+| `tests/AxonHub.Api.Tests/GrainChannelModelSyncGuardTests.cs` | 1 | 生产单例键、跨桥实例共享窗口、三个频率到间隔的映射 |
+| `tests/AxonHub.Api.Tests/ChannelModelSyncTests.cs` | 3 | 周期入口先问守卫、守卫放行才同步、无守卫时回退进程内窗口 |
+
+静态计数：`AxonHub.Grains.Tests` 由 1716 增至 1721（+5），`AxonHub.Api.Tests` 由 5445 增至
+5449（+4），`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 336 不变，四项目合计由 9003
+增至 9012。**按项目规则未运行 lint / build / test。**
+
+差异：C158 的第 ① 项（后台周期注册缺失）关闭——hosted service 按参照 cron 触发，`C158` 仅剩
+按通道代理与 live-only 分支。新增 C228：参照的窗口是每进程一份，端口为集群单激活；多 silo 下
+参照每个进程每个窗口都可能各跑一遍，端口整个集群只跑一遍（有意收窄，单 silo 等价）；grain 分派
+失败时跳过本 tick（参照无此失败面）；grain 状态随 silo 重启丢失，与参照进程重启等价。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
