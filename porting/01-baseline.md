@@ -6596,6 +6596,39 @@ MiniMax 与 ZhiPu 已注册，其余 4 个待切片」。
 差异：C182 由剩余 5 个 checker 收窄为 4 个；新增 C217（ZhiPu 采集 HTTP 接缝、raw Authorization、
 Go 解码语义与 UTC 重置文本）。
 
+## 130. Zai 供应商配额检查器（固定 api.z.ai 用量端点、复用 ZhiPu 族采集器，28 例，2026-11-08）
+
+参照 `f272549f`：`internal/server/biz/provider_quota/zai_checker.go`（`zaiDefaultQuotaBaseURL`:11、
+`ZaiQuotaChecker` / `NewZaiQuotaChecker`:13-19、`CheckQuota`:21-23、`SupportsChannel`:25-28、
+`parseZaiQuotaResponse`:30-33），`internal/server/biz/provider_quota.go:390` 的 `registerZaiSupport`
+（定义见 `provider_quota.go:474-476`，在 `registerZhipuSupport` 之后、`registerCharmHyperSupport` 之前调用），
+以及 `zai_checker_test.go` 的 5 个测试函数。
+
+新增 `src/AxonHub.Api/Orchestration/ZaiQuotaChecker.cs`：`IQuotaChecker` 薄包装，组合
+`ZhipuQuotaChecker` 的共享 `CollectFamilyQuota`；固定 `https://api.z.ai/api/monitor/usage/quota/limit`，
+providerType `zai`，`SupportsChannel` 只匹配 `zai` / `zai_anthropic`；`ParseZaiQuotaResponse`
+委托 `ParseFamilyQuotaResponse(body, "zai", now)`。`Program.cs` 在 zhipu 之后注册 `ZaiQuotaChecker` 与
+`ProviderQuotaCheckerRegistration("zai", …)`（与参照 `registerZaiSupport` 的顺序一致），
+`ProviderQuotaCheckerRegistry` 的文档同步为「… MiniMax、ZhiPu 与 Zai 已注册，其余 3 个待切片」。
+
+- 采集：与 zhipu 相同（raw Authorization、Content-Type、Accept-Language、无 body、代理路由、逐 key
+  顺序、禁用 32 上限、Go 解码语义），仅 URL 与 providerType 不同（C218）；通道 BaseURL 忽略。
+- 文案：共享采集器硬编码 `zhipu` 前缀（`zhipu quota check failed for all …`、`… enabled keys: …`、
+  `failed to parse zhipu quota response: …`、`zhipu API error: …`、禁用截断 warning），zai 通道照常出现。
+- 聚合：单账户按窗口限额、多账户为 `zhipu_accounts` availability group 的绑定限额；rawData 与
+  `NextResetAt` 规则同 §129。
+
+| 守护对象 | 测试位置 | 用例数 |
+|---|---|---|
+| 固定 api.z.ai 端点与 URL 忽略 BaseURL 6 组、raw Authorization / Content-Type / Accept-Language / 无 body、参照报文映射与 rawData、zai / zai_anthropic 通道类型门 5 组、API 错误与缺失 key、全失败族前缀、多 key 的 zhipu_accounts 分组与 exhausted 跳过、40 个禁用 key 截断 warning、ParseZaiQuotaResponse 委托与解码前缀、执行器 >=400 4 组 / 2xx 3 组、代理路由 | `tests/AxonHub.Api.Tests/ZaiQuotaCheckerTests.cs` | 10 + 18 |
+
+`AxonHub.Api.Tests` 由 4954 增至 4982（+28），`AxonHub.Persistence.Tests` 保持 319，四个项目合计由
+8400 增至 8428。**本切片按项目规则未运行 lint / build / test，上述数字为 `[Fact]` / `[InlineData]` 的静态
+计数；下一次全量运行应以 4982 / 319 / 8428 复核。**
+
+差异：C182 由剩余 4 个 checker 收窄为 3 个；新增 C218（Zai 复用族采集器的固定主机、provider 标识、
+共享错误文案与 availability group）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -6623,7 +6656,7 @@ Go 解码语义与 UTC 重置文本）。
 | 项目 / API key profile 的候选过滤 | 已由 §92 闭合：项目 profile（仅带 key 时）与 key 激活 profile 的 ChannelIDs / ChannelTags（any / all / none）交集过滤、空过滤器 no-op、模型关联与通道回退两条来源、tester 指定候选、过滤为空时的 invalid-model 文案（12 例）；C179 的真实缺口 (b) 随之关闭 | — | 完成（C179） |
 | Google / Anthropic 原生工具候选过滤 | 已由 §93 闭合：格式门（Gemini contents / Anthropic messages）、原生工具触发条件、兼容通道集合、无兼容时回退全量、普通与 tester 两条路径（3 + 10 例）；C179 的真实缺口 (c) 随之关闭 | — | 完成（C179） |
 | 流策略候选过滤 | 已由 §94 闭合：流式 forbid 过滤、非流式 require 优先级、自动聚合回退、AI SDK / embedding / compact 空结果、Decisions 冲突文案、通道策略流入候选（19 例）；C179 的真实缺口 (d) 随之关闭 | — | 完成（C179） |
-| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），ZhiPu checker 由 §129 落地（144 例），其余 4 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax / zhipu 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
+| 配额路由与供应商配额采集 | 已由 §95 闭合候选选择侧的配额闸门：EvaluateQuotaRouting 决策表、两阶段过滤与 dropped count、通道级 quotaRoutingMode 覆盖与 fail-closed、请求 modality、系统设置与 legacy 映射、QuotaExhausted 的非流 503 / 流式 envelope / 二进制 503（43 例）；启动数据迁移由 §112 闭合（claim / legacy 映射 / allowedChannelIDs 改写 / 标记，19 + 7 例，C183 resolved）；采集核心（ProviderQuotaService / provider_quota_status / 设置 / 调度 / GraphQL 配额面）由 §114 落地（111 例），Antigravity checker 由 §115 落地（61 例），Claude Code checker 由 §116 落地（80 例），Codex checker 由 §117 落地（83 例，含 IQuotaResetter），xAI Subscription checker 由 §118 落地（46 例），GitHub Copilot checker 由 §119 落地（75 例），NanoGPT checker 由 §120 落地（105 例），ZenMux checker 由 §121 落地（152 例），Cline checker 由 §122 落地（100 例），Synthetic checker 由 §123 落地（209 例），NeuralWatt checker 由 §124 落地（127 例），Apertis checker 由 §125 落地（187 例），OpenCode Go checker 由 §126 落地（122 例），Kimi Code checker 由 §127 落地（218 例），MiniMax checker 由 §128 落地（161 例），ZhiPu checker 由 §129 落地（144 例），Zai checker 由 §130 落地（28 例），其余 3 个 provider checker 与供应商专属重置未移植（C182）；未注册 provider 的通道保留既有行、antigravity / claudecode / codex / xai_subscription / github_copilot / nanogpt / zenmux / cline / synthetic / neuralwatt / apertis / opencode_go / kimi_code / minimax / zhipu / zai 通道发起采集 | 中 | 闸门与迁移完成；其余 checker 按供应商分批落地（C182） |
 | 通道变换选项与流策略强制 | 已由 §96 闭合：ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem、ReasoningEffortMapping 与 Anthropic output_config.effort 同步、Responses custom tool 消息过滤、Anthropic 非流式显式 `stream:false`、require-streaming 候选对可聚合请求的强制流式与 state 同步（43 + 9 例）；C180 随之闭合 | — | 完成（C180） |
 | API key profile 模型映射与响应模型还原 | 已由 §97 闭合：active profile ModelMappings 的首个匹配与 XRegexp 语义、RequestModel / OriginalModel 共享状态与二次调用恢复、空模型拒绝、响应与流模型还原、选择前的 pipeline 接线与 tester 路径（8 例）；C184 随之闭合；其余入站中间件（enforceQuota / applyAutoReasoningEffort / checkApiKeyModelAccess / Claude Code 计费消息）登记为 C185 | 中 | 映射完成；其余中间件随 C185 切片 |
 | orchestrator 其余入站中间件（配额 / auto reasoning / model access / 计费消息） | 已由 §98 闭合：三类配额窗口与 usage_logs 聚合、403 `quota_exceeded_error` 信封、模型后缀拆分与 Qwen 豁免、active profile ModelIDs 精确匹配、Claude Code 计费消息按 claudecode + OAuth 保留（15 + 28 + 5 例，另 Persistence +4）；C185 随之闭合，时区读取差异登记为 C186 | — | 完成（C185 / C186） |
