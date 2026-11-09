@@ -2076,6 +2076,28 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.UpdateChannelSettings
+    /// (axonhub.resolvers.go:222-224; biz channel_settings.go:153-195).
+    /// </summary>
+    [GraphQLName("updateChannelSettings")]
+    public async Task<ChannelType> UpdateChannelSettingsAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateChannelSettingsInput input,
+        [Service] ChannelLifecycleService channels,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var channel = await channels.UpdateSettingsAsync(
+                gid.Id,
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
     /// Port of mutationResolver.CreateChannelOverrideTemplate
     /// (axonhub.resolvers.go:644-652). The resolver checks for a current user
     /// before calling the service.

@@ -568,6 +568,23 @@ C176 item (6) 的 apiKeyQuotaUsages 缺口随之关闭。
 登记为 C249（gap），端口自身不产生 probe 行；scope 近似与系统设置缓存缺席（C029）的影响
 同条目登记。
 
+§163 追加 25 个用例（`AxonHub.Api.Tests` 24：`ChannelSettingsMergeTests` 8、
+`AdminChannelSettingsEndpointTests` 16；`AxonHub.Persistence.Tests` 1：
+`ChannelWriteStoreTests`），同样按项目规则未运行 lint / build / test；§163 落地后的静态
+计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5844、`AxonHub.Llm.Tests` 1512、
+`AxonHub.Persistence.Tests` 363，四项目合计 9465，下一次全量运行应以该数字复核。该切片为
+post-baseline 漂移（冻结基线 `b8bb3421` 无 `channel_settings` 包与对应 schema 成员），按
+`f272549f` 接入 `updateChannelSettings`：读取 `settings` / `updated_at` 后在进程内把 patch
+合并到存储设置（nil 切片保留、显式空切片清空、嵌套对象整体替换、`quotaRoutingMode` 的
+INHERIT 映为 `""`），合并值经完整 `UpdateChannel` 的校验、Command Code cookie 归一化与
+`updated_at` 乐观锁写入；守卫使用合并读取时的版本（`UpdateChannelCommand.ExpectedUpdatedAt`
+覆盖第二次读取），冲突重试至多 8 次并返回 `channel was updated concurrently; retry the
+operation`，其它错误立即返回。序列化沿用 Go tags：非 omitempty 空值恒出现、omitempty
+空值在写入后消失，因此立即响应等于存储 JSON 的读回。缺失 / 软删通道与损坏 settings 的
+读取失败保持 `failed to load channel settings: ` 前缀。live 的 `channelExpectedVersionKey`
+已在本路径采用（C144 更新）；`apiKeyStrategy` 的 present-empty 指针折叠为缺失登记为
+C250（accepted）。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

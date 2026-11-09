@@ -72,6 +72,30 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task GetSettingsVersionProjectsSettingsAndUpdatedAtForLiveRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var channel = await SeedChannelAsync(
+            context,
+            settings: """{"extraModelPrefix":"deepseek"}""");
+        var deleted = await SeedChannelAsync(context, name: "Deleted", deletedAt: 77);
+
+        var version = await store.GetSettingsVersionAsync(channel.Id);
+
+        Assert.NotNull(version);
+        Assert.Equal("""{"extraModelPrefix":"deepseek"}""", version.Settings);
+        Assert.Equal(UpdatedAt, version.UpdatedAt);
+
+        // The soft-delete predicate hides deleted and missing rows.
+        Assert.Null(await store.GetSettingsVersionAsync(deleted.Id));
+        Assert.Null(await store.GetSettingsVersionAsync(424242));
+    }
+
+    [Fact]
     public async Task DeleteSoftDeletesWithUnixSecondsAndHidesTheRow()
     {
         await using var db = new TestDatabase(fixture);

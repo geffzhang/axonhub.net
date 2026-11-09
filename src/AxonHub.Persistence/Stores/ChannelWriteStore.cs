@@ -92,6 +92,14 @@ public sealed class ChannelApiKeyStateRecord
 public sealed record ChannelOrderingItem(long Id, int OrderingWeight);
 
 /// <summary>
+/// Port of the settings/version projection read by
+/// ChannelService.UpdateChannelSettings (channel_settings.go:160-166):
+/// <c>FieldSettings</c> plus <c>FieldUpdatedAt</c> over the soft-delete
+/// predicate. The merge is guarded on <see cref="UpdatedAt"/>.
+/// </summary>
+public sealed record ChannelSettingsVersion(string? Settings, DateTime UpdatedAt);
+
+/// <summary>
 /// Write seam for the channel lifecycle mutations of biz.ChannelService and
 /// biz.ChannelService bulk helpers (channel.go:1205-1290,
 /// channel_bulk.go:163-462). Each method owns the reference's checks and its
@@ -117,6 +125,19 @@ public interface IChannelWriteStore
     /// The read failed; the message already carries "failed to get channel".
     /// </exception>
     Task<ChannelRecord?> GetAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of the settings merge read of ChannelService.UpdateChannelSettings
+    /// (channel_settings.go:160-166): projects only settings and updated_at for
+    /// a live row. Returns null when no live row exists; the caller raises
+    /// "failed to load channel settings: ent: channel not found".
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The read failed; the message already carries "failed to load channel settings".
+    /// </exception>
+    Task<ChannelSettingsVersion?> GetSettingsVersionAsync(
         long id,
         CancellationToken cancellationToken = default);
 
@@ -407,6 +428,29 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
         => db.Channels
             .AsNoTracking()
             .SingleOrDefaultAsync(row => row.Id == id && row.DeletedAt == 0, cancellationToken);
+
+    public async Task<ChannelSettingsVersion?> GetSettingsVersionAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // ent: Select(channel.FieldSettings, channel.FieldUpdatedAt).Get(ctx, id)
+            // with the SoftDeleteMixin predicate; a missing row is not an error.
+            return await db.Channels
+                .AsNoTracking()
+                .Where(row => row.Id == id && row.DeletedAt == 0)
+                .Select(row => new ChannelSettingsVersion(row.Settings, row.UpdatedAt))
+                .SingleOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(
+                "failed to load channel settings: " + ex.Message,
+                ex);
+        }
+    }
 
     public async Task<bool> NameExistsAsync(
         long id,

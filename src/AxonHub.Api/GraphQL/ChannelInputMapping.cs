@@ -70,6 +70,76 @@ public static class ChannelInputMapping
     }
 
     /// <summary>
+    /// Maps the live <c>UpdateChannelSettingsInput</c> to the merge command
+    /// (axonhub.graphql:331-352, channel_settings.go:29-50). Every null keeps
+    /// "absent"; an explicit empty list stays an empty list so the merge can
+    /// clear the stored value. Present-but-empty strings stay empty because the
+    /// Go patch carries pointers, not omitempty fields.
+    /// </summary>
+    public static UpdateChannelSettingsCommand ToCommand(UpdateChannelSettingsInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        return new UpdateChannelSettingsCommand
+        {
+            ExtraModelPrefix = input.ExtraModelPrefix,
+            ModelMappings = input.ModelMappings?
+                .Select(static mapping => new ModelMappingDraft
+                {
+                    From = mapping.From,
+                    To = mapping.To,
+                })
+                .ToList(),
+            AutoTrimedModelPrefixes = input.AutoTrimedModelPrefixes?.ToList(),
+            HideOriginalModels = input.HideOriginalModels,
+            HideMappedModels = input.HideMappedModels,
+            LowercaseModelId = input.LowercaseModelId,
+            Proxy = ToProxy(input.Proxy),
+            TransformOptions = input.TransformOptions is null
+                ? null
+                : ToTransformOptions(input.TransformOptions),
+            HeaderOverrideOperations = input.HeaderOverrideOperations?
+                .Select(ToOperation)
+                .ToList(),
+            BodyOverrideOperations = input.BodyOverrideOperations?
+                .Select(ToOperation)
+                .ToList(),
+            PassThroughUserAgent = input.PassThroughUserAgent,
+            PassThroughBody = input.PassThroughBody,
+            RateLimit = ToRateLimit(input.RateLimit),
+            RetryableStatusCodes = input.RetryableStatusCodes?.ToList(),
+            RetryableErrorPatterns = input.RetryableErrorPatterns?
+                .Select(static pattern => new RetryableErrorPatternDraft
+                {
+                    Pattern = pattern.Pattern,
+                    Regex = pattern.Regex is true ? true : null,
+                })
+                .ToList(),
+            ModelProtocols = input.ModelProtocols?
+                .Select(static protocol => new ModelProtocolDraft
+                {
+                    Model = protocol.Model,
+                    ApiFormats = protocol.ApiFormats.ToList(),
+                    Enabled = protocol.Enabled,
+                })
+                .ToList(),
+            ApiKeyStrategy = input.ApiKeyStrategy,
+            ApiKeyRoundRobinSwitchAfter = input.ApiKeyRoundRobinSwitchAfter,
+            ProviderQuota = ToProviderQuota(input.ProviderQuota),
+            QuotaRoutingMode = input.QuotaRoutingMode switch
+            {
+                // objects.QuotaRoutingMode.UnmarshalGQL: INHERIT is the zero
+                // value, so a present INHERIT merges as "".
+                null => null,
+                ChannelQuotaRoutingModeValue.Inherit => string.Empty,
+                ChannelQuotaRoutingModeValue.IgnoreQuota => "ignore_quota",
+                ChannelQuotaRoutingModeValue.RemoveOnExhausted => "remove_on_exhausted",
+                _ => "backpressure",
+            },
+        };
+    }
+
+    /// <summary>
     /// Maps the GraphQL bulk ordering input to the store items
     /// (channel_bulk.go:18-21). gqlgen decodes the IDs before the resolver runs,
     /// so this is the reference's nil-vs-empty boundary for <c>channels</c>.
@@ -309,23 +379,7 @@ public static class ChannelInputMapping
                 }).ToList()),
             ApiKeyStrategy = OmitEmpty(input.ApiKeyStrategy),
             ApiKeyRoundRobinSwitchAfter = input.ApiKeyRoundRobinSwitchAfter,
-            ProviderQuota = input.ProviderQuota is null
-                ? null
-                : new ChannelProviderQuotaSettingsDraft
-                {
-                    CommandCode = input.ProviderQuota.CommandCode is null
-                        ? null
-                        : new CommandCodeQuotaSettingsDraft
-                        {
-                            AuthCookie = OmitEmpty(input.ProviderQuota.CommandCode.AuthCookie),
-                        },
-                    Ollama = input.ProviderQuota.Ollama is null
-                        ? null
-                        : new OllamaQuotaSettingsDraft
-                        {
-                            AuthCookie = OmitEmpty(input.ProviderQuota.Ollama.AuthCookie),
-                        },
-                },
+            ProviderQuota = ToProviderQuota(input.ProviderQuota),
             QuotaRoutingMode = input.QuotaRoutingMode switch
             {
                 null or ChannelQuotaRoutingModeValue.Inherit => null,
@@ -388,6 +442,26 @@ public static class ChannelInputMapping
                             From = mapping.From,
                             To = mapping.To,
                         }).ToList()),
+            };
+
+    private static ChannelProviderQuotaSettingsDraft? ToProviderQuota(
+        ChannelProviderQuotaSettingsInput? input)
+        => input is null
+            ? null
+            : new ChannelProviderQuotaSettingsDraft
+            {
+                CommandCode = input.CommandCode is null
+                    ? null
+                    : new CommandCodeQuotaSettingsDraft
+                    {
+                        AuthCookie = OmitEmpty(input.CommandCode.AuthCookie),
+                    },
+                Ollama = input.Ollama is null
+                    ? null
+                    : new OllamaQuotaSettingsDraft
+                    {
+                        AuthCookie = OmitEmpty(input.Ollama.AuthCookie),
+                    },
             };
 
     private static ChannelRateLimitDraft? ToRateLimit(ChannelRateLimitInput? input)

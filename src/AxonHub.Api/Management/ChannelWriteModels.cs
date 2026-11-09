@@ -109,6 +109,210 @@ public sealed class UpdateChannelCommand
     public IReadOnlyList<ChannelEndpointDraft>? Endpoints { get; set; }
 
     public bool ClearErrorMessage { get; init; }
+
+    /// <summary>
+    /// Port of the channelExpectedVersionKey context value
+    /// (channel_settings.go:129-141): the updated-at the write must still match.
+    /// Set by <see cref="ChannelLifecycleService.UpdateSettingsAsync"/>'s merge
+    /// loop; null keeps the frozen loaded-version behaviour.
+    /// </summary>
+    public DateTime? ExpectedUpdatedAt { get; init; }
+}
+
+/// <summary>
+/// Port of objects.UpdateChannelSettingsInput (channel_settings.go:17-50): a
+/// partial settings patch where null means "absent" and a null list means
+/// "unstored". An explicitly empty list clears the stored value; nested objects
+/// replace the stored value as a whole.
+/// </summary>
+public sealed class UpdateChannelSettingsCommand
+{
+    public string? ExtraModelPrefix { get; init; }
+
+    public IReadOnlyList<ModelMappingDraft>? ModelMappings { get; init; }
+
+    public IReadOnlyList<string>? AutoTrimedModelPrefixes { get; init; }
+
+    public bool? HideOriginalModels { get; init; }
+
+    public bool? HideMappedModels { get; init; }
+
+    public bool? LowercaseModelId { get; init; }
+
+    public ProxyConfigDraft? Proxy { get; init; }
+
+    public TransformOptionsDraft? TransformOptions { get; init; }
+
+    public IReadOnlyList<OverrideOperationDraft>? HeaderOverrideOperations { get; init; }
+
+    public IReadOnlyList<OverrideOperationDraft>? BodyOverrideOperations { get; init; }
+
+    public bool? PassThroughUserAgent { get; init; }
+
+    public bool? PassThroughBody { get; init; }
+
+    public ChannelRateLimitDraft? RateLimit { get; init; }
+
+    public IReadOnlyList<int>? RetryableStatusCodes { get; init; }
+
+    public IReadOnlyList<RetryableErrorPatternDraft>? RetryableErrorPatterns { get; init; }
+
+    public IReadOnlyList<ModelProtocolDraft>? ModelProtocols { get; init; }
+
+    /// <summary>
+    /// Present-but-empty is meaningful: <c>""</c> replaces the stored value
+    /// (unlike the omitempty serialization, which drops a zero string).
+    /// </summary>
+    public string? ApiKeyStrategy { get; init; }
+
+    public int? ApiKeyRoundRobinSwitchAfter { get; init; }
+
+    public ChannelProviderQuotaSettingsDraft? ProviderQuota { get; init; }
+
+    /// <summary>Wire value of objects.QuotaRoutingMode ("" means INHERIT).</summary>
+    public string? QuotaRoutingMode { get; init; }
+
+    /// <summary>
+    /// Port of UpdateChannelSettingsInput.Apply (channel_settings.go:52-127):
+    /// <paramref name="baseSettings"/> is shallow-copied (nested objects and
+    /// lists shared, exactly like the Go struct copy) and every present patch
+    /// field replaces the copied value. A null base starts from the zero
+    /// settings. The returned object is fresh per call.
+    /// </summary>
+    public ChannelSettingsDraft Apply(ChannelSettingsDraft? baseSettings)
+    {
+        var merged = baseSettings is null
+            ? new ChannelSettingsDraft()
+            : new ChannelSettingsDraft
+            {
+                ExtraModelPrefix = baseSettings.ExtraModelPrefix,
+                AutoTrimedModelPrefixes = baseSettings.AutoTrimedModelPrefixes,
+                ModelMappings = baseSettings.ModelMappings,
+                HideOriginalModels = baseSettings.HideOriginalModels,
+                HideMappedModels = baseSettings.HideMappedModels,
+                LowercaseModelId = baseSettings.LowercaseModelId,
+                OverrideParameters = baseSettings.OverrideParameters,
+                BodyOverrideOperations = baseSettings.BodyOverrideOperations,
+                OverrideHeaders = baseSettings.OverrideHeaders,
+                HeaderOverrideOperations = baseSettings.HeaderOverrideOperations,
+                Proxy = baseSettings.Proxy,
+                TransformOptions = baseSettings.TransformOptions,
+                PassThroughUserAgent = baseSettings.PassThroughUserAgent,
+                PassThroughBody = baseSettings.PassThroughBody,
+                RateLimit = baseSettings.RateLimit,
+                RetryableStatusCodes = baseSettings.RetryableStatusCodes,
+                RetryableErrorPatterns = baseSettings.RetryableErrorPatterns,
+                MaxSingleChannelRetries = baseSettings.MaxSingleChannelRetries,
+                ResponseTimeout = baseSettings.ResponseTimeout,
+                ModelProtocols = baseSettings.ModelProtocols,
+                ApiKeyStrategy = baseSettings.ApiKeyStrategy,
+                ApiKeyRoundRobinSwitchAfter = baseSettings.ApiKeyRoundRobinSwitchAfter,
+                ProviderQuota = baseSettings.ProviderQuota,
+                QuotaRoutingMode = baseSettings.QuotaRoutingMode,
+            };
+
+        if (ExtraModelPrefix is { } extraModelPrefix)
+        {
+            merged.ExtraModelPrefix = extraModelPrefix;
+        }
+
+        if (ModelMappings is { } modelMappings)
+        {
+            merged.ModelMappings = modelMappings;
+        }
+
+        if (AutoTrimedModelPrefixes is { } autoTrimedModelPrefixes)
+        {
+            merged.AutoTrimedModelPrefixes = autoTrimedModelPrefixes;
+        }
+
+        if (HideOriginalModels is { } hideOriginalModels)
+        {
+            merged.HideOriginalModels = hideOriginalModels;
+        }
+
+        if (HideMappedModels is { } hideMappedModels)
+        {
+            merged.HideMappedModels = hideMappedModels;
+        }
+
+        if (LowercaseModelId is { } lowercaseModelId)
+        {
+            merged.LowercaseModelId = lowercaseModelId;
+        }
+
+        if (Proxy is { } proxy)
+        {
+            merged.Proxy = proxy;
+        }
+
+        if (TransformOptions is { } transformOptions)
+        {
+            merged.TransformOptions = transformOptions;
+        }
+
+        if (HeaderOverrideOperations is { } headerOverrideOperations)
+        {
+            merged.HeaderOverrideOperations = headerOverrideOperations;
+        }
+
+        if (BodyOverrideOperations is { } bodyOverrideOperations)
+        {
+            merged.BodyOverrideOperations = bodyOverrideOperations;
+        }
+
+        if (PassThroughUserAgent is { } passThroughUserAgent)
+        {
+            merged.PassThroughUserAgent = passThroughUserAgent;
+        }
+
+        if (PassThroughBody is { } passThroughBody)
+        {
+            merged.PassThroughBody = passThroughBody;
+        }
+
+        if (RateLimit is { } rateLimit)
+        {
+            merged.RateLimit = rateLimit;
+        }
+
+        if (RetryableStatusCodes is { } retryableStatusCodes)
+        {
+            merged.RetryableStatusCodes = retryableStatusCodes;
+        }
+
+        if (RetryableErrorPatterns is { } retryableErrorPatterns)
+        {
+            merged.RetryableErrorPatterns = retryableErrorPatterns;
+        }
+
+        if (ModelProtocols is { } modelProtocols)
+        {
+            merged.ModelProtocols = modelProtocols;
+        }
+
+        if (ApiKeyStrategy is { } apiKeyStrategy)
+        {
+            merged.ApiKeyStrategy = apiKeyStrategy;
+        }
+
+        if (ApiKeyRoundRobinSwitchAfter is { } apiKeyRoundRobinSwitchAfter)
+        {
+            merged.ApiKeyRoundRobinSwitchAfter = apiKeyRoundRobinSwitchAfter;
+        }
+
+        if (ProviderQuota is { } providerQuota)
+        {
+            merged.ProviderQuota = providerQuota;
+        }
+
+        if (QuotaRoutingMode is { } quotaRoutingMode)
+        {
+            merged.QuotaRoutingMode = quotaRoutingMode;
+        }
+
+        return merged;
+    }
 }
 
 /// <summary>

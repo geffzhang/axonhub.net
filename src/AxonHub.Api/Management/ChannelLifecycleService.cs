@@ -632,14 +632,16 @@ public sealed class ChannelLifecycleService(
         var effectiveType = command.Type ?? snapshot.Type;
 
         // The guard is decided from the caller's input before normalization and
-        // the xai rewrite, exactly like the reference (channel.go:869-872).
+        // the xai rewrite, exactly like the reference (channel.go:903-927).
+        var expectedUpdatedAt = command.ExpectedUpdatedAt;
         var commandCodeQuotaSettings = command.Settings is not null
             && (ChannelValidation.IsCommandCodeChannelType(effectiveType)
                 || command.Settings.ProviderQuota?.CommandCode is not null);
         var guardProviderIdentity = command.Type is not null
             || command.BaseUrl is not null
             || command.Endpoints is not null
-            || commandCodeQuotaSettings;
+            || commandCodeQuotaSettings
+            || expectedUpdatedAt is not null;
 
         // A cleared Command Code quota cookie must invalidate the old persisted
         // status, regardless of whether the client sent null or an empty
@@ -960,7 +962,12 @@ public sealed class ChannelLifecycleService(
                 ? null
                 : GoJson.MarshalToString(command.Endpoints),
             ClearErrorMessage = command.ClearErrorMessage,
-            ExpectedUpdatedAt = guardProviderIdentity ? snapshot.UpdatedAt : null,
+            // channel.go:1110-1114: a caller-supplied version wins over the
+            // freshly loaded one, so a read-merge-write caller detects a commit
+            // between its read and this update.
+            ExpectedUpdatedAt = guardProviderIdentity
+                ? expectedUpdatedAt ?? snapshot.UpdatedAt
+                : null,
         };
 
         // UpdateChannel only ensures prices when SupportedModels was provided
@@ -994,8 +1001,9 @@ public sealed class ChannelLifecycleService(
 
         if (updated is null)
         {
-            throw new InvalidOperationException(
-                "channel was updated concurrently; retry the operation");
+            // channel.go:1194-1197: ent's not-found (row vanished or version
+            // mismatch) maps onto the sentinel error.
+            throw new ChannelUpdatedConcurrentlyException();
         }
 
         // The saved row is compared against the pre-normalization identity
@@ -1016,6 +1024,94 @@ public sealed class ChannelLifecycleService(
         // channel.go:1232: reloadChannelsAfterCommit.
         RequestEnabledChannelsRefresh();
         return updated;
+    }
+
+    /// <summary>
+    /// Port of ChannelService.UpdateChannelSettings
+    /// (channel_settings.go:143-195): merges a partial settings patch onto the
+    /// stored settings and writes it through <see cref="UpdateAsync"/> so it is
+    /// subject to the same validation, normalization and optimistic locking as
+    /// a full settings update. When a concurrent update commits between the
+    /// read and the write, the merge is retried against the new snapshot.
+    /// </summary>
+    public async Task<ChannelRecord> UpdateSettingsAsync(
+        long id,
+        UpdateChannelSettingsCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        // Each conflict round lets at least one patch commit, so a handful of
+        // attempts resolves any realistic contention; the bound keeps a
+        // pathologically contended channel from retrying forever.
+        const int maxMergeAttempts = 8;
+
+        ChannelUpdatedConcurrentlyException? lastError = null;
+        for (var attempt = 0; attempt < maxMergeAttempts; attempt++)
+        {
+            ChannelSettingsVersion? existing;
+            try
+            {
+                // channel_settings.go:165-170: the internal read is scoped to
+                // write_channels, so a caller without read_channels can still
+                // merge. The port's GraphQL gate has no per-field scope
+                // decision here yet (C014).
+                existing = await channels.GetSettingsVersionAsync(id, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (StoreFailureException ex)
+            {
+                throw new InvalidOperationException(ex.Message, ex);
+            }
+
+            if (existing is null)
+            {
+                throw new InvalidOperationException(
+                    "failed to load channel settings: ent: channel not found");
+            }
+
+            ChannelSettingsDraft? stored;
+            try
+            {
+                stored = ChannelWriteSerialization.ParseSettings(existing.Settings);
+            }
+            catch (JsonException ex)
+            {
+                // ent decodes settings inside Get, so malformed stored JSON
+                // fails the read (C002 text difference).
+                throw new InvalidOperationException(
+                    "failed to load channel settings: " + ex.Message,
+                    ex);
+            }
+
+            var merged = command.Apply(stored);
+
+            // ent stores the Go struct through its JSON tags: the merged value
+            // must go through the same decode/marshal round-trip normalization
+            // as every other settings write, or cleared omitempty lists would
+            // be stored as [] instead of being dropped.
+            ChannelWriteSerialization.NormalizeSettings(merged);
+
+            try
+            {
+                return await UpdateAsync(
+                        id,
+                        new UpdateChannelCommand
+                        {
+                            Settings = merged,
+                            ExpectedUpdatedAt = existing.UpdatedAt,
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ChannelUpdatedConcurrentlyException ex)
+            {
+                // channel_settings.go:182-189: re-read and re-merge the patch.
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new ChannelUpdatedConcurrentlyException();
     }
 
     /// <summary>
@@ -1445,8 +1541,7 @@ public sealed class ChannelLifecycleService(
                     endpointsJson,
                     cancellationToken)
                 .ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    "channel was updated concurrently; retry the operation");
+                ?? throw new ChannelUpdatedConcurrentlyException();
         }
         catch (StoreFailureException ex)
         {

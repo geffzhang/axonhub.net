@@ -182,6 +182,55 @@ public sealed class ChannelSettingsInput
     public ChannelQuotaRoutingModeValue? QuotaRoutingMode { get; set; }
 }
 
+/// <summary>
+/// Port of the live <c>UpdateChannelSettingsInput</c> (axonhub.graphql:331-352,
+/// channel_settings.go:17-50): a partial settings patch where every field means
+/// "absent" when null, so an explicit empty list clears the stored value while
+/// an absent list keeps it.
+/// </summary>
+public sealed class UpdateChannelSettingsInput
+{
+    public string? ExtraModelPrefix { get; set; }
+
+    public IReadOnlyList<ModelMappingInput>? ModelMappings { get; set; }
+
+    public IReadOnlyList<string>? AutoTrimedModelPrefixes { get; set; }
+
+    public bool? HideOriginalModels { get; set; }
+
+    public bool? HideMappedModels { get; set; }
+
+    public bool? LowercaseModelId { get; set; }
+
+    public ProxyConfigInput? Proxy { get; set; }
+
+    public TransformOptionsInput? TransformOptions { get; set; }
+
+    public IReadOnlyList<OverrideOperationInput>? HeaderOverrideOperations { get; set; }
+
+    public IReadOnlyList<OverrideOperationInput>? BodyOverrideOperations { get; set; }
+
+    public bool? PassThroughUserAgent { get; set; }
+
+    public bool? PassThroughBody { get; set; }
+
+    public ChannelRateLimitInput? RateLimit { get; set; }
+
+    public IReadOnlyList<int>? RetryableStatusCodes { get; set; }
+
+    public IReadOnlyList<RetryableErrorPatternInput>? RetryableErrorPatterns { get; set; }
+
+    public IReadOnlyList<ModelProtocolInput>? ModelProtocols { get; set; }
+
+    public string? ApiKeyStrategy { get; set; }
+
+    public int? ApiKeyRoundRobinSwitchAfter { get; set; }
+
+    public ChannelProviderQuotaSettingsInput? ProviderQuota { get; set; }
+
+    public ChannelQuotaRoutingModeValue? QuotaRoutingMode { get; set; }
+}
+
 /// <summary>Port of <c>ReasoningEffortMappingInput</c> (axonhub.graphql:73-76).</summary>
 public sealed class ReasoningEffortMappingInput
 {

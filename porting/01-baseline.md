@@ -8558,6 +8558,68 @@ singleflight 崩溃进程，端口折叠为有界 502 credentials 错误；C247�
 让 ent 读失败），系统设置缓存缺席（C029）使「denied 主体命中缓存」的边界在端口不可达；
 GraphQL Int 32 位截断沿用 C190。
 
+## 163. updateChannelSettings（通道设置局部合并变更，25 例，2026-11-10）
+
+参照（漂移基线：冻结基线 `b8bb3421` 无此成员，按 live `f272549f` 补齐）：
+`internal/server/gql/axonhub.graphql:331-352`（`UpdateChannelSettingsInput` 的 20 个可空字段）、
+`:1011`（根字段 `updateChannelSettings(id: ID!, input: UpdateChannelSettingsInput!): Channel!`）、
+`internal/server/gql/axonhub.resolvers.go:222-224`（resolver 直接调用 service，无 wrapper）、
+`internal/server/biz/channel_settings.go:17-50,52-127,129-141,143-195`（输入、`Apply`、
+`withChannelExpectedVersion` 与 8 次合并重试）、`internal/server/biz/channel_settings_test.go`
+（Apply 表、未触碰字段保留、并发补丁）、`internal/server/biz/channel.go:900-927,1110-1114,1194-1197`
+（expected-version 守卫的消费与冲突判定）、`internal/server/biz/errors.go:27`
+（`ErrChannelUpdatedConcurrently`）、`internal/objects/channel.go:155-288`
+（`ChannelSettings` 的字段与 omitempty 标签）。
+
+行为：
+
+| 主题 | 参照语义 |
+|---|---|
+| 合并 | `Apply(base)`：patch 为 nil → `*base`；base 为 nil → 零值设置；每个非 nil 指针/切片替换；nil 切片保留存储值；显式空切片清空；嵌套对象整体替换（`TransformOptions` 按值复制；`Proxy` 等指针共享）；`quotaRoutingMode` 的 INHERIT → `""` |
+| 读取 | `Select(FieldSettings, FieldUpdatedAt).Only`；缺失或软删 → `failed to load channel settings: ent: channel not found`；解码失败同前缀 |
+| 写入 | 合并值走完整的 `UpdateChannel`：同样的设置校验、序列化、Command Code cookie 归一化与 `updated_at` 乐观锁；`withChannelExpectedVersion(existing.UpdatedAt)` 让守卫使用合并读取的版本，而不是第二次读取的版本 |
+| 重试 | `maxMergeAttempts = 8`；仅 `ErrChannelUpdatedConcurrently` 触发重试（重新读取 + 重新合并）；其它错误立即返回；第 8 次仍冲突返回最后的 sentinel |
+| 序列化 | ent 按 Go JSON tags marshal：非 omitempty 字段恒出现（`extraModelPrefix:""`、`autoTrimedModelPrefixes:null`、`modelMappings:null`、`overrideHeaders:null`、零值 `transformOptions`）；omitempty 字段（空切片、空 `quotaRoutingMode`、空代理块等）被丢弃，所以立即响应按存储 JSON 读回为 null |
+| 校验顺序 | 合并值进入 `updateChannel` 的设置块，`rateLimit` / `responseTimeout` / retryable / override / 协议与端点校验沿用既有 live 顺序（C144） |
+
+端口实现：
+
+- `src/AxonHub.Persistence/Stores/ChannelWriteStore.cs`：`ChannelSettingsVersion` 记录与
+  `IChannelWriteStore.GetSettingsVersionAsync`（只投影 settings / updated_at，软删过滤，
+  错误前缀 `failed to load channel settings: `）。
+- `src/AxonHub.Api/Management/ChannelWriteModels.cs`：`UpdateChannelSettingsCommand`（20 字段）
+  与 `Apply`（浅拷贝 + 逐字段 presence 替换）；`UpdateChannelCommand.ExpectedUpdatedAt`。
+- `src/AxonHub.Api/Management/ChannelLifecycleService.cs`：`UpdateSettingsAsync`（8 次循环，
+  每次重新解析存储设置、`Apply`、`NormalizeSettings` 后经 `UpdateAsync` 写入，仅重试
+  `ChannelUpdatedConcurrentlyException`）；`UpdateAsync` 的守卫决策纳入 `ExpectedUpdatedAt`
+  并以调用方版本覆盖第二次读取的版本；冲突改抛类型化异常（消息不变，
+  `SaveEndpointsAsync` 同步改用）。
+- `src/AxonHub.Api/Management/ChannelUpdatedConcurrentlyException.cs`（新）：与参照
+  `ErrChannelUpdatedConcurrently` 同文案的 `InvalidOperationException` 子类。
+- `src/AxonHub.Api/GraphQL/ChannelInputTypes.cs`：`UpdateChannelSettingsInput`（20 个可空字段）。
+- `src/AxonHub.Api/GraphQL/ChannelInputMapping.cs`：`ToCommand(UpdateChannelSettingsInput)`
+  （null = absent，空列表保留为「清空」；`quotaRoutingMode` INHERIT → `""`）；抽出
+  `ToProviderQuota` 供完整 settings 与 patch 共用。
+- `src/AxonHub.Api/GraphQL/AdminMutation.cs`：`updateChannelSettings` 根字段（GID 先解析，
+  无 wrapper，返回 `ChannelType`）。
+
+测试（25 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/ChannelSettingsMergeTests.cs` | 8（Fact） | 空 patch 保留 base / null base 从零值开始 / 缺失字段保留（含 apiKeyStrategy 对）/ 存在字段替换（空串、false、新嵌套对象、`quotaRoutingMode:""`）/ 空列表清空而缺失保留 / 每次返回新 draft |
+| `tests/AxonHub.Api.Tests/AdminChannelSettingsEndpointTests.cs` | 16（Fact） | 前端形状与 rateLimit / modelMappings 保留 / 空 patch 仍重写 settings（逐字节 Go JSON）/ 非 omitempty 空列存 `[]` 且 omitempty 空列被丢弃 / 并发提交后重读并保留双方补丁（2 次尝试）/ 恒冲突 8 次后报 sentinel / 合并值经 UpdateChannel 校验 / commandcode 通道保留存储 providerQuota 且不失效配额 / present-empty apiKeyStrategy 折叠为缺失（C250）/ INHERIT 清除 quotaRoutingMode / 缺失通道文案 / 读取失败前缀 / 损坏 settings 读取失败 / 非法 GID 文案 / GUID type 不校验 / 变更与 20 个输入字段 introspect |
+| `tests/AxonHub.Persistence.Tests/ChannelWriteStoreTests.cs` | +1（Fact） | settings / updated_at 投影，软删与缺失返回 null |
+
+静态计数：`AxonHub.Api.Tests` 由 5820 增至 5844（+24），`AxonHub.Persistence.Tests` 由 362
+增至 363（+1），`AxonHub.Grains.Tests` 1746、`AxonHub.Llm.Tests` 1512 不变，四项目合计由
+9440 增至 9465。**按项目规则未运行 lint / build / test。**
+
+差异：C144 更新（live 的 `channelExpectedVersionKey` 已由本节接入本路径；写入面的
+`normalizeModelProtocols` / `NormalizeEndpoints` 仍未采用）；新增 C250（accepted）：
+`apiKeyStrategy` 的 present-empty 指针在端口折叠为缺失（Go 经 omitempty 保留 `""`），
+覆盖 parse / 完整更新 / 本节合并三条路径。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|
