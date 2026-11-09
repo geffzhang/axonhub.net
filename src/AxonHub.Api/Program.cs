@@ -575,14 +575,17 @@ builder.Services.AddScoped<DataStorageManagementService>();
 
 // Backup / restore (internal/server/backup): the streamed backup document, the
 // transactional restore and the auto-backup operations. The storage backends
-// live in Storage/ (fs / S3 / GCS / WebDAV, C199); AutoBackupScheduler carries
-// the reference's daily 02:00 cron entry in the system time zone. The
-// reference's system-value cache invalidation is a no-op here.
+// live in Storage/ (fs / S3 / GCS / WebDAV, C199); AutoBackupGrain carries the
+// reference's daily 02:00 cron entry in the system time zone (§149), re-armed
+// by the settings mutation through IAutoBackupRescheduleSignal. The reference's
+// system-value cache invalidation is a no-op here.
 builder.Services.AddScoped<IBackupBatchSource, BackupStore>();
 builder.Services.AddScoped<IBackupRestoreStore, BackupRestoreStore>();
 builder.Services.AddSingleton<IDataStorageBackendFactory, DataStorageBackendFactory>();
 builder.Services.AddScoped<BackupService>();
-builder.Services.AddHostedService<AutoBackupScheduler>();
+builder.Services.AddSingleton<IAutoBackupScheduleSource, GrainAutoBackupScheduleSource>();
+builder.Services.AddSingleton<IAutoBackupRunner, GrainAutoBackupRunner>();
+builder.Services.AddSingleton<IAutoBackupRescheduleSignal, GrainAutoBackupRescheduleSignal>();
 
 // Garbage collection (internal/server/gc): the storage-policy-driven cleanup
 // worker and its "gc" cron entry in UTC. The reference registers the task
@@ -607,7 +610,9 @@ builder.Services.AddSingleton(gcOptions);
 builder.Services.AddSingleton(gcSchedule);
 builder.Services.AddScoped<IGcStore, GcStore>();
 builder.Services.AddScoped<IGcCleanupService, GcWorker>();
-builder.Services.AddHostedService<GcScheduler>();
+builder.Services.AddSingleton<IGcScheduleSource>(static services =>
+    new GrainGcScheduleSource(services.GetRequiredService<GcCronSchedule>()));
+builder.Services.AddSingleton<IGcCleanupRunner, GrainGcCleanupRunner>();
 
 // Trace/thread management surface (biz.TraceService / biz.ThreadService admin
 // reads, the status transitions and the trace segment tree). The reference
@@ -683,7 +688,17 @@ builder.Host.UseOrleans(silo =>
 {
     silo.UseLocalhostClustering();
     silo.AddMemoryGrainStorage("Default");
+
+    // The reminder-driven management tasks need a reminder table; the in-memory
+    // one keeps the reference's per-process cron state (a stop loses pending
+    // occurrences and nothing is backfilled).
+    silo.UseInMemoryReminderService();
 });
+
+// The startup half of the reference's scheduled-task registration
+// (backup service.go:39-55, gc gc.go:77-84). Registered after UseOrleans so
+// the hosted service starts after the silo.
+builder.Services.AddHostedService<GrainSchedulerActivator>();
 
 var app = builder.Build();
 

@@ -7592,6 +7592,72 @@ memory 模式相同）。
 参照每个进程每个窗口都可能各跑一遍，端口整个集群只跑一遍（有意收窄，单 silo 等价）；grain 分派
 失败时跳过本 tick（参照无此失败面）；grain 状态随 silo 重启丢失，与参照进程重启等价。
 
+## 149. 自动备份与 GC 调度迁入 reminder grain（B3，10 + 5 例，2026-11-09）
+
+参照：`internal/server/backup/service.go:39-55`（`RegisterScheduledTasks` 注册
+`{Name:"backup", CronExpr:"0 2 * * *", Timezone: system TimeLocation}`）、
+`internal/server/backup/autobackup.go:22-32`（`Reschedule` 取消并重建 backup cron：系统时区
+`0 2 * * *`，失败只 `log.Error`）、`backup.resolvers.go:114`（`updateAutoBackupSettings` 后调用
+`Reschedule`）、`internal/server/gc/gc.go:77-84`（`RegisterScheduledTasks` 注册
+`{Name:"gc", CronExpr:gc.cron, Timezone:"UTC"}`）、`autobackup.go:42-85`（`triggerAutoBackup`：
+enabled 与 frequency 双闸门）。
+
+| 项 | 参照值 |
+|---|---|
+| 备份触发 | 启动时注册 cron `0 2 * * *`，`Timezone` 为 `systemService.TimeLocation(ctx).String()`（系统时区） |
+| 备份重排 | `updateAutoBackupSettings`（backup.resolvers.go:114）与 `updateSystemGeneralSettings`（system.resolvers.go:159）后 cancel + re-create；调度失败只记日志，变更仍成功 |
+| 备份执行 | 触发时读设置：未启用则跳过，frequency（daily / weekly 周日 / monthly 1 日）不匹配则跳过 |
+| GC 触发 | 启动时注册 cron `gc.cron`，`Timezone:"UTC"`；非法表达式在启动注册时报错 |
+| 注册语义 | 注册时不立即运行；停机期间错过的不补跑 |
+| 调度器范围 | 每进程一份 scheduler；多实例部署时每个进程各自触发 |
+| 任务失败 | cron 条目保留，下一次照常触发 |
+
+端口实现：
+
+- 新增 `IAutoBackupGrain` / `IGcGrain`（Grains.Abstractions，string key 单例 `"auto-backup"` /
+  `"gc"`）与 `AutoBackupGrain` / `GcGrain`（Grains）：激活内保存 `_next` 待触发时刻，用同名
+  Orleans reminder 承载（`ReminderPeriod` 取最小值 1 分钟）。`EnsureScheduledAsync` 只装填不运行；
+  `FireScheduledAsync` 先 `RegisterOrUpdateReminder` 装填下一次、再执行任务（任务失败不会丢调度），
+  已被消费的过期 tick 由 `_next` 比较去重；`RescheduleAsync` 丢弃 pending 并从调用时刻重装；
+  `ReceiveReminder` 用注入的 `TimeProvider` 取当前时刻。
+- 新增接缝：`IAutoBackupScheduleSource`（系统时区下一次 02:00）/ `IAutoBackupRunner`（执行
+  `triggerAutoBackup`）/ `IGcScheduleSource`（`gc.cron` 下一次触发）/ `IGcCleanupRunner`
+  （执行 `runAutomaticCleanup`）。grains 不引用 Api 类型。
+- 新增 Api 适配器：`GrainAutoBackupScheduleSource`（每次装填重读 `system_general_settings` 的
+  timezone，经 `SystemTimeLocations` 解析；读取失败回退 UTC）、`GrainAutoBackupRunner`
+  （新 DI scope 内解析 `BackupService` 调 `TriggerAutoBackupAsync`）、
+  `GrainAutoBackupRescheduleSignal`（转调单例 grain 的 `RescheduleAsync`，失败只记日志）、
+  `GrainGcScheduleSource`（复用启动时已解析的 `GcCronSchedule`）、`GrainGcCleanupRunner`
+  （新 DI scope 内解析 `IGcCleanupService`）。
+- 新增 `GrainSchedulerActivator`（IHostedService）：宿主启动时依次装填 GC 与备份单例 grain；
+  失败记日志并抛 `InvalidOperationException("failed to register the scheduled tasks")`（参照在
+  app 构造期注册失败即退出）。`Program.cs` 在 `UseOrleans` 之后注册，确保 silo 先启动。
+- `BackupService.Reschedule()`（原 no-op）改为 `RescheduleAsync`，经可选
+  `IAutoBackupRescheduleSignal` 转发；`AdminMutation.UpdateAutoBackupSettingsAsync` 等待它。
+- 删除 `AutoBackupScheduler` / `GcScheduler` 两个每分钟轮询的 BackgroundService；
+  `Program.cs` 的 silo 配置启用 `UseInMemoryReminderService()`，项目新增
+  `Microsoft.Orleans.Reminders` 包（`IRemindable` / `RegisterOrUpdateReminder` 不在 Server 包内）。
+
+测试（10 + 5 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Grains.Tests/AutoBackupGrainTests.cs` | 6 | 注册只装填不运行、Ensure 复用 pending、触发前先装填下一次、过期 tick 去重、Reschedule 从调用时刻重装、任务失败保持调度 |
+| `tests/AxonHub.Grains.Tests/GcGrainTests.cs` | 4 | 注册只装填不运行、Ensure 复用 pending、触发前先装填下一次、过期 tick 去重 |
+| `tests/AxonHub.Api.Tests/GrainScheduledTaskTests.cs` | 3 | GC source 的 cron 推进、备份 source 解析系统时区、读取失败回退 UTC |
+| `tests/AxonHub.Api.Tests/GrainSchedulerBridgeTests.cs` | 1 | 启动激活器装填两个单例、设置信号重装备份 grain |
+| `tests/AxonHub.Api.Tests/BackupServiceTests.cs` | 1 | `RescheduleSignalsTheScheduledTask`：Reschedule 转发给信号 |
+
+静态计数：`AxonHub.Grains.Tests` 由 1721 增至 1731（+10），`AxonHub.Api.Tests` 由 5449 增至
+5454（+5），`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 336 不变，四项目合计由 9012
+增至 9027。**按项目规则未运行 lint / build / test。**
+
+差异：C197 中"端口永远不会自动备份"与 C199 的轮询延迟、C203(3) 的 `GcScheduler` 描述已按 §149
+更新；新增 C229：参照的 cron 是每进程一份，端口为集群单激活的 reminder grain（多 silo 下参照各跑
+一遍、端口整集群只跑一遍，有意收窄，单 silo 等价）；内存 reminder 表随 silo 停止丢失，启动激活器
+从当前时刻重新装填（与参照进程重启等价，不补跑）；冷启动 reminder 表刷新带来数十秒的首次投递
+延迟；reminder 最小周期使极端早到的 tick 最坏晚 1 分钟补上。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

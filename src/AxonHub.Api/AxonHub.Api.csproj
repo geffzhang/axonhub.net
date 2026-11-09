@@ -12,6 +12,8 @@
     <ProjectReference Include="..\AxonHub.Llm\AxonHub.Llm.csproj" />
     <ProjectReference Include="..\AxonHub.Persistence\AxonHub.Persistence.csproj" />
     <PackageReference Include="Microsoft.Orleans.Server" />
+    <!-- UseInMemoryReminderService (§149): reminder storage is not part of Server. -->
+    <PackageReference Include="Microsoft.Orleans.Reminders" />
     <PackageReference Include="ZstdSharp.Port" />
     <PackageReference Include="BCrypt.Net-Next" />
     <PackageReference Include="AWSSDK.S3" />

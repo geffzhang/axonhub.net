@@ -13,6 +13,17 @@ using Microsoft.Extensions.Logging;
 namespace AxonHub.Api.Management;
 
 /// <summary>
+/// The Reschedule side effect of a settings change
+/// (<c>BackupService.Reschedule</c>, autobackup.go:22-32). Production re-arms
+/// the singleton backup grain; hosts without Orleans (minimal test hosts)
+/// leave it unregistered and Reschedule stays a no-op like the pre-grain port.
+/// </summary>
+public interface IAutoBackupRescheduleSignal
+{
+    Task RescheduleAsync(CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Port of internal/server/backup (backup_ops.go, restore.go, autobackup.go).
 /// The service keeps the reference's observable contract: owner gates and
 /// their exact messages, the streamed backup document, the transactional
@@ -27,7 +38,8 @@ public sealed class BackupService(
     IDataStorageStore dataStorages,
     IManagementIdentity identity,
     IDataStorageBackendFactory dataStorageBackends,
-    ILogger<BackupService>? logger = null)
+    ILogger<BackupService>? logger = null,
+    IAutoBackupRescheduleSignal? rescheduleSignal = null)
 {
     /// <summary>backup.backupBatchSize (backup_ops.go:23).</summary>
     public const int BatchSize = 500;
@@ -2103,13 +2115,20 @@ public sealed class BackupService(
     // ---------------------------------------------------------- auto backup
 
     /// <summary>
-    /// Port of BackupService.Reschedule (autobackup.go:26-40). The reference
-    /// re-creates the cron entry in the scheduler; <see cref="AutoBackupScheduler"/>
-    /// re-reads the system time zone at least once per minute, so the next
-    /// occurrence always reflects the saved settings without a signal.
+    /// Port of BackupService.Reschedule (autobackup.go:26-40): the reference
+    /// cancels and re-creates the backup cron entry; the port asks the
+    /// singleton backup grain to re-arm from the current instant (§149). The
+    /// signal logs its own failures, so a settings mutation never fails
+    /// because scheduling did, matching the reference.
     /// </summary>
-    public void Reschedule()
+    public async Task RescheduleAsync(CancellationToken cancellationToken = default)
     {
+        if (rescheduleSignal is null)
+        {
+            return;
+        }
+
+        await rescheduleSignal.RescheduleAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Port of BackupService.triggerAutoBackup (autobackup.go:42-85).</summary>

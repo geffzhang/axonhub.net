@@ -9,6 +9,8 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Microsoft.Orleans.TestingHost" />
+    <!-- UseInMemoryReminderService for the §149 scheduler grains. -->
+    <PackageReference Include="Microsoft.Orleans.Reminders" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
   </ItemGroup>
   <ItemGroup>

@@ -828,6 +828,25 @@ public sealed class BackupServiceTests
 
     // ---------------------------------------------------------- auto backup
 
+    [Fact]
+    public async Task RescheduleSignalsTheScheduledTask()
+    {
+        var signal = new FakeAutoBackupRescheduleSignal();
+        var service = new BackupService(
+            _batchSource,
+            _restoreStore,
+            _systems,
+            _settings,
+            _dataStorages,
+            _identity,
+            _backends,
+            rescheduleSignal: signal);
+
+        await service.RescheduleAsync();
+
+        Assert.Equal(1, signal.Calls);
+    }
+
     [Theory]
     [InlineData(BackupFrequencies.Daily, 2026, 11, 6, true)]
     [InlineData(BackupFrequencies.Weekly, 2026, 11, 8, true)]

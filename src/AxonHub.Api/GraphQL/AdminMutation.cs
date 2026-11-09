@@ -2250,7 +2250,7 @@ public sealed class AdminMutation
                 cancellationToken)
             .ConfigureAwait(false);
 
-        backupService.Reschedule();
+        await backupService.RescheduleAsync(cancellationToken).ConfigureAwait(false);
 
         return true;
     }

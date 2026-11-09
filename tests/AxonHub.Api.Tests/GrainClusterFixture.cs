@@ -48,6 +48,15 @@ public sealed class GrainClusterFixture : IAsyncLifetime
     /// <summary>The silo's token-refresh half (ChannelTokenGrain dependency).</summary>
     public FakeChannelTokenSource TokenSource { get; } = new();
 
+    /// <summary>The scheduler grains' seams (§149); the bridges are tested here.</summary>
+    public FakeAutoBackupScheduleSource AutoBackupSchedule { get; } = new();
+
+    public FakeAutoBackupRunner AutoBackupRunner { get; } = new();
+
+    public FakeGcScheduleSource GcSchedule { get; } = new();
+
+    public FakeGcCleanupRunner GcCleanup { get; } = new();
+
     /// <summary>
     /// The orchestrator's model-association selector. The reference's tests
     /// mark the context with <c>authz.WithTestBypass</c>, which allows every
@@ -63,6 +72,10 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.RateLimitTracker = RateLimitTracker;
         GrainTestSiloConfigurator.ChannelLimiterManager = ChannelLimiterManager;
         GrainTestSiloConfigurator.TokenSource = TokenSource;
+        GrainTestSiloConfigurator.AutoBackupSchedule = AutoBackupSchedule;
+        GrainTestSiloConfigurator.AutoBackupRunner = AutoBackupRunner;
+        GrainTestSiloConfigurator.GcSchedule = GcSchedule;
+        GrainTestSiloConfigurator.GcCleanup = GcCleanup;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -78,6 +91,10 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.RateLimitTracker = null;
         GrainTestSiloConfigurator.ChannelLimiterManager = null;
         GrainTestSiloConfigurator.TokenSource = null;
+        GrainTestSiloConfigurator.AutoBackupSchedule = null;
+        GrainTestSiloConfigurator.AutoBackupRunner = null;
+        GrainTestSiloConfigurator.GcSchedule = null;
+        GrainTestSiloConfigurator.GcCleanup = null;
     }
 }
 
@@ -91,9 +108,20 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static FakeChannelTokenSource? TokenSource { get; set; }
 
+    public static FakeAutoBackupScheduleSource? AutoBackupSchedule { get; set; }
+
+    public static FakeAutoBackupRunner? AutoBackupRunner { get; set; }
+
+    public static FakeGcScheduleSource? GcSchedule { get; set; }
+
+    public static FakeGcCleanupRunner? GcCleanup { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
+
+        // The backup and GC grains (§149) register reminders.
+        siloBuilder.UseInMemoryReminderService();
 
         siloBuilder.ConfigureServices(services =>
         {
@@ -107,6 +135,10 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             // The previous-channel grain reads the reference's thirty-minute
             // TTL; the cluster only needs the type registered to activate it.
             services.AddSingleton(new PreviousChannelOptions());
+            services.AddSingleton<IAutoBackupScheduleSource>(AutoBackupSchedule!);
+            services.AddSingleton<IAutoBackupRunner>(AutoBackupRunner!);
+            services.AddSingleton<IGcScheduleSource>(GcSchedule!);
+            services.AddSingleton<IGcCleanupRunner>(GcCleanup!);
         });
     }
 }
@@ -172,5 +204,104 @@ public sealed class FakeChannelTokenSource : IChannelTokenSource
             CredentialsJson = request.CredentialsJson,
             UpdatedAt = request.UpdatedAt,
         });
+    }
+}
+
+/// <summary>Scripted IAutoBackupScheduleSource (§149): a queue of instants, one per arm.</summary>
+public sealed class FakeAutoBackupScheduleSource : IAutoBackupScheduleSource
+{
+    private readonly Queue<DateTimeOffset> _results = new();
+
+    public List<DateTimeOffset> Calls { get; } = [];
+
+    private DateTimeOffset Fallback { get; set; }
+
+    public void Reset(params DateTimeOffset[] results)
+    {
+        Calls.Clear();
+        _results.Clear();
+        foreach (var result in results)
+        {
+            _results.Enqueue(result);
+        }
+
+        Fallback = results.Length == 0 ? default : results[^1];
+    }
+
+    public Task<DateTimeOffset> GetNextOccurrenceAsync(
+        DateTimeOffset after,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls.Add(after);
+        return Task.FromResult(_results.Count > 0 ? _results.Dequeue() : Fallback);
+    }
+}
+
+public sealed class FakeAutoBackupRunner : IAutoBackupRunner
+{
+    public int Calls { get; private set; }
+
+    public Exception? Failure { get; set; }
+
+    public void Reset()
+    {
+        Calls = 0;
+        Failure = null;
+    }
+
+    public Task TriggerAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Failure is null ? Task.CompletedTask : Task.FromException(Failure);
+    }
+}
+
+/// <summary>Scripted IGcScheduleSource (§149): a queue of instants, one per arm.</summary>
+public sealed class FakeGcScheduleSource : IGcScheduleSource
+{
+    private readonly Queue<DateTimeOffset> _results = new();
+
+    public List<DateTimeOffset> Calls { get; } = [];
+
+    private DateTimeOffset Fallback { get; set; }
+
+    public void Reset(params DateTimeOffset[] results)
+    {
+        Calls.Clear();
+        _results.Clear();
+        foreach (var result in results)
+        {
+            _results.Enqueue(result);
+        }
+
+        Fallback = results.Length == 0 ? default : results[^1];
+    }
+
+    public DateTimeOffset NextOccurrence(DateTimeOffset after)
+    {
+        Calls.Add(after);
+        return _results.Count > 0 ? _results.Dequeue() : Fallback;
+    }
+}
+
+public sealed class FakeGcCleanupRunner : IGcCleanupRunner
+{
+    public int Calls { get; private set; }
+
+    public Exception? Failure { get; set; }
+
+    public void Reset()
+    {
+        Calls = 0;
+        Failure = null;
+    }
+
+    public Task RunAutomaticCleanupAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Failure is null ? Task.CompletedTask : Task.FromException(Failure);
     }
 }

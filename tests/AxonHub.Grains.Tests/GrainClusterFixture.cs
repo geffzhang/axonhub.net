@@ -45,6 +45,15 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         Ttl = TimeSpan.FromSeconds(1),
     };
 
+    /// <summary>The scheduler grains' seams (§149); tests script the timings.</summary>
+    public FakeAutoBackupScheduleSource AutoBackupSchedule { get; } = new();
+
+    public FakeAutoBackupRunner AutoBackupRunner { get; } = new();
+
+    public FakeGcScheduleSource GcSchedule { get; } = new();
+
+    public FakeGcCleanupRunner GcCleanup { get; } = new();
+
     public async Task InitializeAsync()
     {
         GrainTestSiloConfigurator.ChannelProvider = Channels;
@@ -52,6 +61,10 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.ChannelLimiterManager = ChannelLimiterManager;
         GrainTestSiloConfigurator.TokenSource = TokenSource;
         GrainTestSiloConfigurator.PreviousChannels = PreviousChannels;
+        GrainTestSiloConfigurator.AutoBackupSchedule = AutoBackupSchedule;
+        GrainTestSiloConfigurator.AutoBackupRunner = AutoBackupRunner;
+        GrainTestSiloConfigurator.GcSchedule = GcSchedule;
+        GrainTestSiloConfigurator.GcCleanup = GcCleanup;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -68,6 +81,10 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.ChannelLimiterManager = null;
         GrainTestSiloConfigurator.TokenSource = null;
         GrainTestSiloConfigurator.PreviousChannels = null;
+        GrainTestSiloConfigurator.AutoBackupSchedule = null;
+        GrainTestSiloConfigurator.AutoBackupRunner = null;
+        GrainTestSiloConfigurator.GcSchedule = null;
+        GrainTestSiloConfigurator.GcCleanup = null;
     }
 }
 
@@ -83,9 +100,20 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static PreviousChannelOptions? PreviousChannels { get; set; }
 
+    public static FakeAutoBackupScheduleSource? AutoBackupSchedule { get; set; }
+
+    public static FakeAutoBackupRunner? AutoBackupRunner { get; set; }
+
+    public static FakeGcScheduleSource? GcSchedule { get; set; }
+
+    public static FakeGcCleanupRunner? GcCleanup { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
+
+        // The backup and GC grains (§149) register reminders.
+        siloBuilder.UseInMemoryReminderService();
 
         siloBuilder.ConfigureServices(services =>
         {
@@ -96,6 +124,10 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton(ChannelLimiterManager!);
             services.AddSingleton<IChannelTokenSource>(TokenSource!);
             services.AddSingleton(PreviousChannels!);
+            services.AddSingleton<IAutoBackupScheduleSource>(AutoBackupSchedule!);
+            services.AddSingleton<IAutoBackupRunner>(AutoBackupRunner!);
+            services.AddSingleton<IGcScheduleSource>(GcSchedule!);
+            services.AddSingleton<IGcCleanupRunner>(GcCleanup!);
         });
     }
 }
