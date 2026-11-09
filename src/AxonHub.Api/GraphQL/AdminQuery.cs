@@ -432,6 +432,45 @@ public sealed class AdminQuery
         return PromptMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>
+    /// Port of queryResolver.PromptProtectionRules (ent.resolvers.go:471-484).
+    /// </summary>
+    /// <remarks>
+    /// The reference validates pagination and rewrites a CREATED_AT order to
+    /// ent.DefaultPromptProtectionRuleOrder's field (id) before paginating.
+    /// </remarks>
+    [GraphQLName("promptProtectionRules")]
+    public async Task<PromptProtectionRuleConnectionType> PromptProtectionRulesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        PromptProtectionRuleOrder? orderBy,
+        PromptProtectionRuleWhereInput? where,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = PromptProtectionRuleMapping.ToSortField(orderBy);
+        var page = await rules.ListAsync(
+                new PromptProtectionRuleListQuery
+                {
+                    Where = PromptProtectionRuleMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = PromptProtectionRuleMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return PromptProtectionRuleMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>Port of queryResolver.DataStorages (ent.resolvers.go:400-412).</summary>
     /// <remarks>
     /// The reference validates pagination (but not first/last exclusivity) and
@@ -788,8 +827,9 @@ public sealed class AdminQuery
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
     /// port resolves Project, User, APIKey, APIKeyProfileTemplate, Model,
-    /// Prompt, DataStorage, Channel, Trace, Thread, Request and UsageLog so far
-    /// and reports every other type as "unknown node type: %s" (C165).
+    /// Prompt, PromptProtectionRule, DataStorage, Channel, Trace, Thread,
+    /// Request and UsageLog so far and reports every other type as
+    /// "unknown node type: %s" (C165).
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -854,6 +894,15 @@ public sealed class AdminQuery
                 var prompt = await prompts.GetNodeAsync(gid.Id, cancellationToken)
                     .ConfigureAwait(false);
                 return PromptMapping.ToGraphQL(prompt);
+            }
+
+            case "PromptProtectionRule":
+            {
+                var rules = services
+                    .GetRequiredService<PromptProtectionRuleManagementService>();
+                var rule = await rules.GetNodeAsync(gid.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                return PromptProtectionRuleMapping.ToGraphQL(rule);
             }
 
             case "DataStorage":

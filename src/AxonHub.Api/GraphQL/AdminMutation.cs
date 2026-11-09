@@ -2058,6 +2058,141 @@ public sealed class AdminMutation
         return true;
     }
 
+    /// <summary>
+    /// Port of mutationResolver.CreatePromptProtectionRule
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("createPromptProtectionRule")]
+    public async Task<PromptProtectionRuleType> CreatePromptProtectionRuleAsync(
+        CreatePromptProtectionRuleInput input,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+        => PromptProtectionRuleMapping.ToGraphQL(
+            await rules.CreateAsync(
+                    PromptProtectionRuleMapping.ToCommand(input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.UpdatePromptProtectionRule
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("updatePromptProtectionRule")]
+    public async Task<PromptProtectionRuleType> UpdatePromptProtectionRuleAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdatePromptProtectionRuleInput input,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+        => PromptProtectionRuleMapping.ToGraphQL(
+            await rules.UpdateAsync(
+                    PromptProtectionRuleMapping.ToCommand(id, input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.DeletePromptProtectionRule
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("deletePromptProtectionRule")]
+    public async Task<bool> DeletePromptProtectionRuleAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdatePromptProtectionRuleStatus
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("updatePromptProtectionRuleStatus")]
+    public async Task<bool> UpdatePromptProtectionRuleStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        PromptProtectionRuleStatusValue status,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.UpdateStatusAsync(
+                GidValue.Parse(id).Id,
+                PromptProtectionRuleMapping.ToWireStatus(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDeletePromptProtectionRules
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("bulkDeletePromptProtectionRules")]
+    public async Task<bool> BulkDeletePromptProtectionRulesAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.BulkDeleteAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkEnablePromptProtectionRules
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("bulkEnablePromptProtectionRules")]
+    public async Task<bool> BulkEnablePromptProtectionRulesAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.BulkEnableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDisablePromptProtectionRules
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("bulkDisablePromptProtectionRules")]
+    public async Task<bool> BulkDisablePromptProtectionRulesAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.BulkDisableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.PreviewPromptProtectionRule
+    /// (prompt_protection_rule.resolvers.go). The resolver always builds a
+    /// non-nil settings struct, so the preview never hits "settings are
+    /// required".
+    /// </summary>
+    [GraphQLName("previewPromptProtectionRule")]
+    public Task<PromptProtectionRulePreviewResultType> PreviewPromptProtectionRuleAsync(
+        PromptProtectionRulePreviewInput input,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        var result = PromptProtectionRuleManagementService.Preview(
+            input.Pattern,
+            input.TestText,
+            PromptProtectionRuleMapping.ToDomain(input.Settings));
+
+        return Task.FromResult(new PromptProtectionRulePreviewResultType
+        {
+            Result = result.Result,
+            HasMatch = result.HasMatch,
+        });
+    }
+
     /// <summary>Port of mutationResolver.ArchiveTrace (axonhub.resolvers.go:1034-1037).</summary>
     [GraphQLName("archiveTrace")]
     public async Task<bool> ArchiveTraceAsync(

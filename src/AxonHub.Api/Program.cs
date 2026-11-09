@@ -215,6 +215,13 @@ builder.Services.AddScoped<IQuotaRoutingSettingsProvider>(
 builder.Services.AddScoped<IPromptProtectionRuleStore, PromptProtectionRuleStore>();
 builder.Services.AddScoped<IPromptProtectionRuleProvider, PromptProtectionRuleService>();
 
+// Prompt protection management (the rule service's create/update/delete/status/
+// bulk/preview surface): promptProtectionRules / node(PromptProtectionRule)
+// and the mutations the unchanged admin frontend sends. The reference's scope
+// policy is not ported (C014) and its asyncReloadEnabledRules cache refresh is
+// a no-op here (C092).
+builder.Services.AddScoped<PromptProtectionRuleManagementService>();
+
 // Project prompts (biz.PromptService): the port reads enabled prompts per
 // request instead of the reference's per-project one-minute cache (C187).
 builder.Services.AddScoped<IPromptStore, PromptStore>();

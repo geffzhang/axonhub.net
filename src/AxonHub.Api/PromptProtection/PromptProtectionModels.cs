@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AxonHub.Llm;
@@ -42,9 +43,56 @@ public sealed class PromptProtectionSettings
     [JsonPropertyName("scopes")]
     public List<string>? Scopes { get; set; }
 
-    /// <summary>Decodes a rule's jsonb <c>settings</c> column.</summary>
+    /// <summary>
+    /// Decodes a rule's jsonb <c>settings</c> column. Go's decoder leaves a
+    /// string field at its zero value when the JSON value is null, so a null
+    /// replacement decodes to "" rather than null.
+    /// </summary>
     public static PromptProtectionSettings? FromJson(string json)
-        => JsonSerializer.Deserialize<PromptProtectionSettings>(json, Options);
+    {
+        var settings = JsonSerializer.Deserialize<PromptProtectionSettings>(json, Options);
+        if (settings is not null)
+        {
+            settings.Replacement ??= string.Empty;
+        }
+
+        return settings;
+    }
+
+    /// <summary>
+    /// Encodes the settings the way Go's <c>json.Marshal</c> does for the ent
+    /// JSON field: fields in struct order, <c>replacement</c> omitted when
+    /// empty and <c>scopes</c> omitted when nil or empty (<c>omitempty</c>).
+    /// </summary>
+    public string ToJson()
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("action", Action);
+            if (Replacement.Length > 0)
+            {
+                writer.WriteString("replacement", Replacement);
+            }
+
+            if (Scopes is { Count: > 0 })
+            {
+                writer.WritePropertyName("scopes");
+                writer.WriteStartArray();
+                foreach (var scope in Scopes)
+                {
+                    writer.WriteStringValue(scope);
+                }
+
+                writer.WriteEndArray();
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
 }
 
 /// <summary>
@@ -62,6 +110,17 @@ public sealed class PromptProtectionRule
 
     /// <summary>Nil when the stored JSON is <c>null</c>; such rules are skipped.</summary>
     public PromptProtectionSettings? Settings { get; init; }
+}
+
+/// <summary>
+/// Port of biz.PromptProtectionPreviewResult
+/// (internal/server/biz/prompt_protection_preview.go).
+/// </summary>
+public sealed class PromptProtectionPreviewResult
+{
+    public string Result { get; init; } = string.Empty;
+
+    public bool HasMatch { get; init; }
 }
 
 /// <summary>Port of biz.PromptProtectionResult (prompt_protection_request.go).</summary>

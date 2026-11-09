@@ -19,6 +19,35 @@ internal static class PromptProtectionRegex
     private static readonly ConcurrentDictionary<string, CachedPattern> Cache =
         new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Port of biz.getOrCompilePromptProtectionPattern: returns the cached
+    /// regex or the cached compile failure. The management surface uses the
+    /// error to report <c>invalid regex pattern: ...</c>.
+    /// </summary>
+    public static bool TryGetOrCompile(
+        string pattern,
+        out Regex? regex,
+        out Exception? error)
+    {
+        var cached = Cache.GetOrAdd(pattern, static value =>
+        {
+            try
+            {
+                // regexp2.Compile(pattern, regexp2.None): no timeout, no
+                // culture-sensitive options.
+                return new CachedPattern(new Regex(value, RegexOptions.None), null);
+            }
+            catch (ArgumentException compileError)
+            {
+                return new CachedPattern(null, compileError);
+            }
+        });
+
+        regex = cached.Regex;
+        error = cached.Error;
+        return regex is not null;
+    }
+
     /// <summary>Port of biz.MatchPromptProtectionRule.</summary>
     public static bool Match(string pattern, string content)
     {
@@ -60,21 +89,5 @@ internal static class PromptProtectionRegex
     }
 
     private static Regex? GetOrCompile(string pattern)
-    {
-        var cached = Cache.GetOrAdd(pattern, static value =>
-        {
-            try
-            {
-                // regexp2.Compile(pattern, regexp2.None): no timeout, no
-                // culture-sensitive options.
-                return new CachedPattern(new Regex(value, RegexOptions.None), null);
-            }
-            catch (ArgumentException error)
-            {
-                return new CachedPattern(null, error);
-            }
-        });
-
-        return cached.Regex;
-    }
+        => TryGetOrCompile(pattern, out var regex, out _) ? regex : null;
 }

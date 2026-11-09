@@ -669,6 +669,48 @@ public sealed class PromptProtectionRuleServiceTests
             => Failure is not null
                 ? Task.FromException<IReadOnlyList<PromptProtectionRuleRecord>>(Failure)
                 : Task.FromResult<IReadOnlyList<PromptProtectionRuleRecord>>(Rules);
+
+        // The management surface is covered by
+        // AdminPromptProtectionRulesEndpointTests and PromptProtectionRuleStoreTests.
+        public Task<PromptProtectionRuleRecord?> GetByIdAsync(
+            long id,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<bool> ExistsByNameAsync(
+            string name,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<ListPage<PromptProtectionRuleRecord>> ListAsync(
+            PromptProtectionRuleListQuery query,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<PromptProtectionRuleRecord?> UpdateAsync(
+            PromptProtectionRuleUpdate update,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<PromptProtectionRuleRecord?> UpdateStatusAsync(
+            long id,
+            string status,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<int> DeleteAsync(long id, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<int> BulkDeleteAsync(
+            IReadOnlyList<long> ids,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<int> BulkUpdateStatusAsync(
+            IReadOnlyList<long> ids,
+            string status,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
     private static PromptProtectionRuleRecord Record(long id, string settings)
