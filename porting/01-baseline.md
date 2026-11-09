@@ -8140,6 +8140,85 @@ uptime 精度受 TimeSpan 限制），checkForUpdate 的错误链内层文本来
 singleflight、BackgroundService 调度与 scoped settings 读取，差异限于调度实现细节与
 日志文案。
 
+## 156. 缓存诊断导出与清缓存（1 查询 / 1 变更，26 例，2026-11-09）
+
+参照：`internal/server/gql/channel_model_cache_diagnostics.go:22-123`（导出结构：
+`exportedAt` / `targets` / `database.channels` / `database.models` /
+`cache.enabledChannelCache` / `cache.modelAssociationCache` 的 JSON 名、字段序与
+omitempty；模型视图的 `associations` 为 `any`，`candidateSelectionPreview` 逐候选展开
+channelId / channelName / priority / models）、`125-134`（normalizeDiagnosticsTargets：
+`lo.Uniq` 后 `slices.Sort`，空输入回落 `CHANNEL_CACHE`）、`136-179`（导出构建：channels 按
+`ordering_weight` 降序再 `id` 升序，models 按 `id` 升序；两次查询后读
+`time.Now().UTC()` 生成 exportedAt，再取 `GetEnabledChannels()`；错误前缀
+`failed to query channels` / `failed to query models`）、`181-203`（缓存快照：通道数 /
+cacheVersion / ids / names / 逐通道快照 / capturedAtUtc；关联缓存按 modelId 排序，
+RFC3339 时间戳）、`205-249`（DB 行与缓存行快照：字段序、`append(nil, ...)` 的空切片为
+null、`EnabledAPIKeyCount` 取通道装载时缓存的 key、`DisabledAPIKeyCount` 取原始数组长度、
+`ModelEntries` 按 key 排序）、`251-269`（settings 为 nil 时全零值，非 nil 时
+modelMappings 逐项 from / to）、`271-286`（modelEntries 排序与 requestModel /
+actualModel / source）、`288-333`（模型视图：仅 enabled 行调用 `DefaultSelector.Select`
+且错误静默丢弃；settings 为 nil 时 associationCount 0 / associations null）、`335-350`
+（候选预览）、`352-359`（`json.MarshalIndent(data, "", "  ")`，失败前缀
+`failed to marshal diagnostics export`）、`internal/server/gql/system.graphql:459-509`
+（DiagnosticsTarget、GetCacheDiagnosticsInput / ClearCacheInput、两个 payload 的字段）、
+`internal/server/gql/system.resolvers.go:690-726`（getCacheDiagnostics：ErrNotOwner 门、
+构建前缀 `failed to build cache diagnostics export`、文件名
+`axonhub-channel-model-cache-diagnostics-<20060102T150405Z>.json` 用第二次
+`time.Now()` 生成）、`383-408`（clearCache：owner 门、目标归一化、逐目标重载，错误链
+`failed to clear cache for %s: failed to reload enabled channels cache: %w`，成功
+`cache cleared successfully`）、`internal/server/gql/resolver.go:22-23`（ErrNotOwner =
+`permission denied: owner access required`）、`internal/server/orchestrator/diagnostics.go:12-57`
+（CandidateSelectorDiagnostics.ReadAssociationCache：modelId 排序、associations 经
+`append(nil, ...)` 为 null、三个 RFC3339 时间戳与 channelCacheVersion）、
+`internal/server/biz/channel.go:1292-1294` 与 `channel_llm.go:132-143`
+（cachedEnabledAPIKeys 在通道装载时计算，导出只读缓存）。
+
+| 项 | 参照值 |
+|---|---|
+| getCacheDiagnostics | owner 门 `permission denied: owner access required`；input 可为 null；targets 去重后按枚举名排序、空输入 → `[CHANNEL_CACHE]`；content 为两空格缩进的 JSON 文本；fileName 用第二次时钟读取（可与 exportedAt 跨秒）；构建失败 `failed to build cache diagnostics export: ...` |
+| clearCache | owner 门；input 必填；缺省 / 空 targets → `CHANNEL_CACHE`；逐目标强制重载，失败链 `failed to clear cache for CHANNEL_CACHE: failed to reload enabled channels cache: ...`；成功 `{success:true,message:"cache cleared successfully",targets:[...]}` |
+| 导出形状 | 根字段序 exportedAt / targets / database / cache；database 为 channels / models；cache 为 enabledChannelCache / modelAssociationCache；字符串字段 omitempty（baseURL 空串省略、source 与 filtered 等按各自标签）；`lo.Map(nil)` 得到 `[]`，`append([]T(nil), empty...)` 得到 `null`；settings 为 nil 时只输出零值的 hide / lowercase 字段 |
+| 模型视图 | 仅 status=enabled 的行调用选择器；选择错误静默丢弃、预览为空 `[]`；非 enabled 行预览 `[]`；settings 为 nil → associationCount 0、associations null；候选预览保留 channelId / channelName / priority 与逐模型 requestModel / actualModel / source |
+| 时钟与计数 | exportedAt = 两次查询后的 UTC RFC3339，capturedAtUtc 复用同一字符串；enabledApiKeyCount 读通道装载时缓存的启用 key；disabledApiKeyCount 为解码后数组长度（含已到期项）；文件名时间戳为独立的第二次时钟读取 |
+| 编码 | `json.MarshalIndent`：嵌套对象 / 数组在值位置换行并加深缩进，空容器保持内联，字符串原样，token 间空白丢弃；条件值中的整数为定点、浮点为 Go 格式（[1e-6,1e21) 定点，其余指数），溢出浮点回落原始文本，map 键排序 |
+
+端口实现：
+
+- `src/AxonHub.Api/Diagnostics/DiagnosticsTargets.cs`：`DiagnosticsTarget`
+  （`CHANNEL_CACHE` / `MODEL_ASSOCIATION_CACHE`）与 `Normalize`（去重后按枚举名排序，
+  空输入回落 `CHANNEL_CACHE`）。
+- `src/AxonHub.Api/Diagnostics/CacheDiagnosticsExport.cs`：导出根结构与逐节点构建
+  （字段序、omitempty、nil vs 空数组、通道 / 模型排序、settings / modelEntries /
+  候选预览、条件值与关联的 Go 兼容序列化）。
+- `src/AxonHub.Api/Diagnostics/GoJsonIndent.cs`：`json.MarshalIndent` 的缩进遍历
+  （嵌套容器换行、空容器内联、空白跳过、字符串原样）。
+- `src/AxonHub.Api/Diagnostics/CacheDiagnosticsService.cs`：两次查询 → exportedAt →
+  快照 → 构建 → 缩进 → 文件名（第二次时钟读取），查询 / 构建 / 序列化错误前缀与参照一致。
+- `src/AxonHub.Api/Diagnostics/CacheDiagnosticsSelector.cs`：owner-bypass 候选选择器
+  （C239），仅由诊断服务构造。
+- `src/AxonHub.Api/GraphQL/DiagnosticsTypes.cs`：GraphQL 枚举、输入与两个 payload 类型。
+- `src/AxonHub.Api/GraphQL/AdminQuery.cs` / `AdminMutation.cs`：`getCacheDiagnostics`
+  与 `clearCache` 的 owner 门、targets 归一化、逐目标重载与错误链。
+- `src/AxonHub.Api/Program.cs`：注册 `IEnabledChannelCacheSnapshotProvider`、
+  `ICacheDiagnosticsCandidateSelector`、`CacheDiagnosticsService` 与
+  `IEnabledChannelsCacheRefresher`。
+
+测试（26 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/CacheDiagnosticsTests.cs` | 16 | 空导出的逐字节 golden（含 fileName 与默认 targets）；targets 归一化去重；DB 通道的排序与全部字段形状（deleted 排除、baseURL 空串省略、tags / supportedModels 的 null vs 数组、settings 的 nil / 非 nil、查询形状）；模型视图字段序与 `{}` / `null` 的关联形状；显式空 associations 为 `[]`；关联字段序与全空变体；条件值的键排序与 Go 数字格式（1000 / 1.5 / 2 / 1e-7 / 1e400）；候选预览逐字段与空预览、非 enabled 不选择、选择失败静默；enabled 缓存快照的 version / 状态 / 计数 / settings / modelEntries 排序；两次时钟读取的顺序与到期 key 计数；通道 / 模型查询失败与畸形 settings / 快照失败的构建前缀 |
+| `tests/AxonHub.Api.Tests/GoJsonIndentTests.cs` | 4 | 嵌套对象 / 数组换行与空容器内联、字符串原样、token 间空白丢弃 |
+| `tests/AxonHub.Api.Tests/AdminDiagnosticsEndpointTests.cs` | 6 | getCacheDiagnostics / clearCache 的 owner 门（非 owner 两处同文案、reload 计数 0）；owner 查询的 fileName / targets / 解析后的 content（通道、模型、空缓存快照）；input 缺省与空 targets 的默认 CHANNEL_CACHE；clearCache 成功 payload 与重载计数；重载失败的错误链 |
+
+静态计数：`AxonHub.Api.Tests` 由 5659 增至 5685（+26），`AxonHub.Grains.Tests` 1746、
+`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353 不变，四项目合计由 9264 增至
+9290。**按项目规则未运行 lint / build / test。**
+
+差异：新增 C239（accepted）：候选预览复用 owner-bypass 的模型选择器，且
+`modelAssociationCache` 恒为 `[]`（关联解析缓存随 C179 未移植）。新增 C240（accepted）：
+两次时钟读取、导出时重算启用 key 计数与 clearCache 重载不可取消。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|

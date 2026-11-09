@@ -456,6 +456,21 @@ release_date 降序 + id 升序排序；`refreshProvidersCatalog` 强制抓取�
 C238（accepted）：调度器与作用域实现细节（BackgroundService + TCS 重排、scoped
 settings 读取、无 tick 补发、串行刷新不重叠），可观察行为由测试锁定。
 
+§156 追加 26 个用例（`AxonHub.Api.Tests` 26：`CacheDiagnosticsTests` 16、
+`GoJsonIndentTests` 4、`AdminDiagnosticsEndpointTests` 6），同样按项目规则未运行
+lint / build / test；§156 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、
+`AxonHub.Api.Tests` 5685、`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353，
+四项目合计 9290，下一次全量运行应以该数字复核。该切片接入 1 个查询与 1 个变更：
+`getCacheDiagnostics` 与 `clearCache`。导出面复刻参照的字段序、omitempty 与
+nil / 空数组边界（`lo.Map(nil)` → `[]`、`append(nil, ...)` → `null`）、通道
+（ordering_weight 降序 + id 升序）与模型（id 升序）查询顺序、两次时钟读取
+（exportedAt / capturedAtUtc 与文件名）、启用 / 禁用 API key 计数、settings /
+modelEntries / 候选预览，以及 `json.MarshalIndent` 的缩进遍历与 Go 条件值编码
+（整数定点、浮点 Go 格式、map 键排序）；清缓存复刻 owner 门、targets 去重排序与
+逐目标重载错误链。新增 C239（accepted）：候选预览复用 owner-bypass 的模型选择器，
+`modelAssociationCache` 恒为 `[]`（关联解析缓存随 C179 未移植）；新增 C240
+（accepted）：两次时钟读取、导出时重算启用 key 计数、clearCache 重载不接收取消令牌。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

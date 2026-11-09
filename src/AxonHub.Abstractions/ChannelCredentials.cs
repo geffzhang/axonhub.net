@@ -53,6 +53,33 @@ public static class ChannelCredentials
         return enabled;
     }
 
+    /// <summary>
+    /// Port of <c>len(channel.DisabledAPIKeys)</c>: the number of stored
+    /// disable entries, including elapsed ones and entries whose key is empty
+    /// (<c>filterDisabled</c> only decides which entries are active). A
+    /// malformed document counts zero, matching the lenient credential reads
+    /// (C013).
+    /// </summary>
+    public static int CountDisabledApiKeys(string? disabledApiKeysJson)
+    {
+        if (string.IsNullOrWhiteSpace(disabledApiKeysJson))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(disabledApiKeysJson);
+            return document.RootElement.ValueKind == JsonValueKind.Array
+                ? document.RootElement.GetArrayLength()
+                : 0;
+        }
+        catch (JsonException)
+        {
+            return 0;
+        }
+    }
+
     /// <summary>Port of GetAllAPIKeys: legacy apiKey (unless OAuth) first, then apiKeys.</summary>
     public static IReadOnlyList<string> GetAllApiKeys(string? credentialsJson)
     {

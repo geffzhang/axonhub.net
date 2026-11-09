@@ -3,6 +3,7 @@ using HotChocolate.Resolvers;
 using HotChocolate.Types;
 using Microsoft.Extensions.DependencyInjection;
 using AxonHub.Api.Catalog;
+using AxonHub.Api.Diagnostics;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
@@ -523,6 +524,37 @@ public sealed class AdminQuery
                 "failed to get catalog settings: " + ex.Message,
                 ex);
         }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.GetCacheDiagnostics (system.resolvers.go:690-726).
+    /// Owner-only; the reference returns <c>ErrNotOwner</c> before touching the
+    /// input. <c>input</c> is nullable, and a missing one means the default
+    /// CHANNEL_CACHE target.
+    /// </summary>
+    [GraphQLName("getCacheDiagnostics")]
+    public async Task<GetCacheDiagnosticsPayloadType> GetCacheDiagnosticsAsync(
+        GetCacheDiagnosticsInput? input,
+        [Service] IManagementIdentity identity,
+        [Service] CacheDiagnosticsService diagnostics,
+        CancellationToken cancellationToken)
+    {
+        var user = await identity.GetCurrentUserAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null || !user.IsOwner)
+        {
+            throw new InvalidOperationException("permission denied: owner access required");
+        }
+
+        var payload = await diagnostics
+            .GetCacheDiagnosticsAsync(input?.Targets, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new GetCacheDiagnosticsPayloadType
+        {
+            FileName = payload.FileName,
+            Content = payload.Content,
+            Targets = payload.Targets,
+        };
     }
 
     /// <summary>Port of queryResolver.AutoBackupSettings (backup.resolvers.go:130-132).</summary>

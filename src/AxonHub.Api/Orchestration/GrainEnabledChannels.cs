@@ -27,6 +27,38 @@ public sealed class GrainEnabledChannelProvider(IGrainFactory grainFactory) : IE
 }
 
 /// <summary>
+/// Read access to the enabled-channel cache contents plus the cache version
+/// (<c>ChannelService.GetEnabledChannels()</c> and
+/// <c>ChannelService.GetCacheVersion()</c> as read by
+/// buildChannelModelCacheDiagnosticsExport, channel_model_cache_diagnostics.go:164).
+/// </summary>
+public interface IEnabledChannelCacheSnapshotProvider
+{
+    Task<EnabledChannelsSnapshot> GetSnapshotAsync(
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Grain-backed snapshot reader. Both halves come from one activation call so
+/// the diagnostics export sees the channels and the version that belong
+/// together; the reference reads the two accessors back to back instead.
+/// </summary>
+public sealed class GrainEnabledChannelCacheSnapshotProvider(IGrainFactory grainFactory)
+    : IEnabledChannelCacheSnapshotProvider
+{
+    public async Task<EnabledChannelsSnapshot> GetSnapshotAsync(
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        return await grainFactory
+            .GetGrain<IEnabledChannelsGrain>(EnabledChannelsGrainKey.Default)
+            .GetSnapshotAsync()
+            .ConfigureAwait(false);
+    }
+}
+
+/// <summary>
 /// The cache invalidation seam for channel mutations
 /// (<c>ChannelService.asyncReloadChannels</c>, channel.go:1267-1275) and for the
 /// synchronous reloads that must stop selecting a channel immediately

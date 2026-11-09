@@ -3,6 +3,7 @@ using AxonHub.Api.Auth;
 using AxonHub.Api.Auth.Oidc;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Catalog;
+using AxonHub.Api.Diagnostics;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Http;
@@ -57,6 +58,12 @@ builder.Services.AddSingleton<IAxonHubDbContextFactory>(
 builder.Services.AddSingleton<IEnabledChannelSource, PostgresEnabledChannelSource>();
 builder.Services.AddSingleton<IEnabledChannelProvider, GrainEnabledChannelProvider>();
 builder.Services.AddSingleton<IEnabledChannelsCacheRefresher, GrainEnabledChannelsCacheRefresher>();
+
+// The cache diagnostics export reads the same snapshot plus the cache version
+// in one activation (getCacheDiagnostics §156).
+builder.Services.AddSingleton<
+    IEnabledChannelCacheSnapshotProvider,
+    GrainEnabledChannelCacheSnapshotProvider>();
 
 // Per-channel OAuth token refresher: ChannelTokenGrain owns the provider state,
 // ChannelTokenStore is its optimistic-write half, and ChannelTokenSource builds
@@ -268,6 +275,15 @@ builder.Services.AddScoped<IApiKeyQuotaChecker, ApiKeyQuotaService>();
 // (orchestrator.DefaultSelector, candidates.go:110-398).
 builder.Services.AddScoped<IModelCandidateSelector, ModelCandidateSelector>();
 builder.Services.AddScoped<ChatCompletionOrchestrator>();
+
+// The owner-only cache diagnostics export runs the ordinary selector for its
+// candidate preview; the reference's OwnerRule admits owners where the port's
+// API-key privacy check would deny, so the preview uses its own bypass
+// instance (reachable only behind the resolver's owner gate, §156).
+builder.Services.AddScoped<
+    ICacheDiagnosticsCandidateSelector,
+    CacheDiagnosticsCandidateSelector>();
+builder.Services.AddScoped<CacheDiagnosticsService>();
 
 // Users and roles (biz.UserService / biz.RoleService). Passwords keep the
 // reference's hex(bcrypt cost 10) format so rows are interchangeable with the

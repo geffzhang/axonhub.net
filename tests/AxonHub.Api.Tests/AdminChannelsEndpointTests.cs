@@ -1835,6 +1835,12 @@ internal sealed class FakeChannelAdminStore : IChannelAdminStore
     public Exception? CountFailure { get; set; }
 
     /// <summary>
+    /// Fails the unbounded ListAllAsync read (the cache diagnostics export
+    /// queries every channel). ListAsync keeps its own path.
+    /// </summary>
+    public Exception? ListAllFailure { get; set; }
+
+    /// <summary>
     /// Ids returned on their first GetByIdAsync lookup and missing on the
     /// next, modelling a concurrent soft-delete between an edge query and the
     /// back-reference it issues (ent's Only then reports NotFound).
@@ -1891,6 +1897,11 @@ internal sealed class FakeChannelAdminStore : IChannelAdminStore
         CancellationToken cancellationToken = default)
     {
         AllQueries.Add(query);
+
+        if (ListAllFailure is not null)
+        {
+            return Task.FromException<IReadOnlyList<ChannelRecord>>(ListAllFailure);
+        }
 
         var filtered = _rows.Where(row => row.DeletedAt == 0 && Matches(query, row));
         IReadOnlyList<ChannelRecord> ordered = query.Ordered

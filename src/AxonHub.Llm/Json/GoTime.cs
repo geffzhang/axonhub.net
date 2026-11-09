@@ -55,6 +55,20 @@ public static class GoTime
             : text + value.ToString("zzz", CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Go <c>time.Time.UTC().Format(time.RFC3339)</c>: second precision, always
+    /// a <c>Z</c> suffix. The cache diagnostics export uses this layout for
+    /// every timestamp it emits (channel_model_cache_diagnostics.go:163-240).
+    /// </summary>
+    public static string Rfc3339(DateTime value)
+        => ToUtc(value).ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) + "Z";
+
+    /// <inheritdoc cref="Rfc3339(DateTime)"/>
+    public static string Rfc3339(DateTimeOffset value)
+        => value
+            .ToUniversalTime()
+            .ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) + "Z";
+
     /// <summary>Go <c>time.Time.Unix()</c>: whole seconds since the Unix epoch.</summary>
     public static long UnixSeconds(DateTime value)
         => new DateTimeOffset(ToUtc(value)).ToUnixTimeSeconds();

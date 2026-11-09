@@ -179,4 +179,13 @@ public sealed class ChannelCandidateModel
 
     [Id(1)]
     public string ActualModel { get; set; } = string.Empty;
+
+    /// <summary>
+    /// How the entry was produced (the reference's
+    /// <c>biz.ChannelModelEntry.Source</c>: direct / prefix / auto_trim /
+    /// mapping). Only the cache diagnostics export reads it; the outbound path
+    /// ignores it.
+    /// </summary>
+    [Id(2)]
+    public string Source { get; set; } = string.Empty;
 }

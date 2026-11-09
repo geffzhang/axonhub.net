@@ -3,6 +3,7 @@ using HotChocolate.Types;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using AxonHub.Api.Catalog;
+using AxonHub.Api.Diagnostics;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
@@ -2933,6 +2934,62 @@ public sealed class AdminMutation
         {
             Success = true,
             Message = "Backup completed successfully",
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ClearCache (system.resolvers.go:383-408).
+    /// Owner-only; every normalized target is reloaded in order and the first
+    /// failure aborts the mutation. The reference's
+    /// <c>ChannelService.ReloadEnabledChannelsCache</c> prefixes the cache load
+    /// error, so the port reconstructs that chain around the grain refresh.
+    /// </summary>
+    [GraphQLName("clearCache")]
+    public async Task<ClearCachePayloadType> ClearCacheAsync(
+        ClearCacheInput input,
+        [Service] IManagementIdentity identity,
+        [Service] IEnabledChannelsCacheRefresher refresher,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var user = await identity.GetCurrentUserAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null || !user.IsOwner)
+        {
+            throw new InvalidOperationException("permission denied: owner access required");
+        }
+
+        var targets = DiagnosticsTargets.Normalize(input.Targets);
+
+        foreach (var target in targets)
+        {
+            switch (target)
+            {
+                case DiagnosticsTargetValue.ChannelCache:
+                    try
+                    {
+                        await refresher.ReloadAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException(
+                            "failed to clear cache for " + DiagnosticsTargets.ToWire(target)
+                            + ": failed to reload enabled channels cache: " + ex.Message,
+                            ex);
+                    }
+
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        "unsupported cache target: " + DiagnosticsTargets.ToWire(target));
+            }
+        }
+
+        return new ClearCachePayloadType
+        {
+            Success = true,
+            Message = "cache cleared successfully",
+            Targets = targets,
         };
     }
 }

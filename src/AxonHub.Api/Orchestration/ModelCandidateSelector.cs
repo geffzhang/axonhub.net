@@ -411,6 +411,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
                 {
                     RequestModel = entry.RequestModel,
                     ActualModel = entry.ActualModel,
+                    Source = entry.Source,
                 });
             }
         }
@@ -445,7 +446,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
                     var entry = new ChannelModelEntry(
                         model.RequestModel,
                         model.ActualModel,
-                        "direct");
+                        model.Source);
                     var endpoints = ChannelEndpointSelection.ApplyForcedApiFormatsForRequest(
                         descriptor,
                         [entry],
@@ -608,6 +609,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
             {
                 RequestModel = entry.RequestModel,
                 ActualModel = entry.ActualModel,
+                Source = entry.Source,
             });
         }
 

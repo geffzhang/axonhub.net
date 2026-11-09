@@ -6,6 +6,21 @@ namespace AxonHub.Abstractions;
 public sealed record ChannelModelEntry(string RequestModel, string ActualModel, string Source);
 
 /// <summary>
+/// The subset of <c>objects.ChannelSettings</c> the cache diagnostics export
+/// re-serializes (channel_model_cache_diagnostics.go:251-269).
+/// </summary>
+public sealed record ChannelSettingsSnapshot(
+    string ExtraModelPrefix,
+    IReadOnlyList<string>? AutoTrimedModelPrefixes,
+    bool HideMappedModels,
+    bool HideOriginalModels,
+    bool LowercaseModelId,
+    IReadOnlyList<ModelMappingSnapshot>? ModelMappings);
+
+/// <summary>Port of <c>objects.ModelMapping</c> for the diagnostics snapshot.</summary>
+public sealed record ModelMappingSnapshot(string From, string To);
+
+/// <summary>
 /// Faithful port of <c>biz.Channel.GetModelEntries</c>
 /// (internal/server/biz/channel_llm.go): direct supported models plus prefix,
 /// auto-trim and model-mapping aliases, then the hide/lowercase post-processing.
@@ -147,8 +162,10 @@ public static class ChannelModelEntries
         // 4. Model mappings. Only aliases whose target is actually supported.
         foreach (var mapping in settings.ModelMappings ?? [])
         {
-            var from = mapping.From ?? string.Empty;
-            var to = mapping.To ?? string.Empty;
+            // Go's []ModelMapping has value elements: a JSON null element
+            // decodes into the zero struct.
+            var from = mapping?.From ?? string.Empty;
+            var to = mapping?.To ?? string.Empty;
             if (!supportedModels.Contains(to, StringComparer.Ordinal))
             {
                 continue;
@@ -219,6 +236,41 @@ public static class ChannelModelEntries
         return [.. models.Select(static model => model ?? string.Empty)];
     }
 
+    /// <summary>
+    /// Decodes the six settings fields the diagnostics export mirrors. A null
+    /// or <c>null</c> document yields <see langword="null"/> (the reference's
+    /// nil <c>*objects.ChannelSettings</c>); malformed JSON throws like Ent's
+    /// scan.
+    /// </summary>
+    public static ChannelSettingsSnapshot? ParseSettingsSnapshot(string? settingsJson)
+    {
+        if (string.IsNullOrWhiteSpace(settingsJson)
+            || string.Equals(settingsJson, "null", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var settings = JsonSerializer.Deserialize<ChannelSettings>(settingsJson, JsonOptions);
+        if (settings is null)
+        {
+            return null;
+        }
+
+        return new ChannelSettingsSnapshot(
+            settings.ExtraModelPrefix ?? string.Empty,
+            settings.AutoTrimedModelPrefixes?
+                .Select(static prefix => prefix ?? string.Empty)
+                .ToList(),
+            settings.HideMappedModels,
+            settings.HideOriginalModels,
+            settings.LowercaseModelId,
+            settings.ModelMappings?
+                .Select(static mapping => new ModelMappingSnapshot(
+                    mapping?.From ?? string.Empty,
+                    mapping?.To ?? string.Empty))
+                .ToList());
+    }
+
     private static ChannelSettings? ParseSettings(ChannelDescriptor channel)
     {
         if (string.IsNullOrWhiteSpace(channel.Settings) || channel.Settings == "null")
@@ -236,7 +288,7 @@ public static class ChannelModelEntries
 
         public string[]? AutoTrimedModelPrefixes { get; set; }
 
-        public ModelMapping[]? ModelMappings { get; set; }
+        public ModelMapping?[]? ModelMappings { get; set; }
 
         public bool HideOriginalModels { get; set; }
 
