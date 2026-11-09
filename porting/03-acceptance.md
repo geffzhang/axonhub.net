@@ -502,6 +502,21 @@ base64 的接受 / 拒绝集合按 Go 1.26 `decodeQuantum` 对齐（只忽略 CR
 忽略非零尾随位），`IsGoBase64` 预检把 `Convert.FromBase64String` 对空格 / 制表符的额外
 容忍收窄回参照字符集。C242 由 gap 改为 resolved，唯一残余为日志通道 / 类别名不同。
 
+§159 追加 24 个用例（`AxonHub.Api.Tests` 24：`ClaudeCodeSafeguardsSettingsServiceTests` 19、
+`AdminClaudeCodeSafeguardsEndpointTests` 5），同样按项目规则未运行 lint / build / test；
+§159 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5751、
+`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 359，四项目合计 9362，下一次全量
+运行应以该数字复核。该切片为 post-baseline 漂移（冻结基线 `b8bb3421` 无 safeguards 包与
+claudeCodeSafeguards schema），按 `f272549f` 接入 Claude Code safeguards 设置面：
+`claudeCodeSafeguardsSettings` 查询、`updateClaudeCodeSafeguardsSettings` /
+`resetClaudeCodeSafeguardsSettings` 变更与 `ClaudeCodeSafeguardsConfig` /
+`ClaudeCodeSafeguardsSettings` 输出类型；默认值（timeout 30s / maxTokens 4096 /
+transcriptCharBudget 24000 / DefaultPolicy）、零值修补、`"null"` 重置、直接读、Go 字段序
+JSON（空 fallback 为 `[]`）、`time.Duration` 纳秒截断与 15 条校验文案均按参照锁定，
+读取 / 写入分别要求 `read_settings` / `write_settings`。评审运行时（evaluator / response /
+anthropic 入站接线）未移植，登记为 C243 gap；默认 `classifierModel` 为空时评审关闭，
+默认部署的 /v1 行为不受影响。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

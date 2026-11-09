@@ -8317,6 +8317,61 @@ GET /favicon 尚未接线，前端图标回落到静态 index。
 唯一残余为日志通道 / 类别名不同（ILogger 类别 vs narada 结构化日志），进程内可见，
 不影响响应。
 
+## 159. Claude Code safeguards 设置（GraphQL 3 根字段，24 例，2026-11-09）
+
+参照（post-baseline 漂移，按工作仓库 f272549f 跟进）：`internal/server/biz/system_claude_code.go`
+（设置读取 / 写入 / 重置：直接读行、`"null"` 视为服务器默认值、runtimeConfig 校验、
+claudeCodeConfig 的 Go JSON 形状）、`internal/server/safeguards/evaluator.go:17-33`
+（DefaultTimeout 30s、MaxTokens 4096、transcriptBudget 24000、DefaultPolicy）、
+`conf/conf.go:257-264`（safeguards 默认配置）、`internal/server/gql/system.graphql:542-573`
+（输出 / 输入类型与三个根字段）、`internal/server/gql/system.resolvers.go:445-455,804-807`
+（resolver 直接委托 service）。
+
+| 项 | 参照值 |
+|---|---|
+| 读取默认（无行 / `"null"`） | `usingServerDefaults: true`；classifierModel `""`、policy `""`、fallbackModels `[]`、escalateOnDenial false、attemptTimeoutSeconds 0、timeoutSeconds 30、maxTokens 4096、transcriptCharBudget 24000；defaultPolicy 为内置策略全文 |
+| 服务器默认值修补 | YAML 的 timeout / maxTokens / transcriptCharBudget 为零时分别替换为 30s / 4096 / 24000，其余字段原样暴露 |
+| 存储值读取 | 直接读 `systems` 行（不经系统缓存，避免陈旧评审策略）；解码后按 runtimeConfig 校验并返回规整值（model / fallback trim），`usingServerDefaults: false` |
+| 损坏存储值 | `decode Claude Code safeguards settings: %w`（不静默禁用评审）；空对象 `{}` 能解码但校验失败 |
+| 校验顺序与文案 | timeout（NaN / Inf / ≤0 / >120）→ `overall timeout must be greater than zero and at most 120 seconds`；attempt（NaN / Inf / <0 / >120）→ `attempt timeout must be between zero and 120 seconds`；maxTokens（<1 / >16384）→ `max tokens must be between 1 and 16384`；budget（<1 / >1000000）→ `transcript budget must be between 1 and 1000000 UTF-8 bytes`；fallback（trim 后为空 / 重复 / 等于主模型）→ `fallback models must be nonempty, distinct and different from the primary model`；截断后 timeout ≤0 → `overall timeout must be at least one nanosecond` |
+| 写入 | 校验后按 Go 字段顺序持久化 `classifierModel, policy, fallbackModels, escalateOnDenial, attemptTimeoutSeconds, timeoutSeconds, maxTokens, transcriptCharBudget`；空 fallback 为 `[]` 而非 `null`；秒值按 `time.Duration(seconds*1e9)` 截断 |
+| 重置 | 写入字面量 `"null"`，读取回到服务器默认值 |
+| 权限 | 读取需 `read_settings`，写入 / 重置需 `write_settings`（authz.RequireScope）；运行时配置读取不加权限（authz.RunWithSystemBypass 的系统内部路径） |
+| 失败包装 | 读失败 `read Claude Code safeguards settings: %w`；写失败 `failed to create system setting: %w` |
+
+端口实现：
+
+- `src/AxonHub.Api/Settings/ClaudeCodeSafeguardsSettingsService.cs`：
+  `GetAsync` / `GetRuntimeConfigAsync` / `UpdateAsync` / `ResetAsync` 与
+  `ClaudeCodeSafeguardsCodec`；时长以 `long` 纳秒表示（`(long)(seconds * 1e9)` /
+  `nanoseconds / 1e9`），避免 `TimeSpan` 的 100ns 取整改变 `timeoutSeconds`。
+- `src/AxonHub.Api/Safeguards/SafeguardsDefaults.cs`：默认常量与 `DefaultPolicy`
+  全文（由 `evaluator.go` 生成，逐字节一致）。
+- `src/AxonHub.Api/GraphQL/ClaudeCodeSafeguardsTypes.cs`：`ClaudeCodeSafeguardsConfig` /
+  `ClaudeCodeSafeguardsSettings` 输出类型、`UpdateClaudeCodeSafeguardsInput`
+  （全部非空字段）与映射。
+- `src/AxonHub.Api/GraphQL/AdminQuery.cs` / `AdminMutation.cs`：
+  `claudeCodeSafeguardsSettings`、`updateClaudeCodeSafeguardsSettings`、
+  `resetClaudeCodeSafeguardsSettings` 三个根字段；scope 检查与
+  VALIDATION_FAILED 由 service 负责。
+- `src/AxonHub.Api/Program.cs`：注册 `ClaudeCodeSafeguardsServerDefaults` 与 service。
+
+测试（24 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/ClaudeCodeSafeguardsSettingsServiceTests.cs` | 19（Fact） | 缺行默认值 / 零值修补 / 服务器默认值原样 / 存储值规整 / `"null"` / 空对象校验失败 / 损坏值 decode 前缀 / 非法限额 / Go 形状 JSON（字段顺序、`[]`、秒截断）/ 15 条校验文案 / 失败不落库 / 重置 `"null"` / 三种 scope 组合与匿名 / 运行时读取免权限 / 读前缀 / 写前缀 |
+| `tests/AxonHub.Api.Tests/AdminClaudeCodeSafeguardsEndpointTests.cs` | 5（Fact） | GraphQL 默认值 / 更新-读取-重置往返（存储 JSON 精确比对）/ VALIDATION_FAILED 信封 / `read_settings` 门 / `write_settings` 门 |
+
+静态计数：`AxonHub.Api.Tests` 由 5727 增至 5751（+24），`AxonHub.Persistence.Tests` 359、
+`AxonHub.Grains.Tests` 1746、`AxonHub.Llm.Tests` 1506 不变，四项目合计由 9338 增至
+9362。**按项目规则未运行 lint / build / test。**
+
+差异：本特性整体为 post-baseline 漂移（冻结基线 b8bb3421 无 safeguards 包与
+claudeCodeSafeguards schema），本切片只移植设置面；评审运行时（evaluator / response /
+anthropic.go 集成）登记为 C243 gap。服务器默认 `classifierModel` 为空时评审关闭，
+默认部署的 /v1 行为不受影响。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|

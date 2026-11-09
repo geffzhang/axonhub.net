@@ -782,6 +782,39 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.UpdateClaudeCodeSafeguardsSettings
+    /// (system.resolvers.go:445-450). The resolver has no scope check of its
+    /// own: the service requires write_settings and raises the reference's
+    /// VALIDATION_FAILED coded errors.
+    /// </summary>
+    [GraphQLName("updateClaudeCodeSafeguardsSettings")]
+    public async Task<bool> UpdateClaudeCodeSafeguardsSettingsAsync(
+        UpdateClaudeCodeSafeguardsInput input,
+        [Service] IClaudeCodeSafeguardsSettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        await settings.UpdateAsync(
+                ClaudeCodeSafeguardsMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ResetClaudeCodeSafeguardsSettings
+    /// (system.resolvers.go:451-455): a write_settings-guarded upsert of the
+    /// literal "null" value.
+    /// </summary>
+    [GraphQLName("resetClaudeCodeSafeguardsSettings")]
+    public async Task<bool> ResetClaudeCodeSafeguardsSettingsAsync(
+        [Service] IClaudeCodeSafeguardsSettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        await settings.ResetAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
     /// Port of mutationResolver.CheckProviderQuotas (system.resolvers.go:273-282):
     /// the forced check runs under the service mutex and completes before the
     /// mutation returns.

@@ -421,6 +421,18 @@ public sealed class AdminQuery
         => SystemSettingsMapping.ToGraphQL(
             await settings.GetAsync(cancellationToken).ConfigureAwait(false));
 
+    /// <summary>
+    /// Port of queryResolver.ClaudeCodeSafeguardsSettings
+    /// (system.resolvers.go:804-807): the resolver delegates straight to the
+    /// service, which requires read_settings via authz.RequireScope.
+    /// </summary>
+    [GraphQLName("claudeCodeSafeguardsSettings")]
+    public async Task<ClaudeCodeSafeguardsSettingsType> ClaudeCodeSafeguardsSettingsAsync(
+        [Service] IClaudeCodeSafeguardsSettingsService settings,
+        CancellationToken cancellationToken)
+        => ClaudeCodeSafeguardsMapping.ToGraphQL(
+            await settings.GetAsync(cancellationToken).ConfigureAwait(false));
+
     /// <summary>Port of queryResolver.PreviewGcCleanup (system.resolvers.go:499-515).</summary>
     [GraphQLName("previewGcCleanup")]
     public async Task<IReadOnlyList<GcCleanupPreviewItemType>> PreviewGcCleanupAsync(

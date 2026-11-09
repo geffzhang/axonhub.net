@@ -515,6 +515,15 @@ builder.Services.AddSingleton<ProviderQuotaCheckerRegistration>(
 builder.Services.AddScoped<ProviderQuotaCollectionSettingsService>();
 builder.Services.AddScoped<IProviderQuotaCollectionSettingsService>(
     static services => services.GetRequiredService<ProviderQuotaCollectionSettingsService>());
+
+// Claude Code safeguards settings (system_claude_code.go; post-baseline drift,
+// §159). The server defaults mirror conf/conf.go:257-264; configuration-file
+// binding is governed by C027.
+builder.Services.AddSingleton(new ClaudeCodeSafeguardsServerDefaults());
+builder.Services.AddScoped<ClaudeCodeSafeguardsSettingsService>();
+builder.Services.AddScoped<IClaudeCodeSafeguardsSettingsService>(
+    static services => services.GetRequiredService<ClaudeCodeSafeguardsSettingsService>());
+
 builder.Services.AddSingleton<ProviderQuotaService>();
 builder.Services.AddSingleton<IProviderQuotaStatusProvider>(
     static services => services.GetRequiredService<ProviderQuotaService>());
