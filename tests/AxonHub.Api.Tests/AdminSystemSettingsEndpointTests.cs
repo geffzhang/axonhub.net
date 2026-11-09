@@ -1704,6 +1704,239 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
             error.GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task WebhookNotifierConfigReturnsTheReferenceDefaultsAndStoredValues()
+    {
+        var data = await QueryAsync(
+            """
+            {
+              webhookNotifierConfig {
+                targets {
+                  name enabled url
+                  proxy { type url username password disableConnectionReuse }
+                  timeoutMs headers { key value } body
+                }
+                subscriptions { event targetNames }
+              }
+            }
+            """);
+
+        var config = data.GetProperty("webhookNotifierConfig");
+        Assert.Empty(config.GetProperty("targets").EnumerateArray());
+        Assert.Empty(config.GetProperty("subscriptions").EnumerateArray());
+
+        _store.Add(
+            SystemConfigBackupKeys.WebhookNotifierConfig,
+            """
+            {
+              "targets": [
+                {
+                  "name": "primary",
+                  "enabled": true,
+                  "url": "https://hooks.example.com/axon",
+                  "proxy": {"type": "url", "url": "http://proxy:8080", "username": "u", "password": "p", "disableConnectionReuse": true},
+                  "timeout_ms": 2500,
+                  "headers": [{"key": "X-Sign", "value": "abc"}],
+                  "body": "payload"
+                },
+                {"name": "bare"}
+              ],
+              "subscriptions": [
+                {"event": "channel.auto_disabled", "target_names": ["primary"]},
+                {"event": "bare"}
+              ]
+            }
+            """);
+
+        data = await QueryAsync(
+            """
+            {
+              webhookNotifierConfig {
+                targets {
+                  name enabled url
+                  proxy { type url username password disableConnectionReuse }
+                  timeoutMs headers { key value } body
+                }
+                subscriptions { event targetNames }
+              }
+            }
+            """);
+
+        config = data.GetProperty("webhookNotifierConfig");
+        var targets = config.GetProperty("targets").EnumerateArray().ToArray();
+        Assert.Equal(2, targets.Length);
+
+        var primary = targets[0];
+        Assert.Equal("primary", primary.GetProperty("name").GetString());
+        Assert.True(primary.GetProperty("enabled").GetBoolean());
+        Assert.Equal(
+            "https://hooks.example.com/axon",
+            primary.GetProperty("url").GetString());
+
+        // ProxyType marshals the raw lowercase stored value (C139).
+        var proxy = primary.GetProperty("proxy");
+        Assert.Equal("url", proxy.GetProperty("type").GetString());
+        Assert.Equal("http://proxy:8080", proxy.GetProperty("url").GetString());
+        Assert.Equal("u", proxy.GetProperty("username").GetString());
+        Assert.Equal("p", proxy.GetProperty("password").GetString());
+        Assert.True(proxy.GetProperty("disableConnectionReuse").GetBoolean());
+
+        Assert.Equal(2500, primary.GetProperty("timeoutMs").GetInt32());
+        var header = Assert.Single(primary.GetProperty("headers").EnumerateArray());
+        Assert.Equal("X-Sign", header.GetProperty("key").GetString());
+        Assert.Equal("abc", header.GetProperty("value").GetString());
+        Assert.Equal("payload", primary.GetProperty("body").GetString());
+
+        // A minimal stored target keeps the Go zero values; a nil headers
+        // slice renders as [] through gqlgen's list marshaler.
+        var bare = targets[1];
+        Assert.Equal("bare", bare.GetProperty("name").GetString());
+        Assert.False(bare.GetProperty("enabled").GetBoolean());
+        Assert.Equal("", bare.GetProperty("url").GetString());
+        Assert.Equal(JsonValueKind.Null, bare.GetProperty("proxy").ValueKind);
+        Assert.Equal(0, bare.GetProperty("timeoutMs").GetInt32());
+        Assert.Empty(bare.GetProperty("headers").EnumerateArray());
+        Assert.Equal("", bare.GetProperty("body").GetString());
+
+        var subscriptions = config.GetProperty("subscriptions").EnumerateArray().ToArray();
+        Assert.Equal(2, subscriptions.Length);
+        Assert.Equal(
+            "channel.auto_disabled",
+            subscriptions[0].GetProperty("event").GetString());
+        Assert.Equal(
+            "primary",
+            Assert.Single(
+                subscriptions[0].GetProperty("targetNames").EnumerateArray()).GetString());
+        Assert.Equal("bare", subscriptions[1].GetProperty("event").GetString());
+        Assert.Empty(subscriptions[1].GetProperty("targetNames").EnumerateArray());
+
+        // Explicit null lists normalize to empty slices, and a stored target
+        // with "headers": null renders as [].
+        var stored = Assert.Single(_store.Rows);
+        stored.Value =
+            """{"targets":[{"name":"x","headers":null}],"subscriptions":null}""";
+
+        data = await QueryAsync(
+            """
+            {
+              webhookNotifierConfig {
+                targets { name headers { key value } }
+                subscriptions { event targetNames }
+              }
+            }
+            """);
+
+        config = data.GetProperty("webhookNotifierConfig");
+        var only = Assert.Single(config.GetProperty("targets").EnumerateArray());
+        Assert.Equal("x", only.GetProperty("name").GetString());
+        Assert.Empty(only.GetProperty("headers").EnumerateArray());
+        Assert.Empty(config.GetProperty("subscriptions").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task UpdateWebhookNotifierConfigWritesTheReferenceDocument()
+    {
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateWebhookNotifierConfig(input: {
+                targets: [
+                  {
+                    name: "primary"
+                    enabled: true
+                    url: "https://hooks.example.com/axon"
+                    proxy: {
+                      type: url
+                      url: "http://proxy:8080"
+                      username: "u"
+                      password: "p"
+                      disableConnectionReuse: true
+                    }
+                    timeoutMs: 2500
+                    headers: [{ key: "X-Sign", value: "abc" }]
+                    body: "payload"
+                  },
+                  {
+                    name: "second"
+                    enabled: false
+                    url: ""
+                    timeoutMs: 0
+                    body: ""
+                  }
+                ]
+                subscriptions: [{ event: "channel.auto_disabled", targetNames: ["primary"] }]
+              })
+            }
+            """);
+
+        Assert.True(
+            data.GetProperty("updateWebhookNotifierConfig").GetBoolean());
+
+        var stored = Assert.Single(_store.Rows);
+        Assert.Equal(SystemConfigBackupKeys.WebhookNotifierConfig, stored.Key);
+
+        // Field order and omitempty follow Go json.Marshal: proxy is omitted
+        // when nil, headers is written as null when nil.
+        Assert.Equal(
+            """{"targets":[{"name":"primary","enabled":true,"url":"https://hooks.example.com/axon","proxy":{"type":"url","url":"http://proxy:8080","username":"u","password":"p","disableConnectionReuse":true},"timeout_ms":2500,"headers":[{"key":"X-Sign","value":"abc"}],"body":"payload"},{"name":"second","enabled":false,"url":"","timeout_ms":0,"headers":null,"body":""}],"subscriptions":[{"event":"channel.auto_disabled","target_names":["primary"]}]}""",
+            stored.Value);
+
+        // Absent input lists are normalized to empty slices before writing.
+        data = await QueryAsync(
+            """
+            mutation {
+              updateWebhookNotifierConfig(input: {})
+            }
+            """);
+
+        Assert.True(
+            data.GetProperty("updateWebhookNotifierConfig").GetBoolean());
+        Assert.Equal("""{"targets":[],"subscriptions":[]}""", stored.Value);
+    }
+
+    [Fact]
+    public async Task WebhookNotifierConfigSurfacesTheReferencePrefixes()
+    {
+        _store.GetFailuresByKey[SystemConfigBackupKeys.WebhookNotifierConfig] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync(
+            "{ webhookNotifierConfig { targets { name } } }");
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to get webhook notifier config: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        _store.GetFailuresByKey.Clear();
+        _store.Rows.Clear();
+        _store.Add(SystemConfigBackupKeys.WebhookNotifierConfig, "not json");
+
+        response = await PostAsync(
+            "{ webhookNotifierConfig { targets { name } } }");
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.StartsWith(
+            "failed to unmarshal webhook notifier config: ",
+            error.GetProperty("message").GetString());
+
+        _store.Rows.Clear();
+        _store.SetFailuresByKey[SystemConfigBackupKeys.WebhookNotifierConfig] =
+            new InvalidOperationException("boom");
+
+        response = await PostAsync(
+            """
+            mutation {
+              updateWebhookNotifierConfig(input: {})
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update webhook notifier config: failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+    }
+
     private const string DefaultChannelSettingsJson =
         """{"probe":{"enabled":true,"frequency":"5m"},"auto_sync":{"frequency":"1h"},"test_system_prompt":"You are a helpful assistant.","test_user_prompt":"Hello world, I'm AxonHub.\nPlease tell me who you are?"}""";
 

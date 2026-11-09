@@ -191,6 +191,21 @@ public interface ISystemSettingsAdminService
     /// </summary>
     Task CompleteAutoDisableChannelOnboardingAsync(
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.WebhookNotifierConfig (system.go:1188-1209): a
+    /// missing row returns the normalized empty configuration.
+    /// </summary>
+    Task<WebhookNotifierConfig> GetWebhookNotifierConfigAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.SetWebhookNotifierConfig (system.go:1225-1234):
+    /// normalizes both lists and writes the marshalled document.
+    /// </summary>
+    Task SetWebhookNotifierConfigAsync(
+        WebhookNotifierConfig config,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="ISystemSettingsAdminService"/>
@@ -1245,6 +1260,60 @@ public sealed class SystemSettingsAdminService(
         };
 
         await SetOnboardingInfoAsync(info, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<WebhookNotifierConfig> GetWebhookNotifierConfigAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                SystemConfigBackupKeys.WebhookNotifierConfig,
+                "failed to get webhook notifier config",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: the normalized zero configuration.
+            return WebhookNotifierConfigCodec.Default;
+        }
+
+        try
+        {
+            return WebhookNotifierConfigCodec.Deserialize(row.Value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal webhook notifier config: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task SetWebhookNotifierConfigAsync(
+        WebhookNotifierConfig config,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var normalized = WebhookNotifierConfigCodec.Normalize(config);
+
+        string value;
+        try
+        {
+            value = WebhookNotifierConfigCodec.Serialize(normalized);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal webhook notifier config: " + ex.Message,
+                ex);
+        }
+
+        await SetValueAsync(
+                SystemConfigBackupKeys.WebhookNotifierConfig,
+                value,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static VideoStorageSettings NormalizeVideoStorage(VideoStorageSettings settings)

@@ -200,6 +200,9 @@ builder.Services.AddScoped<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
 builder.Services.AddScoped<ISystemStore, SystemStore>();
 builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminService>();
+// Version surface (internal/build/info.go + biz/version.go): the static build
+// metadata and the GitHub release lookup behind checkForUpdate (C235).
+builder.Services.AddSingleton<ISystemVersionService, SystemVersionService>();
 builder.Services.AddScoped<ISecuritySettingsProvider, SystemSettingsService>();
 builder.Services.AddScoped<IRetryPolicyProvider, SystemRetryPolicyService>();
 builder.Services.AddScoped<IPassThroughSettingsProvider, SystemPassThroughSettingsService>();

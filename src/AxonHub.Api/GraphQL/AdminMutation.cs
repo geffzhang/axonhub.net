@@ -447,6 +447,33 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.UpdateWebhookNotifierConfig
+    /// (system.resolvers.go:69-77).
+    /// </summary>
+    [GraphQLName("updateWebhookNotifierConfig")]
+    public async Task<bool> UpdateWebhookNotifierConfigAsync(
+        WebhookNotifierConfigInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetWebhookNotifierConfigAsync(
+                    WebhookNotifierMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update webhook notifier config: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Port of mutationResolver.CompleteOnboarding
     /// (system.resolvers.go:112-120); the input carries only a dummy field.
     /// </summary>

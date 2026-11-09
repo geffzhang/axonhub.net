@@ -7993,6 +7993,84 @@ proxyPresets 再包一层前缀）。
 未移植，设置面等价但后台扫描不存在。`system_proxy_presets` 已在备份键清单中，备份语义
 不变。
 
+## 154. Webhook 通知器配置与版本检查管理面（2 查询 / 1 变更，70 例，2026-11-09）
+
+参照：`internal/server/biz/system.go:416-434`（WebhookNotifierConfig /
+WebhookTarget / WebhookSubscription 的 JSON 标签；target 的 proxy omitempty、headers
+恒输出，subscription 的 target_names 恒输出）、`1174-1186`
+（normalizeWebhookNotifierConfig 只把两个 nil 列表换成空切片）、`1188-1209`
+（WebhookNotifierConfig：缺行 → 归一化零值；读错误
+`failed to get webhook notifier config`；解码错误 `failed to unmarshal webhook
+notifier config`；解码后归一化）、`1225-1234`（SetWebhookNotifierConfig：先归一化，
+marshal 错误 `failed to marshal webhook notifier config`，再 setSystemValue）、
+`internal/server/biz/version.go:39-63`（CheckForUpdate：currentVersion=build.Version，
+错误 `failed to fetch latest release`，releaseURL 拼接）、`65-134`
+（FetchLatestGitHubRelease：`url.Values.Encode` 排序后的 `page=1&per_page=100`、Accept /
+User-Agent 常量、10 秒 client 超时、`failed to fetch releases` / `GitHub API returned
+status %d` / `failed to decode releases`）、`136-186`（selectLatestGitHubRelease：
+draft、必须小写 v 前缀、预发布仅在 includeBeta 且含 -beta 时保留、发布后 30 分钟冷却、
+不可解析标签跳过、最高语义版本）、`188-393`（Masterminds semver 解析与自定义 prerelease
+比较：数字串按数值、beta10 与 beta.10 等价、build metadata 忽略、1-3 段、仅小写 v、
+metadata 仍校验形状）、`internal/build/info.go:14-54` 与 `internal/build/VERSION`
+（build.Info 六字段与冻结版本 v1.0.0-beta9）、`internal/server/gql/system.graphql:69-114、
+443-457、488-493`（SDL）、`internal/server/gql/system.resolvers.go:69-77、524-527、
+589-606`（变更 / 查询前缀）。
+
+| 项 | 参照值 |
+|---|---|
+| webhookNotifierConfig 读 | 缺行 → `{targets:[],subscriptions:[]}`；解码后仅归一化两个 nil 列表；查询不加前缀 |
+| webhookNotifierConfig 写 | gqlgen 直接解码为 biz 结构（缺省列表为 nil → 归一化）；文档字段序 targets → subscriptions，target 序 name/enabled/url/proxy/timeout_ms/headers/body，proxy 内 type 恒输出、其余 omitempty、`disableConnectionReuse` camelCase，headers / target_names nil 写 `null`；错误 `failed to update webhook notifier config: ...` |
+| webhook 输出形状 | `[HeaderEntry!]!` / `[String!]!` / `[WebhookTarget!]!` 的 nil 切片由 gqlgen 列表 marshaler 渲染为 `[]`（无 nil 检查） |
+| systemVersion | version / commit / buildTime / goVersion / platform / uptime 六字段；环境相关（C235） |
+| checkForUpdate | includeBeta 默认 false；稳定版选择、beta10 数值比较、草稿 / 服务前缀 / 冷却 / 非 beta 预发布过滤；三层错误前缀（C235） |
+
+端口实现：
+
+- `src/AxonHub.Api/Settings/WebhookNotifierSettings.cs`：`WebhookNotifierConfig`
+  （targets / subscriptions 为可空列表）、`WebhookTarget`、`WebhookHeaderEntry`、
+  `WebhookSubscription` 域记录与 `WebhookNotifierConfigCodec`：Deserialize（nil 元素 →
+  零值、null 标量 → 零值、顶层 null → 默认值，随后 Normalize）、Serialize（Go 字段序、
+  proxy omitempty、headers / target_names nil 写 null，经 `GoJson.Escape`）、Normalize
+  与 Default。
+- `src/AxonHub.Api/Settings/SystemVersionService.cs`：`SystemBuildInfo` /
+  `VersionCheckResult` / `ISystemVersionService`；`SystemVersionService`（可选注入
+  `HttpMessageHandler` 供测试捕获线路）提供固定版本 v1.0.0-beta9、.NET 运行时与宿主
+  平台映射（C235）、Go `time.Duration.String` 布局的 uptime；`CheckForUpdateAsync` 与
+  `FetchLatestGitHubReleaseAsync` 复刻请求形状、10 秒超时、`failed to fetch releases` /
+  `GitHub API returned status %d` / `failed to decode releases` 包装；内部
+  `SelectLatestGitHubRelease` / `IsNewerVersion` / `CompareVersions` 与
+  `TryParseVersion` 逐项对齐参照过滤与 semver 规则；`GoDuration` 实现 Go 的时长算法。
+- `src/AxonHub.Api/Settings/SystemSettingsAdminService.cs`：新增
+  `GetWebhookNotifierConfigAsync` / `SetWebhookNotifierConfigAsync`，缺行、归一化与
+  逐层错误前缀按参照。
+- `src/AxonHub.Api/GraphQL/WebhookNotifierTypes.cs`：HeaderEntryInput、WebhookTarget /
+  WebhookTargetInput、WebhookSubscription / WebhookSubscriptionInput、
+  WebhookNotifierConfig / WebhookNotifierConfigInput 与域 ↔ GraphQL 映射（nil 列表
+  输出为 `[]`，未知 ProxyType 抛 GraphQLException，C139 家族）。
+- `src/AxonHub.Api/GraphQL/SystemVersionTypes.cs`：SystemVersion / VersionCheck 输出类型
+  与映射。
+- `src/AxonHub.Api/GraphQL/AdminQuery.cs`：`webhookNotifierConfig`（薄转发）、
+  `systemVersion`（薄转发）、`checkForUpdate`（`failed to check for update` 前缀，
+  includeBeta 默认 false）；`AdminMutation.cs`：`updateWebhookNotifierConfig`（前缀）。
+- `src/AxonHub.Api/Program.cs`：`ISystemVersionService` 注册为单例（注入 TimeProvider）。
+
+测试（70 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/AdminSystemSettingsEndpointTests.cs` | 3 | webhook 缺行默认、存储文档读取（proxy 五字段、headers、subscriptions）、最小 target 的零值与 `headers:null` → `[]`、显式 null 列表归一；变更写入的 Go 字段序文档（proxy omitempty、headers null、camelCase）与 `input:{}` 的 `{targets:[],subscriptions:[]}`；读失败 / 解码失败 / 写失败三层错误前缀 |
+| `tests/AxonHub.Api.Tests/AdminSystemVersionEndpointTests.cs` | 67 | systemVersion 六字段与 Go 时长布局；稳定版选择与出站请求线路形状（URL 键序、Accept、User-Agent、GET）；includeBeta 的 beta10 数值选择与 rc 排除；非 200 / 解码 / 无可用版本 / 传输失败四条错误链；IsNewerVersion 31 例、CompareVersions 16 例（含反对称）、非法输入（大写 V、坏 metadata）、release 选择参照表、GoDuration 14 例 |
+
+静态计数：`AxonHub.Api.Tests` 由 5525 增至 5595（+70），`AxonHub.Grains.Tests` 1746、
+`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353 不变，四项目合计由 9130 增至
+9200。**按项目规则未运行 lint / build / test。**
+
+差异：新增 C235（accepted）：systemVersion 的构建元数据随目标运行时变化（版本取冻结
+参照值，commit / buildTime 为空，goVersion 为 .NET，platform 映射到 GOOS/GOARCH 词表，
+uptime 精度受 TimeSpan 限制），checkForUpdate 的错误链内层文本来自 .NET 异常与 STJ。
+新增 C236（gap）：webhook 通知器运行时（通道自动禁用时按订阅发送）未移植，管理面
+配置读写完整但配置当前不被消费。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -8005,7 +8083,7 @@ proxyPresets 再包一层前缀）。
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），端点运行时解析与传输保真由 §143 的 28 例锁定（C094 item 1 / C072 残余收窄），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与第二批系统设置（brand / general / channel 与三个 pass-through 开关，6 查询 + 6 变更，§152）与第三批系统设置（video storage / proxy presets / onboarding，3 查询 + 6 变更，§153）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、dashboard、其余系统设置类查询（diagnostics / version / catalog）等）未移植（视频存储扫描 worker 未移植，C234）（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入，dashboard 的 21 个根字段由 §105 接入，数据存储管理面（dataStorages / node(DataStorage) / createDataStorage / updateDataStorage）由 §106 接入（14 例），备份与自动备份管理面（autoBackupSettings / backup / restore / updateAutoBackupSettings / triggerAutoBackup）由 §107 接入（57 + 24 例）），API key profile template 管理面（apiKeyProfileTemplates 根字段、四个变更与 linkedProfilesCount）由 §109 接入（21 例），邀请的 REST 面（`POST /admin/invitations`、`GET /auth/invitations/:token`、`POST /auth/invitations/:token/register`，含角色删除同事务撤销）由 §110 接入（59 + 14 例；邀请 schema 标注 entgql.SkipAll，SDL 无邀请成员，故无 GraphQL 面）；前端实际调用的 215 个根字段中 145 个已接入（约 67%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 7 个 ent 类型（ChannelProbe / ChannelOverrideTemplate / RequestExecution / Role / System / UserProject / UserRole）见 C165，node(Channel) 与价格读取边由 §136 接入）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与第二批系统设置（brand / general / channel 与三个 pass-through 开关，6 查询 + 6 变更，§152）与第三批系统设置（video storage / proxy presets / onboarding，3 查询 + 6 变更，§153）与第四批系统设置（webhook notifier 配置与 systemVersion / checkForUpdate，2 查询 + 1 变更，§154）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、dashboard、其余系统设置类查询（diagnostics / catalog）等）未移植（视频存储扫描 worker 未移植，C234；webhook 通知器运行时未移植，C236）（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入，dashboard 的 21 个根字段由 §105 接入，数据存储管理面（dataStorages / node(DataStorage) / createDataStorage / updateDataStorage）由 §106 接入（14 例），备份与自动备份管理面（autoBackupSettings / backup / restore / updateAutoBackupSettings / triggerAutoBackup）由 §107 接入（57 + 24 例）），API key profile template 管理面（apiKeyProfileTemplates 根字段、四个变更与 linkedProfilesCount）由 §109 接入（21 例），邀请的 REST 面（`POST /admin/invitations`、`GET /auth/invitations/:token`、`POST /auth/invitations/:token/register`，含角色删除同事务撤销）由 §110 接入（59 + 14 例；邀请 schema 标注 entgql.SkipAll，SDL 无邀请成员，故无 GraphQL 面）；前端实际调用的 215 个根字段中 145 个已接入（约 67%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 7 个 ent 类型（ChannelProbe / ChannelOverrideTemplate / RequestExecution / Role / System / UserProject / UserRole）见 C165，node(Channel) 与价格读取边由 §136 接入）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），通道测试由 §76 接入，模型同步由 §77 接入，覆盖模板的 `channel_override_templates` 表、`channelOverrideTemplates` 查询与 create/update/delete/apply/clear 五个变更由 §78 接入（隐私作用域 C161、where 子集 C162、通道顺序 C163），其余通道写操作（C037）未移植 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / models / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads / data_storages / api_key_profile_templates） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`models` 管理存储由 §88 的 7 例锁定，`data_storages` 管理存储由 §106 的 8 例锁定，`api_key_profile_templates` 存储由 §109 的 4 例锁定，`invitations` 存储与注册事务由 §110 的 14 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主经 `EnabledChannelsGrain`（`PostgresEnabledChannelSource`）读取启用通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 的请求链路归档与存储策略的运行时消费未接入（C020）；存储策略的读写、body 清理与 GC 由 §113 接入，响应头捕获点差异已登记（C021） | 低 | 容器化验收；C020 随请求链路存储策略落地 |

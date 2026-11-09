@@ -421,6 +421,22 @@ omitempty 字段、删除过滤与逐层错误前缀；onboarding 复刻共享 `
 GraphQL 输出为 UTC（参照保留进程本地偏移，同一瞬时），非法 `completed_at` 的解析文案不同；
 新增 C234（gap）：视频存储扫描 worker 未移植，设置面等价但后台扫描不存在。
 
+§154 追加 70 个用例（`AxonHub.Api.Tests` 70：`AdminSystemSettingsEndpointTests` 3、
+`AdminSystemVersionEndpointTests` 67），同样按项目规则未运行 lint / build / test；§154
+落地后的静态计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5595、
+`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353，四项目合计 9200，下一次全量
+运行应以该数字复核。该切片接入 2 个查询与 1 个变更：`webhookNotifierConfig`、
+`systemVersion`、`checkForUpdate` 与 `updateWebhookNotifierConfig`。webhook 配置复刻
+Go 文档编解码（字段序、proxy omitempty、headers / target_names nil 写 null、缺行归一、
+`input:{}` → `{targets:[],subscriptions:[]}`）与三层错误前缀；nil 列表在输出侧由
+gqlgen 列表 marshaler 渲染为 `[]`，端口同样合并为空列表。版本面复刻出站请求（URL 键序、
+Accept、User-Agent、GET、10 秒超时）、30 分钟冷却、draft / 服务前缀 / 非 beta 预发布
+过滤、beta10 数值比较与三层错误链；uptime 按 Go `time.Duration.String()` 布局。新增
+C235（accepted）：systemVersion 的构建元数据随 .NET 运行时变化（版本固定冻结参照值，
+commit / buildTime 为空，goVersion / platform / uptime 为环境相关），checkForUpdate 的
+错误链内层文本来自 .NET 异常与 STJ；新增 C236（gap）：webhook 通知器运行时（通道
+自动禁用时按订阅发送）未移植，管理面配置读写完整但配置当前不被消费。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

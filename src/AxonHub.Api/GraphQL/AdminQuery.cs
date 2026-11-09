@@ -351,6 +351,52 @@ public sealed class AdminQuery
     }
 
     /// <summary>
+    /// Port of queryResolver.WebhookNotifierConfig (system.resolvers.go:524-527):
+    /// the resolver returns the service result without another wrapper.
+    /// </summary>
+    [GraphQLName("webhookNotifierConfig")]
+    public async Task<WebhookNotifierConfigType> WebhookNotifierConfigAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => WebhookNotifierMapping.ToGraphQL(
+            await settings.GetWebhookNotifierConfigAsync(cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.SystemVersion (system.resolvers.go:589-592):
+    /// build.GetBuildInfo with no wrapper.
+    /// </summary>
+    [GraphQLName("systemVersion")]
+    public SystemVersionType SystemVersion([Service] ISystemVersionService version)
+        => SystemVersionMapping.ToGraphQL(version.GetBuildInfo());
+
+    /// <summary>
+    /// Port of queryResolver.CheckForUpdate (system.resolvers.go:594-606):
+    /// includeBeta defaults to false and the service error is wrapped.
+    /// </summary>
+    [GraphQLName("checkForUpdate")]
+    public async Task<VersionCheckType> CheckForUpdateAsync(
+        [Service] ISystemVersionService version,
+        CancellationToken cancellationToken,
+        bool includeBeta = false)
+    {
+        VersionCheckResult result;
+        try
+        {
+            result = await version.CheckForUpdateAsync(includeBeta, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to check for update: " + ex.Message,
+                ex);
+        }
+
+        return SystemVersionMapping.ToGraphQL(result);
+    }
+
+    /// <summary>
     /// Port of queryResolver.QuotaRoutingSettings (system.resolvers.go:705-708):
     /// the strict read, so a malformed or invalid stored mode is a field error.
     /// </summary>
