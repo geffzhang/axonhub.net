@@ -89,6 +89,52 @@ public sealed class DataStorageBootstrapTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task FreshDatabaseIsNotInitialized()
+    {
+        await using var db = new TestDatabase(fixture);
+        await using var connection = await db.OpenMigratedAsync();
+
+        Assert.False(await DataStorageBootstrap.IsSystemInitializedAsync(connection));
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
+    [InlineData("false", false)]
+    [InlineData("1", false)]
+    public async Task InitializedFlagIsComparedCaseInsensitively(
+        string value,
+        bool expected)
+    {
+        await using var db = new TestDatabase(fixture);
+        await using var connection = await db.OpenMigratedAsync();
+
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "systems" ("key", "value")
+            VALUES ('system_initialized', @Value);
+            """,
+            new { Value = value });
+
+        Assert.Equal(expected, await DataStorageBootstrap.IsSystemInitializedAsync(connection));
+    }
+
+    [Fact]
+    public async Task SoftDeletedInitializedFlagDoesNotCount()
+    {
+        await using var db = new TestDatabase(fixture);
+        await using var connection = await db.OpenMigratedAsync();
+
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "systems" ("key", "value", "deleted_at")
+            VALUES ('system_initialized', 'true', 1);
+            """);
+
+        Assert.False(await DataStorageBootstrap.IsSystemInitializedAsync(connection));
+    }
+
+    [Fact]
     public async Task NonPrimaryRowsDoNotSuppressTheSeed()
     {
         await using var db = new TestDatabase(fixture);

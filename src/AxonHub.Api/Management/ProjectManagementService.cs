@@ -319,6 +319,23 @@ public sealed class ProjectManagementService(
             throw new InvalidOperationException(PermissionValidator.UserNotFoundInContext);
         }
 
+        return await CreateForUserAsync(command, currentUser.Id, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Port of ProjectService.CreateProject with the creator supplied directly.
+    /// The reference reads it from <c>contexts.GetUserFromContext</c>; the
+    /// initialize transaction has no request user and installs the owner it
+    /// just created (biz/system.go:780-789).
+    /// </summary>
+    public async Task<ProjectRecord> CreateForUserAsync(
+        CreateProjectCommand command,
+        long currentUserId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
         bool exists;
         try
         {
@@ -387,7 +404,7 @@ public sealed class ProjectManagementService(
 
         try
         {
-            await projects.AssignOwnerAsync(currentUser.Id, project.Id, cancellationToken)
+            await projects.AssignOwnerAsync(currentUserId, project.Id, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (StoreFailureException ex)

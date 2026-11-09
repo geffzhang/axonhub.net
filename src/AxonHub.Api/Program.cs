@@ -208,6 +208,9 @@ builder.Services.AddScoped<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
 builder.Services.AddScoped<ISystemStore, SystemStore>();
 builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminService>();
+// First-run initialization (biz/system.go:698-846): owner user, default
+// project, JWT secret, Primary storage, version — one transaction (C241).
+builder.Services.AddScoped<ISystemInitializationService, SystemInitializationService>();
 // Version surface (internal/build/info.go + biz/version.go): the static build
 // metadata and the GitHub release lookup behind checkForUpdate (C235).
 builder.Services.AddSingleton<ISystemVersionService, SystemVersionService>();
@@ -766,12 +769,20 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
 {
     await DatabaseMigrator.EnsureCreatedAsync(connection);
 
-    // The v0.4.0 data migration seeds the primary storage and the default
-    // data storage setting; without it the first request has no storage.
-    await DataStorageBootstrap.EnsurePrimaryDataStorageAsync(connection);
+    // datamigrate.Migrator.Run skips every version-tracked migration until
+    // the system is initialized (datamigrate/migrator.go). A fresh database
+    // gets its Primary storage from the initialize transaction instead; an
+    // initialized one still runs the idempotent v0.4.0 seed.
+    if (await DataStorageBootstrap.IsSystemInitializedAsync(connection))
+    {
+        await DataStorageBootstrap.EnsurePrimaryDataStorageAsync(connection);
+    }
 }
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+// Public system surface (routes.go:81-99): /health, /admin/system/status and
+// /admin/system/initialize. The two admin routes sit on the reference's
+// unSecureAdminGroup and are deliberately outside every auth middleware.
+app.MapSystemRoutes();
 
 // Unauthenticated admin auth (routes.go:97-98): signin and refresh sit on the
 // unSecureAdminGroup, so they stay outside the gate below.

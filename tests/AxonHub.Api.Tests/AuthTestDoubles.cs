@@ -750,9 +750,17 @@ internal sealed class FakeUserStore : IUserStore
 
     public Exception? GetActivatedByEmailFailure { get; set; }
 
+    /// <summary>When set, CreateAsync throws it like a failed insert would.</summary>
+    public Exception? CreateFailure { get; set; }
+
     public Task<long> CreateAsync(UserRecord user, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
+        if (CreateFailure is not null)
+        {
+            return Task.FromException<long>(CreateFailure);
+        }
+
         user.Id = _nextId++;
         Rows.Add(user);
         return Task.FromResult(user.Id);

@@ -20,6 +20,32 @@ namespace AxonHub.Persistence;
 /// </remarks>
 public static class DataStorageBootstrap
 {
+    /// <summary>
+    /// Port of the guard at the top of datamigrate.Migrator.Run
+    /// (internal/ent/migrate/datamigrate/migrator.go): no data migration runs
+    /// until the system has been initialized. The port runs this check on
+    /// every startup because it has no migration bookkeeping table.
+    /// </summary>
+    public static async Task<bool> IsSystemInitializedAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        // SystemService.IsInitialized: System.Query().Where(KeyEQ).Only with
+        // the SoftDeleteMixin predicate and strings.EqualFold(value, "true").
+        return await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM "systems"
+                WHERE "key" = 'system_initialized'
+                  AND "deleted_at" = 0
+                  AND lower("value") = 'true'
+            );
+            """,
+            cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
     /// <summary>Port of V0_4_0.Migrate.</summary>
     public static async Task EnsurePrimaryDataStorageAsync(
         NpgsqlConnection connection,

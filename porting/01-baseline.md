@@ -8219,6 +8219,60 @@ actualModel / source）、`288-333`（模型视图：仅 enabled 行调用 `Defa
 `modelAssociationCache` 恒为 `[]`（关联解析缓存随 C179 未移植）。新增 C240（accepted）：
 两次时钟读取、导出时重算启用 key 计数与 clearCache 重载不可取消。
 
+## 157. 系统初始化与首启（/health 对齐 + 2 个 admin 端点，28 + 6 例，2026-11-09）
+
+参照：`internal/server/biz/system.go:696-710`（IsInitialized：KeyEQ 查询、SoftDeleteMixin
+谓词、`strings.EqualFold(value, "true")`，NotFound 视为 false）、`721-846`（Initialize 事务：
+已初始化返回 nil；GenerateSecretKey 在事务外生成 32 字节十六进制；HashPassword 在事务内；
+owner user 的 preferLanguage 空串→"en"、status 缺省 activated、isOwner true、scopes
+`["*"]`；以 owner 身份 CreateProject("Default", "Default project") 创建 Admin / Developer /
+Viewer 三角色与 owner 关联；写 system_jwt_secret_key / system_brand_name；创建 Primary /
+database / settings / active 的 data storage；SetDefaultDataStorageID；system_initialized=
+"true"；SetVersion(build.Version)；每个步骤的错误前缀，最后 Commit）、`962-978`
+（setSystemValue 的 OnConflict 更新与 `failed to create system setting` 内层包装）、
+`internal/server/biz/version.go:32-35`（SetVersion）、`internal/server/api/system.go:38-66,76-101,132-185`
+（响应结构、json / binding 标签与 400 / 500 分类）、`internal/server/routes.go:81-99`
+（公开与 unSecureAdmin 路由）、`internal/build/info.go:30-54`（build.Info 的 json 标签与
+omitempty）、`internal/ent/migrate/datamigrate/migrator.go`（未初始化时跳过全部数据迁移）。
+
+| 项 | 参照值 |
+|---|---|
+| GET /health | `{status:"healthy", timestamp:<time.Now 的 RFC3339Nano>, version, build:{version, commit?, build_time?, go_version, platform, uptime}, uptime}`；commit / build_time 为空时省略；`application/json; charset=utf-8` |
+| GET /admin/system/status | `{isInitialized:bool}`；读取失败 → 500 `{"error":{"type":"Internal Server Error","message":"Failed to check system status"}}` |
+| POST /admin/system/initialize | 绑定失败 → 400 `{"success":false,"message":"Invalid request format"}`（JSON 解码失败与 ownerEmail 非 email、ownerPassword 少于 6 个 rune、三个必填名称为空同属此类）；状态读取失败 → 500 "Failed to check initialization status"；已初始化 → 400 "System is already initialized"；服务失败 → 500 `Failed to initialize system: <err>`；成功 → 200 `{"success":true,"message":"System initialized successfully"}` |
+| 初始化事务 | owner（activated、isOwner、`["*"]`）→ 默认项目（Default / Default project，三角色 + owner 关联）→ secret / brand → Primary 存储 → default_data_storage_id → system_initialized=true → system_version；任一失败回滚 |
+| 启动播种 | datamigrate 仅在 system_initialized 为 true 时运行 v0.4.0；全新库的 Primary 由初始化事务创建 |
+
+端口实现：
+
+- `src/AxonHub.Api/Settings/SystemInitializationService.cs`：IsInitialized 透传系统设置服务；
+  Initialize 的检查、secret 生成、事务内步骤顺序、参照错误前缀与 begin / commit 区分。
+- `src/AxonHub.Api/Endpoints/SystemHandlers.cs`：`/health`、`/admin/system/status`、
+  `/admin/system/initialize` 三路由；health 的字段序 / omitempty / GoTime / GoJson；
+  initialize 的 Web JSON 绑定、rune 计数与 400 / 500 响应形状。
+- `src/AxonHub.Api/Management/ProjectManagementService.cs`：`CreateForUserAsync` 重载，让
+  初始化事务以刚创建的 owner 调用 CreateProject；`CreateAsync` 行为不变。
+- `src/AxonHub.Persistence/DataStorageBootstrap.cs`：`IsSystemInitializedAsync` 启动闸
+  （大小写不敏感、排除软删除行）。
+- `src/AxonHub.Api/Program.cs`：注册 `ISystemInitializationService` 并把 v0.4.0 播种放到
+  初始化判定之后；用 `MapSystemRoutes` 取代原先的 `/health` 最小端点。
+
+测试（28 + 6 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/SystemInitializationServiceTests.cs` | 9 | 首次运行逐字段状态；显式 preferLanguage；已初始化 no-op（含 TRUE）；检查失败前缀；HashPassword 双层前缀；owner 创建失败；默认项目失败链；存储失败与系统行回滚；setSystemValue 内层前缀 |
+| `tests/AxonHub.Api.Tests/AdminSystemEndpointTests.cs` | 19 | health 字段序、omitempty 与 timestamp；status 的 false / 大小写不敏感 / 500 信封；initialize 的坏 JSON、null、空 body、六种绑定失败、6 个 CJK rune 通过、已初始化、成功响应逐字节与落库、500 状态读取与服务失败链 |
+| `tests/AxonHub.Persistence.Tests/DataStorageBootstrapTests.cs` | +6 | 全新库未初始化；大小写不敏感（true / TRUE / false / 1）；软删除标志不计数 |
+
+静态计数：`AxonHub.Api.Tests` 由 5685 增至 5713（+28），`AxonHub.Persistence.Tests` 由 353
+增至 359（+6），`AxonHub.Grains.Tests` 1746、`AxonHub.Llm.Tests` 1506 不变，四项目合计由
+9290 增至 9324。**按项目规则未运行 lint / build / test。**
+
+差异：新增 C241（accepted）：初始化事务与 /health 的跨实现差异（"{}" settings、build
+元数据、JSON 边界、email / rune 校验、时间戳来源、无迁移记账表）。新增 C242（gap）：
+GET /favicon 尚未接线，前端图标回落到静态 index。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|

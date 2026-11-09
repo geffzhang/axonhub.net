@@ -471,6 +471,24 @@ modelEntries / 候选预览，以及 `json.MarshalIndent` 的缩进遍历与 Go 
 `modelAssociationCache` 恒为 `[]`（关联解析缓存随 C179 未移植）；新增 C240
 （accepted）：两次时钟读取、导出时重算启用 key 计数、clearCache 重载不接收取消令牌。
 
+§157 追加 34 个用例（`AxonHub.Api.Tests` 28：`SystemInitializationServiceTests` 9、
+`AdminSystemEndpointTests` 19；`AxonHub.Persistence.Tests` 6：`DataStorageBootstrapTests`
+的启动闸用例），同样按项目规则未运行 lint / build / test；§157 落地后的静态计数为
+`AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5713、`AxonHub.Llm.Tests` 1506、
+`AxonHub.Persistence.Tests` 359，四项目合计 9324，下一次全量运行应以该数字复核。该切片
+接入 2 个 admin 端点与 `/health` 对齐：`GET /admin/system/status`、`POST
+/admin/system/initialize`，并把启动时的 v0.4.0 Primary 播种改为仅在 system_initialized
+为 true 时运行。状态面复刻大小写不敏感的 initialized 判定与 500 信封；初始化面复刻 gin
+绑定（email、min=6 按 rune、三个必填名称）、400 / 500 分类、已初始化文案与成功响应逐字节，
+并在一个事务内按参照顺序创建 owner（scopes `["*"]`）、默认项目（Default / Default
+project，Admin / Developer / Viewer 三角色 + owner 关联）、JWT secret（32 字节小写十六
+进制）、品牌名、Primary 存储、default_data_storage_id、initialized 标志与 system_version，
+逐一保留参照错误前缀（含 HashPassword 双层与 failed to create system setting 内层）；
+`/health` 复刻 build.Info 的字段序、commit / build_time 的 omitempty 与 timestamp 的
+RFC3339Nano。新增 C241（accepted）：Primary settings 写 `"{}"`（C196）、build 元数据环境
+差异（C235）、JSON 边界（C201）、email / rune 校验近似（C166）、时间戳来源与无迁移记账表
+（C020）；新增 C242（gap）：GET /favicon 尚未接线，前端图标回落到静态 index。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
