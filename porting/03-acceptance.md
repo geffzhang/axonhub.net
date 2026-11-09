@@ -367,14 +367,15 @@ lint / build / test；§150 落地后的静态计数为 `AxonHub.Grains.Tests` 1
 非承载 silo 的读缓存不会更新（有意的收窄，项目只支持单 silo）；通道 grain 的镜像启动为
 空且从不参与决策；runners 的意外异常被组长 grain 捕获记录，参照会 panic 进程。
 
-§151 追加 33 个用例（`AxonHub.Api.Tests` 19：`AdminPromptProtectionRulesEndpointTests`；
+§151 追加 32 个用例（`AxonHub.Api.Tests` 18：`AdminPromptProtectionRulesEndpointTests`；
 `AxonHub.Persistence.Tests` 14：`PromptProtectionRuleStoreTests`），同样按项目规则未运行
 lint / build / test；§151 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、
-`AxonHub.Api.Tests` 5486、`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 350，
-四项目合计 9088，下一次全量运行应以该数字复核。该切片接入 `promptProtectionRules` 连接、
-`node(PromptProtectionRule)`、`createPromptProtectionRule` / `updatePromptProtectionRule` /
+`AxonHub.Api.Tests` 5485、`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 350，
+四项目合计 9087，下一次全量运行应以该数字复核。该切片接入 `promptProtectionRules` 连接、
+`createPromptProtectionRule` / `updatePromptProtectionRule` /
 `deletePromptProtectionRule` / `updatePromptProtectionRuleStatus` /
-`bulkDelete|Enable|DisablePromptProtectionRules` / `previewPromptProtectionRule` 八个变更：
+`bulkDelete|Enable|DisablePromptProtectionRules` / `previewPromptProtectionRule` 八个变更
+（根 `node` 查询不含规则：参照的 `guidTypeToNodeType` 未登记该类型，端口同样报 `unknown node type`）：
 `PromptProtectionRuleManagementService` 逐项复刻参照的校验顺序（先编译正则，再 settings 必填、
 action 合法、mask 必须有 replacement、scope 合法）、先读后校验再写的更新路径、`DUPLICATE_NAME`
 扩展与四个 `failed to ... prompt protection rule` 错误前缀；`PromptProtectionRuleStore` 以 EF
@@ -383,7 +384,7 @@ action 合法、mask 必须有 replacement、scope 合法）、先读后校验�
 `replacement=""` / `scopes=[]`。新增 C231（accepted）：where 只暴露前端实际使用的子集
 （未移植的时间/description/pattern 谓词在输入校验阶段被拒绝）、HotChocolate 输入枚举严格拒绝
 （参照 gqlgen 透传字符串，未知 action 由服务层报 `invalid action: <x>`）、未知存储枚举值的输出
-抛错，规则 scopes 策略仍归 C014。C092 由 gap 改为 accepted：请求侧 71 例与管理面 33 例锁定，
+抛错，规则 scopes 策略仍归 C014。C092 由 gap 改为 accepted：请求侧 71 例与管理面 32 例锁定，
 残余收窄为无 30 秒 live 缓存、写入不触发缓存重载、.NET Regex 与 regexp2 尚未逐特性对照、
 Gemini/Ollama 载荷级对照延后。
 
@@ -691,7 +692,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C082–C085：OpenAI Video 端点接线的已接受差异 | 已接受（4 项，登记于台账）：(1) C082 参照的 `ch.Outbounds[videoKey]` 映射由 `ChannelOutboundFactory` 按通道类型重建：openai 通道承载 openai/video，doubao / volcengine 通道承载 Doubao 家族的 Seedance 出站（第 43 节，C105），四类 zenmux 通道承载 ZenMux 原生出站（第 44 节，C106），持久化的 seedance / zenmux 格式与对应通道回退一致；其余无视频变换器的通道仍报「channel does not support video task operations」，zenmux 的 delete-unsupported 本地取消分支已可达（7 例锁定），剩余差异只是「通道端点配置是否声明 zenmux/video」的端点表未建模——端口按请求 ApiFormat 直接分派（C080 item 4 同族）；(2) C083 `videoTaskProjectID` 的缺省 project 报错在端口不可达，无鉴权直调回退 `RequestIdentity.Default`（project 1）；(3) C084 同 project 下多条 external_id 命中时 ent Only 的 NotSingularError 与 Dapper QuerySingleOrDefault 的异常文案不同，均为 500 信封；(4) C085 `video.Video` 为 nil 时端口抛 `InvalidOperationException`（500 信封）而非 Go 的 nil 解引用 panic | 已接受（36 例锁定 video 端点切片；(1) 的 doubao 项由第 43 节的 11 + 5 例闭合，zenmux 项由第 44 节的 18 + 7 例闭合，残余为端点配置门控（C106）；其余为不可达或数据完整性边缘路径） |
 | C087：TypeSafe SystemOne 切片的已接受差异 | 已接受（4 项，登记于台账）：(1) 参照的 `AllowPassThroughBody` 对 SystemOne 恒为 true，开启 pass-through_body 时重放客户端原始 body（只写回映射后的 model）；端口已按 C091 接入请求与响应/流半程（额外顶层字段保留，原始响应/流按开关替换，26 例锁定），提示词保护补丁由 C092 接入（71 例锁定）；(2) 参照按通道端点/能力表选择出站并拒绝不支持的请求类型，端口按通道类型分派（与 C080 item 4、C086 同源）；(3) `state` / `instructions` / `criteria` / `legend` / `probabilities` 以 `JsonElement` 承载，`GoAnyJson` 复刻键排序、重复键与数字字面量，仅内部构造时需提供 `JsonElement`；(4) `SystemOneAnswer` 的字段级解码错误为端口自述的 Go 风格文案（缺 `Alias.<field>` 路径，同 C064/C079 的 STJ 差异） | 已接受（56 例 Llm + 9 例端点锁定正常往返；pass-through 请求半程由 C091 的 95 例覆盖，通道可用性判定与非 JSON 输入文案仍为既定差异） |
 | C091：pass-through 通道重放 | 请求与响应/流半程已解决：`isPassThroughEnabled` 的通道/全局开关继承、`passThroughStreamAligned` 的 Go 真值相等、body 重放与 sjson 语义的 model 补丁（空白 body 视作 `{}`）、格式支持（multipart / image_variation / transcription / translation 拒绝、JSON image_edit 允许）、Content-Type 同步、Codex Responses 头白名单、User-Agent 策略、`PassThroughApplied` 复位与 `request_executions.pass_through_applied` 落库（95 例）；响应/流半程按 `captureRawProviderResponse/Stream` 与 `applyPassThroughResponse/Stream` 移植，含双通道扇出（容量 64）、attach 前 backlog（1024 事件 / 8 MiB，含 Type/LastEventID 计入）、per-attempt 错误引用、取消后排干缓冲再关闭上游、`NextChannel`/`PrepareForRetry` 复位，并按参照顺序注册（26 例）；`pass_through_prompt_protection.go` 的补丁/校验由 C092 接入（71 例），codex 出站的 `AllowPassThroughBody` 由第 29 节的 codex 用例锁定（C094 item 10 登记 gjson 探测差异）；另有三项已接受差异：每请求设置快照替代参照的逐中间件惰性读取、RawRequest 缺失时保守跳过替代参照 panic、通道 settings 畸形 JSON 降级为继承（C037 家族） | 重放与参照逐分支一致（121 例锁定：请求 95 + 响应/流 26）；关闭开关时行为不变，开启时下游拿到原始响应/流；codex 策略已由 C094 锁定 |
-| C092：pass-through 提示词保护 | 请求侧与管理面均已解决：`protectPrompts` 入站中间件（Messages / Decisions / Compact 三路规则应用、拒绝固定文案、legacy protector 的提示词快照回放校验）、五种 APIFormat 的原始 body 补丁（含 Gemini `functionResponse.response` 的 UseNumber 递归掩码）与 `PassThroughRequestBodyMiddleware` 的合并/校验回退按参照移植（71 例）；规则管理面（`promptProtectionRules` 连接、`node(PromptProtectionRule)`、八个变更与预览）由 §151 的 19 + 14 例锁定（C231 登记 where 子集与枚举严格度）。残余为已接受差异：无 30 秒 live 缓存（每请求读 `prompt_protection_rules`，失败开放）、写入不触发缓存重载、.NET Regex 与 regexp2 尚未逐特性对照、Gemini/Ollama 无变换器导致载荷级对照延后 | 请求侧 71 例、管理面 33 例锁定；规则读取即时且失败开放不改变可观察行为，管理面已完成（规则 scopes 策略仍归 C014），Gemini/Ollama 变换器落地时补载荷对照 |
+| C092：pass-through 提示词保护 | 请求侧与管理面均已解决：`protectPrompts` 入站中间件（Messages / Decisions / Compact 三路规则应用、拒绝固定文案、legacy protector 的提示词快照回放校验）、五种 APIFormat 的原始 body 补丁（含 Gemini `functionResponse.response` 的 UseNumber 递归掩码）与 `PassThroughRequestBodyMiddleware` 的合并/校验回退按参照移植（71 例）；规则管理面（`promptProtectionRules` 连接、八个变更与预览；根 `node` 不含规则，参照 `guidTypeToNodeType` 未登记该类型）由 §151 的 18 + 14 例锁定（C231 登记 where 子集与枚举严格度）。残余为已接受差异：无 30 秒 live 缓存（每请求读 `prompt_protection_rules`，失败开放）、写入不触发缓存重载、.NET Regex 与 regexp2 尚未逐特性对照、Gemini/Ollama 无变换器导致载荷级对照延后 | 请求侧 71 例、管理面 32 例锁定；规则读取即时且失败开放不改变可观察行为，管理面已完成（规则 scopes 策略仍归 C014），Gemini/Ollama 变换器落地时补载荷对照 |
 | C093–C094：OAuth 凭据与 Codex 通道 | C093 已接受：`expires_at` / `last_refresh` 用 `DateTimeOffset.TryParse` 宽松解析（参照为严格 RFC3339/RFC3339Nano）、JSON 解码错误文案来自 System.Text.Json、OnRefreshed 失败无日志接缝、单飞用锁 + TaskCompletionSource 替代 `x/sync/singleflight`、`ParseOAuthObject` 延迟解码（C013 延续）；C094 已接受 + 真实缺口：codex/fenno 分派、三种凭据形态、镜像主模型、transport 推断、pass-through 策略与传输收尾已锁定，真实缺口为端点表未建模（图片/alpha-search 按通道类型与入站格式分派）、OAuth `TokenProvider` 每次尝试新建（刷新单飞不跨请求共享）、刷新不写回数据库、无后台自动刷新、刷新复用共享 executor 而非按通道代理 client、`DecodeAuthJson` 的消费方未移植（API 层 codex 响应头转发已由 §142 接线：`X-Reasoning-Included` 与 `/responses` 的 `X-Codex-Turn-State`） | 已接受差异只影响畸形输入/日志/资源结构；真实缺口在管理面与通道生命周期切片补齐，期间 OAuth 凭据仍按需刷新，API key 通道不受影响 |
 | C088：模型列表的 `models` 表与 API Key profile | 已解决：§89 接入 ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API Key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、OpenAI include 扩展字段（列表取系统默认、检索硬编码 false）以及 OpenAI / Anthropic / Gemini 的 403 信封；45 例 Api 锁定。残余运行时结构差异登记为 C178（实时读通道、无 outbound 构建跳过、通道派生稳定排序、畸形 profile JSON 失败关闭） | 已关闭（C178 残余） |
 | C089：请求 ID 与 trace ID 中间件 | 已解决：`RequestTracingMiddleware` 的 `ar-<uuid>` 请求 ID、`AH-Request-Id` 响应头与错误体 `request_id` 回显（7 例）；`TraceMiddleware` 按参照实现请求头 → extra headers → OpenCode → Claude Code `metadata.user_id` → Codex 头 / turn metadata → body 字段的提取链、非消息端点跳过、`GetOrCreateTrace` 的 `(trace_id, project_id)` 语义与唯一约束重试、响应的 `AH-Trace-Id` 头与 `AH-Session-Id` 上下文；trace id 经 `RequestIdentity` 落到 `requests.trace_id`，并以 session id 传给通道出站（42 例 Api + 6 例 Persistence + 12 例 Llm） | 已关闭；残余差异见 C095 |

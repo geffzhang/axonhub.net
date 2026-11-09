@@ -279,15 +279,6 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         return await rules.ListAsync(query, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Port of the entgql Node lookup for PromptProtectionRule.</summary>
-    public async Task<PromptProtectionRuleRecord> GetNodeAsync(
-        long id,
-        CancellationToken cancellationToken = default)
-    {
-        var record = await rules.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        return record ?? throw new InvalidOperationException(RuleNotFound);
-    }
-
     /// <summary>
     /// Port of PromptProtectionRuleService.ValidateSettings
     /// (prompt_protection_rule.go:124-166). The pattern compiles first, so an

@@ -813,8 +813,11 @@ public sealed class AdminPromptProtectionRulesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task NodeResolverReturnsTheRule()
+    public async Task NodeQueryReportsPromptProtectionRuleAsAnUnknownType()
     {
+        // PromptProtectionRule implements Node in the SDL, but the reference's
+        // guidTypeToNodeType map does not register it, so node() fails before
+        // loading the row (existing and missing ids alike).
         var rule = _rules.Seed(record =>
         {
             record.Name = "mask secrets";
@@ -822,38 +825,20 @@ public sealed class AdminPromptProtectionRulesEndpointTests : IAsyncLifetime
             record.Settings = """{"action":"reject"}""";
         });
 
-        var data = await QueryDataAsync(
-            """
-            query Node($id: ID!) {
-              node(id: $id) {
-                id
-                ... on PromptProtectionRule { name pattern status }
-              }
-            }
-            """,
-            new { id = Gid(rule.Id) });
+        foreach (var id in new[] { Gid(rule.Id), Gid(9_999) })
+        {
+            var errors = await QueryErrorsAsync(
+                """
+                query Node($id: ID!) {
+                  node(id: $id) { id ... on PromptProtectionRule { name } }
+                }
+                """,
+                new { id });
 
-        var node = data.GetProperty("node");
-        Assert.Equal(Gid(rule.Id), node.GetProperty("id").GetString());
-        Assert.Equal("mask secrets", node.GetProperty("name").GetString());
-        Assert.Equal("secret", node.GetProperty("pattern").GetString());
-        Assert.Equal("disabled", node.GetProperty("status").GetString());
-    }
-
-    [Fact]
-    public async Task NodeResolverReportsMissingRules()
-    {
-        var errors = await QueryErrorsAsync(
-            """
-            query Node($id: ID!) {
-              node(id: $id) { id ... on PromptProtectionRule { name } }
-            }
-            """,
-            new { id = Gid(9_999) });
-
-        Assert.Equal(
-            "ent: prompt_protection_rule not found",
-            errors[0].GetProperty("message").GetString());
+            Assert.Equal(
+                "unknown node type: PromptProtectionRule",
+                errors[0].GetProperty("message").GetString());
+        }
     }
 
     private static string Gid(long id) => "gid://axonhub/PromptProtectionRule/" + id;

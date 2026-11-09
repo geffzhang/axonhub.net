@@ -827,9 +827,10 @@ public sealed class AdminQuery
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
     /// port resolves Project, User, APIKey, APIKeyProfileTemplate, Model,
-    /// Prompt, PromptProtectionRule, DataStorage, Channel, Trace, Thread,
-    /// Request and UsageLog so far and reports every other type as
-    /// "unknown node type: %s" (C165).
+    /// Prompt, DataStorage, Channel, Trace, Thread, Request and UsageLog so
+    /// far and reports every other type as "unknown node type: %s" (C165).
+    /// PromptProtectionRule is absent from the reference map
+    /// (graphql.go:206-226) even though its SDL type implements Node.
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -896,15 +897,9 @@ public sealed class AdminQuery
                 return PromptMapping.ToGraphQL(prompt);
             }
 
-            case "PromptProtectionRule":
-            {
-                var rules = services
-                    .GetRequiredService<PromptProtectionRuleManagementService>();
-                var rule = await rules.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return PromptProtectionRuleMapping.ToGraphQL(rule);
-            }
-
+            // PromptProtectionRule implements Node in the SDL, but the
+            // reference's guidTypeToNodeType map (graphql.go:206-226) does not
+            // register it, so node() reports it as an unknown type.
             case "DataStorage":
             {
                 var storages = services.GetRequiredService<DataStorageManagementService>();

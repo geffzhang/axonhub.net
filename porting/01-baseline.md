@@ -7751,7 +7751,7 @@ checker 错误走 `saveQuotaError`、成功按成员 `fillPeriodQuotas` + `saveQ
 `ProviderQuotaService._quotaCache`（唯一写入口不变）；runner 意外异常被组长 grain 捕获并记录，
 参照会 panic 整个进程（防御性收窄）。
 
-## 151. 提示词保护规则管理面（GraphQL 查询 / 8 变更 / 预览，19 + 14 例，2026-11-09）
+## 151. 提示词保护规则管理面（GraphQL 查询 / 8 变更 / 预览，18 + 14 例，2026-11-09）
 
 参照：`internal/ent/schema/prompt_protection_rule.go:32-77`（name / description / pattern /
 status / settings 五列，`(name, deleted_at)` 唯一索引，status 默认 `disabled` 且
@@ -7784,7 +7784,7 @@ mask 命中时 `Replace`，reject 命中时 result 为 `"reject"`）、
 | 删除 | soft-delete 更新（`deleted_at` + `updated_at`），只命中 live 行；再次删除报 `failed to delete prompt protection rule: ent: prompt_protection_rule not found` |
 | 状态 | `UpdateOneID.SetStatus`，无软删谓词（软删行也会被写入）；缺失报 `failed to update prompt protection rule status: ...` |
 | 批量 | 空列表 no-op；批量状态无软删谓词，批量删除只命中 live 行 |
-| 查询 | `promptProtectionRules` 键集分页；`CREATED_AT` 折叠为 id 排序（游标不带值），`UPDATED_AT` / `NAME` 游标带值；软删谓词只加在查询上；`node(PromptProtectionRule)` 走 live `Get` |
+| 查询 | `promptProtectionRules` 键集分页；`CREATED_AT` 折叠为 id 排序（游标不带值），`UPDATED_AT` / `NAME` 游标带值；软删谓词只加在查询上；根 `node` 查询不含规则（参照 `guidTypeToNodeType` 未登记 `PromptProtectionRule`，报 `unknown node type`，尽管 SDL 类型实现 Node） |
 | 预览 | `ValidateSettings` → 编译 → `MatchString` → mask 命中 `Replace`、reject 命中 `"reject"`；校验失败原样返回 |
 | 设置 JSON | Go `json.Marshal` + `omitempty`：`action` 恒在，`replacement` 为空时省略，`scopes` 为 nil/空时省略；输出侧 `replacement` 恒为字符串（`""` 非 null）、`scopes` 为列表 |
 
@@ -7805,7 +7805,9 @@ mask 命中时 `Replace`，reject 命中时 result 为 `"reject"`）、
   值游标与连接构造。where 只暴露前端实际使用的子集（C231）；未知存储枚举值抛 `GraphQLException`
   （C188 家族）。
 - `src/AxonHub.Api/GraphQL/AdminQuery.cs`：新增 `promptProtectionRules`（分页参数校验 +
-  first/last 互斥 + 映射 + 连接）与 `node()` 的 `"PromptProtectionRule"` 分支。
+  first/last 互斥 + 映射 + 连接）。`node()` 不新增规则分支：参照的
+  `guidTypeToNodeType`（graphql.go:206-226）未登记 `PromptProtectionRule`，端口与参照一样报
+  `unknown node type: PromptProtectionRule`（SDL 输出类型仍实现 Node）。
   `AdminMutation.cs`：新增 `createPromptProtectionRule`、`updatePromptProtectionRule`、
   `deletePromptProtectionRule`、`updatePromptProtectionRuleStatus`、
   `bulkDelete/Enable/DisablePromptProtectionRules`、`previewPromptProtectionRule` 八个变更。
@@ -7820,16 +7822,16 @@ mask 命中时 `Replace`，reject 命中时 result 为 `"reject"`）、
   `FromJson` 把 JSON `null` 的 `replacement` 归一为 `""`（Go 解码零值语义）。
   `PromptProtectionRegex.TryGetOrCompile` 暴露缓存中的编译失败，供校验与预览复用。
 
-测试（19 + 14 例）：
+测试（18 + 14 例）：
 
 | 测试文件 | 例数 | 锁定内容 |
 |---|---|---|
-| `tests/AxonHub.Api.Tests/AdminPromptProtectionRulesEndpointTests.cs` | 19 | 前端查询形状（gid / GoTime / settings）；空 replacement 与 nil scopes 的 Go 输出；where + NAME 键集分页；CREATED_AT→id；分页互斥文案；创建默认 description/status 与精确 settings JSON；omitempty；mask 缺 replacement；非法正则先于查重；DUPLICATE_NAME 扩展；更新有效值校验与省略字段；无效有效 pattern 不写；缺失行的更新/状态/删除文案；状态/批量/删除流程；软删行状态更新；预览 mask/reject/无命中；预览校验；node 成功与缺失 |
+| `tests/AxonHub.Api.Tests/AdminPromptProtectionRulesEndpointTests.cs` | 18 | 前端查询形状（gid / GoTime / settings）；空 replacement 与 nil scopes 的 Go 输出；where + NAME 键集分页；CREATED_AT→id；分页互斥文案；创建默认 description/status 与精确 settings JSON；omitempty；mask 缺 replacement；非法正则先于查重；DUPLICATE_NAME 扩展；更新有效值校验与省略字段；无效有效 pattern 不写；缺失行的更新/状态/删除文案；状态/批量/删除流程；软删行状态更新；预览 mask/reject/无命中；预览校验；node 报未知类型 |
 | `tests/AxonHub.Persistence.Tests/PromptProtectionRuleStoreTests.cs` | 14 | 建表列往返与 JSON；创建默认 status/timestamp；ListEnabled 的状态与软删过滤；GetById / ExistsByName live 谓词；filter + NAME 键集分页；状态过滤（空 NOT IN 恒真、NOT）；UPDATED_AT DESC 值游标；id 顺序与无值游标；部分列更新与缺失 id；更新/状态无软删谓词；软删一次并刷新 updated_at；批量状态含软删行、批量删除只 live、空列表 0；`(name, deleted_at)` 唯一（软删后复用） |
 
-静态计数：`AxonHub.Api.Tests` 由 5467 增至 5486（+19），`AxonHub.Persistence.Tests` 由 336 增至
+静态计数：`AxonHub.Api.Tests` 由 5467 增至 5485（+18），`AxonHub.Persistence.Tests` 由 336 增至
 350（+14），`AxonHub.Grains.Tests` 1746、`AxonHub.Llm.Tests` 1506 不变，四项目合计由 9055
-增至 9088。**按项目规则未运行 lint / build / test。**
+增至 9087。**按项目规则未运行 lint / build / test。**
 
 差异：C092 由 gap 改为 accepted——请求侧与管理面均已接入，残余收窄为无 30 秒 live 缓存、
 .NET Regex 与 regexp2 的方言对照、Gemini/Ollama 载荷级对照与日志接缝；管理面写入不再触发缓存
@@ -7837,7 +7839,7 @@ mask 命中时 `Replace`，reject 命中时 result 为 `"reject"`）、
 谓词在输入校验阶段被拒绝）、HotChocolate 输入枚举的严格拒绝（参照 gqlgen 透传字符串，未知
 action 由服务层报 `invalid action: <x>`）、未知存储枚举值的输出抛错，以及规则 scopes 策略仍归
 C014。未改动前端 `frontend/src/features/prompt-protection-rules` 的查询/变更契约全部由本节的
-19 例锁定。
+18 例锁定。
 
 ## 覆盖缺口
 
@@ -7845,7 +7847,7 @@ C014。未改动前端 `frontend/src/features/prompt-protection-rules` 的查询
 |---|---|---|---|
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求与提示词保护半程已由第 26、28 节闭合 | 低 | 完成（C087、C091、C092） |
-| pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面与预览由第 151 节的 19 + 14 例锁定（C092 管理面闭合；where 子集与枚举严格度登记为 C231，规则 scopes 策略仍归 C014），codex 出站的 `AllowPassThroughBody` 策略由第 29 节的 61 例 codex 用例锁定（C091 缺口关闭，见 C094） | 低 | 管理面完成；C014 仅剩 scopes 策略 |
+| pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面与预览由第 151 节的 18 + 14 例锁定（C092 管理面闭合；where 子集与枚举严格度登记为 C231，规则 scopes 策略仍归 C014），codex 出站的 `AllowPassThroughBody` 策略由第 29 节的 61 例 codex 用例锁定（C091 缺口关闭，见 C094） | 低 | 管理面完成；C014 仅剩 scopes 策略 |
 | Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点运行时解析已由 §143 按 live 语义接线（`NormalizeEndpoints` / `DefaultEndpoints` / `PrimaryEndpointTransport` / `FindUserEndpoint`；codex/fenno 的 responses 与 alpha 取端点 BaseURL/Path/Transport，openai 的 h/w/compact 等家族同样取端点值；C094 item 1 收窄），残余为非 Responses 端点的家族路由与供应商路径（fenno 图片门、codex/fenno 的 compact 端点存在性、zai/doubao 家族 chat 的 Path、minimax/gemini/jina/typesafe 的路径、xai_subscription 覆盖）、OAuth `TokenProvider` 已由 §146 的 `ChannelTokenGrain` 按通道持有（刷新写回、后台预刷新、冲突接管；C094 item 2/3/4 对 codex / claudecode / xai_subscription 关闭，fenno / github_copilot / antigravity / ModelFetcher / 端点探测仍每次新建）、无按通道代理 client、codex 响应头转发已由 §142 接线（C094 item 7 关闭）、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
