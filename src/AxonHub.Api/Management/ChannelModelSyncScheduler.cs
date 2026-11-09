@@ -13,12 +13,12 @@ namespace AxonHub.Api.Management;
 /// the configured auto-sync frequency (one hour, six hours or one day).
 /// </summary>
 /// <remarks>
-/// Like <see cref="ProviderQuotaScheduler"/>, a missed occurrence is not
-/// backfilled: the next fire time is recomputed from the current instant. The
-/// execution window itself lives in the cluster-wide grain (§148), so two
-/// silos ticking in the same second still start at most one pass. The backup
-/// and GC crons no longer use this polling shape; they are reminder-driven
-/// grains (§149).
+/// A missed occurrence is not backfilled: the next fire time is recomputed
+/// from the current instant. The execution window itself lives in the
+/// cluster-wide grain (§148), so two silos ticking in the same second still
+/// start at most one pass. The backup and GC crons (§149) and the provider
+/// quota cron (§150) no longer use this polling shape; they are
+/// reminder-driven grains.
 /// </remarks>
 public sealed class ChannelModelSyncScheduler : BackgroundService
 {

@@ -6,8 +6,10 @@ namespace AxonHub.Api.Management;
 
 /// <summary>
 /// Arms the reminder-driven management tasks at startup: the backup cron
-/// (<c>BackupService.RegisterScheduledTasks</c>, service.go:39-55) and the GC
-/// cron (<c>gc.Worker.RegisterScheduledTasks</c>, gc.go:77-84).
+/// (<c>BackupService.RegisterScheduledTasks</c>, service.go:39-55), the GC
+/// cron (<c>gc.Worker.RegisterScheduledTasks</c>, gc.go:77-84) and the
+/// provider quota cron
+/// (<c>ProviderQuotaService.RegisterScheduledTasks</c>, provider_quota.go:401-409).
 /// </summary>
 /// <remarks>
 /// Orleans' in-memory reminder table does not survive a silo stop and never
@@ -39,6 +41,10 @@ public sealed class GrainSchedulerActivator(
                 .ConfigureAwait(false);
             await grainFactory
                 .GetGrain<IAutoBackupGrain>(IAutoBackupGrain.SingletonKey)
+                .EnsureScheduledAsync(now)
+                .ConfigureAwait(false);
+            await grainFactory
+                .GetGrain<IProviderQuotaCoordinatorGrain>(IProviderQuotaCoordinatorGrain.SingletonKey)
                 .EnsureScheduledAsync(now)
                 .ConfigureAwait(false);
         }

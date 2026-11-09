@@ -315,7 +315,8 @@ builder.Services.AddHostedService<QuotaRoutingMigrationHostedService>();
 // Provider quota collection (biz/provider_quota.go,
 // biz/provider_quota_settings.go, biz/channel_provider_quota_hook.go): the
 // per-channel quota status table, the collection loop and its five-minute UTC
-// schedule, the synchronous routing-gate snapshot and the settings surface.
+// reminder (the coordinator grain, §150), the synchronous routing-gate
+// snapshot and the settings surface.
 // The collection core is ported; the remaining one provider checker
 // arrives in a follow-up slice (C182), so those providers reach the reference's
 // "No checker for provider" branch. The service is a singleton because the
@@ -485,8 +486,19 @@ builder.Services.AddSingleton<IProviderQuotaStatusProvider>(
     static services => services.GetRequiredService<ProviderQuotaService>());
 builder.Services.AddSingleton<IProviderQuotaInvalidator>(
     static services => services.GetRequiredService<ProviderQuotaService>());
+builder.Services.AddSingleton<IProviderQuotaGroupRunner>(
+    static services => services.GetRequiredService<ProviderQuotaService>());
+
+// The quota collection's svc.mu becomes the singleton coordinator grain's
+// turn (C230): the reminder replaces the five-minute cron, and manual checks,
+// invalidations and post-reset refreshes queue behind a running sweep. Each
+// due group is dispatched to the leader channel's quota grain, which keeps the
+// channel's cache entry and serializes its checks.
+builder.Services.AddSingleton<IQuotaGroupExecutor, GrainQuotaGroupExecutor>();
+builder.Services.AddSingleton<IProviderQuotaCoordinatorClient, GrainProviderQuotaCoordinator>();
+builder.Services.AddSingleton<IProviderQuotaCoordinatorOperations, GrainProviderQuotaOperations>();
+builder.Services.AddSingleton<IProviderQuotaScheduleSource, GrainProviderQuotaScheduleSource>();
 builder.Services.AddHostedService<ProviderQuotaInitializationHostedService>();
-builder.Services.AddHostedService<ProviderQuotaScheduler>();
 
 // Endpoint auto-detection (detectChannelEndpoints): read-only upstream probes
 // built from the channel type's primary outbound and generic peers.

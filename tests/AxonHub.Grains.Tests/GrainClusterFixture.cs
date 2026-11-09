@@ -54,6 +54,13 @@ public sealed class GrainClusterFixture : IAsyncLifetime
 
     public FakeGcCleanupRunner GcCleanup { get; } = new();
 
+    /// <summary>The provider quota grain's seams (§150).</summary>
+    public FakeProviderQuotaScheduleSource QuotaSchedule { get; } = new();
+
+    public FakeProviderQuotaCoordinatorOperations QuotaOperations { get; } = new();
+
+    public FakeProviderQuotaGroupRunner QuotaRunner { get; } = new();
+
     public async Task InitializeAsync()
     {
         GrainTestSiloConfigurator.ChannelProvider = Channels;
@@ -65,6 +72,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.AutoBackupRunner = AutoBackupRunner;
         GrainTestSiloConfigurator.GcSchedule = GcSchedule;
         GrainTestSiloConfigurator.GcCleanup = GcCleanup;
+        GrainTestSiloConfigurator.QuotaSchedule = QuotaSchedule;
+        GrainTestSiloConfigurator.QuotaOperations = QuotaOperations;
+        GrainTestSiloConfigurator.QuotaRunner = QuotaRunner;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -85,6 +95,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.AutoBackupRunner = null;
         GrainTestSiloConfigurator.GcSchedule = null;
         GrainTestSiloConfigurator.GcCleanup = null;
+        GrainTestSiloConfigurator.QuotaSchedule = null;
+        GrainTestSiloConfigurator.QuotaOperations = null;
+        GrainTestSiloConfigurator.QuotaRunner = null;
     }
 }
 
@@ -108,6 +121,12 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static FakeGcCleanupRunner? GcCleanup { get; set; }
 
+    public static FakeProviderQuotaScheduleSource? QuotaSchedule { get; set; }
+
+    public static FakeProviderQuotaCoordinatorOperations? QuotaOperations { get; set; }
+
+    public static FakeProviderQuotaGroupRunner? QuotaRunner { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
@@ -128,6 +147,9 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton<IAutoBackupRunner>(AutoBackupRunner!);
             services.AddSingleton<IGcScheduleSource>(GcSchedule!);
             services.AddSingleton<IGcCleanupRunner>(GcCleanup!);
+            services.AddSingleton<IProviderQuotaScheduleSource>(QuotaSchedule!);
+            services.AddSingleton<IProviderQuotaCoordinatorOperations>(QuotaOperations!);
+            services.AddSingleton<IProviderQuotaGroupRunner>(QuotaRunner!);
         });
     }
 }

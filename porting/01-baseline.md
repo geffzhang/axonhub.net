@@ -7658,6 +7658,99 @@ enabled 与 frequency 双闸门）。
 从当前时刻重新装填（与参照进程重启等价，不补跑）；冷启动 reminder 表刷新带来数十秒的首次投递
 延迟；reminder 最小周期使极端早到的 tick 最坏晚 1 分钟补上。
 
+## 150. 供应商配额采集迁入 coordinator / 每通道 grain（B2，15 + 13 例，2026-11-09）
+
+参照：`internal/server/biz/provider_quota.go:346-359`（`ProviderQuotaService` 的
+`quotaCache sync.Map` 与 `mu sync.Mutex`）、`401-409`（`RegisterScheduledTasks` 注册
+`{Name:"provider-quota-check", CronExpr:intervalToCronExpr(5m), Timezone:"UTC"}`，
+`*/5 * * * *`，启动后不再重排）、`534-549`（`getCheckInterval` 固定 5 分钟默认值）、
+`561-584`（`GetQuotaStatus`：同步读进程内缓存并叠加采集设置闸门）、`586-593`
+（`updateQuotaCache`）、`595-623`（`InvalidateChannelQuota` / `ManualCheck` 均取 `svc.mu`）、
+`605-618`（`invalidateChannelQuotaLocked`：硬删失败也清缓存）、`665-717`
+（`ResetChannelQuotaNow`：锁外重置、锁内刷新单通道组）、`719-790`（`runQuotaCheck`：设置闸门 →
+启用通道 → 按配额账号分组 → due 过滤 →
+`errgroup.SetLimit(min(maxConcurrentQuotaChecks=8, len(groups)))`）、`792-864`
+（`checkChannelQuota`：`group.channels[0]` 为租户凭据、设置二次检查、无凭据走失效、
+checker 错误走 `saveQuotaError`、成功按成员 `fillPeriodQuotas` + `saveQuotaStatus`）、
+`provider_quota_account.go:39-64`（按账号分组）与 `75-83`（任一无状态或 `NextCheckAt <= now`
+即 due）。
+
+| 项 | 参照值 |
+|---|---|
+| 调度 | 启动注册一次 `*/5 * * * *`（UTC）；设置变更不重排；注册时不运行；错过不补跑 |
+| 互斥 | 单个 `svc.mu` 覆盖整轮采集、手动检查、缓存失效与重置后刷新 |
+| 采集并发 | 组间并发上限 `min(8, 组数)`；组内一次 provider 请求，成功后逐成员落库 |
+| 缓存 | 进程内 `map[channelID]QuotaChannelStatus`；启动时 `loadQuotaCache` 全量装载；`GetQuotaStatus` 同步读 |
+| 失败 | 组失败只记录（goroutine 恒返回 nil）；checker 错误写成 `unknown` + 退避；失效的删除错误返回给通道钩子记录 |
+| 调度权属 | 每进程一份 scheduler；多实例部署时每个进程各自采集并更新各自的缓存 |
+
+端口实现：
+
+- 新增 `ProviderQuota.cs`（Grains.Abstractions）：`ProviderQuotaChannelSnapshot` /
+  `ProviderQuotaStoredStatus` / `ProviderQuotaCheckGroup` / `ProviderQuotaLimitSnapshot` /
+  `ProviderQuotaStatusSnapshot` / `ProviderQuotaMemberStatus` / `ProviderQuotaGroupCheckResult` /
+  `ProviderQuotaRefreshRequest` 八个 `[GenerateSerializer]` DTO，以及
+  `IProviderQuotaGrain`（integer key）、`IProviderQuotaGroupRunner`、
+  `IProviderQuotaScheduleSource`（同步 `NextOccurrence`）、
+  `IProviderQuotaCoordinatorOperations`、`IProviderQuotaCoordinatorGrain`（string key
+  `"provider-quota"`，reminder 名 `"provider-quota-check"`）。
+- 新增 `ProviderQuotaGrain`（Grains）：每通道 actor。`CheckGroupAsync` 以本通道为组长调用
+  `IProviderQuotaGroupRunner.RunGroupAsync`，把结果中组长的缓存条目存进激活内 `_status`；
+  runner 意外抛错时记 `ProviderQuotaGroupFailed` 并返回空结果（保留旧条目），对应参照组
+  goroutine「只记日志、绝不向上抛」；`ApplyStatusAsync` / `ClearStatusAsync` 供组内非组长成员
+  镜像与失效路径使用。grain 状态是激活内的缓存镜像，**从不参与路由判断**。
+- 新增 `ProviderQuotaCoordinatorGrain`（Grains）：string-key 单例，用名为
+  `provider-quota-check` 的 Orleans reminder（周期取最小值 1 分钟）承载五段式表达式的下一触发
+  时刻。`EnsureScheduledAsync` 只装填不运行；`FireScheduledAsync` 先重装下一次再执行
+  `RunAsync(force:false)`（失败不丢调度），用 `_next` 去重过期 tick；`RunManualAsync` 执行
+  `force:true` 且不触碰调度；`RefreshChannelAsync` 转发重置后刷新；`InvalidateAsync` 直接转发
+  并让删除错误向上传播（参照把错误返回给通道钩子，钩子记 warning）。前三类失败只记日志
+  （`ProviderQuotaScheduledRunFailed` / `ProviderQuotaManualRunFailed` /
+  `ProviderQuotaRefreshFailed`），与参照 `runQuotaCheck` / `checkChannelQuota` 只记录一致。
+- 新增 Api 适配器 `GrainProviderQuota.cs`：`GrainProviderQuotaCoordinator`
+  （`IProviderQuotaCoordinatorClient` → 单例 grain）、`GrainProviderQuotaOperations`
+  （`RunAsync` → `ProviderQuotaService.RunQuotaCheckAsync`；`RefreshChannelAsync` →
+  `RefreshChannelQuotaAsync`；`InvalidateAsync` → `InvalidateChannelQuotaCoreAsync`，
+  并在 `finally` 清对应通道 grain 状态，清镜像失败只记 `ProviderQuotaGrainClearFailed`）、
+  `GrainQuotaGroupExecutor`（把 due 组派给 `Members[0]` 的 `IProviderQuotaGrain`，
+  再把结果逐成员 `ApplyStatusAsync` / `ClearStatusAsync` 镜像到其余通道 grain，单成员镜像失败
+  记 `ProviderQuotaGrainMirrorFailed` 不中断本轮）、`GrainProviderQuotaScheduleSource`
+  （复用 `GcCronSchedule` 解析 `*/5 * * * *`）。
+- `ProviderQuotaService`：新增可选注入 `IQuotaGroupExecutor` 与
+  `IProviderQuotaCoordinatorClient`。生产环境 `ManualCheckAsync` / `InvalidateChannelQuotaAsync` /
+  `ResetChannelQuotaNowAsync` 的刷新段转发给协调器；`RunQuotaCheckAsync` 保留
+  `Parallel.ForEachAsync` 与 `min(8, 组数)` 并发，组体经 `ExecuteGroupAsync` 派给组长 grain；
+  新增 `RunGroupAsync`（组长 grain 的 API 半程：重建 `QuotaCheckGroup` 调
+  `CheckChannelQuotaAsync`，然后从 `_quotaCache` 取每个成员的原始条目——不叠设置闸门——作为
+  结果）与 `RefreshChannelQuotaAsync`（单成员、无历史状态）。直接构造（测试 / 工具）或未注入
+  接缝时保留原 `_mutex` 进程内路径，语义与 §114 相同。
+- `Program.cs`：删除 `ProviderQuotaScheduler`（BackgroundService）与
+  `AddHostedService<ProviderQuotaScheduler>()`；注册 `IQuotaGroupExecutor`、
+  `IProviderQuotaCoordinatorClient`、`IProviderQuotaCoordinatorOperations`、
+  `IProviderQuotaScheduleSource` 与 `IProviderQuotaGroupRunner`（→ `ProviderQuotaService`）。
+  `GrainSchedulerActivator` 启动时在 GC 与备份之后装填配额协调器。
+  `ChannelModelSyncScheduler` 的注释不再引用已删除的 `ProviderQuotaScheduler`。
+
+测试（15 + 13 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Grains.Tests/ProviderQuotaGrainTests.cs` | 5 | 组长执行组、只存组长条目；runner 抛错返回空结果且保留旧条目；Apply/Clear 镜像；空成员组不覆盖旧条目；同通道并发检查被 grain turn 串行化 |
+| `tests/AxonHub.Grains.Tests/ProviderQuotaCoordinatorGrainTests.cs` | 10 | 注册只装填不运行、Ensure 复用 pending、触发前先装填下一次（force=false）、过期 tick 去重、手动强制（force=true）不动调度、手动/定时/刷新失败被吞、刷新转发请求、失效转发并传播删除错误 |
+| `tests/AxonHub.Api.Tests/ProviderQuotaGrainBridgeTests.cs` | 8 | 执行器派给组长并镜像全员、null 成员状态清镜像、组长失败时全员不动、协调器客户端三路转发与失效错误传播、操作适配器失效后清 grain（删除失败也清）、调度源为 `*/5` UTC |
+| `tests/AxonHub.Api.Tests/ProviderQuotaServiceTests.cs` | 5 | 注入协调器后手动检查 / 失效 / 重置后刷新均转发（本地不执行）、注入执行器后 `RunQuotaCheckAsync` 逐组派发、`RunGroupAsync` 单次请求按成员落库并回传两个缓存在 |
+
+静态计数：`AxonHub.Grains.Tests` 由 1731 增至 1746（+15），`AxonHub.Api.Tests` 由 5454 增至
+5467（+13），`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 336 不变，四项目合计由
+9027 增至 9055。**按项目规则未运行 lint / build / test。**
+
+差异：新增 C230（accepted）：`svc.mu` 与五段式 cron 收窄为集群单激活的协调器 grain，每通道
+缓存镜像收进通道 grain；单 silo 下互斥、调度、并发与失败语义等价，多 silo 下参照各进程各采集
+各更新缓存、端口整个集群只采集一次（其余 silo 的进程内读缓存不会更新，故只支持单 silo
+`UseLocalhostClustering`）；grain 镜像启动为空、随检查懒填，但从不参与决策，读模型仍是
+`ProviderQuotaService._quotaCache`（唯一写入口不变）；runner 意外异常被组长 grain 捕获并记录，
+参照会 panic 整个进程（防御性收窄）。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |

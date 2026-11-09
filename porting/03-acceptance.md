@@ -351,6 +351,22 @@ C197 的「永不自动备份」、C199 的轮询延迟与 C203(3) 的调度器�
 只跑一遍，内存 reminder 表随 silo 停止丢失并由启动激活器重装（不补跑），冷启动 reminder
 表刷新带来数十秒首次延迟，reminder 最小周期使极端早到 tick 最坏晚 1 分钟。
 
+§150 追加 28 个用例（`AxonHub.Grains.Tests` 15：`ProviderQuotaGrainTests` 5、
+`ProviderQuotaCoordinatorGrainTests` 10；`AxonHub.Api.Tests` 13：
+`ProviderQuotaGrainBridgeTests` 8、`ProviderQuotaServiceTests` 5），同样按项目规则未运行
+lint / build / test；§150 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、
+`AxonHub.Api.Tests` 5467、`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 336，
+四项目合计 9055，下一次全量运行应以该数字复核。该切片不新增表或 SQL；参照的 `svc.mu`
+改由单例 `ProviderQuotaCoordinatorGrain` 的 grain turn 承担，固定 5 分钟的
+`provider-quota-check` cron 改由同名 Orleans reminder 承载（启动激活器只装填不运行、
+触发前先装填下一次、过期 tick 去重、失败不丢调度），每个 due 组派给组长通道的
+`ProviderQuotaGrain` 执行并把成员缓存条目镜像到各通道 grain；`ProviderQuotaScheduler`
+轮询宿主已删除，`ProviderQuotaService` 保留进程内 `_quotaCache` 作为同步路由读模型与
+唯一写入口，直接构造时沿用 `_mutex` 路径。新增 C230（accepted）：单 silo 下互斥、调度、
+并发与失败语义等价；多 silo 下参照各进程各采集各更新缓存、端口整个集群只采集一轮，
+非承载 silo 的读缓存不会更新（有意的收窄，项目只支持单 silo）；通道 grain 的镜像启动为
+空且从不参与决策；runners 的意外异常被组长 grain 捕获记录，参照会 panic 进程。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

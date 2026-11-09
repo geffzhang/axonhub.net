@@ -1,5 +1,7 @@
 using System.Text.Json;
+using AxonHub.Api.Management;
 using AxonHub.Api.Orchestration;
+using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -1051,6 +1053,129 @@ public sealed class ProviderQuotaServiceTests
         Assert.Equal(0, resetter.CheckCalls);
     }
 
+    // ------------------------------------------------------------------
+    // Coordinator and group-executor seams (§150)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task ManualCheckGoesThroughTheCoordinatorWhenOneIsWired()
+    {
+        var coordinator = new RecordingQuotaCoordinatorClient();
+        var checker = new ScriptedQuotaChecker();
+        var harness = new QuotaHarness(null, coordinator, ("claudecode", checker));
+        harness.AddChannel(3, "claudecode", OAuthCredentials);
+
+        await harness.Service.ManualCheckAsync();
+
+        Assert.Equal(1, coordinator.ManualChecks);
+        Assert.Equal(0, checker.CheckCalls);
+    }
+
+    [Fact]
+    public async Task InvalidateChannelQuotaGoesThroughTheCoordinatorWhenOneIsWired()
+    {
+        var coordinator = new RecordingQuotaCoordinatorClient();
+        var harness = new QuotaHarness(null, coordinator);
+
+        await harness.Service.InvalidateChannelQuotaAsync(3);
+
+        Assert.Equal([3L], coordinator.Invalidations);
+        Assert.Empty(harness.Statuses.HardDeletes);
+    }
+
+    [Fact]
+    public async Task ResetChannelQuotaRefreshGoesThroughTheCoordinatorWhenOneIsWired()
+    {
+        var coordinator = new RecordingQuotaCoordinatorClient();
+        var resetter = new ScriptedQuotaResetter
+        {
+            Result = new QuotaData
+            {
+                Status = ProviderQuotaStatuses.Available,
+                ProviderType = "claudecode",
+            },
+            ListResult = new ResetList { Supported = true, Resets = [] },
+        };
+        var harness = new QuotaHarness(null, coordinator, ("claudecode", resetter));
+        harness.AddChannel(3, "claudecode", OAuthCredentials);
+
+        await harness.Service.ResetChannelQuotaNowAsync(3);
+
+        Assert.Equal(1, resetter.ResetCalls);
+
+        // The refresh itself is deferred to the coordinator, so this process
+        // has neither checked the provider nor written a status row.
+        Assert.Equal(0, resetter.CheckCalls);
+        Assert.Empty(harness.Statuses.Upserts);
+
+        var refresh = Assert.Single(coordinator.Refreshes);
+        Assert.Equal(string.Empty, refresh.AccountKey);
+        Assert.Equal(3, refresh.Channel.Id);
+        Assert.Equal("claudecode", refresh.Channel.Type);
+        Assert.Equal(OAuthCredentials, refresh.Channel.Credentials);
+        Assert.Null(refresh.Channel.Status);
+    }
+
+    [Fact]
+    public async Task RunQuotaCheckDispatchesEachDueGroupThroughTheExecutorWhenOneIsWired()
+    {
+        var executor = new RecordingQuotaGroupExecutor();
+        var checker = new ScriptedQuotaChecker();
+        var harness = new QuotaHarness(executor, null, ("claudecode", checker));
+        harness.AddChannel(3, "claudecode", OAuthCredentials);
+
+        await harness.Service.RunQuotaCheckAsync(force: true);
+
+        var group = Assert.Single(executor.Groups);
+        Assert.Equal([3L], group.Members.Select(static member => member.Id));
+        Assert.Equal("claudecode", group.Members[0].Type);
+        Assert.Equal(0, checker.CheckCalls);
+    }
+
+    [Fact]
+    public async Task RunGroupAsyncRunsTheCheckAndReportsEveryMembersCacheEntry()
+    {
+        var checker = new ScriptedQuotaChecker
+        {
+            Result = new QuotaData
+            {
+                Status = ProviderQuotaStatuses.Available,
+                ProviderType = "claudecode",
+                Ready = true,
+            },
+        };
+        var harness = new QuotaHarness(("claudecode", checker));
+        harness.AddChannel(11, "claudecode", OAuthCredentials);
+        harness.AddChannel(12, "claudecode", OAuthCredentials);
+
+        var group = new ProviderQuotaCheckGroup { AccountKey = string.Empty };
+        foreach (var channelId in new long[] { 11, 12 })
+        {
+            group.Members.Add(new ProviderQuotaChannelSnapshot
+            {
+                Id = channelId,
+                Name = "claudecode-channel",
+                Type = "claudecode",
+                Credentials = OAuthCredentials,
+                BaseUrl = "https://example.test",
+            });
+        }
+
+        var result = await harness.Service.RunGroupAsync(group, Now);
+
+        // One provider request for the account, one status row per member.
+        Assert.Equal(1, checker.CheckCalls);
+        Assert.Equal(2, harness.Statuses.Upserts.Count);
+        Assert.Equal([11L, 12L], result.Members.Select(static member => member.ChannelId));
+        Assert.All(result.Members, static member => Assert.NotNull(member.Status));
+        Assert.Equal(
+            ProviderQuotaStatuses.Available,
+            result.Members[0].Status!.Status);
+        Assert.Equal(
+            ProviderQuotaStatuses.Available,
+            result.Members[1].Status!.Status);
+    }
+
     // -- Helpers -------------------------------------------------------------
 
     private static UsageLogRecord UsageLog(
@@ -1111,6 +1236,14 @@ public sealed class ProviderQuotaServiceTests
     private sealed class QuotaHarness
     {
         public QuotaHarness(params (string ProviderType, IQuotaChecker Checker)[] checkers)
+            : this(null, null, checkers)
+        {
+        }
+
+        public QuotaHarness(
+            IQuotaGroupExecutor? groupExecutor,
+            IProviderQuotaCoordinatorClient? coordinator,
+            params (string ProviderType, IQuotaChecker Checker)[] checkers)
         {
             var registry = new ProviderQuotaCheckerRegistry(
                 checkers.Select(static entry =>
@@ -1130,7 +1263,9 @@ public sealed class ProviderQuotaServiceTests
                 SettingsCache,
                 registry,
                 Time,
-                NullLogger<ProviderQuotaService>.Instance);
+                NullLogger<ProviderQuotaService>.Instance,
+                groupExecutor,
+                coordinator);
         }
 
         public FakeSystemStore Systems { get; } = new();
@@ -1157,5 +1292,58 @@ public sealed class ProviderQuotaServiceTests
                 Credentials = credentials,
                 BaseUrl = "https://example.test",
             });
+    }
+}
+
+/// <summary>
+/// Records the coordinator entries the service delegates (§150): manual
+/// checks, invalidations and post-reset refreshes.
+/// </summary>
+internal sealed class RecordingQuotaCoordinatorClient : IProviderQuotaCoordinatorClient
+{
+    public int ManualChecks { get; private set; }
+
+    public List<long> Invalidations { get; } = [];
+
+    public List<ProviderQuotaRefreshRequest> Refreshes { get; } = [];
+
+    public Task RunManualAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        ManualChecks++;
+        return Task.CompletedTask;
+    }
+
+    public Task RefreshChannelAsync(
+        ProviderQuotaRefreshRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Refreshes.Add(request);
+        return Task.CompletedTask;
+    }
+
+    public Task InvalidateAsync(long channelId, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Invalidations.Add(channelId);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Records every group the collection run dispatches (§150).</summary>
+internal sealed class RecordingQuotaGroupExecutor : IQuotaGroupExecutor
+{
+    public List<ProviderQuotaCheckGroup> Groups { get; } = [];
+
+    public Task ExecuteAsync(
+        ProviderQuotaCheckGroup group,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        _ = now;
+        _ = cancellationToken;
+        Groups.Add(group);
+        return Task.CompletedTask;
     }
 }

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AxonHub.Abstractions;
 using AxonHub.Api.Management;
+using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Persistence;
@@ -39,7 +40,10 @@ namespace AxonHub.Api.Orchestration;
 /// <see cref="AxonHub.Persistence.AxonHubDbContext"/> is not safe for concurrent use.
 /// </para>
 /// </remarks>
-public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProviderQuotaInvalidator
+public sealed class ProviderQuotaService :
+    IProviderQuotaStatusProvider,
+    IProviderQuotaInvalidator,
+    IProviderQuotaGroupRunner
 {
     /// <summary>Port of maxConcurrentQuotaChecks (provider_quota.go:26).</summary>
     public const int MaxConcurrentQuotaChecks = 8;
@@ -182,10 +186,16 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
     private readonly TimeProvider _time;
     private readonly ILogger<ProviderQuotaService> _logger;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, QuotaChannelStatus> _quotaCache = new();
+    private readonly IQuotaGroupExecutor? _groupExecutor;
+    private readonly IProviderQuotaCoordinatorClient? _coordinator;
 
     /// <summary>
     /// Port of <c>svc.mu</c>: serializes the whole collection run with cache
-    /// invalidation and post-reset refreshes.
+    /// invalidation and post-reset refreshes. In production the coordinator
+    /// grain provides the cluster-wide exclusion and the process-local mutex
+    /// only guards the direct entries (a single silo, tests); a service
+    /// constructed without a coordinator keeps the reference's process-local
+    /// semantics (§150; C230).
     /// </summary>
     private readonly SemaphoreSlim _mutex = new(1, 1);
 
@@ -194,13 +204,17 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
         ProviderQuotaSettingsCache settingsCache,
         IProviderQuotaCheckerRegistry checkers,
         TimeProvider time,
-        ILogger<ProviderQuotaService> logger)
+        ILogger<ProviderQuotaService> logger,
+        IQuotaGroupExecutor? groupExecutor = null,
+        IProviderQuotaCoordinatorClient? coordinator = null)
     {
         _scopeFactory = scopeFactory;
         _settingsCache = settingsCache;
         _checkers = checkers;
         _time = time;
         _logger = logger;
+        _groupExecutor = groupExecutor;
+        _coordinator = coordinator;
     }
 
     /// <summary>
@@ -273,18 +287,43 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
     /// <summary>
     /// Port of <c>InvalidateChannelQuota</c> (provider_quota.go:595-603). The
     /// channel service calls it when a channel's provider identity changes or
-    /// its quota cookie is cleared (channel_provider_quota_hook.go).
+    /// its quota cookie is cleared (channel_provider_quota_hook.go). In
+    /// production the coordinator grain serializes it with the collection run
+    /// (§150); a directly constructed service keeps the process-local mutex.
     /// </summary>
-    public async Task InvalidateChannelQuotaAsync(
+    public Task InvalidateChannelQuotaAsync(
         long channelId,
         CancellationToken cancellationToken = default)
+    {
+        if (_coordinator is not null)
+        {
+            return _coordinator.InvalidateAsync(channelId, cancellationToken);
+        }
+
+        return InvalidateChannelQuotaLockedEntryAsync(channelId, cancellationToken);
+    }
+
+    /// <summary>
+    /// The invalidation without the process-local mutex, for the coordinator's
+    /// operations (the coordinator grain's turn is the exclusion).
+    /// </summary>
+    public async Task InvalidateChannelQuotaCoreAsync(
+        long channelId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        await InvalidateChannelQuotaLockedAsync(scope.ServiceProvider, channelId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task InvalidateChannelQuotaLockedEntryAsync(
+        long channelId,
+        CancellationToken cancellationToken)
     {
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            await InvalidateChannelQuotaLockedAsync(scope.ServiceProvider, channelId, cancellationToken)
-                .ConfigureAwait(false);
+            await InvalidateChannelQuotaCoreAsync(channelId, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -292,11 +331,27 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
         }
     }
 
-    /// <summary>Port of <c>ManualCheck</c> (provider_quota.go:620-623).</summary>
+    /// <summary>
+    /// Port of <c>ManualCheck</c> (provider_quota.go:620-623). The reference
+    /// runs it under <c>svc.mu</c>, so it waits for a running sweep and blocks
+    /// the next one; the coordinator grain provides that exclusion (§150).
+    /// </summary>
     public Task ManualCheckAsync(CancellationToken cancellationToken = default)
-        => RunLockedAsync(force: true, cancellationToken);
+    {
+        if (_coordinator is not null)
+        {
+            return _coordinator.RunManualAsync(cancellationToken);
+        }
 
-    /// <summary>Port of <c>runQuotaCheckScheduled</c> (provider_quota_internal.go).</summary>
+        return RunLockedAsync(force: true, cancellationToken);
+    }
+
+    /// <summary>
+    /// Port of <c>runQuotaCheckScheduled</c> (provider_quota_internal.go). The
+    /// production schedule is the coordinator grain's reminder; this direct
+    /// entry keeps the process-local mutex for callers outside the grain
+    /// (tests and tools).
+    /// </summary>
     public Task RunScheduledCheckAsync(CancellationToken cancellationToken = default)
         => RunLockedAsync(force: false, cancellationToken);
 
@@ -390,11 +445,9 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
 
         await Parallel.ForEachAsync(groups, options, async (group, token) =>
         {
-            await using var groupScope = _scopeFactory.CreateAsyncScope();
             try
             {
-                await CheckChannelQuotaAsync(groupScope.ServiceProvider, group, now, token)
-                    .ConfigureAwait(false);
+                await ExecuteGroupAsync(group, now, token).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -404,6 +457,68 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
                 LogGroupFailed(_logger, ex);
             }
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs one due group: through the leader channel's grain when production
+    /// wired the executor (§150), otherwise in-process (the reference's
+    /// goroutine body, provider_quota.go:779-786).
+    /// </summary>
+    private async Task ExecuteGroupAsync(
+        QuotaCheckGroup group,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (_groupExecutor is not null)
+        {
+            await _groupExecutor
+                .ExecuteAsync(ToCheckGroup(group), now, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await using var groupScope = _scopeFactory.CreateAsyncScope();
+        await CheckChannelQuotaAsync(groupScope.ServiceProvider, group, now, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The API half of <see cref="IProviderQuotaGrain.CheckGroupAsync"/>
+    /// (§150): rebuilds the group from the grain's snapshot and runs the
+    /// reference's <c>checkChannelQuota</c> (provider_quota.go:792-864), then
+    /// reports every member's resulting cache entry so member grains can mirror
+    /// it.
+    /// </summary>
+    public async Task<ProviderQuotaGroupCheckResult> RunGroupAsync(
+        ProviderQuotaCheckGroup group,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+
+        var checkGroup = new QuotaCheckGroup(group.AccountKey);
+        foreach (var member in group.Members)
+        {
+            checkGroup.Members.Add(new QuotaCheckChannel(
+                ToChannelRecord(member),
+                ToStatusRecord(member.Status)));
+        }
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        await CheckChannelQuotaAsync(scope.ServiceProvider, checkGroup, now, cancellationToken)
+            .ConfigureAwait(false);
+
+        var result = new ProviderQuotaGroupCheckResult();
+        foreach (var member in group.Members)
+        {
+            result.Members.Add(new ProviderQuotaMemberStatus
+            {
+                ChannelId = member.Id,
+                Status = TryGetCachedStatus(member.Id),
+            });
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -928,16 +1043,30 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
         }
 
         // Refresh the quota status immediately so the UI reflects the reset.
-        // The mutex keeps the cache consistent with the DB if a scheduled check
-        // is running concurrently. The reference's refresh group has no loaded
-        // status edge, so a failed refresh's create-or-update decision starts
-        // from "no row" here as well.
+        // The reference's refresh group has no loaded status edge, so a failed
+        // refresh's create-or-update decision starts from "no row" here as
+        // well. In production the coordinator grain serializes the refresh
+        // with the collection run (§150); a directly constructed service keeps
+        // the process-local mutex.
+        if (_coordinator is not null)
+        {
+            await _coordinator.RefreshChannelAsync(
+                    new ProviderQuotaRefreshRequest
+                    {
+                        AccountKey = QuotaAccountKey(providerType, channel),
+                        Channel = ToChannelSnapshot(channel, status: null),
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var now = _time.GetUtcNow();
             var group = new QuotaCheckGroup(QuotaAccountKey(providerType, channel));
-            group.Members.Add(new QuotaCheckChannel(channel, Status: null));
+            group.Members.Add(new QuotaCheckChannel(channel, status: null));
             await CheckChannelQuotaAsync(scope.ServiceProvider, group, now, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -945,6 +1074,26 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
         {
             _mutex.Release();
         }
+    }
+
+    /// <summary>
+    /// The coordinator's post-reset refresh (provider_quota.go:701-713): one
+    /// channel, no loaded status edge, run through the leader grain when the
+    /// executor is wired.
+    /// </summary>
+    public async Task RefreshChannelQuotaAsync(
+        ProviderQuotaRefreshRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var group = new QuotaCheckGroup(request.AccountKey);
+        group.Members.Add(new QuotaCheckChannel(
+            ToChannelRecord(request.Channel),
+            status: null));
+
+        await ExecuteGroupAsync(group, _time.GetUtcNow(), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1078,6 +1227,123 @@ public sealed class ProviderQuotaService : IProviderQuotaStatusProvider, IProvid
             return new ChannelCredentialsDraft();
         }
     }
+
+    /// <summary>
+    /// Converts a planned group into the grain boundary shape (§150). The
+    /// snapshot carries exactly the channel and status columns the check reads,
+    /// so the grain path sees the same values the in-process path holds.
+    /// </summary>
+    private static ProviderQuotaCheckGroup ToCheckGroup(QuotaCheckGroup group)
+    {
+        var descriptor = new ProviderQuotaCheckGroup { AccountKey = group.AccountKey };
+        foreach (var member in group.Members)
+        {
+            descriptor.Members.Add(ToChannelSnapshot(member.Channel, member.Status));
+        }
+
+        return descriptor;
+    }
+
+    private static ProviderQuotaChannelSnapshot ToChannelSnapshot(
+        ChannelRecord channel,
+        ProviderQuotaStatusRecord? status) => new()
+    {
+        Id = channel.Id,
+        Name = channel.Name,
+        Type = channel.Type,
+        BaseUrl = channel.BaseUrl,
+        Credentials = channel.Credentials,
+        Settings = channel.Settings,
+        SupportedModels = channel.SupportedModels,
+        ManualModels = channel.ManualModels,
+        DisabledApiKeys = channel.DisabledApiKeys,
+        Status = status is null ? null : ToStoredStatus(status),
+    };
+
+    private static ProviderQuotaStoredStatus ToStoredStatus(ProviderQuotaStatusRecord status) => new()
+    {
+        Id = status.Id,
+        ChannelId = status.ChannelId,
+        ProviderType = status.ProviderType,
+        Status = status.Status,
+        QuotaData = status.QuotaData,
+        NextResetAt = status.NextResetAt,
+        Ready = status.Ready,
+        NextCheckAt = status.NextCheckAt,
+        AccountKey = status.AccountKey,
+    };
+
+    private static ChannelRecord ToChannelRecord(ProviderQuotaChannelSnapshot snapshot) => new()
+    {
+        Id = snapshot.Id,
+        Name = snapshot.Name,
+        Type = snapshot.Type,
+        BaseUrl = snapshot.BaseUrl,
+        Credentials = snapshot.Credentials,
+        Settings = snapshot.Settings,
+        SupportedModels = snapshot.SupportedModels,
+        ManualModels = snapshot.ManualModels,
+        DisabledApiKeys = snapshot.DisabledApiKeys,
+    };
+
+    private static ProviderQuotaStatusRecord? ToStatusRecord(ProviderQuotaStoredStatus? status)
+        => status is null
+            ? null
+            : new ProviderQuotaStatusRecord
+            {
+                Id = status.Id,
+                ChannelId = status.ChannelId,
+                ProviderType = status.ProviderType,
+                Status = status.Status,
+                QuotaData = status.QuotaData,
+                NextResetAt = status.NextResetAt,
+                Ready = status.Ready,
+                NextCheckAt = status.NextCheckAt,
+                AccountKey = status.AccountKey,
+            };
+
+    /// <summary>
+    /// The raw cache entry for a channel (provider_quota.go:586-593). Unlike
+    /// <see cref="GetQuotaStatus"/> this does not apply the collection settings
+    /// gate: the grain mirrors the cache, not the routing view.
+    /// </summary>
+    private ProviderQuotaStatusSnapshot? TryGetCachedStatus(long channelId)
+    {
+        if (!_quotaCache.TryGetValue(channelId, out var status))
+        {
+            return null;
+        }
+
+        var snapshot = new ProviderQuotaStatusSnapshot
+        {
+            ChannelId = channelId,
+            ProviderType = status.ProviderType,
+            Status = status.Status,
+            Ready = status.Ready,
+        };
+
+        foreach (var limit in status.Limits)
+        {
+            snapshot.Limits.Add(ToLimitSnapshot(limit));
+        }
+
+        return snapshot;
+    }
+
+    private static ProviderQuotaLimitSnapshot ToLimitSnapshot(QuotaLimitStatus limit) => new()
+    {
+        Type = limit.Type,
+        Status = limit.Status,
+        UsageRatio = limit.UsageRatio,
+        Ready = limit.Ready,
+        NextResetAt = limit.NextResetAt,
+        AvailabilityGroup = limit.AvailabilityGroup,
+        Window = limit.Window,
+        Account = limit.Account,
+        PeriodStart = limit.PeriodStart,
+        PeriodCost = limit.PeriodCost,
+        PeriodQuota = limit.PeriodQuota,
+    };
 
     /// <summary>Port of <c>groupChannelsByQuotaAccount</c> (provider_quota_account.go:39-64).</summary>
     private List<QuotaCheckGroup> GroupChannelsByQuotaAccount(
