@@ -524,6 +524,15 @@ builder.Services.AddScoped<ClaudeCodeSafeguardsSettingsService>();
 builder.Services.AddScoped<IClaudeCodeSafeguardsSettingsService>(
     static services => services.GetRequiredService<ClaudeCodeSafeguardsSettingsService>());
 
+// Codex compatibility settings and catalog test (system_codex.go,
+// codex_catalog.go; post-baseline drift, §160). The catalog service keeps the
+// reference's process-wide singleflight, so it is a singleton whose flights
+// open their own DI scope.
+builder.Services.AddScoped<CodexCompatibilitySettingsService>();
+builder.Services.AddScoped<ICodexCompatibilitySettingsService>(
+    static services => services.GetRequiredService<CodexCompatibilitySettingsService>());
+builder.Services.AddSingleton<ICodexCatalogService, CodexCatalogService>();
+
 builder.Services.AddSingleton<ProviderQuotaService>();
 builder.Services.AddSingleton<IProviderQuotaStatusProvider>(
     static services => services.GetRequiredService<ProviderQuotaService>());

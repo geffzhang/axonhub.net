@@ -36,9 +36,10 @@ public sealed class HttpExecutor : IExecutor
     private readonly HttpClient _client;
     private readonly bool _rejectHttpsDowngrade;
     private readonly bool _rejectAll;
+    private readonly bool _sameOrigin;
 
     public HttpExecutor(HttpClient client)
-        : this(client, rejectHttpsDowngrade: false, rejectAll: false)
+        : this(client, rejectHttpsDowngrade: false, rejectAll: false, sameOrigin: false)
     {
     }
 
@@ -51,16 +52,22 @@ public sealed class HttpExecutor : IExecutor
         : this(
             new HttpClient(transport, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan },
             rejectHttpsDowngrade: false,
-            rejectAll: false)
+            rejectAll: false,
+            sameOrigin: false)
     {
     }
 
-    private HttpExecutor(HttpClient client, bool rejectHttpsDowngrade, bool rejectAll)
+    private HttpExecutor(
+        HttpClient client,
+        bool rejectHttpsDowngrade,
+        bool rejectAll,
+        bool sameOrigin)
     {
         ArgumentNullException.ThrowIfNull(client);
         _client = client;
         _rejectHttpsDowngrade = rejectHttpsDowngrade;
         _rejectAll = rejectAll;
+        _sameOrigin = sameOrigin;
     }
 
     /// <summary>
@@ -69,7 +76,7 @@ public sealed class HttpExecutor : IExecutor
     /// 10-hop check, so this policy deliberately has no hop cap.
     /// </summary>
     public HttpExecutor WithRejectHttpsDowngrade()
-        => new(_client, rejectHttpsDowngrade: true, _rejectAll);
+        => new(_client, rejectHttpsDowngrade: true, _rejectAll, sameOrigin: false);
 
     /// <summary>
     /// client.go:132-144: a copy of this executor that refuses every redirect.
@@ -77,7 +84,17 @@ public sealed class HttpExecutor : IExecutor
     /// so the downgrade check is not chained.
     /// </summary>
     public HttpExecutor WithRejectRedirects()
-        => new(_client, rejectHttpsDowngrade: false, rejectAll: true);
+        => new(_client, rejectHttpsDowngrade: false, rejectAll: true, sameOrigin: false);
+
+    /// <summary>
+    /// codex_catalog.go:150-161: a copy of this executor that follows a
+    /// redirect only while it stays on the initial request's scheme and
+    /// authority, stopping the chain after ten hops. Both refusals use Go's
+    /// <c>ErrUseLastResponse</c>, so the caller receives the 3xx response (a
+    /// normal response for the port, like Go) instead of a redirect error.
+    /// </summary>
+    public HttpExecutor WithSameOriginRedirects()
+        => new(_client, _rejectHttpsDowngrade, _rejectAll, sameOrigin: true);
 
     public HttpResponseData Do(CancellationToken cancellationToken, HttpRequestData request)
     {
@@ -328,12 +345,23 @@ public sealed class HttpExecutor : IExecutor
 
                     var nextRequest = BuildMessage(currentMethod, nextUri, nextHeaders, includeBody ? built.Body : null);
 
-                    // client.go:696-727: the hook runs after the hop request is
-                    // assembled. On refusal Go returns the redirect response
-                    // with its body already closed.
-                    var refusal = CheckRedirect(nextUri, sentUris);
+                    // client.go:696-705: the hook runs after the hop request is
+                    // assembled. ErrUseLastResponse hands the redirect response
+                    // back untouched: the next request is never sent and the
+                    // redirect body stays unclosed.
+                    var check = CheckRedirect(nextUri, sentUris);
+                    if (check.Action == RedirectAction.UseLastResponse)
+                    {
+                        request.Dispose();
+                        nextRequest.Dispose();
+                        return response!;
+                    }
+
+                    // client.go:705-727: any other refusal drains and closes the
+                    // redirect response, then reports the hook's error (Go still
+                    // returns that response alongside it).
                     Dictionary<string, List<string>>? refusalHeaders = null;
-                    if (refusal is not null)
+                    if (check.Action == RedirectAction.Refuse)
                     {
                         refusalHeaders = ReadHeaders(response!);
                     }
@@ -342,14 +370,14 @@ public sealed class HttpExecutor : IExecutor
                     SlurpAndDispose(response!);
                     response = null;
 
-                    if (refusal is not null)
+                    if (check.Action == RedirectAction.Refuse)
                     {
                         nextRequest.Dispose();
 
                         // client.go:724-726: the url.Error carries the raw
                         // Location value, not the resolved URL.
                         throw new HttpRedirectRefusal(
-                            RedirectError(built.Method, location, refusal),
+                            RedirectError(built.Method, location, check.Reason!),
                             refusalHeaders);
                     }
 
@@ -448,33 +476,70 @@ public sealed class HttpExecutor : IExecutor
     }
 
     /// <summary>
-    /// The CheckRedirect chains of client.go:87-90, 112-144 and 146-151. Returns
-    /// the refusal reason, or null when the hop is allowed.
+    /// The CheckRedirect chains of client.go:87-90, 112-144 and 146-151, plus the
+    /// catalog's own hook (codex_catalog.go:150-161). <paramref name="via"/> is
+    /// the list of requests already sent, oldest first.
     /// </summary>
-    private string? CheckRedirect(Uri next, List<Uri> via)
+    private RedirectCheck CheckRedirect(Uri next, List<Uri> via)
     {
-        if (_rejectHttpsDowngrade
-            && via.Count > 0
-            && string.Equals(via[^1].Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)
-            && string.Equals(next.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal))
+        if (_sameOrigin)
         {
-            return "refusing HTTPS to HTTP redirect";
+            // codex_catalog.go:150-155: a hop that leaves the initial request's
+            // scheme or authority stops the chain with ErrUseLastResponse.
+            if (via.Count > 0
+                && (!string.Equals(via[0].Scheme, next.Scheme, StringComparison.Ordinal)
+                    || !string.Equals(via[0].Authority, next.Authority, StringComparison.Ordinal)))
+            {
+                return RedirectCheck.UseLastResponse();
+            }
+
+            // codex_catalog.go:156-158: the hook chains the client's previous
+            // CheckRedirect when it has one. The downgrade and reject-all hooks
+            // are the only ones the port installs.
+            if (_rejectHttpsDowngrade)
+            {
+                return IsHttpsDowngrade(via, next)
+                    ? RedirectCheck.Refuse("refusing HTTPS to HTTP redirect")
+                    : RedirectCheck.Allow();
+            }
+
+            if (_rejectAll)
+            {
+                return RedirectCheck.Refuse("refusing redirect for credential-bearing request");
+            }
+
+            // codex_catalog.go:159-161: with no previous hook, ten hops is the
+            // last response, again via ErrUseLastResponse.
+            return via.Count >= MaxRedirects
+                ? RedirectCheck.UseLastResponse()
+                : RedirectCheck.Allow();
+        }
+
+        if (_rejectHttpsDowngrade && IsHttpsDowngrade(via, next))
+        {
+            return RedirectCheck.Refuse("refusing HTTPS to HTTP redirect");
         }
 
         if (_rejectAll)
         {
-            return "refusing redirect for credential-bearing request";
+            return RedirectCheck.Refuse("refusing redirect for credential-bearing request");
         }
 
         // Installing a CheckRedirect replaces defaultCheckRedirect, so only the
         // plain follower keeps the 10-hop cap (client.go:504-507, 833-838).
         if (!_rejectHttpsDowngrade && via.Count >= MaxRedirects)
         {
-            return "stopped after 10 redirects";
+            return RedirectCheck.Refuse("stopped after 10 redirects");
         }
 
-        return null;
+        return RedirectCheck.Allow();
     }
+
+    /// <summary>client.go:146-151: HTTPS to HTTP on the most recent hop.</summary>
+    private static bool IsHttpsDowngrade(List<Uri> via, Uri next)
+        => via.Count > 0
+            && string.Equals(via[^1].Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)
+            && string.Equals(next.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal);
 
     /// <summary>Go's <c>*url.Error</c> rendering: <c>%s %q: %s</c>.</summary>
     private static string RedirectError(string method, string url, string reason)
@@ -687,6 +752,31 @@ public sealed class HttpExecutor : IExecutor
         : Exception(message)
     {
         public Dictionary<string, List<string>>? ResponseHeaders { get; } = responseHeaders;
+    }
+
+    /// <summary>The three outcomes of a Go <c>CheckRedirect</c> hook.</summary>
+    private enum RedirectAction
+    {
+        /// <summary>The hook returned nil: send the hop.</summary>
+        Allow,
+
+        /// <summary>The hook returned an error: close the 3xx body, surface the error.</summary>
+        Refuse,
+
+        /// <summary>
+        /// The hook returned <c>ErrUseLastResponse</c>: do not send the hop and
+        /// return the 3xx response with its body still open (client.go:699-705).
+        /// </summary>
+        UseLastResponse,
+    }
+
+    private readonly record struct RedirectCheck(RedirectAction Action, string? Reason)
+    {
+        public static RedirectCheck Allow() => new(RedirectAction.Allow, null);
+
+        public static RedirectCheck Refuse(string reason) => new(RedirectAction.Refuse, reason);
+
+        public static RedirectCheck UseLastResponse() => new(RedirectAction.UseLastResponse, null);
     }
 
     private static Dictionary<string, List<string>> ReadHeaders(HttpResponseMessage response)

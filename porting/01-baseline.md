@@ -8372,6 +8372,75 @@ claudeCodeSafeguards schema），本切片只移植设置面；评审运行时�
 anthropic.go 集成）登记为 C243 gap。服务器默认 `classifierModel` 为空时评审关闭，
 默认部署的 /v1 行为不受影响。
 
+## 160. Codex 兼容性设置与模型目录（GraphQL 5 根字段 + 目录服务，37 + 6 例，2026-11-09）
+
+参照（post-baseline 漂移，按工作仓库 f272549f 跟进）：`internal/server/biz/system_codex.go`
+（`codex_compatibility` 键、`CodexCompatibilitySettings{Enabled, ChannelID}`、读取 / 启用判定 /
+写入校验）、`internal/server/biz/codex_catalog.go:24-30`（`CodexCatalogError{Status,
+UpstreamStatus, Message}`）、`32-61`（`CodexCatalog` 与 `Count` / `Intersect`）、`84-104`
+（`FetchCodexCatalog`：singleflight `DoChan("%d:%s", channelID, version)`、调用方取消 →
+502、30s `context.WithoutCancel` 预算）、`106-173`（`fetchCodexCatalog`：实时行类型检查 →
+503、启用快照分支的类型断言 → 502 且复用快照 HTTP client、实时分支凭据 → 502、
+wss/ws 前缀改写、`codex.ModelsRequest`、URL 查询串回写、same-origin 重定向钩子、
+HTTP / 传输错误 → 502 + UpstreamStatus）、`internal/server/biz/channel_apikey_strategies.go`
+（多 key 策略分派，未移植，见 C247）、`internal/server/gql/system.graphql:409-440`
+（`CodexCompatibilitySettings` / `UpdateCodexCompatibilitySettingsInput` /
+`CodexCatalogChannel` / `CodexCatalogTestResult` 与 3 查询 + 2 变更）、
+`internal/server/gql/system.resolvers.go:25-56,470-497`、`models_gen.go:238-266`、
+`internal/server/api/codex_compatibility.go`（`/codex/*` 运行时处理器，未移植，见 C244）、
+`internal/server/codex_routes.go:10-29`（运行时路由注册，同上）。
+
+| 项 | 参照值 |
+|---|---|
+| 存储键 / 形状 | `codex_compatibility`；值按 Go 字段序 `{"enabled":bool,"channelID":int|null}`，`channelID` 无 omitempty |
+| 读取默认 | 缺行 / `"null"` → 零值结构（enabled false、channelID nil） |
+| 解码容忍 | 键大小写不敏感、重复键后者胜、`null` 进 bool 字段为 no-op、`null` 进 `*int` 清空、int 为 64 位、分数 / 指数进 int 报错；错误文案为 `json: cannot unmarshal ... into Go struct field CodexCompatibilitySettings.<field> of type ...`，外层 `decode Codex compatibility settings: %w` |
+| 读取权限 | `CodexCompatibilitySettings` 需 `read_settings`；`CodexCompatibilityEnabled` 走 `authz.RunWithSystemBypass`，无 principal 也可读；两者读失败均包 `read Codex compatibility ...`，内层 `failed to get system value: %w` |
+| 写入校验 | 需 `write_settings`；`Enabled && ChannelID == nil` → VALIDATION_FAILED `a Codex channel is required when enabled`；有 ChannelID 时需 `read_channels` 并 `Channel.Get`（任何错误 → `Codex catalog channel is unavailable or inaccessible`），类型非 codex → `catalog channel must be Codex` |
+| 写入持久化 | `json.Marshal(settings)` 后 `setSystemValue`；失败包 `failed to create system setting: %w` |
+| 目录通道列表 | 需 `read_settings` 再 `read_channels`；`Channel.Query().Where(TypeEQ(codex)).All(ctx)`，不按状态过滤、不显式排序 |
+| 目录测试 | 需 `write_settings` 再 `read_channels`；前置 `Channel.Get` 失败 → 普通错误 `catalog channel is unavailable or inaccessible`（GraphQL error）；抓取失败 → 结果 `{success:false, modelCount:0, error:<message>, upstreamStatus:<仅非 0>}` 且 GraphQL error 为 nil；成功 → `{success:true, modelCount:catalog.Count()}` |
+| 目录抓取 | 单飞键 `%d:%s`；调用方取消 → 502 `Codex catalog request was cancelled`；30s 分离预算；实时行缺失或类型非 codex → 503 `Codex catalog source is unavailable`；启用快照的缓存出站非 codex → 502 `Codex catalog provider is unavailable`；实时分支凭据构建失败 → 502 `Codex catalog credentials are unavailable`；base URL 小写敏感地把 `wss://` / `ws://` 改写为 `https://` / `http://`；`client_version` 非空时覆盖同名查询参数并按 `url.Values.Encode()` 重写查询串；上游 HTTP 失败 → 502 `Codex catalog upstream HTTP %d` + UpstreamStatus；传输失败 → 502 `Codex catalog transport failed`；目录解析严格（对象根、精确 `models` 数组、每项对象且 `slug` 非空）→ 502 `invalid Codex model catalog` |
+
+端口实现：
+
+- `src/AxonHub.Api/Settings/CodexCompatibilitySettingsService.cs`：`GetAsync` /
+  `IsEnabledAsync` / `UpdateAsync`、Go 形状的 `CodexCompatibilitySettingsStored` 与
+  `CodexCompatibilitySettingsCodec`（手写解码以复刻 Go 的键匹配、null 与 64 位 int 语义
+  及逐字错误文案）。
+- `src/AxonHub.Api/Management/CodexCatalogService.cs`：`CodexCatalogException` /
+  `CodexCatalog` / `ICodexCatalogService` 与单例 `CodexCatalogService`；`ConcurrentDictionary`
+  + `Lazy<Task>` 复刻 singleflight，每次飞行自建 `IServiceScope` 并从飞行开始计时 30s；
+  `ParseCodexCatalog` 与 `RewriteCatalogUrl`；启用快照分支用快照的 Settings 构建代理
+  executor（与参照复用 `source.HTTPClient` 对齐），实时分支用行内 Settings。
+- `src/AxonHub.Api/GraphQL/CodexCompatibilityTypes.cs`：四个 GraphQL 类型与映射；
+  `channelID` 按 Int 截断，`status` 复用 `ChannelMapping.ToChannelStatusValue`。
+- `src/AxonHub.Api/GraphQL/AdminQuery.cs` / `AdminMutation.cs`：五个根字段；
+  `codexCatalogChannels` 与 `testCodexCatalog` 的 scope 顺序按参照。
+- `src/AxonHub.Llm/Http/HttpRedirectPolicy.cs` / `HttpExecutor.cs` /
+  `HttpRedirectPolicies.cs`：新增 `SameOrigin` 策略（对比 `via[0]`、链上 previous、
+  10 跳上限）与 `WithSameOriginRedirects`。
+- `src/AxonHub.Api/Program.cs`：注册 `ICodexCompatibilitySettingsService` 与
+  `ICodexCatalogService`。
+
+测试（37 + 6 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/CodexCompatibilitySettingsServiceTests.cs` | 22（16 Fact + 2 Theory / 6 InlineData） | 缺行零值 / 存储 `"null"` / 大小写键 / 重复键与 null 清空 / null bool no-op / 64 位 int / 四类解码失败逐字文案 / 损坏值前缀 / 读前缀（两处）/ 启用判定免权限 / 写入 Go 形状与 null channelID / 启用无通道、缺通道、非 codex 三类校验 / read_channels 门 / 写失败前缀 / 三种 scope 组合 |
+| `tests/AxonHub.Api.Tests/AdminCodexCompatibilityEndpointTests.cs` | 15（Fact） | 设置精确形状 / enabled 免 scope / 更新往返与存储 JSON / VALIDATION_FAILED 信封 / write_settings 门 / 目录通道仅 codex（含 archived）与 Where / 两个 scope 门 / 上游 404 不泄漏 body 与请求形状（GET、URL、Authorization、Version、Accept）/ 成功计数 / 非法目录 / 前置普通错误 / 非 codex 行 503 / 零启用 key 的凭据错误（C246）/ 缓存出站类型不匹配 502 / testCatalog 两个 scope 门 |
+| `tests/AxonHub.Llm.Tests/HttpRedirectTests.cs` | +6（Fact） | same-origin 跟随、跨主机 / 跨 scheme / 跨端口返回 3xx、10 跳上限、保留 3xx body；既有 `ScriptedExecutorsIgnoreTheRedirectPolicies` 断言脚本化执行器不受策略影响 |
+
+静态计数：`AxonHub.Api.Tests` 由 5751 增至 5788（+37），`AxonHub.Llm.Tests` 由 1506 增至
+1512（+6），`AxonHub.Persistence.Tests` 359、`AxonHub.Grains.Tests` 1746 不变，四项目合计由
+9362 增至 9405。**按项目规则未运行 lint / build / test。**
+
+差异：C244（gap）：`/codex/*` 运行时路由（Enabled 门、whoami、accounts/check、models
+交集、images、responses 与 WS）未移植；C245（accepted）：same-origin 比较使用 .NET 规范化
+后的 Scheme / Authority，Go 用字面 Host；C246（accepted）：零启用 key 的参照 panic 会经
+singleflight 崩溃进程，端口折叠为有界 502 credentials 错误；C247（gap）：多 key
+`apiKeyStrategy` 分派与共享选择状态未移植，端口保持基线 sticky / random。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|

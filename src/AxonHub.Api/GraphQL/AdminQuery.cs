@@ -433,6 +433,63 @@ public sealed class AdminQuery
         => ClaudeCodeSafeguardsMapping.ToGraphQL(
             await settings.GetAsync(cancellationToken).ConfigureAwait(false));
 
+    /// <summary>
+    /// Port of queryResolver.CodexCompatibilitySettings
+    /// (system.resolvers.go:470-473): the resolver delegates straight to the
+    /// service, which requires read_settings via authz.RequireScope.
+    /// </summary>
+    [GraphQLName("codexCompatibilitySettings")]
+    public async Task<CodexCompatibilitySettingsType> CodexCompatibilitySettingsAsync(
+        [Service] ICodexCompatibilitySettingsService settings,
+        CancellationToken cancellationToken)
+        => CodexCompatibilityMapping.ToGraphQL(
+            await settings.GetAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.CodexCompatibilityEnabled
+    /// (system.resolvers.go:475-478): the system-bypass read, so no principal
+    /// scope is consulted.
+    /// </summary>
+    [GraphQLName("codexCompatibilityEnabled")]
+    public Task<bool> CodexCompatibilityEnabledAsync(
+        [Service] ICodexCompatibilitySettingsService settings,
+        CancellationToken cancellationToken)
+        => settings.IsEnabledAsync(cancellationToken);
+
+    /// <summary>
+    /// Port of queryResolver.CodexCatalogChannels
+    /// (system.resolvers.go:480-497): read_settings then read_channels, then
+    /// every live channel whose type is <c>codex</c>, archived included.
+    /// </summary>
+    [GraphQLName("codexCatalogChannels")]
+    public async Task<IReadOnlyList<CodexCatalogChannelType>> CodexCatalogChannelsAsync(
+        [Service] IChannelAdminStore channels,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        await scope.RequireScopeAsync(AuthorizationScope.ReadSettings, cancellationToken)
+            .ConfigureAwait(false);
+        await scope.RequireScopeAsync(AuthorizationScope.ReadChannels, cancellationToken)
+            .ConfigureAwait(false);
+
+        var rows = await channels
+            .ListAllAsync(
+                new ChannelListQuery
+                {
+                    Where = new ChannelListFilter { Type = "codex" },
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var result = new List<CodexCatalogChannelType>(rows.Count);
+        foreach (var row in rows)
+        {
+            result.Add(CodexCompatibilityMapping.ToGraphQL(row));
+        }
+
+        return result;
+    }
+
     /// <summary>Port of queryResolver.PreviewGcCleanup (system.resolvers.go:499-515).</summary>
     [GraphQLName("previewGcCleanup")]
     public async Task<IReadOnlyList<GcCleanupPreviewItemType>> PreviewGcCleanupAsync(

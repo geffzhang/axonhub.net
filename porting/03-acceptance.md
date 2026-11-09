@@ -517,6 +517,25 @@ JSON（空 fallback 为 `[]`）、`time.Duration` 纳秒截断与 15 条校验�
 anthropic 入站接线）未移植，登记为 C243 gap；默认 `classifierModel` 为空时评审关闭，
 默认部署的 /v1 行为不受影响。
 
+§160 追加 43 个用例（`AxonHub.Api.Tests` 37：`CodexCompatibilitySettingsServiceTests` 22、
+`AdminCodexCompatibilityEndpointTests` 15；`AxonHub.Llm.Tests` 6：`HttpRedirectTests` 的
+SameOrigin 用例），同样按项目规则未运行 lint / build / test；§160 落地后的静态计数为
+`AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5788、`AxonHub.Llm.Tests` 1512、
+`AxonHub.Persistence.Tests` 359，四项目合计 9405，下一次全量运行应以该数字复核。该切片为
+post-baseline 漂移（冻结基线 `b8bb3421` 无 codex 兼容性文件与 schema），按 `f272549f` 接入
+Codex 兼容性管理面与目录服务：`codexCompatibilitySettings` / `codexCompatibilityEnabled` /
+`codexCatalogChannels` 查询与 `updateCodexCompatibilitySettings` / `testCodexCatalog` 变更。
+设置面复刻 `codex_compatibility` 的 Go 形状（`channelID` 无 omitempty）、缺行与 `"null"` 的
+零值、Go 的键大小写 / 重复键 / null / 64 位 int 解码容忍与逐字错误文案、`read_settings` 与
+`write_settings` 的读写分离、`RunWithSystemBypass` 的免权限启用判定与三类校验文案；目录面
+复刻 singleflight（键 `%d:%s`、30s 分离预算、调用方取消 502）、启用快照优先与快照代理
+executor、实时行类型检查、凭据构建、wss/ws 改写、`client_version` 查询串回写、same-origin
+重定向钩子、上游 HTTP / 传输错误折叠、严格目录解析与 `testCodexCatalog` 的结果折叠
+（message 覆盖与仅非零 upstreamStatus）。`/codex/*` 运行时路由未移植，登记为 C244 gap；
+same-origin 比较的 URI 规范化差异登记为 C245（accepted）；零启用 key 的参照 panic 经
+singleflight 崩溃进程，端口折叠为有界 502 凭据错误，登记为 C246（accepted）；多 key
+`apiKeyStrategy` 分派未移植，登记为 C247（gap），端口保持基线 sticky / random。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

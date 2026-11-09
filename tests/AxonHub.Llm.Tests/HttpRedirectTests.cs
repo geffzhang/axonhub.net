@@ -324,12 +324,123 @@ public sealed class HttpRedirectTests
     }
 
     [Fact]
+    public void SameOriginPolicyFollowsSameOriginChain()
+    {
+        var handler = new RedirectHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/start" => Redirect(HttpStatusCode.Found, "/next"),
+            _ => Ok("{}"),
+        });
+
+        using var client = new HttpClient(handler);
+        var executor = new HttpExecutor(client).WithSameOriginRedirects();
+
+        var response = executor.Do(CancellationToken.None, Get("https://u.example/start"));
+
+        Assert.Equal(200, response.StatusCode);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal("https://u.example/next", handler.Requests[1].Url);
+    }
+
+    [Fact]
+    public void SameOriginPolicyReturnsTheThreeHundredOnCrossHost()
+    {
+        // codex_catalog.go:150-155: a cross-host hop stops the chain with
+        // ErrUseLastResponse, so the 3xx response is returned unread instead of
+        // raising a redirect error.
+        var handler = new RedirectHandler(_ => Redirect(HttpStatusCode.Found, "https://other.example/next"));
+
+        using var client = new HttpClient(handler);
+        var executor = new HttpExecutor(client).WithSameOriginRedirects();
+
+        var response = executor.Do(CancellationToken.None, Get("https://u.example/start"));
+
+        Assert.Equal(302, response.StatusCode);
+        Assert.Single(handler.Requests);
+        Assert.Equal("https://u.example/start", handler.Requests[0].Url);
+    }
+
+    [Fact]
+    public void SameOriginPolicyReturnsTheThreeHundredOnSchemeChange()
+    {
+        var handler = new RedirectHandler(_ => Redirect(HttpStatusCode.Found, "http://u.example/next"));
+
+        using var client = new HttpClient(handler);
+        var executor = new HttpExecutor(client).WithSameOriginRedirects();
+
+        var response = executor.Do(CancellationToken.None, Get("https://u.example/start"));
+
+        Assert.Equal(302, response.StatusCode);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public void SameOriginPolicyReturnsTheThreeHundredOnPortChange()
+    {
+        var handler = new RedirectHandler(_ => Redirect(HttpStatusCode.Found, "https://u.example:8443/next"));
+
+        using var client = new HttpClient(handler);
+        var executor = new HttpExecutor(client).WithSameOriginRedirects();
+
+        var response = executor.Do(CancellationToken.None, Get("https://u.example/start"));
+
+        Assert.Equal(302, response.StatusCode);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public void SameOriginPolicyStopsAfterTenHopsReturningTheLastResponse()
+    {
+        // codex_catalog.go:159-161: with no previous hook the ten-hop cap also
+        // returns the last response instead of an error.
+        var next = 0;
+        var handler = new RedirectHandler(_ =>
+        {
+            next++;
+            return Redirect(
+                HttpStatusCode.MovedPermanently,
+                "/r" + next.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        });
+
+        using var client = new HttpClient(handler);
+        var executor = new HttpExecutor(client).WithSameOriginRedirects();
+
+        var response = executor.Do(CancellationToken.None, Get("https://u.example/r0"));
+
+        Assert.Equal(301, response.StatusCode);
+        Assert.Equal(10, handler.Requests.Count);
+    }
+
+    [Fact]
+    public void SameOriginPolicyKeepsTheRedirectBodyForTheCaller()
+    {
+        var handler = new RedirectHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Found)
+            {
+                Content = new StringContent("redirecting", Encoding.UTF8, "text/plain"),
+            };
+            response.Headers.TryAddWithoutValidation("Location", "https://other.example/next");
+            return response;
+        });
+
+        using var client = new HttpClient(handler);
+        var executor = new HttpExecutor(client).WithSameOriginRedirects();
+
+        var response = executor.Do(CancellationToken.None, Get("https://u.example/start"));
+
+        Assert.Equal(302, response.StatusCode);
+        Assert.Equal("redirecting", Encoding.UTF8.GetString(response.Body!));
+    }
+
+    [Fact]
     public void ScriptedExecutorsIgnoreTheRedirectPolicies()
     {
         IExecutor scripted = new PassthroughExecutor();
 
         Assert.Same(scripted, scripted.WithRejectHttpsDowngrade());
         Assert.Same(scripted, scripted.WithRejectRedirects());
+        Assert.Same(scripted, scripted.WithSameOriginRedirects());
     }
 
     private static HttpRequestData Get(string url) => new()

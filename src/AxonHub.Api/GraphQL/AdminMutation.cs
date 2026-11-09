@@ -815,6 +815,96 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.UpdateCodexCompatibilitySettings
+    /// (system.resolvers.go:26-31). The resolver has no scope check of its own:
+    /// the service requires write_settings (and read_channels for a channel id)
+    /// and raises the reference's VALIDATION_FAILED coded errors.
+    /// </summary>
+    [GraphQLName("updateCodexCompatibilitySettings")]
+    public async Task<bool> UpdateCodexCompatibilitySettingsAsync(
+        UpdateCodexCompatibilitySettingsInput input,
+        [Service] ICodexCompatibilitySettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        await settings.UpdateAsync(
+                CodexCompatibilityMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TestCodexCatalog
+    /// (system.resolvers.go:34-56): write_settings then read_channels, a
+    /// Channel.Get precheck as a plain error, then the catalog fetch whose
+    /// failures are folded into the result instead of failing the field.
+    /// </summary>
+    [GraphQLName("testCodexCatalog")]
+    public async Task<CodexCatalogTestResultType> TestCodexCatalogAsync(
+        [GraphQLName("channelID")] int channelID,
+        [Service] IChannelStore channels,
+        [Service] ICodexCatalogService catalog,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        await scope.RequireScopeAsync(AuthorizationScope.WriteSettings, cancellationToken)
+            .ConfigureAwait(false);
+        await scope.RequireScopeAsync(AuthorizationScope.ReadChannels, cancellationToken)
+            .ConfigureAwait(false);
+
+        ChannelRecord? entity;
+        try
+        {
+            entity = await channels.GetByIdAsync(channelID, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // ent's Channel.Get error, including not-found, is the same plain
+            // error the resolver returns.
+            entity = null;
+        }
+
+        if (entity is null)
+        {
+            throw new InvalidOperationException(
+                "catalog channel is unavailable or inaccessible");
+        }
+
+        try
+        {
+            var result = await catalog
+                .FetchAsync(channelID, string.Empty, cancellationToken)
+                .ConfigureAwait(false);
+            return new CodexCatalogTestResultType
+            {
+                Success = true,
+                ModelCount = result.Count,
+            };
+        }
+        catch (CodexCatalogException ex)
+        {
+            return new CodexCatalogTestResultType
+            {
+                Success = false,
+                ModelCount = 0,
+                Error = ex.Message,
+                UpstreamStatus = ex.UpstreamStatus != 0 ? ex.UpstreamStatus : null,
+            };
+        }
+        catch (Exception)
+        {
+            // errors.As fails: the generic message, still nil error.
+            return new CodexCatalogTestResultType
+            {
+                Success = false,
+                ModelCount = 0,
+                Error = "Codex catalog request failed",
+            };
+        }
+    }
+
+    /// <summary>
     /// Port of mutationResolver.CheckProviderQuotas (system.resolvers.go:273-282):
     /// the forced check runs under the service mutex and completes before the
     /// mutation returns.

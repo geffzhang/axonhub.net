@@ -8,7 +8,9 @@ namespace AxonHub.Llm.Http;
 /// Go installs <c>CheckRedirect</c> only for the policy clients, and doing so
 /// replaces <c>http.Client</c>'s default 10-hop check (client.go:504-507). The
 /// port keeps that split: <see cref="Follow"/> applies the default hop cap,
-/// while the two rejecting policies intentionally have none.
+/// while the two rejecting policies intentionally have none, and
+/// <see cref="SameOrigin"/> implements the catalog's own chain where both
+/// refusals use <c>ErrUseLastResponse</c>.
 /// </remarks>
 public enum HttpRedirectPolicy
 {
@@ -27,4 +29,13 @@ public enum HttpRedirectPolicy
     /// for credential-bearing catalog requests. No hop cap.
     /// </summary>
     RejectAll = 2,
+
+    /// <summary>
+    /// Follow a redirect only while it stays on the initial request's scheme
+    /// and authority; a crossing hop and the ten-hop cap both stop the chain
+    /// with Go's <c>ErrUseLastResponse</c>, returning the 3xx response instead
+    /// of an error (codex_catalog.go:150-161). Installed with
+    /// <c>WithSameOriginRedirects</c>.
+    /// </summary>
+    SameOrigin = 3,
 }

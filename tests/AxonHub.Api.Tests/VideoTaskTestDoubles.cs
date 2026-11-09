@@ -303,6 +303,15 @@ internal sealed class FakeChannelStore : IChannelStore
             .ToList());
     }
 
+    /// <summary>
+    /// The enabled-channel cache fingerprint: the largest updated_at across
+    /// every row, soft-deleted ones included (null for an empty table).
+    /// </summary>
+    public Task<DateTime?> GetLatestUpdatedAtAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(Rows.Count == 0
+            ? (DateTime?)null
+            : Rows.Max(static row => row.UpdatedAt));
+
     public int ListEnabledByTypesCalls { get; private set; }
 
     public Task<IReadOnlyList<ChannelRecord>> ListEnabledByTypesAsync(
