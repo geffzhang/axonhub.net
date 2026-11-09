@@ -275,7 +275,12 @@ builder.Services.AddScoped<VideoService>();
 
 // The orchestrator's enforceQuota middleware (biz.QuotaService): API key
 // profile quotas aggregated from usage_logs in the general-settings timezone.
-builder.Services.AddScoped<IApiKeyQuotaChecker, ApiKeyQuotaService>();
+builder.Services.AddScoped<ApiKeyQuotaService>();
+builder.Services.AddScoped<IApiKeyQuotaChecker>(
+    static services => services.GetRequiredService<ApiKeyQuotaService>());
+// The apiKeyQuotaUsages root reads the same service's ProfileQuotaUsages.
+builder.Services.AddScoped<IApiKeyProfileQuotaReader>(
+    static services => services.GetRequiredService<ApiKeyQuotaService>());
 
 // The orchestrator reads the retry policy through the scoped system store and
 // resolves candidates through the model-association selector

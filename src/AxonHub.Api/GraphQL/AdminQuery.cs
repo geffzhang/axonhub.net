@@ -806,6 +806,52 @@ public sealed class AdminQuery
         return ApiKeyProfileTemplateMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>Port of queryResolver.APIKeyQuotaUsages (axonhub.resolvers.go:952-981).</summary>
+    /// <remarks>
+    /// The reference loads the key through <c>client.APIKey.Get</c> (privacy
+    /// applies, a missing or filtered row is <c>ent: api_key not found</c>) and
+    /// then asks the quota service for one entry per quota-carrying profile;
+    /// both steps prefix their failures. The reference decodes the profiles
+    /// column during the ent scan; the port decodes it in the quota service, so
+    /// a corrupt column surfaces under the second prefix and with System.Text.Json
+    /// text instead of ent's scan error (C002 strategy).
+    /// </remarks>
+    [GraphQLName("apiKeyQuotaUsages")]
+    public async Task<IReadOnlyList<ApiKeyProfileQuotaUsageType>> ApiKeyQuotaUsagesAsync(
+        [GraphQLType(typeof(IdType))] string apiKeyId,
+        [Service] ApiKeyManagementService apiKeys,
+        [Service] IApiKeyProfileQuotaReader quotas,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(apiKeyId);
+
+        ApiKeyRecord apiKey;
+        try
+        {
+            apiKey = await apiKeys.GetNodeAsync(gid.Id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException("failed to get api key: " + ex.Message, ex);
+        }
+
+        IReadOnlyList<ProfileQuotaUsage> usages;
+        try
+        {
+            usages = await quotas.ProfileQuotaUsagesAsync(apiKey, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to get api key quota usage: " + ex.Message,
+                ex);
+        }
+
+        return [.. usages.Select(static usage => ApiKeyMapping.ToGraphQL(usage))];
+    }
+
     /// <summary>
     /// Port of queryResolver.Models (ent.resolvers.go:416-424).
     /// </summary>

@@ -15,6 +15,19 @@ public sealed record QuotaUsage(long RequestCount, long TotalTokens, decimal Tot
 /// <summary>Port of biz.QuotaCheckResult (internal/server/biz/quota.go:30-34).</summary>
 public sealed record QuotaCheckResult(bool Allowed, string Message, QuotaWindow Window);
 
+/// <summary>Port of biz.QuotaResult (internal/server/biz/quota.go:36-39).</summary>
+public sealed record QuotaResult(QuotaWindow Window, QuotaUsage Usage);
+
+/// <summary>
+/// Port of biz.ProfileQuotaUsage (internal/server/biz/quota.go:124-129): the
+/// realtime usage of one profile's quota on an API key.
+/// </summary>
+public sealed record ProfileQuotaUsage(
+    string ProfileName,
+    ApiKeyQuotaModel Quota,
+    QuotaWindow Window,
+    QuotaUsage Usage);
+
 /// <summary>
 /// Read side of <c>biz.QuotaService.CheckAPIKeyQuota</c> used by the
 /// orchestrator's enforceQuota middleware.
@@ -24,6 +37,18 @@ public interface IApiKeyQuotaChecker
     Task<QuotaCheckResult> CheckApiKeyQuotaAsync(
         long apiKeyId,
         ApiKeyQuotaModel quota,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Read side of <c>biz.QuotaService.ProfileQuotaUsages</c>
+/// (internal/server/biz/quota.go:129-155) behind the <c>apiKeyQuotaUsages</c>
+/// GraphQL root.
+/// </summary>
+public interface IApiKeyProfileQuotaReader
+{
+    Task<IReadOnlyList<ProfileQuotaUsage>> ProfileQuotaUsagesAsync(
+        ApiKeyRecord apiKey,
         CancellationToken cancellationToken = default);
 }
 
@@ -42,7 +67,7 @@ public interface IApiKeyQuotaChecker
 public sealed class ApiKeyQuotaService(
     IUsageLogStore usageLogs,
     ISystemStore systems,
-    TimeProvider timeProvider) : IApiKeyQuotaChecker
+    TimeProvider timeProvider) : IApiKeyQuotaChecker, IApiKeyProfileQuotaReader
 {
     /// <summary>biz.SystemKeyGeneralSettings (internal/server/biz/system.go:96).</summary>
     public const string GeneralSettingsKey = SystemTimeLocations.GeneralSettingsKey;
@@ -119,6 +144,91 @@ public sealed class ApiKeyQuotaService(
         }
 
         return new QuotaCheckResult(true, string.Empty, window);
+    }
+
+    /// <summary>
+    /// Port of biz.QuotaService.GetQuota (internal/server/biz/quota.go:157-191):
+    /// resolve the window, then read the request count and the usage aggregate
+    /// through the reference's system bypass (the port's stores have no privacy
+    /// layer, so the bypass is structural). A nil quota is the zero result.
+    /// </summary>
+    public async Task<QuotaResult> GetQuotaAsync(
+        long apiKeyId,
+        ApiKeyQuotaModel? quota,
+        CancellationToken cancellationToken = default)
+    {
+        if (quota is null)
+        {
+            // The Go zero QuotaResult: an empty window (both bounds nil, the
+            // end exclusive flag false) and a zero usage.
+            return new QuotaResult(
+                new QuotaWindow(null, null, EndInclusive: false),
+                new QuotaUsage(0, 0, 0m));
+        }
+
+        var location = await ReadTimeZoneAsync(cancellationToken).ConfigureAwait(false);
+        var window = ApiKeyQuotaWindows.Compute(timeProvider.GetUtcNow(), quota.Period, location);
+
+        var requestCount = await usageLogs
+            .CountByApiKeyAsync(
+                apiKeyId,
+                window.Start,
+                window.End,
+                window.EndInclusive,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var usage = await usageLogs
+            .AggregateByApiKeyAsync(
+                apiKeyId,
+                window.Start,
+                window.End,
+                window.EndInclusive,
+                needTokens: true,
+                needCost: true,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new QuotaResult(
+            window,
+            new QuotaUsage(
+                requestCount,
+                usage.TotalTokens,
+                GoFloatDecimal.FromFloat(usage.TotalCost)));
+    }
+
+    /// <summary>
+    /// Port of biz.QuotaService.ProfileQuotaUsages (internal/server/biz/quota.go:129-155):
+    /// every profile that carries a quota, in profile order, with its realtime
+    /// window and usage. The caller has already loaded the key (and thereby
+    /// applied authorization); this only reads usage aggregates for its id.
+    /// </summary>
+    public async Task<IReadOnlyList<ProfileQuotaUsage>> ProfileQuotaUsagesAsync(
+        ApiKeyRecord apiKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(apiKey);
+
+        var profiles = ApiKeyProfilesCodec.Deserialize(apiKey.Profiles);
+        if (profiles.Profiles is null || profiles.Profiles.Count == 0)
+        {
+            return [];
+        }
+
+        var result = new List<ProfileQuotaUsage>(profiles.Profiles.Count);
+        foreach (var profile in profiles.Profiles)
+        {
+            if (profile.Quota is null)
+            {
+                continue;
+            }
+
+            var quota = await GetQuotaAsync(apiKey.Id, profile.Quota, cancellationToken)
+                .ConfigureAwait(false);
+            result.Add(new ProfileQuotaUsage(profile.Name, profile.Quota, quota.Window, quota.Usage));
+        }
+
+        return result;
     }
 
     /// <summary>

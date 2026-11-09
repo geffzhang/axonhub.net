@@ -8441,6 +8441,58 @@ HTTP / 传输错误 → 502 + UpstreamStatus）、`internal/server/biz/channel_a
 singleflight 崩溃进程，端口折叠为有界 502 credentials 错误；C247（gap）：多 key
 `apiKeyStrategy` 分派与共享选择状态未移植，端口保持基线 sticky / random。
 
+## 161. apiKeyQuotaUsages（API 密钥配额用量查询根，15 例，2026-11-10）
+
+参照（冻结基线 b8bb3421）：`internal/server/gql/axonhub.graphql:1116`（根字段
+`apiKeyQuotaUsages(apiKeyId: ID!): [APIKeyProfileQuotaUsage!]!`）、`562-639`
+（`APIKeyQuota` / `APIKeyQuotaUsage` / `APIKeyQuotaWindow` / `APIKeyProfileQuotaUsage` 类型）、
+`internal/server/gql/axonhub.resolvers.go:952-981`（resolver：`client.APIKey.Get` → 前缀、
+`quotaService.ProfileQuotaUsages` → 前缀、`int()` 投影）、`internal/server/biz/quota.go:129-155`
+（`ProfileQuotaUsages`：nil / 空 profiles → nil、跳过无 quota 的 profile、按 profile 顺序）、
+`157-191`（`GetQuota`：nil quota → 零值、`SystemService.TimeLocation`、`quotaWindow`、系统旁路的
+`requestCount` 与 `usageAgg(needTokens=true, needCost=true)`）、`193-256`（`quotaWindow`）、
+`internal/server/gql/graphql.go:181-190`（隐私拒绝 → `permission denied` + FORBIDDEN）。
+
+| 项 | 参照值 |
+|---|---|
+| 根签名 | `apiKeyQuotaUsages(apiKeyId: ID!): [APIKeyProfileQuotaUsage!]!`；GUID 解析先于取键，非法前缀 → `guid must start with gid://axonhub/` |
+| 取键与隐私 | `client.APIKey.Get` 走 APIKey 查询策略（project-scope 用户 / 带 `read_api_keys` 的 API key 主体 / owner，全部 Skip 时默认拒绝）；缺失或被谓词过滤 → `failed to get api key: ent: api_key not found`；隐私拒绝由 presenter 折叠为 `permission denied`（`code: FORBIDDEN`），wrapper 前缀被丢弃 |
+| profiles 为空 | `apiKey.Profiles == nil \|\| len(apiKey.Profiles.Profiles) == 0` → `nil, nil`，resolver 的 `make(..., 0, 0)` 输出空列表（非 null） |
+| 输出选择 | 只输出 `p.Quota != nil` 的 profile，顺序与 profiles 列一致，`profileName` 原样 |
+| 窗口 | 每个 profile 独立计算：all_time（start nil、end now、含端点）、past_duration（start now−Δ、end now、含端点）、calendar_duration（系统时区的本地日 / 月边界，end 不含）；未知 `period.type` → `unknown period.type: %s`，pastDuration 缺失 / 非正 / 未知单位沿用 §98 文案 |
+| 用量 | 每 profile 一次 `requestCount`（系统旁路 count）与一次 `usageAgg(needTokens=true, needCost=true)`；`TotalCost` 为 `decimal.NewFromFloat(SUM(total_cost) 的 float 扫描)` |
+| 错误前缀 | 取键失败 `failed to get api key: %w`；配额读取失败 `failed to get api key quota usage: %w` |
+| 投影 | `int(u.Usage.RequestCount)` / `int(u.Usage.TotalTokens)` 按宿主 int 折叠（线上 32 位，C190）；`TotalCost` 直传 Decimal 标量；窗口时间走 Time 标量 |
+
+端口实现：
+
+- `src/AxonHub.Api/Orchestration/ApiKeyQuotaService.cs`：`QuotaResult` /
+  `ProfileQuotaUsage` / `IApiKeyProfileQuotaReader` 与 `GetQuotaAsync`（nil quota 零值、
+  `ReadTimeZoneAsync`、`ApiKeyQuotaWindows.Compute`、count + aggregate）/
+  `ProfileQuotaUsagesAsync`（profiles 解码、跳过无 quota、profile 顺序）。
+- `src/AxonHub.Api/GraphQL/ApiKeyTypes.cs`：`APIKeyQuotaUsage` /
+  `APIKeyQuotaWindow` / `APIKeyProfileQuotaUsage` 三个类型与
+  `ApiKeyMapping.ToGraphQL(ProfileQuotaUsage)`（C190 checked 截断）。
+- `src/AxonHub.Api/GraphQL/AdminQuery.cs`：`apiKeyQuotaUsages` 根字段；取键与配额两段
+  前缀按参照；`GidValue.Parse` 先于取键。
+- `src/AxonHub.Api/Program.cs`：`ApiKeyQuotaService` 同时注册为
+  `IApiKeyQuotaChecker` 与 `IApiKeyProfileQuotaReader`。
+
+测试（15 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/ApiKeyQuotaTests.cs` | +8（3 Fact + 1 Theory / 5 InlineData） | ProfileQuotaUsages 的 profile 顺序与逐窗口聚合（all_time 与 1 分钟窗口）/ 空串、`{}`、null 与空 profiles / 窗口错误传播 / nil quota 的零值结果 |
+| `tests/AxonHub.Api.Tests/AdminApiKeyQuotaUsageEndpointTests.cs` | 7（Fact） | 前端形状（quota / window / usage、Decimal 原样、窗口端点）/ past_duration 独立窗口 / 空 profiles 的 `[]` / 缺失键的取键前缀 / 非法 GID 先于取键 / 隐私拒绝 `permission denied` / 窗口错误的配额前缀 |
+
+静态计数：`AxonHub.Api.Tests` 由 5788 增至 5803（+15），`AxonHub.Persistence.Tests` 359、
+`AxonHub.Grains.Tests` 1746、`AxonHub.Llm.Tests` 1512 不变，四项目合计由 9405 增至
+9420。**按项目规则未运行 lint / build / test。**
+
+差异：C248（accepted）：profiles 损坏列的解码位置与错误前缀（参照在 ent 扫描阶段，
+端口在配额服务）；C176 item (6) 的 apiKeyQuotaUsages 缺口关闭。时区读取逐请求（C186）
+与 int 截断（C190）沿用既有登记。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|

@@ -536,6 +536,20 @@ same-origin 比较的 URI 规范化差异登记为 C245（accepted）；零启�
 singleflight 崩溃进程，端口折叠为有界 502 凭据错误，登记为 C246（accepted）；多 key
 `apiKeyStrategy` 分派未移植，登记为 C247（gap），端口保持基线 sticky / random。
 
+§161 追加 15 个用例（`AxonHub.Api.Tests` 15：`ApiKeyQuotaTests` 8、
+`AdminApiKeyQuotaUsageEndpointTests` 7），同样按项目规则未运行 lint / build / test；
+§161 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5803、
+`AxonHub.Llm.Tests` 1512、`AxonHub.Persistence.Tests` 359，四项目合计 9420，下一次全量
+运行应以该数字复核。该切片为冻结基线行为（`internal/server/gql/axonhub.graphql:1116`、
+`axonhub.resolvers.go:952-981`、`internal/server/biz/quota.go:129-155,157-191`）：
+`apiKeyQuotaUsages` 查询经 APIKey 查询隐私加载密钥（缺失或被过滤 → `failed to get api key: %w`），
+再让配额服务为每个携带 quota 的 profile 输出一项（`failed to get api key quota usage: %w`），
+窗口与用量逐 profile 用 `quotaWindow(UTCNow, period, TimeLocation)` 与系统旁路的
+`requestCount` / `usageAgg(needTokens=true, needCost=true)` 计算；空或 null profiles 输出空列表，
+int64 计数按 C190 截断，隐私拒绝由 presenter 折叠为 `permission denied` / FORBIDDEN。
+profiles 损坏列的 decode 位置差异（ent 扫描 vs 配额服务）登记为 C248（accepted）；
+C176 item (6) 的 apiKeyQuotaUsages 缺口随之关闭。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

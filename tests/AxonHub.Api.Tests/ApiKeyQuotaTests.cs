@@ -378,6 +378,101 @@ public sealed class ApiKeyQuotaTests
         Assert.Equal(0m, GoFloatDecimal.FromFloat(double.NegativeInfinity));
     }
 
+    // ------------------------------------------------------------------
+    // ProfileQuotaUsages / GetQuota (biz/quota.go:129-191)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task ProfileQuotaUsagesReturnsQuotaCarryingProfilesInOrder()
+    {
+        var logs = new InMemoryUsageLogStore();
+        logs.Rows.Add(Log(2, Now.AddMinutes(-5), totalTokens: 10, totalCost: 0.5));
+        logs.Rows.Add(Log(2, Now.AddMinutes(-4), totalTokens: 20, totalCost: 0.25));
+        logs.Rows.Add(Log(2, Now.AddSeconds(-30), totalTokens: 5, totalCost: 0.125));
+        var service = Service(logs, Now);
+
+        var usages = await service.ProfileQuotaUsagesAsync(new ApiKeyRecord
+        {
+            Id = 2,
+            Profiles = """
+                {"activeProfile":"paid","profiles":[
+                  {"name":"paid","quota":{"requests":10,"totalTokens":100,"cost":"9","period":{"type":"all_time"}}},
+                  {"name":"free"},
+                  {"name":"trial","quota":{"requests":1,"period":{"type":"past_duration","pastDuration":{"value":1,"unit":"minute"}}}}
+                ]}
+                """,
+        });
+
+        Assert.Equal(2, usages.Count);
+
+        Assert.Equal("paid", usages[0].ProfileName);
+        Assert.Equal("all_time", usages[0].Quota.Period.Type);
+        Assert.Null(usages[0].Window.Start);
+        Assert.Equal(Now.UtcDateTime, usages[0].Window.End);
+        Assert.True(usages[0].Window.EndInclusive);
+        Assert.Equal(3, usages[0].Usage.RequestCount);
+        Assert.Equal(35, usages[0].Usage.TotalTokens);
+        Assert.Equal(0.875m, usages[0].Usage.TotalCost);
+
+        // The past-duration window excludes the two older rows.
+        Assert.Equal("trial", usages[1].ProfileName);
+        Assert.Equal(new DateTime(2026, 5, 1, 11, 59, 0, DateTimeKind.Utc), usages[1].Window.Start);
+        Assert.Equal(1, usages[1].Usage.RequestCount);
+        Assert.Equal(5, usages[1].Usage.TotalTokens);
+        Assert.Equal(0.125m, usages[1].Usage.TotalCost);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("{}")]
+    [InlineData("""{"profiles":null}""")]
+    [InlineData("""{"profiles":[]}""")]
+    public async Task ProfileQuotaUsagesWithoutProfilesIsEmpty(string? json)
+    {
+        var service = Service(new InMemoryUsageLogStore(), Now);
+
+        var usages = await service.ProfileQuotaUsagesAsync(new ApiKeyRecord
+        {
+            Id = 2,
+            Profiles = json,
+        });
+
+        Assert.Empty(usages);
+    }
+
+    [Fact]
+    public async Task ProfileQuotaUsagesPropagatesTheWindowError()
+    {
+        var service = Service(new InMemoryUsageLogStore(), Now);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ProfileQuotaUsagesAsync(new ApiKeyRecord
+            {
+                Id = 2,
+                Profiles = """
+                    {"profiles":[{"name":"p","quota":{"period":{"type":"weekly"}}}]}
+                    """,
+            }));
+
+        Assert.Equal("unknown period.type: weekly", error.Message);
+    }
+
+    [Fact]
+    public async Task GetQuotaWithANilQuotaReturnsTheZeroResult()
+    {
+        var service = Service(new InMemoryUsageLogStore(), Now);
+
+        var result = await service.GetQuotaAsync(2, null);
+
+        Assert.Null(result.Window.Start);
+        Assert.Null(result.Window.End);
+        Assert.False(result.Window.EndInclusive);
+        Assert.Equal(0, result.Usage.RequestCount);
+        Assert.Equal(0, result.Usage.TotalTokens);
+        Assert.Equal(0m, result.Usage.TotalCost);
+    }
+
     // -- Helpers -------------------------------------------------------------
 
     private static ApiKeyQuotaService Service(InMemoryUsageLogStore logs, DateTimeOffset now)

@@ -8,6 +8,7 @@ using HotChocolate.Text.Json;
 using HotChocolate.Types;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Management;
+using AxonHub.Api.Orchestration;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.GraphQL;
@@ -431,6 +432,44 @@ public sealed class ApiKeyQuotaCalendarDurationType
     public ApiKeyQuotaCalendarDurationUnitValue Unit { get; init; }
 }
 
+/// <summary>Port of APIKeyQuotaUsage (axonhub.graphql:623-627).</summary>
+[GraphQLName("APIKeyQuotaUsage")]
+public sealed class ApiKeyQuotaUsageType
+{
+    // int(u.Usage.RequestCount) / int(u.Usage.TotalTokens) in the reference:
+    // 64-bit on the host, 32-bit on the GraphQL wire (C190).
+    public int RequestCount { get; init; }
+
+    public int TotalTokens { get; init; }
+
+    [GraphQLType(typeof(GoDecimalType))]
+    public decimal TotalCost { get; init; }
+}
+
+/// <summary>Port of APIKeyQuotaWindow (axonhub.graphql:629-632).</summary>
+[GraphQLName("APIKeyQuotaWindow")]
+public sealed class ApiKeyQuotaWindowType
+{
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? Start { get; init; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? End { get; init; }
+}
+
+/// <summary>Port of APIKeyProfileQuotaUsage (axonhub.graphql:634-639).</summary>
+[GraphQLName("APIKeyProfileQuotaUsage")]
+public sealed class ApiKeyProfileQuotaUsageType
+{
+    public string ProfileName { get; init; } = string.Empty;
+
+    public ApiKeyQuotaType Quota { get; init; } = new();
+
+    public ApiKeyQuotaWindowType Window { get; init; } = new();
+
+    public ApiKeyQuotaUsageType Usage { get; init; } = new();
+}
+
 /// <summary>Port of the <c>APIKey</c> object type (ent.graphql:2-75).</summary>
 [GraphQLName("APIKey")]
 public sealed class ApiKeyType : INode
@@ -609,6 +648,29 @@ public static class ApiKeyMapping
                 {
                     Unit = ToGraphQLCalendarDurationUnit(quota.Period.CalendarDuration.Unit),
                 },
+        },
+    };
+
+    /// <summary>
+    /// Port of queryResolver.APIKeyQuotaUsages' result projection
+    /// (axonhub.resolvers.go:952-981). The reference folds the int64 counters
+    /// into a host-width int and marshals them through gqlgen's Int writer; the
+    /// port keeps the C190 checked truncation at the GraphQL boundary.
+    /// </summary>
+    public static ApiKeyProfileQuotaUsageType ToGraphQL(ProfileQuotaUsage usage) => new()
+    {
+        ProfileName = usage.ProfileName,
+        Quota = ToGraphQL(usage.Quota),
+        Window = new ApiKeyQuotaWindowType
+        {
+            Start = usage.Window.Start,
+            End = usage.Window.End,
+        },
+        Usage = new ApiKeyQuotaUsageType
+        {
+            RequestCount = checked((int)usage.Usage.RequestCount),
+            TotalTokens = checked((int)usage.Usage.TotalTokens),
+            TotalCost = usage.Usage.TotalCost,
         },
     };
 
