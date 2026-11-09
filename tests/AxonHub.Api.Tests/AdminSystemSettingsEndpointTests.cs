@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using AxonHub.Api.GraphQL;
+using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Security;
@@ -25,6 +26,7 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
     private readonly FakeProviderQuotaStatusStore _quotaStatuses = new();
     private readonly FakeChannelStore _quotaChannels = new();
     private readonly ProviderQuotaSettingsCache _quotaCache = new();
+    private readonly RecordingAutoBackupRescheduleSignal _reschedule = new();
     private readonly AdminGraphqlGateServices _gate = new();
 
     private WebApplication _app = null!;
@@ -52,6 +54,7 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IChannelStore>(_quotaChannels);
         builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaCheckerRegistry>();
         builder.Services.AddSingleton<ProviderQuotaService>();
+        builder.Services.AddSingleton<IAutoBackupRescheduleSignal>(_reschedule);
 
         _app = builder.Build();
         _app.MapAdminGraphql();
@@ -499,6 +502,560 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
             "provider quota reset is not supported for provider \"claudecode\"",
             error.GetProperty("message").GetString());
     }
+
+    // ------------------------------------------------- general / channel / brand
+
+    [Fact]
+    public async Task GeneralSettingsQueryReturnsDefaultsAndStoredValues()
+    {
+        var defaults = await QueryAsync(
+            "{ systemGeneralSettings { currencyCode timezone } }");
+        var settings = defaults.GetProperty("systemGeneralSettings");
+        Assert.Equal("USD", settings.GetProperty("currencyCode").GetString());
+        Assert.Equal("UTC", settings.GetProperty("timezone").GetString());
+
+        _store.Add(SystemConfigBackupKeys.GeneralSettings, """{"currency_code":"CNY"}""");
+
+        var stored = await QueryAsync(
+            "{ systemGeneralSettings { currencyCode timezone } }");
+        settings = stored.GetProperty("systemGeneralSettings");
+        // The missing timezone decodes to "" and is normalized back to UTC.
+        Assert.Equal("CNY", settings.GetProperty("currencyCode").GetString());
+        Assert.Equal("UTC", settings.GetProperty("timezone").GetString());
+    }
+
+    [Fact]
+    public async Task GeneralSettingsQueryNormalizesEmptyStrings()
+    {
+        _store.Add(
+            SystemConfigBackupKeys.GeneralSettings,
+            """{"currency_code":"","timezone":""}""");
+
+        var data = await QueryAsync(
+            "{ systemGeneralSettings { currencyCode timezone } }");
+
+        var settings = data.GetProperty("systemGeneralSettings");
+        Assert.Equal("USD", settings.GetProperty("currencyCode").GetString());
+        Assert.Equal("UTC", settings.GetProperty("timezone").GetString());
+    }
+
+    [Fact]
+    public async Task GeneralSettingsQuerySurfacesLookupAndUnmarshalErrors()
+    {
+        _store.GetFailuresByKey[SystemConfigBackupKeys.GeneralSettings] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync("{ systemGeneralSettings { currencyCode } }");
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to get general settings: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        _store.GetFailuresByKey.Clear();
+        _store.Rows.Clear();
+        _store.Add(SystemConfigBackupKeys.GeneralSettings, "not json");
+
+        response = await PostAsync("{ systemGeneralSettings { currencyCode } }");
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.StartsWith(
+            "failed to unmarshal general settings: ",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateSystemGeneralSettingsWritesTheDocumentAndReschedulesBackup()
+    {
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateSystemGeneralSettings(input: {
+                currencyCode: "CNY"
+                timezone: "Asia/Shanghai"
+              })
+            }
+            """);
+
+        Assert.True(data.GetProperty("updateSystemGeneralSettings").GetBoolean());
+        var row = Assert.Single(_store.Rows);
+        Assert.Equal(
+            """{"currency_code":"CNY","timezone":"Asia/Shanghai"}""",
+            row.Value);
+        Assert.Equal(1, _reschedule.Calls);
+
+        // Absent input strings decode to the Go zero value and are stored as "".
+        await QueryAsync(
+            """
+            mutation {
+              updateSystemGeneralSettings(input: { timezone: "UTC" })
+            }
+            """);
+
+        Assert.Equal("""{"currency_code":"","timezone":"UTC"}""", row.Value);
+        Assert.Equal(2, _reschedule.Calls);
+    }
+
+    [Fact]
+    public async Task ChannelSettingsQueryReturnsTheReferenceDefaults()
+    {
+        var data = await QueryAsync(
+            """
+            {
+              systemChannelSettings {
+                probe { enabled frequency }
+                autoSync { frequency }
+                testSystemPrompt
+                testUserPrompt
+              }
+            }
+            """);
+
+        var settings = data.GetProperty("systemChannelSettings");
+        Assert.True(settings.GetProperty("probe").GetProperty("enabled").GetBoolean());
+        Assert.Equal(
+            "FIVE_MINUTES",
+            settings.GetProperty("probe").GetProperty("frequency").GetString());
+        Assert.Equal(
+            "ONE_HOUR",
+            settings.GetProperty("autoSync").GetProperty("frequency").GetString());
+        Assert.Equal(
+            "You are a helpful assistant.",
+            settings.GetProperty("testSystemPrompt").GetString());
+        Assert.Equal(
+            "Hello world, I'm AxonHub.\nPlease tell me who you are?",
+            settings.GetProperty("testUserPrompt").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelSettingsQueryNormalizesStoredValues()
+    {
+        _store.Add(
+            SystemConfigBackupKeys.ChannelSettings,
+            """
+            {"probe":{"enabled":true,"frequency":"7x"},
+             "auto_sync":{"frequency":"2h"},
+             "test_system_prompt":"  ",
+             "test_user_prompt":"keep me"}
+            """);
+
+        var data = await QueryAsync(
+            """
+            {
+              systemChannelSettings {
+                probe { enabled frequency }
+                autoSync { frequency }
+                testSystemPrompt
+                testUserPrompt
+              }
+            }
+            """);
+
+        var settings = data.GetProperty("systemChannelSettings");
+        // An unknown stored probe interval renders as ONE_MINUTE and is not
+        // rewritten by normalization.
+        Assert.Equal(
+            "ONE_MINUTE",
+            settings.GetProperty("probe").GetProperty("frequency").GetString());
+        // AutoSyncFrequency.UnmarshalJSON collapses every unknown value to 1h.
+        Assert.Equal(
+            "ONE_HOUR",
+            settings.GetProperty("autoSync").GetProperty("frequency").GetString());
+        Assert.Equal(
+            "You are a helpful assistant.",
+            settings.GetProperty("testSystemPrompt").GetString());
+        Assert.Equal("keep me", settings.GetProperty("testUserPrompt").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelSettingsQuerySurfacesUnmarshalErrors()
+    {
+        _store.Add(SystemConfigBackupKeys.ChannelSettings, "not json");
+
+        var response = await PostAsync(
+            "{ systemChannelSettings { testSystemPrompt } }");
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.StartsWith(
+            "failed to get channel setting: failed to unmarshal channel setting: ",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateSystemChannelSettingsCreatesTheDefaultDocumentWithThePatch()
+    {
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateSystemChannelSettings(input: {
+                probe: { enabled: false, frequency: THIRTY_MINUTES }
+                testSystemPrompt: "Custom"
+              })
+            }
+            """);
+
+        Assert.True(data.GetProperty("updateSystemChannelSettings").GetBoolean());
+        var row = Assert.Single(_store.Rows);
+        Assert.Equal(
+            """{"probe":{"enabled":false,"frequency":"30m"},"auto_sync":{"frequency":"1h"},"test_system_prompt":"Custom","test_user_prompt":"Hello world, I'm AxonHub.\nPlease tell me who you are?"}""",
+            row.Value);
+        Assert.True(row.CreatedAt > new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        Assert.True(row.UpdatedAt > new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task UpdateSystemChannelSettingsAppliesAPartialPatch()
+    {
+        var row = _store.Add(
+            SystemConfigBackupKeys.ChannelSettings,
+            """{"probe":{"enabled":false,"frequency":"30m"},"auto_sync":{"frequency":"1h"},"test_system_prompt":"sys","test_user_prompt":"usr"}""");
+
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateSystemChannelSettings(input: {
+                autoSync: { frequency: SIX_HOURS }
+              })
+            }
+            """);
+
+        Assert.True(data.GetProperty("updateSystemChannelSettings").GetBoolean());
+        Assert.Equal(
+            """{"probe":{"enabled":false,"frequency":"30m"},"auto_sync":{"frequency":"6h"},"test_system_prompt":"sys","test_user_prompt":"usr"}""",
+            row.Value);
+        Assert.Equal(1, _store.UpdateValueIfUnchangedCalls);
+    }
+
+    [Fact]
+    public async Task UpdateSystemChannelSettingsRestoresDefaultsForBlankPrompts()
+    {
+        var row = _store.Add(
+            SystemConfigBackupKeys.ChannelSettings,
+            """{"probe":{"enabled":false,"frequency":"30m"},"auto_sync":{"frequency":"1h"},"test_system_prompt":"sys","test_user_prompt":"usr"}""");
+
+        await QueryAsync(
+            """
+            mutation {
+              updateSystemChannelSettings(input: { testSystemPrompt: "   " })
+            }
+            """);
+
+        Assert.Equal(
+            """{"probe":{"enabled":false,"frequency":"30m"},"auto_sync":{"frequency":"1h"},"test_system_prompt":"You are a helpful assistant.","test_user_prompt":"usr"}""",
+            row.Value);
+    }
+
+    [Fact]
+    public async Task UpdateSystemChannelSettingsValidatesPromptRuneLimits()
+    {
+        var oversized = new string('a', 4097);
+
+        var response = await PostAsync(
+            $$"""
+            mutation {
+              updateSystemChannelSettings(input: { testSystemPrompt: "{{oversized}}" })
+            }
+            """);
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update channel setting: "
+            + "test system prompt must not exceed 4096 characters",
+            error.GetProperty("message").GetString());
+        // Validation runs before the insert, so nothing is persisted.
+        Assert.Empty(_store.Rows);
+    }
+
+    [Fact]
+    public async Task UpdateSystemChannelSettingsRejectsUnknownEnumValues()
+    {
+        // Both implementations reject an unknown ProbeFrequency before the
+        // resolver runs; only the validation message differs (C232).
+        var response = await PostAsync(
+            """
+            mutation {
+              updateSystemChannelSettings(input: {
+                probe: { enabled: true, frequency: NOPE }
+              })
+            }
+            """);
+
+        Assert.True(response.TryGetProperty("errors", out var errors));
+        Assert.NotEmpty(errors.EnumerateArray());
+        Assert.Empty(_store.Rows);
+    }
+
+    [Fact]
+    public async Task UpdateSystemChannelSettingsRetriesTheCompareAndSet()
+    {
+        var row = _store.Add(
+            SystemConfigBackupKeys.ChannelSettings,
+            DefaultChannelSettingsJson);
+        _store.UpdateValueIfUnchangedOverride = static (_, _) => 0;
+
+        var response = await PostAsync(
+            """
+            mutation {
+              updateSystemChannelSettings(input: {
+                autoSync: { frequency: SIX_HOURS }
+              })
+            }
+            """);
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update channel setting: "
+            + "failed to update channel setting after 5 concurrent attempts",
+            error.GetProperty("message").GetString());
+        Assert.Equal(5, _store.UpdateValueIfUnchangedCalls);
+        Assert.Equal(DefaultChannelSettingsJson, row.Value);
+    }
+
+    [Fact]
+    public async Task UpdateSystemChannelSettingsReappliesThePatchAfterAConcurrentWrite()
+    {
+        const string competitor =
+            """{"probe":{"enabled":false,"frequency":"1m"},"auto_sync":{"frequency":"1h"},"test_system_prompt":"theirs","test_user_prompt":"theirs"}""";
+        var row = _store.Add(
+            SystemConfigBackupKeys.ChannelSettings,
+            DefaultChannelSettingsJson);
+        var first = true;
+        _store.UpdateValueIfUnchangedOverride = (current, value) =>
+        {
+            if (first)
+            {
+                // The competing writer commits first and invalidates the CAS.
+                first = false;
+                current.Value = competitor;
+                return 0;
+            }
+
+            current.Value = value;
+            current.UpdatedAt = DateTime.UtcNow;
+            return 1;
+        };
+
+        await QueryAsync(
+            """
+            mutation {
+              updateSystemChannelSettings(input: {
+                autoSync: { frequency: ONE_DAY }
+              })
+            }
+            """);
+
+        // The retry re-read the competitor's document, then applied the patch
+        // on top of it.
+        Assert.Equal(
+            """{"probe":{"enabled":false,"frequency":"1m"},"auto_sync":{"frequency":"1d"},"test_system_prompt":"theirs","test_user_prompt":"theirs"}""",
+            row.Value);
+        Assert.Equal(2, _store.UpdateValueIfUnchangedCalls);
+    }
+
+    [Fact]
+    public async Task UpdateSystemChannelSettingsSkipsTheWriteWhenNothingChanges()
+    {
+        var row = _store.Add(
+            SystemConfigBackupKeys.ChannelSettings,
+            DefaultChannelSettingsJson);
+
+        var data = await QueryAsync(
+            "mutation { updateSystemChannelSettings(input: {}) }");
+
+        Assert.True(data.GetProperty("updateSystemChannelSettings").GetBoolean());
+        Assert.Equal(0, _store.UpdateValueIfUnchangedCalls);
+        Assert.Equal(DefaultChannelSettingsJson, row.Value);
+    }
+
+    [Fact]
+    public async Task BrandSettingsQueryReadsEachKeyAndDefaultsToEmpty()
+    {
+        var defaults = await QueryAsync(
+            "{ brandSettings { brandName brandLogo title } }");
+        var settings = defaults.GetProperty("brandSettings");
+        Assert.Equal(string.Empty, settings.GetProperty("brandName").GetString());
+        Assert.Equal(string.Empty, settings.GetProperty("brandLogo").GetString());
+        Assert.Equal(string.Empty, settings.GetProperty("title").GetString());
+
+        _store.Add(SystemConfigBackupKeys.BrandName, "AxonHub");
+        _store.Add(SystemConfigBackupKeys.Title, "AxonHub Admin");
+
+        var stored = await QueryAsync(
+            "{ brandSettings { brandName brandLogo title } }");
+        settings = stored.GetProperty("brandSettings");
+        Assert.Equal("AxonHub", settings.GetProperty("brandName").GetString());
+        Assert.Equal(string.Empty, settings.GetProperty("brandLogo").GetString());
+        Assert.Equal("AxonHub Admin", settings.GetProperty("title").GetString());
+    }
+
+    [Fact]
+    public async Task BrandSettingsQuerySurfacesEachReadPrefix()
+    {
+        _store.GetFailuresByKey[SystemConfigBackupKeys.BrandLogo] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync("{ brandSettings { brandName } }");
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to get brand logo: failed to get brand logo: boom",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateBrandSettingsWritesOnlyProvidedFields()
+    {
+        var name = _store.Add(SystemConfigBackupKeys.BrandName, "AxonHub");
+        var logo = _store.Add(SystemConfigBackupKeys.BrandLogo, "data:image/png;base64,AA==");
+
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateBrandSettings(input: { title: "AxonHub Admin" })
+            }
+            """);
+
+        Assert.True(data.GetProperty("updateBrandSettings").GetBoolean());
+        Assert.Equal("AxonHub", name.Value);
+        Assert.Equal("data:image/png;base64,AA==", logo.Value);
+        var title = Assert.Single(
+            _store.Rows, row => row.Key == SystemConfigBackupKeys.Title);
+        Assert.Equal("AxonHub Admin", title.Value);
+    }
+
+    [Fact]
+    public async Task UpdateBrandSettingsSurfacesTheWritePrefix()
+    {
+        _store.SetFailuresByKey[SystemConfigBackupKeys.BrandName] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync(
+            """
+            mutation {
+              updateBrandSettings(input: { brandName: "AxonHub" })
+            }
+            """);
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update brand name setting: failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task PassThroughFlagsReadDefaultsAndOnlyTheExactTrueString()
+    {
+        var defaults = await QueryAsync(
+            """
+            {
+              userAgentPassThroughSettings { enabled }
+              passThroughSettings { enabled }
+              usageCostInjectionSettings { enabled }
+            }
+            """);
+        Assert.False(defaults.GetProperty("userAgentPassThroughSettings")
+            .GetProperty("enabled").GetBoolean());
+        Assert.False(defaults.GetProperty("passThroughSettings")
+            .GetProperty("enabled").GetBoolean());
+        Assert.False(defaults.GetProperty("usageCostInjectionSettings")
+            .GetProperty("enabled").GetBoolean());
+
+        _store.Add(SystemConfigBackupKeys.UserAgentPassThrough, "true");
+        _store.Add(SystemConfigBackupKeys.PassThrough, "TRUE");
+        _store.Add(SystemConfigBackupKeys.InjectUsageCost, " true ");
+
+        var stored = await QueryAsync(
+            """
+            {
+              userAgentPassThroughSettings { enabled }
+              passThroughSettings { enabled }
+              usageCostInjectionSettings { enabled }
+            }
+            """);
+        Assert.True(stored.GetProperty("userAgentPassThroughSettings")
+            .GetProperty("enabled").GetBoolean());
+        // The reference compares the stored string with "true" exactly.
+        Assert.False(stored.GetProperty("passThroughSettings")
+            .GetProperty("enabled").GetBoolean());
+        Assert.False(stored.GetProperty("usageCostInjectionSettings")
+            .GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public async Task PassThroughFlagMutationsStoreTheExactStrings()
+    {
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateUserAgentPassThroughSettings(input: { enabled: true })
+              updatePassThroughSettings(input: { enabled: true })
+              updateUsageCostInjectionSettings(input: { enabled: true })
+            }
+            """);
+
+        Assert.True(data.GetProperty("updateUserAgentPassThroughSettings").GetBoolean());
+        Assert.True(data.GetProperty("updatePassThroughSettings").GetBoolean());
+        Assert.True(data.GetProperty("updateUsageCostInjectionSettings").GetBoolean());
+        Assert.Equal(
+            "true",
+            Assert.Single(_store.Rows,
+                row => row.Key == SystemConfigBackupKeys.UserAgentPassThrough).Value);
+        Assert.Equal(
+            "true",
+            Assert.Single(_store.Rows,
+                row => row.Key == SystemConfigBackupKeys.PassThrough).Value);
+        Assert.Equal(
+            "true",
+            Assert.Single(_store.Rows,
+                row => row.Key == SystemConfigBackupKeys.InjectUsageCost).Value);
+
+        await QueryAsync(
+            """
+            mutation {
+              updatePassThroughSettings(input: { enabled: false })
+            }
+            """);
+
+        Assert.Equal(
+            "false",
+            Assert.Single(_store.Rows,
+                row => row.Key == SystemConfigBackupKeys.PassThrough).Value);
+    }
+
+    [Fact]
+    public async Task PassThroughFlagErrorsCarryTheReferencePrefixes()
+    {
+        _store.GetFailuresByKey[SystemConfigBackupKeys.InjectUsageCost] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync("{ usageCostInjectionSettings { enabled } }");
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to get usage cost injection settings: "
+            + "failed to get inject usage cost: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        _store.GetFailuresByKey.Clear();
+        _store.SetFailuresByKey[SystemConfigBackupKeys.UserAgentPassThrough] =
+            new InvalidOperationException("boom");
+
+        response = await PostAsync(
+            """
+            mutation {
+              updateUserAgentPassThroughSettings(input: { enabled: false })
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update user-agent pass-through settings: "
+            + "failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+    }
+
+    private const string DefaultChannelSettingsJson =
+        """{"probe":{"enabled":true,"frequency":"5m"},"auto_sync":{"frequency":"1h"},"test_system_prompt":"You are a helpful assistant.","test_user_prompt":"Hello world, I'm AxonHub.\nPlease tell me who you are?"}""";
 
     private static bool ProviderEntry(JsonElement[] providers, string providerType)
         => providers.Single(

@@ -129,6 +129,166 @@ public sealed class AdminQuery
     }
 
     /// <summary>
+    /// Port of queryResolver.BrandSettings (system.resolvers.go:491-512): three
+    /// sequential reads, each wrapped with its own field prefix.
+    /// </summary>
+    [GraphQLName("brandSettings")]
+    public async Task<BrandSettingsType> BrandSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        string brandName;
+        try
+        {
+            brandName = await settings.GetBrandNameAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get brand name: " + ex.Message,
+                ex);
+        }
+
+        string brandLogo;
+        try
+        {
+            brandLogo = await settings.GetBrandLogoAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get brand logo: " + ex.Message,
+                ex);
+        }
+
+        string title;
+        try
+        {
+            title = await settings.GetTitleAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("failed to get title: " + ex.Message, ex);
+        }
+
+        return SystemSettingsMapping.ToGraphQL(new BrandSettings
+        {
+            BrandName = brandName,
+            BrandLogo = brandLogo,
+            Title = title,
+        });
+    }
+
+    /// <summary>
+    /// Port of queryResolver.SystemChannelSettings (system.resolvers.go:609-617).
+    /// </summary>
+    [GraphQLName("systemChannelSettings")]
+    public async Task<SystemChannelSettingsType> SystemChannelSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return SystemSettingsMapping.ToGraphQL(
+                await settings.GetChannelSettingsAsync(cancellationToken)
+                    .ConfigureAwait(false));
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get channel setting: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.SystemGeneralSettings (system.resolvers.go:619-622):
+    /// the resolver returns the service result without another wrapper.
+    /// </summary>
+    [GraphQLName("systemGeneralSettings")]
+    public async Task<SystemGeneralSettingsType> SystemGeneralSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetGeneralSettingsAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.UserAgentPassThroughSettings
+    /// (system.resolvers.go:654-664).
+    /// </summary>
+    [GraphQLName("userAgentPassThroughSettings")]
+    public async Task<UserAgentPassThroughSettingsType> UserAgentPassThroughSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return new UserAgentPassThroughSettingsType
+            {
+                Enabled = await settings.GetUserAgentPassThroughAsync(cancellationToken)
+                    .ConfigureAwait(false),
+            };
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get user-agent pass-through settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.PassThroughSettings (system.resolvers.go:666-676).
+    /// </summary>
+    [GraphQLName("passThroughSettings")]
+    public async Task<PassThroughSettingsType> PassThroughSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return new PassThroughSettingsType
+            {
+                Enabled = await settings.GetPassThroughAsync(cancellationToken)
+                    .ConfigureAwait(false),
+            };
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get pass-through settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.UsageCostInjectionSettings
+    /// (system.resolvers.go:678-688).
+    /// </summary>
+    [GraphQLName("usageCostInjectionSettings")]
+    public async Task<UsageCostInjectionSettingsType> UsageCostInjectionSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return new UsageCostInjectionSettingsType
+            {
+                Enabled = await settings.GetInjectUsageCostEnabledAsync(cancellationToken)
+                    .ConfigureAwait(false),
+            };
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get usage cost injection settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
     /// Port of queryResolver.QuotaRoutingSettings (system.resolvers.go:705-708):
     /// the strict read, so a malformed or invalid stored mode is a field error.
     /// </summary>

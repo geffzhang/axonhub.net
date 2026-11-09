@@ -69,6 +69,74 @@ public interface ISystemSettingsAdminService
     Task UpdateAutoBackupLastRunAsync(
         string lastError,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.GeneralSettings (system.go:1544-1569).</summary>
+    Task<SystemGeneralSettings> GetGeneralSettingsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetGeneralSettings (system.go:1571-1588).</summary>
+    Task SetGeneralSettingsAsync(
+        SystemGeneralSettings settings,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.ChannelSetting (system.go:1319-1338).</summary>
+    Task<SystemChannelSettings> GetChannelSettingsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.UpdateChannelSetting (system.go:1385-1462): the
+    /// five-attempt compare-and-set loop that keeps concurrent patches.
+    /// </summary>
+    Task UpdateChannelSettingsAsync(
+        SystemChannelSettingsPatch patch,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.BrandName (system.go:877-892).</summary>
+    Task<string> GetBrandNameAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.BrandLogo (system.go:899-914).</summary>
+    Task<string> GetBrandLogoAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.Title (system.go:921-936).</summary>
+    Task<string> GetTitleAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetBrandName (system.go:894-897).</summary>
+    Task SetBrandNameAsync(string brandName, CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetBrandLogo (system.go:916-919).</summary>
+    Task SetBrandLogoAsync(string brandLogo, CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetTitle (system.go:938-941).</summary>
+    Task SetTitleAsync(string title, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.UserAgentPassThrough (system.go:1741-1754): a
+    /// missing row is false and only the exact string "true" enables the flag.
+    /// </summary>
+    Task<bool> GetUserAgentPassThroughAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetUserAgentPassThrough (system.go:1756-1764).</summary>
+    Task SetUserAgentPassThroughAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.PassThrough (system.go:1766-1781).</summary>
+    Task<bool> GetPassThroughAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.SetPassThrough (system.go:1783-1791).</summary>
+    Task SetPassThroughAsync(bool enabled, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.InjectUsageCostEnabled (system.go:1793-1806).
+    /// </summary>
+    Task<bool> GetInjectUsageCostEnabledAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.SetInjectUsageCostEnabled (system.go:1808-1817).
+    /// </summary>
+    Task SetInjectUsageCostEnabledAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="ISystemSettingsAdminService"/>
@@ -79,6 +147,9 @@ public sealed class SystemSettingsAdminService(ISystemStore systems) : ISystemSe
 
     /// <summary>biz.SystemKeyDefaultDataStorage (system.go:80).</summary>
     public const string DefaultDataStorageIdKey = "default_data_storage_id";
+
+    /// <summary>maxChannelSettingUpdateAttempts (system.go:37).</summary>
+    public const int MaxChannelSettingUpdateAttempts = 5;
 
     public async Task<bool> IsInitializedAsync(CancellationToken cancellationToken = default)
     {
@@ -471,6 +542,375 @@ public sealed class SystemSettingsAdminService(ISystemStore systems) : ISystemSe
         };
 
         await SetAutoBackupSettingsAsync(updated, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<SystemGeneralSettings> GetGeneralSettingsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                SystemConfigBackupKeys.GeneralSettings,
+                "failed to get general settings",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: the defaults are returned as-is.
+            return SystemSettingsDefaults.General;
+        }
+
+        SystemGeneralSettings settings;
+        try
+        {
+            settings = SystemSettingsCodec.DeserializeGeneral(row.Value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal general settings: " + ex.Message,
+                ex);
+        }
+
+        // GeneralSettings normalizes only the two empty strings.
+        if (settings.CurrencyCode.Length == 0)
+        {
+            settings = settings with
+            {
+                CurrencyCode = SystemSettingsDefaults.General.CurrencyCode,
+            };
+        }
+
+        if (settings.Timezone.Length == 0)
+        {
+            settings = settings with { Timezone = SystemSettingsDefaults.General.Timezone };
+        }
+
+        return settings;
+    }
+
+    public async Task SetGeneralSettingsAsync(
+        SystemGeneralSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        string value;
+        try
+        {
+            value = SystemSettingsCodec.SerializeGeneral(settings);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal general settings: " + ex.Message,
+                ex);
+        }
+
+        try
+        {
+            await SetValueAsync(
+                    SystemConfigBackupKeys.GeneralSettings,
+                    value,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to set general settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task<SystemChannelSettings> GetChannelSettingsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                SystemConfigBackupKeys.ChannelSettings,
+                "failed to get channel setting",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: ChannelSetting returns the default as-is.
+            return SystemSettingsDefaults.Channel;
+        }
+
+        try
+        {
+            return SystemSettingsCodec.Normalize(
+                SystemSettingsCodec.DeserializeChannel(row.Value));
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal channel setting: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task UpdateChannelSettingsAsync(
+        SystemChannelSettingsPatch patch,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(patch);
+
+        for (var attempt = 0; attempt < MaxChannelSettingUpdateAttempts; attempt++)
+        {
+            SystemRecord? current;
+            try
+            {
+                // The loop queries ent directly, so a lookup error is not
+                // wrapped by getSystemValue.
+                current = await systems
+                    .GetByKeyAsync(SystemConfigBackupKeys.ChannelSettings, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to get channel setting: " + ex.Message,
+                    ex);
+            }
+
+            if (current is null)
+            {
+                var created = SystemSettingsCodec.Normalize(
+                    SystemSettingsCodec.ApplyPatch(SystemSettingsDefaults.Channel, patch));
+                SystemSettingsCodec.Validate(created);
+
+                var createdJson = SerializeChannelSetting(created);
+
+                bool inserted;
+                try
+                {
+                    inserted = await systems.TryCreateAsync(
+                            new SystemRecord
+                            {
+                                Key = SystemConfigBackupKeys.ChannelSettings,
+                                Value = createdJson,
+                                CreatedAt = DateTime.UtcNow,
+                                UpdatedAt = DateTime.UtcNow,
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "failed to create channel setting: " + ex.Message,
+                        ex);
+                }
+
+                if (!inserted)
+                {
+                    // ent.IsConstraintError: a concurrent insert won; retry.
+                    continue;
+                }
+
+                return;
+            }
+
+            SystemChannelSettings setting;
+            try
+            {
+                setting = SystemSettingsCodec.DeserializeChannel(current.Value);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to unmarshal channel setting: " + ex.Message,
+                    ex);
+            }
+
+            setting = SystemSettingsCodec.Normalize(setting);
+            setting = SystemSettingsCodec.ApplyPatch(setting, patch);
+            setting = SystemSettingsCodec.Normalize(setting);
+            SystemSettingsCodec.Validate(setting);
+
+            var json = SerializeChannelSetting(setting);
+            if (string.Equals(json, current.Value, StringComparison.Ordinal))
+            {
+                // No write when normalization and the patch reproduce the row.
+                return;
+            }
+
+            int affected;
+            try
+            {
+                affected = await systems.UpdateValueIfUnchangedAsync(
+                        current.Id,
+                        current.UpdatedAt,
+                        current.Value,
+                        json,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to update channel setting: " + ex.Message,
+                    ex);
+            }
+
+            if (affected == 0)
+            {
+                continue;
+            }
+
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "failed to update channel setting after "
+            + MaxChannelSettingUpdateAttempts
+            + " concurrent attempts");
+    }
+
+    public Task<string> GetBrandNameAsync(CancellationToken cancellationToken = default)
+        => GetBrandValueAsync(
+            SystemConfigBackupKeys.BrandName,
+            "failed to get brand name",
+            cancellationToken);
+
+    public Task<string> GetBrandLogoAsync(CancellationToken cancellationToken = default)
+        => GetBrandValueAsync(
+            SystemConfigBackupKeys.BrandLogo,
+            "failed to get brand logo",
+            cancellationToken);
+
+    public Task<string> GetTitleAsync(CancellationToken cancellationToken = default)
+        => GetBrandValueAsync(
+            SystemConfigBackupKeys.Title,
+            "failed to get title",
+            cancellationToken);
+
+    public Task SetBrandNameAsync(
+        string brandName,
+        CancellationToken cancellationToken = default)
+        => SetValueAsync(SystemConfigBackupKeys.BrandName, brandName, cancellationToken);
+
+    public Task SetBrandLogoAsync(
+        string brandLogo,
+        CancellationToken cancellationToken = default)
+        => SetValueAsync(SystemConfigBackupKeys.BrandLogo, brandLogo, cancellationToken);
+
+    public Task SetTitleAsync(string title, CancellationToken cancellationToken = default)
+        => SetValueAsync(SystemConfigBackupKeys.Title, title, cancellationToken);
+
+    public async Task<bool> GetUserAgentPassThroughAsync(
+        CancellationToken cancellationToken = default)
+        => await GetFlagAsync(
+                SystemConfigBackupKeys.UserAgentPassThrough,
+                "failed to get user-agent pass-through",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    public Task SetUserAgentPassThroughAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+        => SetValueAsync(
+            SystemConfigBackupKeys.UserAgentPassThrough,
+            enabled ? "true" : "false",
+            cancellationToken);
+
+    public async Task<bool> GetPassThroughAsync(
+        CancellationToken cancellationToken = default)
+        => await GetFlagAsync(
+                SystemConfigBackupKeys.PassThrough,
+                "failed to get pass-through",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    public Task SetPassThroughAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+        => SetValueAsync(
+            SystemConfigBackupKeys.PassThrough,
+            enabled ? "true" : "false",
+            cancellationToken);
+
+    public async Task<bool> GetInjectUsageCostEnabledAsync(
+        CancellationToken cancellationToken = default)
+        => await GetFlagAsync(
+                SystemConfigBackupKeys.InjectUsageCost,
+                "failed to get inject usage cost",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    public Task SetInjectUsageCostEnabledAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+        => SetValueAsync(
+            SystemConfigBackupKeys.InjectUsageCost,
+            enabled ? "true" : "false",
+            cancellationToken);
+
+    private static string SerializeChannelSetting(SystemChannelSettings setting)
+    {
+        try
+        {
+            return SystemSettingsCodec.SerializeChannel(setting);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal channel setting: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of BrandName/BrandLogo/Title: the reference queries ent directly,
+    /// so the not-found row becomes "" without the getSystemValue wrapper.
+    /// </summary>
+    private async Task<string> GetBrandValueAsync(
+        string key,
+        string scope,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var row = await systems.GetByKeyAsync(key, cancellationToken)
+                .ConfigureAwait(false);
+            return row?.Value ?? string.Empty;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(scope + ": " + ex.Message, ex);
+        }
+    }
+
+    private async Task<bool> GetFlagAsync(
+        string key,
+        string scope,
+        CancellationToken cancellationToken)
+    {
+        var row = await GetValueAsync(key, scope, cancellationToken).ConfigureAwait(false);
+
+        // Missing means false; only the exact stored "true" enables the flag.
+        return row is not null && string.Equals(row.Value, "true", StringComparison.Ordinal);
     }
 
     private async Task<SystemRecord?> GetValueAsync(

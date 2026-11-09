@@ -1,3 +1,4 @@
+using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Security;
@@ -54,6 +55,73 @@ internal sealed class FakeSystemStore : ISystemStore
 
         return Task.FromResult(Rows.SingleOrDefault(row => row.Key == key && row.DeletedAt == 0));
     }
+
+    /// <summary>ent's plain System.Create() for the channel-settings CAS loop.</summary>
+    public Task<bool> TryCreateAsync(
+        SystemRecord system,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        if (TryCreateFailure is not null)
+        {
+            return Task.FromException<bool>(TryCreateFailure);
+        }
+
+        // The unique index on key covers soft-deleted rows too.
+        if (Rows.Any(row => string.Equals(row.Key, system.Key, StringComparison.Ordinal)))
+        {
+            return Task.FromResult(false);
+        }
+
+        system.Id = _nextId++;
+        Rows.Add(system);
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// ent's System.Update().Where(id, updated_at, value).SetValue().Save():
+    /// the fake applies the same predicates and bumps updated_at on a match.
+    /// </summary>
+    public Task<int> UpdateValueIfUnchangedAsync(
+        long id,
+        DateTime expectedUpdatedAt,
+        string expectedValue,
+        string value,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        UpdateValueIfUnchangedCalls++;
+        if (UpdateValueIfUnchangedFailure is not null)
+        {
+            return Task.FromException<int>(UpdateValueIfUnchangedFailure);
+        }
+
+        var row = Rows.SingleOrDefault(candidate => candidate.Id == id && candidate.DeletedAt == 0);
+        if (row is null
+            || row.UpdatedAt != expectedUpdatedAt
+            || !string.Equals(row.Value, expectedValue, StringComparison.Ordinal))
+        {
+            return Task.FromResult(0);
+        }
+
+        if (UpdateValueIfUnchangedOverride is { } script)
+        {
+            return Task.FromResult(script(row, value));
+        }
+
+        row.Value = value;
+        row.UpdatedAt = DateTime.UtcNow;
+        return Task.FromResult(1);
+    }
+
+    /// <summary>Scripts the CAS result; used to simulate losing writers.</summary>
+    public Func<SystemRecord, string, int>? UpdateValueIfUnchangedOverride { get; set; }
+
+    public Exception? UpdateValueIfUnchangedFailure { get; set; }
+
+    public Exception? TryCreateFailure { get; set; }
+
+    public int UpdateValueIfUnchangedCalls { get; private set; }
 
     /// <summary>ent's OnConflict(key).UpdateNewValues(), including resurrecting a soft-deleted row.</summary>
     public Task SetAsync(string key, string value, CancellationToken cancellationToken = default)
@@ -200,5 +268,21 @@ internal sealed class StaticModelSettingsProvider(ModelSettings settings) : IMod
         _ = cancellationToken;
         Calls++;
         return Task.FromResult(settings);
+    }
+}
+
+/// <summary>
+/// Records the backup re-arm signal that updateSystemGeneralSettings sends
+/// (BackupService.Reschedule, system.resolvers.go:159).
+/// </summary>
+internal sealed class RecordingAutoBackupRescheduleSignal : IAutoBackupRescheduleSignal
+{
+    public int Calls { get; private set; }
+
+    public Task RescheduleAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Task.CompletedTask;
     }
 }

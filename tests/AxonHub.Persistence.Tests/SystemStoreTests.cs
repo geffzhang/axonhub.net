@@ -307,6 +307,106 @@ public sealed class SystemStoreTests(PostgresFixture fixture)
         Assert.Equal(winner.Claim, marker?.Value);
     }
 
+    [Fact]
+    public async Task UpdateValueIfUnchangedRequiresTheExactRowState()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        var system = NewSystem();
+        var id = await store.CreateAsync(system);
+        var stored = (await store.GetByIdAsync(id))!;
+
+        // A stale timestamp or a stale value loses the compare-and-set.
+        Assert.Equal(
+            0,
+            await store.UpdateValueIfUnchangedAsync(
+                id,
+                stored.UpdatedAt.AddSeconds(1),
+                stored.Value,
+                "stale-timestamp"));
+        Assert.Equal(
+            0,
+            await store.UpdateValueIfUnchangedAsync(
+                id,
+                stored.UpdatedAt,
+                stored.Value + "x",
+                "stale-value"));
+
+        var value = """{"blocked_ips":[],"show_request_log_ip_ban_icon":true}""";
+        Assert.Equal(
+            1,
+            await store.UpdateValueIfUnchangedAsync(
+                id,
+                stored.UpdatedAt,
+                stored.Value,
+                value));
+
+        var updated = (await store.GetByIdAsync(id))!;
+        Assert.Equal(value, updated.Value);
+        // ent's UpdateDefault(xtime.UTCNow) advances updated_at.
+        Assert.True(updated.UpdatedAt > stored.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateValueIfUnchangedIgnoresSoftDeletedRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        var system = NewSystem();
+        var id = await store.CreateAsync(system);
+        var stored = (await store.GetByIdAsync(id))!;
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"systems\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, Id = id });
+        }
+
+        Assert.Equal(
+            0,
+            await store.UpdateValueIfUnchangedAsync(
+                id,
+                stored.UpdatedAt,
+                stored.Value,
+                "resurrect"));
+    }
+
+    [Fact]
+    public async Task TryCreateReportsAKeyConflictWithoutThrowing()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        var system = NewSystem();
+        Assert.True(await store.TryCreateAsync(system));
+
+        // systems.key is unique on its own: a second live row conflicts.
+        Assert.False(await store.TryCreateAsync(NewSystem()));
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"systems\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, Id = system.Id });
+        }
+
+        // A soft-deleted row still occupies the unique key.
+        Assert.False(await store.TryCreateAsync(NewSystem()));
+
+        await using var verify = await db.Factory.OpenAsync();
+        Assert.Equal(1, await verify.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM \"systems\";"));
+    }
+
     private static SystemRecord NewSystem() => new()
     {
         CreatedAt = CreatedAt,

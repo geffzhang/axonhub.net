@@ -162,6 +162,204 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.UpdateBrandSettings (system.resolvers.go:24-47):
+    /// each provided field is written in order and each failure carries its own
+    /// prefix.
+    /// </summary>
+    [GraphQLName("updateBrandSettings")]
+    public async Task<bool> UpdateBrandSettingsAsync(
+        UpdateBrandSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        if (input.BrandName is not null)
+        {
+            try
+            {
+                await settings.SetBrandNameAsync(input.BrandName, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to update brand name setting: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (input.BrandLogo is not null)
+        {
+            try
+            {
+                await settings.SetBrandLogoAsync(input.BrandLogo, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to update brand logo setting: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (input.Title is not null)
+        {
+            try
+            {
+                await settings.SetTitleAsync(input.Title, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to update title setting: " + ex.Message,
+                    ex);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateSystemChannelSettings
+    /// (system.resolvers.go:143-150).
+    /// </summary>
+    [GraphQLName("updateSystemChannelSettings")]
+    public async Task<bool> UpdateSystemChannelSettingsAsync(
+        UpdateSystemChannelSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.UpdateChannelSettingsAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update channel setting: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateSystemGeneralSettings
+    /// (system.resolvers.go:152-162): a successful write re-arms the auto-backup
+    /// schedule (<c>backupService.Reschedule(ctx, scheduler)</c>).
+    /// </summary>
+    [GraphQLName("updateSystemGeneralSettings")]
+    public async Task<bool> UpdateSystemGeneralSettingsAsync(
+        UpdateSystemGeneralSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        [Service] IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetGeneralSettingsAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update general settings: " + ex.Message,
+                ex);
+        }
+
+        // Hosts without the backup grain leave the signal unregistered, like
+        // the reference's nil scheduler.
+        var rescheduleSignal = services.GetService<IAutoBackupRescheduleSignal>();
+        if (rescheduleSignal is not null)
+        {
+            await rescheduleSignal.RescheduleAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateUserAgentPassThroughSettings
+    /// (system.resolvers.go:308-316).
+    /// </summary>
+    [GraphQLName("updateUserAgentPassThroughSettings")]
+    public async Task<bool> UpdateUserAgentPassThroughSettingsAsync(
+        UpdateUserAgentPassThroughSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetUserAgentPassThroughAsync(input.Enabled, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update user-agent pass-through settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdatePassThroughSettings
+    /// (system.resolvers.go:318-326).
+    /// </summary>
+    [GraphQLName("updatePassThroughSettings")]
+    public async Task<bool> UpdatePassThroughSettingsAsync(
+        UpdatePassThroughSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetPassThroughAsync(input.Enabled, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update pass-through settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateUsageCostInjectionSettings
+    /// (system.resolvers.go:328-336).
+    /// </summary>
+    [GraphQLName("updateUsageCostInjectionSettings")]
+    public async Task<bool> UpdateUsageCostInjectionSettingsAsync(
+        UpdateUsageCostInjectionSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetInjectUsageCostEnabledAsync(input.Enabled, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update usage cost injection settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Port of mutationResolver.UpdateDefaultDataStorage
     /// (system.resolvers.go:103-110). The gid type is ignored, like UpdateDataStorage.
     /// </summary>

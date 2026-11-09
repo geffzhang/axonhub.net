@@ -388,6 +388,25 @@ action 合法、mask 必须有 replacement、scope 合法）、先读后校验�
 残余收窄为无 30 秒 live 缓存、写入不触发缓存重载、.NET Regex 与 regexp2 尚未逐特性对照、
 Gemini/Ollama 载荷级对照延后。
 
+§152 追加 25 个用例（`AxonHub.Api.Tests` 22：`AdminSystemSettingsEndpointTests`；
+`AxonHub.Persistence.Tests` 3：`SystemStoreTests`），同样按项目规则未运行 lint / build / test；
+§152 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5507、
+`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353，四项目合计 9112，下一次全量运行
+应以该数字复核。该切片接入 system-settings 第二批 12 个根字段：`brandSettings` /
+`systemChannelSettings` / `systemGeneralSettings` / `userAgentPassThroughSettings` /
+`passThroughSettings` / `usageCostInjectionSettings` 六个查询与对应的六个变更。
+`SystemSettingsCodec` 复刻 Go 的序列化形状（字段序、HTML 转义、AutoSyncFrequency 永不失败的
+JSON 解码）与 normalize / validate（空白提示词恢复默认且非空白不裁剪、未知 auto-sync → 1h、
+系统提示词先校验、4096 rune 上限）；`SystemStore.UpdateValueIfUnchangedAsync` 以
+(id, updated_at, value, deleted_at = 0) 谓词实现 UpdateChannelSetting 的五次 compare-and-set，
+`TryCreateAsync` 把唯一键冲突映射为 `ent.IsConstraintError`（继续重试）；general 写入成功后经
+`IAutoBackupRescheduleSignal` 重排自动备份（无 Orleans 的宿主为空操作，生产实现与参照一样只
+记录调度失败，不影响变更结果）。新增 C232（accepted）：非法枚举输入的拒绝文案来自
+HotChocolate 校验器，而非参照 UnmarshalGQL 的 `invalid ProbeFrequency: <x>` /
+`invalid AutoSyncFrequency: <x>`，两侧都拒绝且不产生写入；合法输入的映射、写入顺序与逐层
+错误前缀（含 brand 读取与 general 写入的双前缀）逐字一致，字段级 JSON 类型错误沿用 C064，
+`timeLocation` 缓存失效因端口每次读取时区而不可观察（C186）。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

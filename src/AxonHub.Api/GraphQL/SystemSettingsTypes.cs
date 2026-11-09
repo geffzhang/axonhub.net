@@ -653,6 +653,194 @@ public sealed class GcCleanupPreviewItemType
     public int RetentionDays { get; init; }
 }
 
+/// <summary>Port of the gqlgen <c>ProbeFrequency</c> enum (system.graphql:271-276).</summary>
+[GraphQLName("ProbeFrequency")]
+public enum ProbeFrequencyValue
+{
+    [GraphQLName("ONE_MINUTE")]
+    OneMinute,
+
+    [GraphQLName("FIVE_MINUTES")]
+    FiveMinutes,
+
+    [GraphQLName("THIRTY_MINUTES")]
+    ThirtyMinutes,
+
+    [GraphQLName("ONE_HOUR")]
+    OneHour,
+}
+
+/// <summary>Port of the gqlgen <c>AutoSyncFrequency</c> enum (system.graphql:278-282).</summary>
+[GraphQLName("AutoSyncFrequency")]
+public enum AutoSyncFrequencyValue
+{
+    [GraphQLName("ONE_HOUR")]
+    OneHour,
+
+    [GraphQLName("SIX_HOURS")]
+    SixHours,
+
+    [GraphQLName("ONE_DAY")]
+    OneDay,
+}
+
+/// <summary>Port of the <c>ChannelProbeSetting</c> type (system.graphql:284-287).</summary>
+[GraphQLName("ChannelProbeSetting")]
+public sealed class ChannelProbeSettingType
+{
+    public bool Enabled { get; init; }
+
+    public ProbeFrequencyValue Frequency { get; init; }
+}
+
+/// <summary>
+/// Port of the <c>ChannelModelAutoSyncSetting</c> type (system.graphql:289-291).
+/// </summary>
+[GraphQLName("ChannelModelAutoSyncSetting")]
+public sealed class ChannelModelAutoSyncSettingType
+{
+    public AutoSyncFrequencyValue Frequency { get; init; }
+}
+
+/// <summary>Port of the <c>SystemChannelSettings</c> type (system.graphql:293-298).</summary>
+[GraphQLName("SystemChannelSettings")]
+public sealed class SystemChannelSettingsType
+{
+    public ChannelProbeSettingType Probe { get; init; } = new();
+
+    public ChannelModelAutoSyncSettingType AutoSync { get; init; } = new();
+
+    public string TestSystemPrompt { get; init; } = string.Empty;
+
+    public string TestUserPrompt { get; init; } = string.Empty;
+}
+
+/// <summary>Port of the <c>SystemGeneralSettings</c> type (system.graphql:316-319).</summary>
+[GraphQLName("SystemGeneralSettings")]
+public sealed class SystemGeneralSettingsType
+{
+    public string CurrencyCode { get; init; } = string.Empty;
+
+    public string Timezone { get; init; } = string.Empty;
+}
+
+/// <summary>Port of the <c>BrandSettings</c> type (system.graphql:21-25).</summary>
+[GraphQLName("BrandSettings")]
+public sealed class BrandSettingsType
+{
+    /// <summary>Nullable in the SDL; the reference always returns a pointer.</summary>
+    public string? BrandName { get; init; }
+
+    /// <summary>Nullable in the SDL; the reference always returns a pointer.</summary>
+    public string? BrandLogo { get; init; }
+
+    /// <summary>Nullable in the SDL; the reference always returns a pointer.</summary>
+    public string? Title { get; init; }
+}
+
+/// <summary>
+/// Port of the <c>UserAgentPassThroughSettings</c> type (system.graphql:339-341).
+/// </summary>
+[GraphQLName("UserAgentPassThroughSettings")]
+public sealed class UserAgentPassThroughSettingsType
+{
+    public bool Enabled { get; init; }
+}
+
+/// <summary>Port of the <c>PassThroughSettings</c> type (system.graphql:347-349).</summary>
+[GraphQLName("PassThroughSettings")]
+public sealed class PassThroughSettingsType
+{
+    public bool Enabled { get; init; }
+}
+
+/// <summary>
+/// Port of the <c>UsageCostInjectionSettings</c> type (system.graphql:355-357).
+/// </summary>
+[GraphQLName("UsageCostInjectionSettings")]
+public sealed class UsageCostInjectionSettingsType
+{
+    public bool Enabled { get; init; }
+}
+
+/// <summary>Port of <c>UpdateBrandSettingsInput</c> (system.graphql:41-45).</summary>
+public sealed class UpdateBrandSettingsInput
+{
+    public string? BrandName { get; set; }
+
+    public string? BrandLogo { get; set; }
+
+    public string? Title { get; set; }
+}
+
+/// <summary>
+/// Port of <c>UpdateSystemGeneralSettingsInput</c> (system.graphql:321-324).
+/// Absent strings decode to the Go zero value.
+/// </summary>
+public sealed class UpdateSystemGeneralSettingsInput
+{
+    public string? CurrencyCode { get; set; }
+
+    public string? Timezone { get; set; }
+}
+
+/// <summary>
+/// Port of <c>UpdateChannelProbeSettingInput</c> (system.graphql:300-303).
+/// </summary>
+public sealed class UpdateChannelProbeSettingInput
+{
+    public bool Enabled { get; set; }
+
+    public ProbeFrequencyValue Frequency { get; set; }
+}
+
+/// <summary>
+/// Port of <c>UpdateChannelModelAutoSyncSettingInput</c>
+/// (system.graphql:305-307).
+/// </summary>
+public sealed class UpdateChannelModelAutoSyncSettingInput
+{
+    public AutoSyncFrequencyValue Frequency { get; set; }
+}
+
+/// <summary>
+/// Port of <c>UpdateSystemChannelSettingsInput</c> (system.graphql:309-314).
+/// Every field is optional; omitted fields leave the stored value unchanged.
+/// </summary>
+public sealed class UpdateSystemChannelSettingsInput
+{
+    public UpdateChannelProbeSettingInput? Probe { get; set; }
+
+    public UpdateChannelModelAutoSyncSettingInput? AutoSync { get; set; }
+
+    public string? TestSystemPrompt { get; set; }
+
+    public string? TestUserPrompt { get; set; }
+}
+
+/// <summary>
+/// Port of <c>UpdateUserAgentPassThroughSettingsInput</c>
+/// (system.graphql:343-345).
+/// </summary>
+public sealed class UpdateUserAgentPassThroughSettingsInput
+{
+    public bool Enabled { get; set; }
+}
+
+/// <summary>Port of <c>UpdatePassThroughSettingsInput</c> (system.graphql:351-353).</summary>
+public sealed class UpdatePassThroughSettingsInput
+{
+    public bool Enabled { get; set; }
+}
+
+/// <summary>
+/// Port of <c>UpdateUsageCostInjectionSettingsInput</c> (system.graphql:359-361).
+/// </summary>
+public sealed class UpdateUsageCostInjectionSettingsInput
+{
+    public bool Enabled { get; set; }
+}
+
 /// <summary>Domain ↔ GraphQL mapping for the system-settings slice.</summary>
 public static class SystemSettingsMapping
 {
@@ -1090,4 +1278,105 @@ public static class SystemSettingsMapping
                     ChannelTags = exclude.ChannelTags,
                 })
             .ToList();
+
+    public static BrandSettingsType ToGraphQL(BrandSettings settings) => new()
+    {
+        BrandName = settings.BrandName,
+        BrandLogo = settings.BrandLogo,
+        Title = settings.Title,
+    };
+
+    public static SystemGeneralSettingsType ToGraphQL(SystemGeneralSettings settings) => new()
+    {
+        CurrencyCode = settings.CurrencyCode,
+        Timezone = settings.Timezone,
+    };
+
+    public static SystemChannelSettingsType ToGraphQL(SystemChannelSettings settings) => new()
+    {
+        Probe = new ChannelProbeSettingType
+        {
+            Enabled = settings.Probe.Enabled,
+            Frequency = ToGraphQLProbeFrequency(settings.Probe.Frequency),
+        },
+        AutoSync = new ChannelModelAutoSyncSettingType
+        {
+            Frequency = ToGraphQLAutoSyncFrequency(settings.AutoSync.Frequency),
+        },
+        TestSystemPrompt = settings.TestSystemPrompt,
+        TestUserPrompt = settings.TestUserPrompt,
+    };
+
+    /// <summary>
+    /// gqlgen decodes UpdateSystemGeneralSettingsInput straight into
+    /// biz.SystemGeneralSettings: absent strings become "".
+    /// </summary>
+    public static SystemGeneralSettings ToDomain(UpdateSystemGeneralSettingsInput input)
+        => new()
+        {
+            CurrencyCode = input.CurrencyCode ?? string.Empty,
+            Timezone = input.Timezone ?? string.Empty,
+        };
+
+    public static SystemChannelSettingsPatch ToDomain(UpdateSystemChannelSettingsInput input)
+        => new()
+        {
+            Probe = input.Probe is null
+                ? null
+                : new ChannelProbeSetting
+                {
+                    Enabled = input.Probe.Enabled,
+                    Frequency = ToDomain(input.Probe.Frequency),
+                },
+            AutoSync = input.AutoSync is null
+                ? null
+                : new ChannelModelAutoSyncSetting
+                {
+                    Frequency = ToDomain(input.AutoSync.Frequency),
+                },
+            TestSystemPrompt = input.TestSystemPrompt,
+            TestUserPrompt = input.TestUserPrompt,
+        };
+
+    /// <summary>
+    /// Port of ProbeFrequency.MarshalGQL (system.go:626-644): an unknown stored
+    /// value renders as ONE_MINUTE.
+    /// </summary>
+    private static ProbeFrequencyValue ToGraphQLProbeFrequency(string frequency)
+        => frequency switch
+        {
+            ProbeFrequencies.OneMinute => ProbeFrequencyValue.OneMinute,
+            ProbeFrequencies.FiveMinutes => ProbeFrequencyValue.FiveMinutes,
+            ProbeFrequencies.ThirtyMinutes => ProbeFrequencyValue.ThirtyMinutes,
+            ProbeFrequencies.OneHour => ProbeFrequencyValue.OneHour,
+            _ => ProbeFrequencyValue.OneMinute,
+        };
+
+    private static string ToDomain(ProbeFrequencyValue frequency) => frequency switch
+    {
+        ProbeFrequencyValue.OneMinute => ProbeFrequencies.OneMinute,
+        ProbeFrequencyValue.FiveMinutes => ProbeFrequencies.FiveMinutes,
+        ProbeFrequencyValue.ThirtyMinutes => ProbeFrequencies.ThirtyMinutes,
+        _ => ProbeFrequencies.OneHour,
+    };
+
+    /// <summary>
+    /// Port of AutoSyncFrequency.MarshalGQL (system.go:515-530): an unknown
+    /// stored value renders as ONE_HOUR.
+    /// </summary>
+    private static AutoSyncFrequencyValue ToGraphQLAutoSyncFrequency(string frequency)
+        => frequency switch
+        {
+            AutoSyncFrequencies.OneHour => AutoSyncFrequencyValue.OneHour,
+            AutoSyncFrequencies.SixHours => AutoSyncFrequencyValue.SixHours,
+            AutoSyncFrequencies.OneDay => AutoSyncFrequencyValue.OneDay,
+            _ => AutoSyncFrequencyValue.OneHour,
+        };
+
+    private static string ToDomain(AutoSyncFrequencyValue frequency) => frequency switch
+    {
+        AutoSyncFrequencyValue.OneHour => AutoSyncFrequencies.OneHour,
+        AutoSyncFrequencyValue.SixHours => AutoSyncFrequencies.SixHours,
+        _ => AutoSyncFrequencies.OneDay,
+    };
 }

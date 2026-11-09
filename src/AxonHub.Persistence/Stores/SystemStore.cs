@@ -1,4 +1,6 @@
 using Dapper;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace AxonHub.Persistence;
 
@@ -11,6 +13,28 @@ public interface ISystemStore
 
     /// <summary>Port of SystemService.getSystemValue's query (live rows only).</summary>
     Task<SystemRecord?> GetByKeyAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of the channel-settings loop's plain <c>System.Create()</c>: insert
+    /// the row and report <c>false</c> when the unique index on <c>key</c>
+    /// rejects the insert (ent.IsConstraintError), which the caller retries.
+    /// </summary>
+    Task<bool> TryCreateAsync(
+        SystemRecord system,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of the channel-settings compare-and-set update
+    /// (<c>System.Update().Where(id, updated_at, value).SetValue(...).Save(ctx)</c>):
+    /// the soft-delete predicate applies, <c>updated_at</c> advances, and the
+    /// returned count is 0 when another writer changed the row first.
+    /// </summary>
+    Task<int> UpdateValueIfUnchangedAsync(
+        long id,
+        DateTime expectedUpdatedAt,
+        string expectedValue,
+        string value,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Port of <c>setSystemValue</c>: ent's <c>OnConflict(key).UpdateNewValues()</c>
@@ -91,6 +115,77 @@ public sealed class SystemStore(AxonHubDbContext db) : ISystemStore
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
+
+    public async Task<bool> TryCreateAsync(
+        SystemRecord system,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+
+        db.Systems.Add(system);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (DbUpdateException ex) when (IsConstraintViolation(ex))
+        {
+            // Ent keeps no failed-entity state; detaching keeps a later write
+            // on the same scoped context from retrying this row.
+            db.Entry(system).State = EntityState.Detached;
+            return false;
+        }
+        catch (DbUpdateException)
+        {
+            db.Entry(system).State = EntityState.Detached;
+            throw;
+        }
+    }
+
+    public async Task<int> UpdateValueIfUnchangedAsync(
+        long id,
+        DateTime expectedUpdatedAt,
+        string expectedValue,
+        string value,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(expectedValue);
+        ArgumentNullException.ThrowIfNull(value);
+
+        // Ent's UpdateSave adds the soft-delete predicate and bumps updated_at
+        // through TimeMixin's UpdateDefault(xtime.UTCNow).
+        const string sql = """
+            UPDATE "systems"
+            SET "value" = @Value, "updated_at" = CURRENT_TIMESTAMP
+            WHERE "id" = @Id
+              AND "updated_at" = @ExpectedUpdatedAt
+              AND "value" = @ExpectedValue
+              AND "deleted_at" = 0;
+            """;
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteAsync(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    Id = id,
+                    ExpectedUpdatedAt = expectedUpdatedAt,
+                    ExpectedValue = expectedValue,
+                    Value = value,
+                },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Ent classifies every PostgreSQL constraint failure (SQLSTATE class 23)
+    /// as a constraint error; the only reachable one here is
+    /// <c>systems_key_key</c>.
+    /// </summary>
+    private static bool IsConstraintViolation(DbUpdateException exception)
+        => exception.GetBaseException() is PostgresException { SqlState: { } sqlState }
+            && sqlState.StartsWith("23", StringComparison.Ordinal);
 
     public async Task SetAsync(
         string key,
