@@ -30,6 +30,8 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
 
     public DbSet<ChannelOverrideTemplateRecord> ChannelOverrideTemplates => Set<ChannelOverrideTemplateRecord>();
 
+    public DbSet<ChannelProbeRecord> ChannelProbes => Set<ChannelProbeRecord>();
+
     public DbSet<ModelRecord> Models => Set<ModelRecord>();
 
     public DbSet<RequestRecord> Requests => Set<RequestRecord>();
@@ -95,6 +97,7 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         ConfigureChannelModelPrice(modelBuilder.Entity<ChannelModelPriceRecord>());
         ConfigureChannelModelPriceVersion(modelBuilder.Entity<ChannelModelPriceVersionRecord>());
         ConfigureChannelOverrideTemplate(modelBuilder.Entity<ChannelOverrideTemplateRecord>());
+        ConfigureChannelProbe(modelBuilder.Entity<ChannelProbeRecord>());
         ConfigureModel(modelBuilder.Entity<ModelRecord>());
         ConfigureRequest(modelBuilder.Entity<RequestRecord>());
         ConfigureRequestExecution(modelBuilder.Entity<RequestExecutionRecord>());
@@ -751,6 +754,34 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         builder.HasIndex(template => new { template.UserId, template.Name, template.DeletedAt })
             .HasDatabaseName("channel_override_templates_by_user_name")
             .IsUnique();
+    }
+
+    private static void ConfigureChannelProbe(EntityTypeBuilder<ChannelProbeRecord> builder)
+    {
+        // internal/ent/schema/channel_probe.go has no mixin: no created_at,
+        // updated_at or deleted_at, and no foreign-key clause is emitted
+        // (migrate.WithForeignKeys(false)).
+        builder.ToTable("channel_probes");
+        builder.HasKey(probe => probe.Id);
+        builder.Property(probe => probe.Id)
+            .HasColumnName("id")
+            .UseIdentityByDefaultColumn();
+
+        builder.Property(probe => probe.TotalRequestCount)
+            .HasColumnName("total_request_count")
+            .IsRequired();
+        builder.Property(probe => probe.SuccessRequestCount)
+            .HasColumnName("success_request_count")
+            .IsRequired();
+        builder.Property(probe => probe.AvgTokensPerSecond)
+            .HasColumnName("avg_tokens_per_second");
+        builder.Property(probe => probe.AvgTimeToFirstTokenMs)
+            .HasColumnName("avg_time_to_first_token_ms");
+        builder.Property(probe => probe.Timestamp).HasColumnName("timestamp").IsRequired();
+        builder.Property(probe => probe.ChannelId).HasColumnName("channel_id").IsRequired();
+
+        builder.HasIndex(probe => new { probe.ChannelId, probe.Timestamp })
+            .HasDatabaseName("channel_probes_by_channel_id_timestamp");
     }
 
     private static void ConfigureChannelModelPriceVersion(

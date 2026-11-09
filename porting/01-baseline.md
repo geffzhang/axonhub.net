@@ -8493,6 +8493,71 @@ singleflight 崩溃进程，端口折叠为有界 502 credentials 错误；C247�
 端口在配额服务）；C176 item (6) 的 apiKeyQuotaUsages 缺口关闭。时区读取逐请求（C186）
 与 int 截断（C190）沿用既有登记。
 
+## 162. channelProbeData（通道探针读取根字段，20 例，2026-11-10）
+
+参照（冻结基线 b8bb3421）：`internal/server/gql/channel_probe.graphql:1-19`
+（`ChannelProbePoint` / `ChannelProbeData` 类型与 `GetChannelProbeDataInput`，
+根字段 `channelProbeData(input: GetChannelProbeDataInput!): [ChannelProbeData!]!`）、
+`internal/server/gql/channel_probe.resolvers.go:15-26`（ChannelID 恒返回
+`&objects.GUID{Type:"Channel"}`；Query 直接返回 service 结果，无 wrapper）、
+`internal/server/biz/channel_probe.go:345-465`（`BatchQueryChannelProbes` 的空输入短路、
+`QueryChannelProbes` 的 scope decision、窗口、ent 查询、map 与零填充、`generateTimestamps`）、
+`internal/authz/scope.go`（`RunWithScopeDecision` 按 `ScopeReadChannels` 附加 Allow / Deny）、
+`internal/server/biz/system.go:487-627`（设置默认值与 range / interval 开关）、
+`1280-1370`（`ChannelSettingOrDefault` 吞掉非 NotFound 错误）、
+`internal/ent/schema/channel_probe.go` 与 `internal/ent/migrate/schema.go:225-265`
+（`channel_probes` 列、`(channel_id, timestamp)` 非唯一索引、无 mixin / 外键）。
+
+| 项 | 参照值 |
+|---|---|
+| 根签名 | `channelProbeData(input: GetChannelProbeDataInput!): [ChannelProbeData!]!`；输入 `channelIDs: [ID!]!` 经 `GUID.UnmarshalGQL` 解析后只取数字 id，**不校验 type**（`gid://axonhub/Whatever/42` 与 `Channel/42` 等价）；输出 `channelID` 恒为 `gid://axonhub/Channel/<id>` |
+| 空输入 | `len(channelIDs) == 0` 在读取设置与查询之前返回空切片（非 null） |
+| 设置可见性 | `authz.RunWithScopeDecision(ctx, read_channels, ...)`：有 scope 的主体读取存储 `system_channel_settings`（附 Allow decision 覆盖 System 的 OwnerRule + UserReadScopeRule(read_settings)）；无 scope 的主体让 ent 读失败，`ChannelSettingOrDefault` 记录日志并返回 `defaultChannelSetting`；任何非 NotFound 错误（存储失败 / 解码失败）同样回退默认值 |
+| 窗口 | `now := xtime.UTCNow()`；`end := now.Truncate(intervalMinutes*time.Minute)`；`start := end.Add(-rangeMinutes*time.Minute)`；range / interval 由 frequency 决定：1m→10/1、5m→60/5、30m→720/30、1h→1440/60、未知→10/1 分钟（默认 5m） |
+| 查询 | `ChannelIDIn(ids...), TimestampGTE(start), TimestampLTE(end), Order(Asc(timestamp))`；闭区间；错误原样返回（无前缀） |
+| 映射 | `channel_id → timestamp → probe` 建 map（后行胜出）；对 `generateTimestamps(start, end, interval)` 的每个对齐秒（含两端）输出一点；缺行为 `{timestamp, 0, 0, nil, nil}`；输出按输入 id 顺序，重复 id 重复输出 |
+| 表形状 | `channel_probes(id identity, total_request_count, success_request_count, avg_tokens_per_second nullable, avg_time_to_first_token_ms nullable, timestamp, channel_id)`；无 created_at / updated_at / deleted_at；索引 `channel_probes_by_channel_id_timestamp` 非唯一；无外键 |
+| 未移植 | 探针 writer（`runProbe` / `computeAllChannelProbesStats` 的 SQL CTE）、每分钟 cron（`* * * * *` UTC）与 `runProbePeriodically` 未移植（C249），端口自身不产生 probe 行 |
+
+端口实现：
+
+- `src/AxonHub.Persistence/DatabaseSchema.cs`：`channel_probes` 幂等 DDL 与非唯一索引。
+- `src/AxonHub.Persistence/Records.cs`：`ChannelProbeRecord`（计数器 64 位、均值为
+  `double?`、时间戳为 Unix 秒）。
+- `src/AxonHub.Persistence/Stores/ChannelProbeStore.cs`：Dapper 批量读取（通道过滤、
+  闭区间、`ORDER BY timestamp`）；空 id 不查询；事务沿用 `CurrentDbTransaction`。
+- `src/AxonHub.Persistence/AxonHubDbContext.cs`：EF 模型（identity id、索引）供写入侧与
+  模型基线测试使用。
+- `src/AxonHub.Api/Management/ChannelProbeService.cs`：`BatchQueryChannelProbesAsync`
+  （空短路）、`QueryChannelProbesAsync`（窗口、映射、零填充、输入顺序）、
+  `EffectiveProbeSettingAsync`（`AuthorizationScope.HasScopeAsync(read_channels)` 为真才
+  读存储值，任何异常回退默认值）；range / interval / `TruncateToInterval` /
+  `GenerateTimestamps` 静态方法。
+- `src/AxonHub.Api/GraphQL/ChannelProbeTypes.cs`：三个类型与 `ChannelProbeMapping`
+  （Int 按 C190 checked 截断，`channelID` 恒为 Channel GID）。
+- `src/AxonHub.Api/GraphQL/AdminQuery.cs`：`channelProbeData` 根字段；GUID 解析先于
+  service，无 wrapper。
+- `src/AxonHub.Api/Program.cs`：注册 `IChannelProbeStore` 与 `ChannelProbeService`。
+
+测试（20 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/ChannelProbeServiceTests.cs` | 10（Fact） | 空输入不查询 / 默认 5m 窗口（13 点、09:05–10:05）/ 存储 1h（25 点、10:00 截断）/ 无 read_channels 回退默认窗口 / 未知频率（11 点、1 分钟步进）/ 解码失败回退 / 读取失败回退 / 行映射与同桶后行胜出、窗口外行忽略、null 均值 / 重复 id 输入顺序 / 存储错误原样冒泡 |
+| `tests/AxonHub.Api.Tests/AdminChannelProbeDataEndpointTests.cs` | 7（Fact） | 前端形状（channelID、13 点、计数与均值、缺口 null、存储窗口）/ 存储频率 / deny 回退仍成功 / 空 `channelIDs` 的 `[]` 且不查询 / 非法 GID 文案 / type 不校验 / 存储错误无前缀 |
+| `tests/AxonHub.Persistence.Tests/ChannelProbeStoreTests.cs` | 3（Fact） | 通道过滤与闭区间（两侧越界排除、边界包含、nullable 均值往返）/ 跨通道时间升序与同桶双行均返回 / 空 id 不查询 |
+| `tests/AxonHub.Persistence.Tests/EfCoreModelTests.cs` | 基线更新 | 表 23→24、索引 51→52 |
+
+静态计数：`AxonHub.Api.Tests` 由 5803 增至 5820（+17），`AxonHub.Persistence.Tests` 由 359
+增至 362（+3），`AxonHub.Grains.Tests` 1746、`AxonHub.Llm.Tests` 1512 不变，四项目合计由
+9420 增至 9440。**按项目规则未运行 lint / build / test。**
+
+差异：C249（gap）：探针 writer / 调度器 / GC `cleanupChannelProbes` / dashboard probes 分支
+未移植（C195 item (5) 与 C203 item (1) 的措辞已按建表事实更新）；读取面以
+`AuthorizationScope.HasScopeAsync` 近似参照的 scope decision（deny 分支直接取默认值而非
+让 ent 读失败），系统设置缓存缺席（C029）使「denied 主体命中缓存」的边界在端口不可达；
+GraphQL Int 32 位截断沿用 C190。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|
@@ -8510,7 +8575,7 @@ singleflight 崩溃进程，端口折叠为有界 502 credentials 错误；C247�
 | 持久化（channels / projects / users / api_keys / channel_model_prices / models / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads / data_storages / api_key_profile_templates） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`models` 管理存储由 §88 的 7 例锁定，`data_storages` 管理存储由 §106 的 8 例锁定，`api_key_profile_templates` 存储由 §109 的 4 例锁定，`invitations` 存储与注册事务由 §110 的 14 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主经 `EnabledChannelsGrain`（`PostgresEnabledChannelSource`）读取启用通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 的请求链路归档与存储策略的运行时消费未接入（C020）；存储策略的读写、body 清理与 GC 由 §113 接入，响应头捕获点差异已登记（C021） | 低 | 容器化验收；C020 随请求链路存储策略落地 |
 | usage 成本管理面：`channel_model_prices` 自动定价与读取边 | 写入面已由 §73 接入（`saveChannelModelPrices`、create/update/skip/delete 计划、reference id 轮换、`channel_model_price_versions` 版本行与 GraphQL 定价类型，68 例）；自动定价由 §74 接入（`models` 表、模型卡换算、createChannel / updateChannel 事务内补价，20 例）；ent 的读取边由 §136 接入（`node(Channel)`、`channelModelPrices` / `versions` / `channel` / `channelModelPrice` 四条边与 read_channels 查询隐私，Node 接口与版本状态枚举，10 例），进程内价格缓存刷新不可观察（C048 resolved） | — | 完成（C048） |
 | API key 鉴权（/v1 中间件、header 提取、ClientIP/allowlist、no-auth 懒建）与 IP 黑名单 | 已按参照实现并由 73 例鉴权 + 29 例黑名单/系统设置锁定（另有 6 例 netip 前缀边界计入鉴权的 73 例）；管理面（GraphQL API key 创建）未接入，角色 / 权限校验由 §84 接入（PermissionValidator 与 users / roles 写入接线，25 例），OIDC 登录流程由 §83 接入（提供方配置与 providers 列表由 §82 接入），JWT 登录 / 刷新由 §80 接入，管理员 GraphQL 的 bearer / service_account 门与只读规则由 §81 接入 | 中 | 管理面随 GraphQL/前端里程碑 |
-| 其余 Ent 表 | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74 供自动定价读取，§88 管理面 CRUD）、`channel_override_templates`（§78）、`oidc_identities`（§79）、`data_storages`（§106）、`prompts`（§99）与 `invitations`（§110）已落；其余表未移植 | 中 | 随对应功能落地 |
+| 其余 Ent 表 | 请求链路四表、鉴权三表（users / api_keys / projects）、`roles` / `user_roles` / `user_projects`（§64）、`systems`、`traces`（第 30 节）、`threads`（第 31 节）、`models`（§74 供自动定价读取，§88 管理面 CRUD）、`channel_override_templates`（§78）、`oidc_identities`（§79）、`data_storages`（§106）、`prompts`（§99）、`invitations`（§110）与 `channel_probes`（§162 读取面，writer / 调度见 C249）已落；其余表未移植 | 中 | 随对应功能落地 |
 | trace 子系统：查询 / GC、GraphQL | trace id 解析、响应别名、`traces` 幂等落库、唯一冲突重读、非消息端点与 fail-open 由第 30 节的 38 + 6 例锁定，thread 中间件与 `traces.thread_id` 由第 31 节的 7 + 5 例锁定，trace 粘性 API key 由第 32 节的 7 + 1 例锁定；claudecode / DeepSeek / OpenCode 出站生成由第 33 节的 154 例锁定（C096）；查询与 GraphQL（列表 / node / 段 / 用量 / 八个状态变更）由 §101 闭合（23 + 15 例），GC / 保留策略由 §113 闭合（C095 resolved）；仅剩日志接缝与 gjson 归一化等已接受差异（C095 / C203） | — | 完成（C095 / C203） |
 | 其余供应商通道类型（Gemini 原生 / Vertex、ZenMux 系列、Antigravity、Commandcode、OpenaiResponses 等） | 参照 `channel_llm.go` 的类型分支为上述类型装配 provider 专用出站；端口已移植 openai、anthropic、codex、fenno、claudecode、opencode_go(_anthropic)、jina、typesafe、deepseek、fireworks、moonshot、longcat、cline、xai、ollama(_anthropic)、openrouter、cerebras、nanogpt(_responses)、bailian 四类、modelscope、doubao/volcengine 与 doubao_anthropic/volcengine_anthropic、11 个 OpenAI 兼容别名（atlascloud、vercel、deepinfra、qiniu、ppio、siliconflow、aihubmix、burncloud、github、evolink、groq）、7 个 anthropic 变体（qiniu/aihubmix/evolink/longcat/deepseek/moonshot _anthropic 与 anthropic_aws）与 xai_responses；`ChannelOutboundFactory` 遇到其余类型会报 unsupported channel type。Ollama 两种类型由第 34 节闭合（C097），DeepSeek 通道接线由第 35 节闭合，Fireworks 与 Moonshot 由第 36 节闭合（C098），Longcat 由第 37 节闭合（C099），xAI 与 Cline 由第 38 节闭合（C100），OpenRouter、Cerebras 与 nanoGPT（含 `nanogpt_responses`）由第 39 节闭合（C101），Zai / Zhipu / Zai-Anthropic / Zhipu-Anthropic / Xiaomi / Xiaomi-Anthropic / MiniMax / MiniMax-Anthropic（含两家的图片出站）由第 40 节闭合（C102），Bailian 四类（`bailian` / `bailian_responses` / `bailian_anthropic` / `moonshot_coding`）由第 41 节闭合（C103），Modelscope（chat 与异步图片任务）由第 42 节闭合（C104），Doubao / Volcengine / Doubao-Anthropic / Volcengine-Anthropic（chat、图片、多模态 embedding、Seedance 任务与 `/doubao/v3` 客户端面）由第 43 节闭合（C105），ZenMux 系列（`zenmux` / `zenmux_responses` / `zenmux_anthropic` / `zenmux_video` 的原生视频任务、chat 委托与本地取消）由第 44 节闭合（C106），GitHub Copilot（chat / Responses 双路径、令牌交换与 OAuth 通道接线）由第 45 节闭合（C107），`gemini_openai`（OpenAI 兼容端点、extra_body thinking 配置、Google 原生工具过滤与 thought signature 透传）由第 46 节闭合（C108），Gemini 原生基础（全模型、共享转换、MIME 推断、thought signature、usage 双向与配置清理）由第 49 节先行锁定（C110），Gemini 原生出站转换（outbound_convert.go 全量）由第 50 节锁定（C111），出站变换器与 embedding/image（outbound.go/embedding.go/image.go/vertex/constants.go）由第 51 节锁定（C112），出站流式与聚合（outbound_stream.go/aggregator.go 及其测试）与 gemini/zenmux_gemini/gemini_vertex 通道接线由第 52 节锁定（C113），Gemini 原生入站转换（inbound_convert.go 全量）由第 53 节锁定（C114），入站变换器与流式（inbound.go/inbound_stream.go）及 `/v1beta`、`/gemini/:version` 原生端点接线由第 54 节锁定（C115–C117），Antigravity Llm 层（router/executor/health/version/sanitizer/envelope/transformer 全包与 129 例测试）由第 55 节锁定（C118–C120），Antigravity 通道接线由第 56 节锁定（C121–C123），其 OAuth 管理面（start / exchange / 项目发现）由第 111 节闭合（C121 resolved，残余见 C202），OpenaiResponses 通道接线由第 57 节闭合，Commandcode 通道接线由第 58 节闭合（C124），别名通道类型（11 个 OpenAI 兼容别名、8 个 anthropic 变体、xai_responses）由第 59 节闭合（C125/C126 登记 anthropic_gcp 与两个 fake 通道），xai_subscription 由第 60 节闭合（C127） | 中 | 按 provider 分组后续切片（剩余：Antigravity 模型拉取（配额采集已由 §115 闭合）、xai_subscription 的自动刷新/持久化回写与管理面宿主（C127 残余）；anthropic_gcp 与两个 fake 通道随 C056/C126 排期） |
 | 模型列表的管理面来源 | 已由 §89 闭合：ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、include 扩展字段与 OpenAI / Anthropic / Gemini 三种 403 信封（45 例）；残余运行时结构差异登记为 C178 | — | 完成（C088 resolved / C178） |

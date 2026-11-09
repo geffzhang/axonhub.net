@@ -550,6 +550,24 @@ int64 计数按 C190 截断，隐私拒绝由 presenter 折叠为 `permission de
 profiles 损坏列的 decode 位置差异（ent 扫描 vs 配额服务）登记为 C248（accepted）；
 C176 item (6) 的 apiKeyQuotaUsages 缺口随之关闭。
 
+§162 追加 20 个用例（`AxonHub.Api.Tests` 17：`ChannelProbeServiceTests` 10、
+`AdminChannelProbeDataEndpointTests` 7；`AxonHub.Persistence.Tests` 3：
+`ChannelProbeStoreTests`），同样按项目规则未运行 lint / build / test；§162 落地后的静态
+计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5820、`AxonHub.Llm.Tests` 1512、
+`AxonHub.Persistence.Tests` 362，四项目合计 9440，下一次全量运行应以该数字复核。该切片为
+冻结基线行为（`internal/server/gql/channel_probe.graphql:1-19`、
+`channel_probe.resolvers.go:15-26`、`internal/server/biz/channel_probe.go:345-465`）：
+`channelProbeData` 按 `read_channels` 的 scope decision 选择存储的 `system_channel_settings`
+或默认探针设置（deny / 读取失败 / 解码失败一律回退 defaultChannelSetting），把 UTC now
+按 interval 截断得到窗口，查询 `channel_probes` 的闭区间行并按 `(channel_id, timestamp)`
+映射到对齐时间点（缺失为零计数与 null 均值），输出按输入 id 顺序、重复 id 重复输出、空输入
+在读取设置前返回空列表，ent 查询错误原样冒泡；输入 GUID 只取 id 不校验 type，输出
+`channelID` 恒为 `gid://axonhub/Channel/<id>`，GraphQL Int 按 C190 截断。新增
+`channel_probes` 的 DDL、EF 模型与 Dapper 读取 seam（表基线更新为 24 表 / 52 索引）。
+探针 writer / 每分钟调度器 / GC `cleanupChannelProbes` / dashboard probes 分支未移植，
+登记为 C249（gap），端口自身不产生 probe 行；scope 近似与系统设置缓存缺席（C029）的影响
+同条目登记。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
@@ -859,7 +877,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C088：模型列表的 `models` 表与 API Key profile | 已解决：§89 接入 ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API Key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、OpenAI include 扩展字段（列表取系统默认、检索硬编码 false）以及 OpenAI / Anthropic / Gemini 的 403 信封；45 例 Api 锁定。残余运行时结构差异登记为 C178（实时读通道、无 outbound 构建跳过、通道派生稳定排序、畸形 profile JSON 失败关闭） | 已关闭（C178 残余） |
 | C089：请求 ID 与 trace ID 中间件 | 已解决：`RequestTracingMiddleware` 的 `ar-<uuid>` 请求 ID、`AH-Request-Id` 响应头与错误体 `request_id` 回显（7 例）；`TraceMiddleware` 按参照实现请求头 → extra headers → OpenCode → Claude Code `metadata.user_id` → Codex 头 / turn metadata → body 字段的提取链、非消息端点跳过、`GetOrCreateTrace` 的 `(trace_id, project_id)` 语义与唯一约束重试、响应的 `AH-Trace-Id` 头与 `AH-Session-Id` 上下文；trace id 经 `RequestIdentity` 落到 `requests.trace_id`，并以 session id 传给通道出站（42 例 Api + 6 例 Persistence + 12 例 Llm） | 已关闭；残余差异见 C095 |
 | C095：trace 子系统的残余差异 | 已解决：thread 中间件与 `threads` 表已按参照移植（`AH-Thread-Id` 首值、按项目 get-or-create、fail-open、`traces.thread_id` 落库，7 + 5 例），trace 粘性 API key 已接入（C013，7 + 1 例），claudecode / opencode 出站与 user id / 会话头生成由第 33 节关闭（C096），trace 查询 / 归档 / GraphQL 由 §101 闭合（23 + 15 例），GC / 保留策略由 §113 闭合（54 + 9 例）；已接受：无 slog 日志与 operation name、gjson 数字归一化（`1.50` → `1.5`、`1e3` → `1000`）与路径语法差异、约束错误按 SQLSTATE 23 分类（参照按 Ent 约束名）、`EnableBuffering` 回绕与参照 `io.ReadAll` + 新 reader 的资源差异 | 已关闭（C203 登记 GC 侧的调度 / cron / 计数实现差异） |
-| C203：GC / 存储策略切片的实现差异 | 调度器结构（§149 起由 `GcGrain` 的 reminder 承载 `gc.cron`，替代共享 scheduler）、cron 为五字段 Vixie 子集（不支持库扩展）、channel_probes 清理为 no-op、预览计数 32 位、数据存储进程缓存缺席、手写 Dapper SQL；清理结果、键序、错误包装与 GraphQL 线形由 63 例锁定 | 已接受；channel_probes 清理仍为 no-op（待 channel_probes 切片补齐），其余不改变清理结果 |
+| C203：GC / 存储策略切片的实现差异 | 调度器结构（§149 起由 `GcGrain` 的 reminder 承载 `gc.cron`，替代共享 scheduler）、cron 为五字段 Vixie 子集（不支持库扩展）、channel_probes 清理为 no-op（§162 已建表，但 writer / 调度未移植，C249）、预览计数 32 位、数据存储进程缓存缺席、手写 Dapper SQL；清理结果、键序、错误包装与 GraphQL 线形由 63 例锁定 | 已接受；channel_probes 清理仍为 no-op（随 C249 的探针采集 / 调度切片补齐），其余不改变清理结果 |
 | C096：ClaudeCode / DeepSeek / OpenCode 出站与通道接线 | 已接受 + 真实缺口：claudecode 的 Bearer 认证、默认 base URL 与 `beta` 查询、13 个头与入站透传覆盖、系统消息注入、伪造 user_id、官方工具前缀与响应 / 流 / 聚合去前缀、思考开关，DeepSeek 的 URL 归一、completion 分派、`json_schema` 降级、`thinking` 与 `reasoning_content`，OpenCode 的模型路由、会话头优先级、响应 / 流分派与 `WithSessionHeader` 的能力保留，两条通道的 OAuth / API key 凭据构造与 `IsOfficial` 差异均已锁定（Llm 143 例、Api 11 例）；真实缺口：opencode 用户端点未包裹会话头（端点表，C094）、claudecode 多 key 通道的执行 key 审计列为空、OAuth provider 每次尝试新建（C094）（计费系统消息移除已由 §98 接线、`sessionHeaderCustomizedOutbound.Stop` 转发与编排调用已由 §141 接线）；已接受：会话值走 `RawRequest.SessionId`（C062）、流式行去前缀经 `JsonNode` 重序列化（键序保留、空白可能不同）、OAuth 凭据文案统一为 `failed to parse claudecode oauth credentials` | 主链路 154 例锁定；剩余缺口在端点表切片补齐；计费消息移除与 Stop 转发已接线 |
 | C097：Ollama 原生出站与 NDJSON 流 | 已接受 + 真实缺口：OllamaChat 的 `/api/chat` 线格式、`stream` 恒显式、`options`、`images` 的 data-URL 剥离、工具与 `tool_calls` 的 Go map 排序往返、`thinking` → `reasoning_content`、finish reason 优先级、`ollama_error` 与聚合、NDJSON 解码与 Content-Type 路由、`ollama` / `ollama_anthropic` 接线（无启用 key 时不发送认证）、流式模型名分派均已锁定（Llm 52 例、Api 11 例）；真实缺口：apiKeyOverride（C013 残留，参照 5 个接线用例中的 1 例未移植）、能力/端点表未建模（C080/C086 同族）、modelname 的其余 format 分支（Anthropic `message_start` / Responses 生命周期 / Gemini `modelVersion`）、其余 provider 通道类型未接线；已接受：NDJSON 取消以 `OperationCanceledException` 进入 `Err`（参照返回 `ctx.Err`）、工具参数数字字面量保真（参照经 float64 重编码）、非对象 `arguments` 的宽容度与 STJ 解码文案、`TransformError(null)` 以 `null!` 承载非空接口 | 主链路由 63 例锁定；ollama_anthropic 的 Bearer 与 `/v1/messages` 归一、禁用 key 不发送与流式 `upstream_model_id` 均与参照一致；缺口在端点记录、通道 key 测试流程与后续 provider 切片补齐 |
 | C098：Fireworks / Moonshot OpenAI 兼容出站与通道接线 | 已接受：Fireworks 的默认 `https://api.fireworks.ai/inference/v1`、`strings.TrimSuffix` 单斜杠裁剪、`ReasoningFieldContent` 与普通 OpenAI 出站，Moonshot 的内嵌 OpenAI 出站、chat-only 请求路径、messages 必填、`json_schema` → `json_object` 与 schema 清除、`NormalizeBaseURL(raw, "v1")` + `/chat/completions`、Bearer，以及 `fireworks` / `moonshot` 通道分支均由 19 例 Llm + 6 例 Api 锁定；已接受差异：Moonshot nil 配置由 Go nil 指针 panic 改为 `InvalidOperationException`、嵌套构造错误保留 .NET `ArgumentException` 的 `(Parameter 'config')` 后缀（测试只钉 Go 前缀）、`openai.ReasoningFieldNone` 注释与 Fireworks 实际使用的 `Content` 冲突时以代码为准；真实缺口：能力/端点表未建模（C080/C086 同族），但两个类型各只有一个 OpenAI chat 端点，按入站 ApiFormat 分派与参照一致 | 主链路由 25 例锁定；异常文案参数后缀与端点表缺口随全局错误文案策略与端点记录切片补齐 |

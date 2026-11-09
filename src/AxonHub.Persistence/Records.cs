@@ -156,6 +156,34 @@ public sealed class ChannelOverrideTemplateRecord
 }
 
 /// <summary>
+/// Row of the reference <c>channel_probes</c> table
+/// (internal/ent/schema/channel_probe.go): one aggregated probe bucket per
+/// channel and aligned timestamp. The schema declares no mixins and no privacy
+/// policy, so there is no soft-delete timestamp and every read sees every row.
+/// Integer columns stay <see cref="long"/> here; the GraphQL Int conversion
+/// (32-bit, C190) happens at the boundary.
+/// </summary>
+public sealed class ChannelProbeRecord
+{
+    public long Id { get; set; }
+
+    public long TotalRequestCount { get; set; }
+
+    public long SuccessRequestCount { get; set; }
+
+    /// <summary>Nullable double: a bucket with no latency samples stores NULL.</summary>
+    public double? AvgTokensPerSecond { get; set; }
+
+    /// <summary>Nullable double: a bucket with no TTFT samples stores NULL.</summary>
+    public double? AvgTimeToFirstTokenMs { get; set; }
+
+    /// <summary>Unix seconds, aligned to the configured probe interval.</summary>
+    public long Timestamp { get; set; }
+
+    public long ChannelId { get; set; }
+}
+
+/// <summary>
 /// Row of the reference <c>models</c> table (internal/ent/schema/model.go). The
 /// model library supplies the automatic channel prices: each enabled or
 /// disabled model's <see cref="ModelCard"/> carries the per-token costs.

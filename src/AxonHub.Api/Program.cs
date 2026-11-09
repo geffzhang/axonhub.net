@@ -572,6 +572,13 @@ builder.Services.AddScoped<IChannelAutoSyncFrequencyProvider>(
     static services => services.GetRequiredService<SystemChannelSettingsService>());
 builder.Services.AddScoped<ChannelTestService>();
 
+// Channel probes (biz.ChannelProbeService): the channelProbeData read over the
+// interval-aligned channel_probes buckets, gated by read_channels for the
+// stored probe setting. The writer, the per-minute scheduler and the manual
+// trigger are not ported (C249).
+builder.Services.AddScoped<IChannelProbeStore, ChannelProbeStore>();
+builder.Services.AddScoped<ChannelProbeService>();
+
 // Channel model sync (syncChannelModels): the per-channel fetch/merge/price
 // transaction and the hourly schedule guard (channel_model_sync.go). A changed
 // sync signals the enabled-channel cache grain, matching the reference's

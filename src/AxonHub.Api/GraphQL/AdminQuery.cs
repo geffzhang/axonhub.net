@@ -1139,6 +1139,36 @@ public sealed class AdminQuery
         CancellationToken cancellationToken)
         => channels.QueryChannelsAsync(input, cancellationToken);
 
+    /// <summary>
+    /// Port of queryResolver.ChannelProbeData (channel_probe.resolvers.go:23-26):
+    /// the resolver returns the service result without another wrapper, and the
+    /// input IDs go through GUID.UnmarshalGQL without a type check.
+    /// </summary>
+    [GraphQLName("channelProbeData")]
+    public async Task<IReadOnlyList<ChannelProbeDataType>> ChannelProbeDataAsync(
+        GetChannelProbeDataInput input,
+        [Service] ChannelProbeService channelProbes,
+        CancellationToken cancellationToken)
+    {
+        List<long> channelIds = new(input.ChannelIDs.Count);
+        foreach (var channelId in input.ChannelIDs)
+        {
+            channelIds.Add(GidValue.Parse(channelId).Id);
+        }
+
+        var data = await channelProbes
+            .BatchQueryChannelProbesAsync(channelIds, cancellationToken)
+            .ConfigureAwait(false);
+
+        List<ChannelProbeDataType> result = new(data.Count);
+        foreach (var item in data)
+        {
+            result.Add(ChannelProbeMapping.ToGraphQL(item));
+        }
+
+        return result;
+    }
+
     /// <summary>Port of queryResolver.AllChannelSummarys (non-project branch).</summary>
     [GraphQLName("allChannelSummarys")]
     public Task<IReadOnlyList<ChannelType>> AllChannelSummarysAsync(
