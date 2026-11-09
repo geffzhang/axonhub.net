@@ -286,3 +286,19 @@ internal sealed class RecordingAutoBackupRescheduleSignal : IAutoBackupReschedul
         return Task.CompletedTask;
     }
 }
+
+/// <summary>
+/// Records the video storage scan signal that updateVideoStorageSettings sends
+/// (video_storage.Worker.Reschedule, system.resolvers.go:171).
+/// </summary>
+internal sealed class RecordingVideoStorageRescheduleSignal : IVideoStorageRescheduleSignal
+{
+    public int Calls { get; private set; }
+
+    public Task RescheduleAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Task.CompletedTask;
+    }
+}

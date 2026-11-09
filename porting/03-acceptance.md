@@ -407,6 +407,20 @@ HotChocolate 校验器，而非参照 UnmarshalGQL 的 `invalid ProbeFrequency: 
 错误前缀（含 brand 读取与 general 写入的双前缀）逐字一致，字段级 JSON 类型错误沿用 C064，
 `timeLocation` 缓存失效因端口每次读取时区而不可观察（C186）。
 
+§153 追加 18 个用例（`AxonHub.Api.Tests` 18：`AdminSystemSettingsEndpointTests`），同样按
+项目规则未运行 lint / build / test；§153 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、
+`AxonHub.Api.Tests` 5525、`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353，四项目
+合计 9130，下一次全量运行应以该数字复核。该切片接入 system-settings 第三批 9 个根字段：
+`videoStorageSettings` / `proxyPresets` / `onboardingInfo` 三个查询与
+`updateVideoStorageSettings` / `saveProxyPreset` / `deleteProxyPreset` 与三个
+`complete*Onboarding` 六个变更。视频设置复刻默认 false/0/1/50、`<=0` 扫描值归一、Enabled 时
+对 data storage 的四种拒绝（缺 ID / 不存在 / Primary / database），写入成功后调用可选
+`IVideoStorageRescheduleSignal`；代理预设复刻缺失 / `null` → `[]`、按 URL 就地替换与追加、
+omitempty 字段、删除过滤与逐层错误前缀；onboarding 复刻共享 `time.Now()`、仅自动创建缺失的
+通道模块、模块完成只覆盖自身与逐层错误前缀。新增 C233（accepted）：onboarding 时间戳在
+GraphQL 输出为 UTC（参照保留进程本地偏移，同一瞬时），非法 `completed_at` 的解析文案不同；
+新增 C234（gap）：视频存储扫描 worker 未移植，设置面等价但后台扫描不存在。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

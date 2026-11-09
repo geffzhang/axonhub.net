@@ -360,6 +360,173 @@ public sealed class AdminMutation
     }
 
     /// <summary>
+    /// Port of mutationResolver.UpdateVideoStorageSettings
+    /// (system.resolvers.go:165-173): a successful write re-arms the video
+    /// storage scan task (<c>videoWorker.Reschedule(ctx, scheduler)</c>).
+    /// </summary>
+    [GraphQLName("updateVideoStorageSettings")]
+    public async Task<bool> UpdateVideoStorageSettingsAsync(
+        UpdateVideoStorageSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        [Service] IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetVideoStorageSettingsAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update video storage settings: " + ex.Message,
+                ex);
+        }
+
+        // The scan worker is not ported yet (gap); hosts leave the signal
+        // unregistered, like the reference's nil scheduler.
+        var rescheduleSignal = services.GetService<IVideoStorageRescheduleSignal>();
+        if (rescheduleSignal is not null)
+        {
+            await rescheduleSignal.RescheduleAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.SaveProxyPreset (system.resolvers.go:288-296).
+    /// </summary>
+    [GraphQLName("saveProxyPreset")]
+    public async Task<bool> SaveProxyPresetAsync(
+        SaveProxyPresetInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SaveProxyPresetAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to save proxy preset: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteProxyPreset (system.resolvers.go:298-306).
+    /// </summary>
+    [GraphQLName("deleteProxyPreset")]
+    public async Task<bool> DeleteProxyPresetAsync(
+        string url,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.DeleteProxyPresetAsync(url, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to delete proxy preset: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CompleteOnboarding
+    /// (system.resolvers.go:112-120); the input carries only a dummy field.
+    /// </summary>
+    [GraphQLName("completeOnboarding")]
+    public async Task<bool> CompleteOnboardingAsync(
+        CompleteOnboardingInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        _ = input;
+
+        try
+        {
+            await settings.CompleteOnboardingAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to complete onboarding: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CompleteSystemModelSettingOnboarding
+    /// (system.resolvers.go:122-130).
+    /// </summary>
+    [GraphQLName("completeSystemModelSettingOnboarding")]
+    public async Task<bool> CompleteSystemModelSettingOnboardingAsync(
+        CompleteSystemModelSettingOnboardingInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        _ = input;
+
+        try
+        {
+            await settings.CompleteSystemModelSettingOnboardingAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to complete system model setting onboarding: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CompleteAutoDisableChannelOnboarding
+    /// (system.resolvers.go:132-140).
+    /// </summary>
+    [GraphQLName("completeAutoDisableChannelOnboarding")]
+    public async Task<bool> CompleteAutoDisableChannelOnboardingAsync(
+        CompleteAutoDisableChannelOnboardingInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        _ = input;
+
+        try
+        {
+            await settings.CompleteAutoDisableChannelOnboardingAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to complete auto disable channel onboarding: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Port of mutationResolver.UpdateDefaultDataStorage
     /// (system.resolvers.go:103-110). The gid type is ignored, like UpdateDataStorage.
     /// </summary>

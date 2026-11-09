@@ -289,6 +289,68 @@ public sealed class AdminQuery
     }
 
     /// <summary>
+    /// Port of queryResolver.VideoStorageSettings (system.resolvers.go:624-627):
+    /// the resolver returns the service result without another wrapper.
+    /// </summary>
+    [GraphQLName("videoStorageSettings")]
+    public async Task<VideoStorageSettingsType> VideoStorageSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetVideoStorageSettingsAsync(cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.ProxyPresets (system.resolvers.go:644-652): the
+    /// service error is wrapped a second time.
+    /// </summary>
+    [GraphQLName("proxyPresets")]
+    public async Task<IReadOnlyList<ProxyPresetType>> ProxyPresetsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ProxyPreset> presets;
+        try
+        {
+            presets = await settings.GetProxyPresetsAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get proxy presets: " + ex.Message,
+                ex);
+        }
+
+        return presets.Select(preset => SystemSettingsMapping.ToGraphQL(preset)).ToList();
+    }
+
+    /// <summary>
+    /// Port of queryResolver.OnboardingInfo (system.resolvers.go:557-590): a
+    /// missing record renders as null and the service error is wrapped again.
+    /// </summary>
+    [GraphQLName("onboardingInfo")]
+    public async Task<OnboardingInfoType?> OnboardingInfoAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        OnboardingRecord? info;
+        try
+        {
+            info = await settings.GetOnboardingInfoAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get onboarding info: " + ex.Message,
+                ex);
+        }
+
+        return info is null ? null : SystemSettingsMapping.ToGraphQL(info);
+    }
+
+    /// <summary>
     /// Port of queryResolver.QuotaRoutingSettings (system.resolvers.go:705-708):
     /// the strict read, so a malformed or invalid stored mode is a field error.
     /// </summary>

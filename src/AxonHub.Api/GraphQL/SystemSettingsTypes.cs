@@ -1379,4 +1379,192 @@ public static class SystemSettingsMapping
         AutoSyncFrequencyValue.SixHours => AutoSyncFrequencies.SixHours,
         _ => AutoSyncFrequencies.OneDay,
     };
+
+    public static VideoStorageSettingsType ToGraphQL(VideoStorageSettings settings) => new()
+    {
+        Enabled = settings.Enabled,
+        DataStorageId = settings.DataStorageId,
+        ScanIntervalMinutes = settings.ScanIntervalMinutes,
+        ScanLimit = settings.ScanLimit,
+    };
+
+    /// <summary>
+    /// gqlgen decodes UpdateVideoStorageSettingsInput straight into
+    /// biz.VideoStorageSettings: absent numbers and booleans become the zero
+    /// value, so an omitted field resets rather than preserving the stored one.
+    /// </summary>
+    public static VideoStorageSettings ToDomain(UpdateVideoStorageSettingsInput input) => new()
+    {
+        Enabled = input.Enabled ?? false,
+        DataStorageId = input.DataStorageId ?? 0,
+        ScanIntervalMinutes = input.ScanIntervalMinutes ?? 0,
+        ScanLimit = input.ScanLimit ?? 0,
+    };
+
+    public static ProxyPresetType ToGraphQL(ProxyPreset preset) => new()
+    {
+        Name = preset.Name,
+        Url = preset.Url,
+        Username = preset.Username,
+        Password = preset.Password,
+    };
+
+    /// <summary>Absent optional strings decode to the Go zero value.</summary>
+    public static ProxyPreset ToDomain(SaveProxyPresetInput input) => new()
+    {
+        Name = input.Name ?? string.Empty,
+        Url = input.Url,
+        Username = input.Username ?? string.Empty,
+        Password = input.Password ?? string.Empty,
+    };
+
+    /// <summary>
+    /// Port of queryResolver.OnboardingInfo (system.resolvers.go:557-590): the
+    /// absent modules stay null and the timestamps are the values parsed from
+    /// the stored record.
+    /// </summary>
+    public static OnboardingInfoType ToGraphQL(OnboardingRecord record) => new()
+    {
+        Onboarded = record.Onboarded,
+        CompletedAt = ToGraphQLTime(record.CompletedAt),
+        SystemModelSetting = record.SystemModelSetting is null
+            ? null
+            : new SystemModelSettingOnboardingType
+            {
+                Onboarded = record.SystemModelSetting.Onboarded,
+                CompletedAt = ToGraphQLTime(record.SystemModelSetting.CompletedAt),
+            },
+        AutoDisableChannel = record.AutoDisableChannel is null
+            ? null
+            : new AutoDisableChannelOnboardingType
+            {
+                Onboarded = record.AutoDisableChannel.Onboarded,
+                CompletedAt = ToGraphQLTime(record.AutoDisableChannel.CompletedAt),
+            },
+    };
+
+    /// <summary>
+    /// The Time scalar renders UTC (GoTimeType); the reference's
+    /// <c>time.Now()</c> values keep the process local offset (C233).
+    /// </summary>
+    private static DateTime? ToGraphQLTime(DateTimeOffset? value) => value?.UtcDateTime;
+}
+
+/// <summary>Port of the <c>VideoStorageSettings</c> type (system.graphql:325-330).</summary>
+[GraphQLName("VideoStorageSettings")]
+public sealed class VideoStorageSettingsType
+{
+    public bool Enabled { get; init; }
+
+    [GraphQLName("dataStorageID")]
+    public int DataStorageId { get; init; }
+
+    public int ScanIntervalMinutes { get; init; }
+
+    public int ScanLimit { get; init; }
+}
+
+/// <summary>Port of <c>UpdateVideoStorageSettingsInput</c> (system.graphql:332-337).</summary>
+public sealed class UpdateVideoStorageSettingsInput
+{
+    public bool? Enabled { get; set; }
+
+    [GraphQLName("dataStorageID")]
+    public int? DataStorageId { get; set; }
+
+    public int? ScanIntervalMinutes { get; set; }
+
+    public int? ScanLimit { get; set; }
+}
+
+/// <summary>Port of the <c>ProxyPreset</c> type (system.graphql:362-367).</summary>
+[GraphQLName("ProxyPreset")]
+public sealed class ProxyPresetType
+{
+    public string? Name { get; init; }
+
+    [GraphQLType(typeof(NonNullType<StringType>))]
+    public string Url { get; init; } = string.Empty;
+
+    public string? Username { get; init; }
+
+    public string? Password { get; init; }
+}
+
+/// <summary>Port of <c>SaveProxyPresetInput</c> (system.graphql:369-374).</summary>
+public sealed class SaveProxyPresetInput
+{
+    public string? Name { get; set; }
+
+    [GraphQLType(typeof(NonNullType<StringType>))]
+    public string Url { get; set; } = string.Empty;
+
+    public string? Username { get; set; }
+
+    public string? Password { get; set; }
+}
+
+/// <summary>
+/// Port of <c>SystemModelSettingOnboarding</c> (system.graphql:242-245).
+/// </summary>
+[GraphQLName("SystemModelSettingOnboarding")]
+public sealed class SystemModelSettingOnboardingType
+{
+    public bool Onboarded { get; init; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CompletedAt { get; init; }
+}
+
+/// <summary>
+/// Port of <c>AutoDisableChannelOnboarding</c> (system.graphql:247-250).
+/// </summary>
+[GraphQLName("AutoDisableChannelOnboarding")]
+public sealed class AutoDisableChannelOnboardingType
+{
+    public bool Onboarded { get; init; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CompletedAt { get; init; }
+}
+
+/// <summary>Port of the <c>OnboardingInfo</c> type (system.graphql:252-257).</summary>
+[GraphQLName("OnboardingInfo")]
+public sealed class OnboardingInfoType
+{
+    public bool Onboarded { get; init; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CompletedAt { get; init; }
+
+    public SystemModelSettingOnboardingType? SystemModelSetting { get; init; }
+
+    public AutoDisableChannelOnboardingType? AutoDisableChannel { get; init; }
+}
+
+/// <summary>Port of <c>CompleteOnboardingInput</c> (system.graphql:259-261).</summary>
+public sealed class CompleteOnboardingInput
+{
+    /// <summary>The SDL carries a single optional dummy field.</summary>
+    public string? Dummy { get; set; }
+}
+
+/// <summary>
+/// Port of <c>CompleteSystemModelSettingOnboardingInput</c>
+/// (system.graphql:263-265).
+/// </summary>
+public sealed class CompleteSystemModelSettingOnboardingInput
+{
+    /// <summary>The SDL carries a single optional dummy field.</summary>
+    public string? Dummy { get; set; }
+}
+
+/// <summary>
+/// Port of <c>CompleteAutoDisableChannelOnboardingInput</c>
+/// (system.graphql:267-269).
+/// </summary>
+public sealed class CompleteAutoDisableChannelOnboardingInput
+{
+    /// <summary>The SDL carries a single optional dummy field.</summary>
+    public string? Dummy { get; set; }
 }

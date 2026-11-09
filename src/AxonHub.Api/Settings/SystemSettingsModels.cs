@@ -93,6 +93,53 @@ public sealed record BrandSettings
 }
 
 /// <summary>
+/// Port of biz.ProxyPreset (system_proxy.go:17-23). The three optional strings
+/// are always present in the domain; the stored JSON omits the empty ones.
+/// </summary>
+public sealed record ProxyPreset
+{
+    public string Name { get; init; } = string.Empty;
+
+    public string Url { get; init; } = string.Empty;
+
+    public string Username { get; init; } = string.Empty;
+
+    public string Password { get; init; } = string.Empty;
+}
+
+/// <summary>Port of biz.OnboardingModule (system_onboarding.go:15-18).</summary>
+public sealed record OnboardingModule
+{
+    public bool Onboarded { get; init; }
+
+    public DateTimeOffset? CompletedAt { get; init; }
+}
+
+/// <summary>Port of biz.OnboardingRecord (system_onboarding.go:21-28).</summary>
+public sealed record OnboardingRecord
+{
+    public bool Onboarded { get; init; }
+
+    public DateTimeOffset? CompletedAt { get; init; }
+
+    public OnboardingModule? SystemModelSetting { get; init; }
+
+    public OnboardingModule? AutoDisableChannel { get; init; }
+}
+
+/// <summary>Port of biz.VideoStorageSettings (system.go:149-160).</summary>
+public sealed record VideoStorageSettings
+{
+    public bool Enabled { get; init; }
+
+    public int DataStorageId { get; init; }
+
+    public int ScanIntervalMinutes { get; init; }
+
+    public int ScanLimit { get; init; }
+}
+
+/// <summary>
 /// Port of the defaults in system_default.go:6-8 and 101-116. Records are
 /// immutable, so every read can share the same instances, like Go's package
 /// variables.
@@ -131,6 +178,15 @@ public static class SystemSettingsDefaults
         },
         TestSystemPrompt = DefaultChannelTestSystemPrompt,
         TestUserPrompt = DefaultChannelTestUserPrompt,
+    };
+
+    /// <summary>defaultVideoStorageSettings (system_default.go:131-136).</summary>
+    public static VideoStorageSettings VideoStorage { get; } = new()
+    {
+        Enabled = false,
+        DataStorageId = 0,
+        ScanIntervalMinutes = 1,
+        ScanLimit = 50,
     };
 }
 
@@ -312,6 +368,205 @@ public static class SystemSettingsCodec
         return count;
     }
 
+    /// <summary>
+    /// Port of the <c>json.Unmarshal(value, &amp;[]ProxyPreset{})</c> step of
+    /// SystemService.ProxyPresets (system_proxy.go:26-39): a stored
+    /// <c>null</c> decodes to an empty list and a null element to the zero
+    /// preset, like Go's value slices.
+    /// </summary>
+    /// <exception cref="JsonException">The stored value is not valid JSON.</exception>
+    public static List<ProxyPreset> DeserializeProxyPresets(string value)
+    {
+        var stored = JsonSerializer.Deserialize<List<ProxyPresetJson?>>(value, LlmJson.Options);
+        if (stored is null)
+        {
+            return [];
+        }
+
+        var presets = new List<ProxyPreset>(stored.Count);
+        foreach (var preset in stored)
+        {
+            presets.Add(preset is null
+                ? new ProxyPreset()
+                : new ProxyPreset
+                {
+                    Name = preset.Name ?? string.Empty,
+                    Url = preset.Url ?? string.Empty,
+                    Username = preset.Username ?? string.Empty,
+                    Password = preset.Password ?? string.Empty,
+                });
+        }
+
+        return presets;
+    }
+
+    /// <summary>
+    /// Go <c>json.Marshal([]ProxyPreset)</c>: the three optional strings carry
+    /// <c>omitempty</c>; the URL is always emitted.
+    /// </summary>
+    public static string SerializeProxyPresets(IReadOnlyList<ProxyPreset> presets)
+    {
+        ArgumentNullException.ThrowIfNull(presets);
+
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(
+                   buffer,
+                   new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartArray();
+            foreach (var preset in presets)
+            {
+                writer.WriteStartObject();
+                if (preset.Name.Length > 0)
+                {
+                    writer.WriteString("name", preset.Name);
+                }
+
+                writer.WriteString("url", preset.Url);
+                if (preset.Username.Length > 0)
+                {
+                    writer.WriteString("username", preset.Username);
+                }
+
+                if (preset.Password.Length > 0)
+                {
+                    writer.WriteString("password", preset.Password);
+                }
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(GoJson.Escape(buffer.ToArray()));
+    }
+
+    /// <summary>
+    /// Port of the <c>json.Unmarshal(value, &amp;OnboardingRecord{})</c> step of
+    /// SystemService.OnboardingInfo (system_onboarding.go:31-48): a stored
+    /// <c>null</c> leaves the zero record and the absent modules stay nil.
+    /// </summary>
+    /// <exception cref="JsonException">The stored value is not valid JSON.</exception>
+    public static OnboardingRecord DeserializeOnboarding(string value)
+    {
+        var stored = JsonSerializer.Deserialize<OnboardingRecordJson>(value, LlmJson.Options);
+        if (stored is null)
+        {
+            return new OnboardingRecord();
+        }
+
+        return new OnboardingRecord
+        {
+            Onboarded = stored.Onboarded,
+            CompletedAt = stored.CompletedAt,
+            SystemModelSetting = ToOnboardingModule(stored.SystemModelSetting),
+            AutoDisableChannel = ToOnboardingModule(stored.AutoDisableChannel),
+        };
+    }
+
+    /// <summary>
+    /// Go <c>json.Marshal(*OnboardingRecord)</c>: fields in declaration order,
+    /// the nil time and module pointers dropped by <c>omitempty</c>.
+    /// </summary>
+    public static string SerializeOnboarding(OnboardingRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(
+                   buffer,
+                   new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartObject();
+            writer.WriteBoolean("onboarded", record.Onboarded);
+            if (record.CompletedAt is { } completedAt)
+            {
+                writer.WriteString("completed_at", GoTime.Rfc3339Nano(completedAt));
+            }
+
+            if (record.SystemModelSetting is { } systemModelSetting)
+            {
+                writer.WritePropertyName("system_model_setting");
+                WriteOnboardingModule(writer, systemModelSetting);
+            }
+
+            if (record.AutoDisableChannel is { } autoDisableChannel)
+            {
+                writer.WritePropertyName("auto_disable_channel");
+                WriteOnboardingModule(writer, autoDisableChannel);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(GoJson.Escape(buffer.ToArray()));
+    }
+
+    /// <summary>
+    /// Port of the <c>json.Unmarshal</c> step of
+    /// SystemService.VideoStorageSettings (system.go:1678-1695).
+    /// </summary>
+    /// <exception cref="JsonException">The stored value is not valid JSON.</exception>
+    public static VideoStorageSettings DeserializeVideoStorage(string value)
+    {
+        var stored = JsonSerializer.Deserialize<VideoStorageSettingsJson>(
+            value,
+            LlmJson.Options) ?? new VideoStorageSettingsJson();
+
+        return new VideoStorageSettings
+        {
+            Enabled = stored.Enabled,
+            DataStorageId = stored.DataStorageId,
+            ScanIntervalMinutes = stored.ScanIntervalMinutes,
+            ScanLimit = stored.ScanLimit,
+        };
+    }
+
+    /// <summary>Go <c>json.Marshal(VideoStorageSettings)</c>: every field emitted.</summary>
+    public static string SerializeVideoStorage(VideoStorageSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(
+                   buffer,
+                   new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartObject();
+            writer.WriteBoolean("enabled", settings.Enabled);
+            writer.WriteNumber("data_storage_id", settings.DataStorageId);
+            writer.WriteNumber("scan_interval_minutes", settings.ScanIntervalMinutes);
+            writer.WriteNumber("scan_limit", settings.ScanLimit);
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(GoJson.Escape(buffer.ToArray()));
+    }
+
+    private static OnboardingModule? ToOnboardingModule(OnboardingModuleJson? stored)
+        => stored is null
+            ? null
+            : new OnboardingModule
+            {
+                Onboarded = stored.Onboarded,
+                CompletedAt = stored.CompletedAt,
+            };
+
+    private static void WriteOnboardingModule(
+        Utf8JsonWriter writer,
+        OnboardingModule module)
+    {
+        writer.WriteStartObject();
+        writer.WriteBoolean("onboarded", module.Onboarded);
+        if (module.CompletedAt is { } completedAt)
+        {
+            writer.WriteString("completed_at", GoTime.Rfc3339Nano(completedAt));
+        }
+
+        writer.WriteEndObject();
+    }
+
     private static string DecodeAutoSyncFrequency(JsonElement? element)
     {
         if (element is not { } value || value.ValueKind != JsonValueKind.String)
@@ -365,5 +620,61 @@ public static class SystemSettingsCodec
     {
         [JsonPropertyName("frequency")]
         public JsonElement Frequency { get; set; }
+    }
+
+    private sealed class ProxyPresetJson
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("url")]
+        public string? Url { get; set; }
+
+        [JsonPropertyName("username")]
+        public string? Username { get; set; }
+
+        [JsonPropertyName("password")]
+        public string? Password { get; set; }
+    }
+
+    private sealed class OnboardingModuleJson
+    {
+        [JsonPropertyName("onboarded")]
+        public bool Onboarded { get; set; }
+
+        [JsonPropertyName("completed_at")]
+        [JsonConverter(typeof(GoNullableRfc3339NanoConverter))]
+        public DateTimeOffset? CompletedAt { get; set; }
+    }
+
+    private sealed class OnboardingRecordJson
+    {
+        [JsonPropertyName("onboarded")]
+        public bool Onboarded { get; set; }
+
+        [JsonPropertyName("completed_at")]
+        [JsonConverter(typeof(GoNullableRfc3339NanoConverter))]
+        public DateTimeOffset? CompletedAt { get; set; }
+
+        [JsonPropertyName("system_model_setting")]
+        public OnboardingModuleJson? SystemModelSetting { get; set; }
+
+        [JsonPropertyName("auto_disable_channel")]
+        public OnboardingModuleJson? AutoDisableChannel { get; set; }
+    }
+
+    private sealed class VideoStorageSettingsJson
+    {
+        [JsonPropertyName("enabled")]
+        public bool Enabled { get; set; }
+
+        [JsonPropertyName("data_storage_id")]
+        public int DataStorageId { get; set; }
+
+        [JsonPropertyName("scan_interval_minutes")]
+        public int ScanIntervalMinutes { get; set; }
+
+        [JsonPropertyName("scan_limit")]
+        public int ScanLimit { get; set; }
     }
 }

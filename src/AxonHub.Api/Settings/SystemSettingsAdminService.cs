@@ -137,16 +137,87 @@ public interface ISystemSettingsAdminService
     Task SetInjectUsageCostEnabledAsync(
         bool enabled,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.VideoStorageSettings (system.go:1678-1695): a
+    /// missing row returns the defaults and non-positive scan values are
+    /// normalized to 1 / 50.
+    /// </summary>
+    Task<VideoStorageSettings> GetVideoStorageSettingsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.SetVideoStorageSettings (system.go:1697-1740):
+    /// normalizes the scan values, validates the target data storage and
+    /// writes the document.
+    /// </summary>
+    Task SetVideoStorageSettingsAsync(
+        VideoStorageSettings settings,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.ProxyPresets (system_proxy.go:26-39).</summary>
+    Task<IReadOnlyList<ProxyPreset>> GetProxyPresetsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.SaveProxyPreset (system_proxy.go:42-67): upserts
+    /// by URL, replacing the existing entry in place.
+    /// </summary>
+    Task SaveProxyPresetAsync(ProxyPreset preset, CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.DeleteProxyPreset (system_proxy.go:70-94).</summary>
+    Task DeleteProxyPresetAsync(string url, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.OnboardingInfo (system_onboarding.go:31-48): the
+    /// missing row is null, not an error.
+    /// </summary>
+    Task<OnboardingRecord?> GetOnboardingInfoAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.CompleteOnboarding (system_onboarding.go:61-81).</summary>
+    Task CompleteOnboardingAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.CompleteSystemModelSettingOnboarding
+    /// (system_onboarding.go:84-98).
+    /// </summary>
+    Task CompleteSystemModelSettingOnboardingAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.CompleteAutoDisableChannelOnboarding
+    /// (system_onboarding.go:101-115).
+    /// </summary>
+    Task CompleteAutoDisableChannelOnboardingAsync(
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="ISystemSettingsAdminService"/>
-public sealed class SystemSettingsAdminService(ISystemStore systems) : ISystemSettingsAdminService
+/// <param name="systems">The systems key/value store.</param>
+/// <param name="dataStorages">
+/// The data_storages store used by the video-storage target validation. Hosts
+/// always register it; the optional default keeps unit construction that does
+/// not touch video storage unchanged.
+/// </param>
+public sealed class SystemSettingsAdminService(
+    ISystemStore systems,
+    IDataStorageStore? dataStorages = null) : ISystemSettingsAdminService
 {
     /// <summary>biz.SystemKeyInitialized.</summary>
     public const string InitializedKey = "system_initialized";
 
     /// <summary>biz.SystemKeyDefaultDataStorage (system.go:80).</summary>
     public const string DefaultDataStorageIdKey = "default_data_storage_id";
+
+    /// <summary>biz.SystemKeyVideoStorageSettings (system.go:104).</summary>
+    public const string VideoStorageSettingsKey = "system_video_storage_settings";
+
+    /// <summary>biz.SystemKeyOnboarded (system.go:84).</summary>
+    public const string OnboardedKey = "system_onboarded";
+
+    /// <summary>datastorage.TypeDatabase.</summary>
+    private const string DatabaseStorageType = "database";
 
     /// <summary>maxChannelSettingUpdateAttempts (system.go:37).</summary>
     public const int MaxChannelSettingUpdateAttempts = 5;
@@ -862,6 +933,378 @@ public sealed class SystemSettingsAdminService(ISystemStore systems) : ISystemSe
             SystemConfigBackupKeys.InjectUsageCost,
             enabled ? "true" : "false",
             cancellationToken);
+
+    public async Task<VideoStorageSettings> GetVideoStorageSettingsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                VideoStorageSettingsKey,
+                "failed to get video storage settings",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: the defaults are returned as-is.
+            return SystemSettingsDefaults.VideoStorage;
+        }
+
+        VideoStorageSettings settings;
+        try
+        {
+            settings = SystemSettingsCodec.DeserializeVideoStorage(row.Value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal video storage settings: " + ex.Message,
+                ex);
+        }
+
+        return NormalizeVideoStorage(settings);
+    }
+
+    public async Task SetVideoStorageSettingsAsync(
+        VideoStorageSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        settings = NormalizeVideoStorage(settings);
+
+        if (settings.Enabled)
+        {
+            if (settings.DataStorageId == 0)
+            {
+                throw new InvalidOperationException(
+                    "data_storage_id is required when video storage is enabled");
+            }
+
+            DataStorageRecord? dataStorage;
+            try
+            {
+                if (dataStorages is null)
+                {
+                    throw new InvalidOperationException("data storage store is not configured");
+                }
+
+                dataStorage = await dataStorages
+                    .GetByIdAsync(settings.DataStorageId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to get data storage: " + ex.Message,
+                    ex);
+            }
+
+            if (dataStorage is null)
+            {
+                // DataStorageManagementService.DataStorageNotFound: ent's
+                // NotFoundError text for the data_storages table.
+                throw new InvalidOperationException(
+                    "failed to get data storage: "
+                    + DataStorageManagementService.DataStorageNotFound);
+            }
+
+            if (dataStorage.Primary
+                || string.Equals(dataStorage.Type, DatabaseStorageType, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "video storage must use a non-database data storage");
+            }
+        }
+
+        string value;
+        try
+        {
+            value = SystemSettingsCodec.SerializeVideoStorage(settings);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal video storage settings: " + ex.Message,
+                ex);
+        }
+
+        try
+        {
+            await SetValueAsync(VideoStorageSettingsKey, value, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to set video storage settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task<IReadOnlyList<ProxyPreset>> GetProxyPresetsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                SystemConfigBackupKeys.ProxyPresets,
+                "failed to get proxy presets",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: an empty, non-nil list.
+            return [];
+        }
+
+        try
+        {
+            return SystemSettingsCodec.DeserializeProxyPresets(row.Value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal proxy presets: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task SaveProxyPresetAsync(
+        ProxyPreset preset,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(preset);
+
+        // The reference returns ProxyPresets errors unchanged here.
+        var presets = new List<ProxyPreset>(
+            await GetProxyPresetsAsync(cancellationToken).ConfigureAwait(false));
+
+        var found = false;
+        for (var i = 0; i < presets.Count; i++)
+        {
+            if (string.Equals(presets[i].Url, preset.Url, StringComparison.Ordinal))
+            {
+                presets[i] = preset;
+                found = true;
+
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            presets.Add(preset);
+        }
+
+        string value;
+        try
+        {
+            value = SystemSettingsCodec.SerializeProxyPresets(presets);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal proxy presets: " + ex.Message,
+                ex);
+        }
+
+        // setSystemValue errors pass through with their own prefix.
+        await SetValueAsync(SystemConfigBackupKeys.ProxyPresets, value, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task DeleteProxyPresetAsync(
+        string url,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+
+        var presets = await GetProxyPresetsAsync(cancellationToken).ConfigureAwait(false);
+
+        var filtered = new List<ProxyPreset>(presets.Count);
+        foreach (var preset in presets)
+        {
+            if (!string.Equals(preset.Url, url, StringComparison.Ordinal))
+            {
+                filtered.Add(preset);
+            }
+        }
+
+        string value;
+        try
+        {
+            value = SystemSettingsCodec.SerializeProxyPresets(filtered);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal proxy presets: " + ex.Message,
+                ex);
+        }
+
+        await SetValueAsync(SystemConfigBackupKeys.ProxyPresets, value, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<OnboardingRecord?> GetOnboardingInfoAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                OnboardedKey,
+                "failed to get onboarding info",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: not set yet.
+            return null;
+        }
+
+        try
+        {
+            return SystemSettingsCodec.DeserializeOnboarding(row.Value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal onboarding info: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task CompleteOnboardingAsync(CancellationToken cancellationToken = default)
+    {
+        var info = await GetExistingOnboardingInfoAsync(cancellationToken)
+                .ConfigureAwait(false)
+            ?? new OnboardingRecord();
+
+        // time.Now(): one instant shared by the record and the auto-completed
+        // module.
+        var now = DateTimeOffset.Now;
+
+        info = info with { Onboarded = true, CompletedAt = now };
+
+        // For new users the auto-disable-channel module is completed in the
+        // main flow; an existing module keeps its timestamp.
+        if (info.AutoDisableChannel is null)
+        {
+            info = info with
+            {
+                AutoDisableChannel = new OnboardingModule
+                {
+                    Onboarded = true,
+                    CompletedAt = now,
+                },
+            };
+        }
+
+        await SetOnboardingInfoAsync(info, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task CompleteSystemModelSettingOnboardingAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var info = await GetExistingOnboardingInfoAsync(cancellationToken)
+                .ConfigureAwait(false)
+            ?? new OnboardingRecord();
+
+        info = info with
+        {
+            SystemModelSetting = new OnboardingModule
+            {
+                Onboarded = true,
+                CompletedAt = DateTimeOffset.Now,
+            },
+        };
+
+        await SetOnboardingInfoAsync(info, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task CompleteAutoDisableChannelOnboardingAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var info = await GetExistingOnboardingInfoAsync(cancellationToken)
+                .ConfigureAwait(false)
+            ?? new OnboardingRecord();
+
+        info = info with
+        {
+            AutoDisableChannel = new OnboardingModule
+            {
+                Onboarded = true,
+                CompletedAt = DateTimeOffset.Now,
+            },
+        };
+
+        await SetOnboardingInfoAsync(info, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static VideoStorageSettings NormalizeVideoStorage(VideoStorageSettings settings)
+    {
+        if (settings.ScanIntervalMinutes <= 0)
+        {
+            settings = settings with
+            {
+                ScanIntervalMinutes = SystemSettingsDefaults.VideoStorage.ScanIntervalMinutes,
+            };
+        }
+
+        if (settings.ScanLimit <= 0)
+        {
+            settings = settings with
+            {
+                ScanLimit = SystemSettingsDefaults.VideoStorage.ScanLimit,
+            };
+        }
+
+        return settings;
+    }
+
+    /// <summary>
+    /// The Complete* methods wrap OnboardingInfo failures with
+    /// "failed to get existing onboarding info: " (system_onboarding.go:64-67).
+    /// </summary>
+    private async Task<OnboardingRecord?> GetExistingOnboardingInfoAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await GetOnboardingInfoAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get existing onboarding info: " + ex.Message,
+                ex);
+        }
+    }
+
+    private async Task SetOnboardingInfoAsync(
+        OnboardingRecord info,
+        CancellationToken cancellationToken)
+    {
+        string value;
+        try
+        {
+            value = SystemSettingsCodec.SerializeOnboarding(info);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to marshal onboarding info: " + ex.Message,
+                ex);
+        }
+
+        await SetValueAsync(OnboardedKey, value, cancellationToken).ConfigureAwait(false);
+    }
 
     private static string SerializeChannelSetting(SystemChannelSettings setting)
     {

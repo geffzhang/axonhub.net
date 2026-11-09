@@ -7921,6 +7921,78 @@ ONE_HOUR/SIX_HOURS/ONE_DAY；UnmarshalJSON 永不失败，未知值与 1m/5m/30m
 （`SystemTimeLocations` 每次读取，C186）；系统设置的行读取、upsert 与 CAS 复用既有
 `systems` 存储接缝，未新增表或 SQL 语义差异。
 
+## 153. 视频存储设置、代理预设与 onboarding 管理面（3 查询 / 6 变更，18 例，2026-11-09）
+
+参照：`internal/server/biz/system.go:1678-1695`（VideoStorageSettings：缺失返回默认
+false/0/1/50，读取后 `<=0` 的扫描值归一为 1/50）、`1697-1740`（SetVideoStorageSettings：
+先归一化；Enabled 时要求 data_storage_id 非 0、加载 DataStorage（失败带
+`failed to get data storage`，缺失为 `ent: data storage not found`）、拒绝 Primary 或
+`Type == "database"`（`video storage must use a non-database data storage`）；marshal
+错误 `failed to marshal video storage settings`、写入错误
+`failed to set video storage settings`）、`internal/server/biz/system_proxy.go:17-94`
+（ProxyPreset 三字段 omitempty；ProxyPresets 缺失返回空列表、解码失败
+`failed to unmarshal proxy presets`；SaveProxyPreset 按 URL 就地替换否则追加；
+DeleteProxyPreset 按 URL 过滤后写回）、`internal/server/biz/system_onboarding.go:15-115`
+（OnboardingModule / OnboardingRecord 的 omitempty；OnboardingInfo 缺失为 nil；
+CompleteOnboarding 用同一个 `time.Now()` 完成根记录且仅在 AutoDisableChannel 为 nil 时
+自动完成该模块；两个模块完成方法只覆盖自己的模块；`failed to get existing onboarding
+info` 包装）、`internal/server/biz/system_default.go:131-136`
+（defaultVideoStorageSettings）、`internal/server/video_storage/worker.go:1-140`
+（设置写入后的 Reschedule；worker 本体未移植，见 C234）、
+`internal/server/gql/system.graphql:238-275、300-390、485-500`（OnboardingInfo 族、
+VideoStorageSettings 族与 ProxyPreset 族的输出 / 输入类型）、
+`internal/server/gql/system.resolvers.go:113-140`（三个 onboarding 变更与
+`failed to complete ... onboarding` 前缀）、`165-173`（updateVideoStorageSettings 成功后
+`videoWorker.Reschedule`）、`285-306`（save / delete proxy preset 前缀）、`557-590`
+（onboardingInfo 查询再包一层前缀）、`624-652`（videoStorageSettings 薄转发、
+proxyPresets 再包一层前缀）。
+
+| 项 | 参照值 |
+|---|---|
+| videoStorageSettings 读 | 缺失 → false / 0 / 1 / 50；解码失败 `failed to unmarshal video storage settings: ...`（查询不再包前缀）；扫描值 `<=0` 归一 |
+| videoStorageSettings 写 | gqlgen 直接解码为 biz 结构，故缺省字段为零值（重置而非保留）；归一化 → Enabled 校验（缺 ID / 存储不存在 / Primary / database）→ Go 字段序文档；错误为 `failed to update video storage settings: failed to set video storage settings: failed to create system setting: ...`；成功后触发重排 |
+| proxyPresets 读 | 缺失或存储 `null` → `[]`；解码失败双层前缀（服务 `failed to unmarshal proxy presets`、查询再包 `failed to get proxy presets`） |
+| proxyPreset 写 | Save 按 URL 就地替换、否则追加；Delete 过滤后重写；name / username / password 空串省略、url 恒输出；服务层不重包 ProxyPresets / setSystemValue 错误，变更层各包一次 |
+| onboardingInfo 读 | 缺失 → null；解码失败服务层 `failed to unmarshal onboarding info`，查询再包一层 `failed to get onboarding info` |
+| onboarding 写 | CompleteOnboarding 共享一个 `time.Now()`，仅在 AutoDisableChannel 为 nil 时创建并完成；两个模块完成方法只覆盖自己的模块；错误经 `failed to get existing onboarding info` 与变更前缀逐层叠加 |
+
+端口实现：
+
+- `src/AxonHub.Api/Settings/SystemSettingsModels.cs`：`ProxyPreset` / `OnboardingModule` /
+  `OnboardingRecord` / `VideoStorageSettings` 域记录与 `SystemSettingsDefaults.VideoStorage`
+  （false/0/1/50）；`SystemSettingsCodec` 新增五组编解码：ProxyPreset 数组（null 根 →
+  空列表、null 元素 → 零值、omitempty 字段）、Onboarding（字段序 + omitempty +
+  RFC3339Nano 时间）、VideoStorage（四字段全量），全部经 `GoJson.Escape`。
+- `src/AxonHub.Api/Settings/SystemSettingsAdminService.cs`：新增 9 个方法（视频设置读写、
+  代理预设三方法、onboarding 四方法），逐项复刻上表的缺失语义、归一化、校验顺序与错误
+  前缀；构造器新增可选 `IDataStorageStore?`（生产 DI 注入已注册的 store，既有单参数
+  构造保持可用）。
+- `src/AxonHub.Api/Management/VideoStorageRescheduleSignal.cs`：
+  `IVideoStorageRescheduleSignal` 接缝；生产不注册（扫描 worker 未移植，C234），宿主可
+  接管重排。
+- `src/AxonHub.Api/GraphQL/SystemSettingsTypes.cs`：VideoStorageSettings / ProxyPreset
+  输出类型、OnboardingInfo 族三个输出类型、四个输入类型与域 ↔ GraphQL 映射（时间经
+  GoTimeType 输出 UTC，C233）。
+- `src/AxonHub.Api/GraphQL/AdminQuery.cs`：`videoStorageSettings`、`proxyPresets`、
+  `onboardingInfo` 三个查询；`AdminMutation.cs`：`updateVideoStorageSettings`、
+  `saveProxyPreset`、`deleteProxyPreset` 与三个 `complete*Onboarding` 共六个变更，前缀
+  逐字一致，视频设置写入成功后调用可选重排信号。
+
+测试（18 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/AdminSystemSettingsEndpointTests.cs` | 18 | 视频设置默认值、非正扫描值归一、查询错误前缀；写入文档与归一、Enabled 校验四分支（缺 ID / 不存在 / Primary / database）与合法 fs、写入错误前缀且不重排；代理预设缺失 / null → `[]`、存储文档读取（缺省字段为空串）、查询双层错误、按 URL 追加与就地替换、删除过滤与空数组、Save / Delete 双层错误前缀；onboarding 完成前为 null、CompleteOnboarding 共享时间戳并自动完成通道模块、已有模块时间戳保留、模块完成只写自身且互不覆盖、查询 / 变更逐层错误前缀 |
+
+静态计数：`AxonHub.Api.Tests` 由 5507 增至 5525（+18），`AxonHub.Grains.Tests` 1746、
+`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353 不变，四项目合计由 9112 增至
+9130。**按项目规则未运行 lint / build / test。**
+
+差异：新增 C233（accepted）：onboarding 时间戳在 GraphQL 输出为 UTC（参照保留本地偏移，
+同一瞬时），非法 `completed_at` 的解析文案不同。新增 C234（gap）：视频存储扫描 worker
+未移植，设置面等价但后台扫描不存在。`system_proxy_presets` 已在备份键清单中，备份语义
+不变。
+
 ## 覆盖缺口
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
@@ -7933,7 +8005,7 @@ ONE_HOUR/SIX_HOURS/ONE_DAY；UnmarshalJSON 永不失败，未知值与 1m/5m/30m
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |
 | Responses API 非流式以外部分 | Anthropic Messages 双向链路已实现：入站（非流式与流式）由第 10 节的 155 + 7 例锁定，出站（含 SSE 与 cache_control 优化器）由第 11 节的 67 例锁定；Responses 非流式双向变换（含 compact）由第 12 节的 158 例锁定，图片请求/响应路径与图片流式聚合由第 14 节的 26 例锁定（C059 闭合），流式状态机与聚合由第 13 节的 86 例锁定（C063 闭合），WebSocket 传输与 HTTP 包装由第 15 节的 45 例锁定（C061 闭合；生产接线见 C072），端点运行时解析与传输保真由 §143 的 28 例锁定（C094 item 1 / C072 残余收窄），客户端 OpenAI Images 入站/出站变换器由第 16 节的 71 例锁定（C069 闭合），`/v1/images/*` 路由接线由第 16.1 节的 8 例锁定（C075 闭合，参照本身停用 variations 路由），OpenAI Embeddings / Moderations 客户端变换器与两条路由由第 17 节的 71 例锁定（C076 闭合），OpenAI Alpha Search / Decisions 客户端变换器与两条路由由第 18 节的 137 例锁定（C077 闭合），OpenAI Audio 客户端变换器与三条 `/v1/audio/*` 路由由第 19 节的 102 例锁定（C079 登记，C010 的 speech / transcription 分支闭合），Jina Rerank / Embedding 客户端变换器与 `/v1/rerank`、`/jina/v1/rerank`、`/jina/v1/embeddings` 三条路由由第 20 节的 88 例锁定（C080 登记，C010 的 rerank 分支闭合；非 chat 响应类型仅剩 video），OpenAI Video 客户端变换器 Llm 层由第 21 节的 57 例锁定（C081 登记，C010 的 video Llm 分支闭合），OpenAI Video 端点接线（三条路由、biz VideoService 的任务查询/删除流程与持久化接缝）由第 22 节的 36 例锁定（C082–C085 登记，C010 的 video 端点接线闭合；doubao 视频变换器由第 43 节闭合、ZenMux 视频变换器与通道接线由第 44 节闭合），OpenAI 旧版 Completions 客户端变换器与 `POST /v1/completions` 路由由第 23 节的 69 例锁定（C086 登记） | 中 | 后续阶段 |
-| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与第二批系统设置（brand / general / channel 与三个 pass-through 开关，6 查询 + 6 变更，§152）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、dashboard、其余系统设置类查询（video storage / proxy presets / diagnostics / version / onboarding / catalog）等）未移植（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入，dashboard 的 21 个根字段由 §105 接入，数据存储管理面（dataStorages / node(DataStorage) / createDataStorage / updateDataStorage）由 §106 接入（14 例），备份与自动备份管理面（autoBackupSettings / backup / restore / updateAutoBackupSettings / triggerAutoBackup）由 §107 接入（57 + 24 例）），API key profile template 管理面（apiKeyProfileTemplates 根字段、四个变更与 linkedProfilesCount）由 §109 接入（21 例），邀请的 REST 面（`POST /admin/invitations`、`GET /auth/invitations/:token`、`POST /auth/invitations/:token/register`，含角色删除同事务撤销）由 §110 接入（59 + 14 例；邀请 schema 标注 entgql.SkipAll，SDL 无邀请成员，故无 GraphQL 面）；前端实际调用的 215 个根字段中 145 个已接入（约 67%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 7 个 ent 类型（ChannelProbe / ChannelOverrideTemplate / RequestExecution / Role / System / UserProject / UserRole）见 C165，node(Channel) 与价格读取边由 §136 接入）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
+| GraphQL / 前端 | 前端已原样复用（§47：829 文件、逐字节一致、`frontend/src/gql/` 即服务端契约）；服务端 GraphQL 由 HotChocolate 16 接入 `/admin/graphql`（§48），`allScopes`、system-settings 的 4 查询 / 3 变更（§63）与第二批系统设置（brand / general / channel 与三个 pass-through 开关，6 查询 + 6 变更，§152）与第三批系统设置（video storage / proxy presets / onboarding，3 查询 + 6 变更，§153）与 users / roles 的 2 查询 + 7 变更（§64：gid / Cursor / Time 标量、entgql 分页、嵌套角色、密码哈希）已闭合；channels 的读取（§65：channels / queryChannels / 四个聚合查询）、生命周期写入（§66：状态 / 删除 / 批量状态 / 批量删除 / 批量标签共 10 个变更）与 createChannel（§67：写入校验、ent 默认值与凭据序列化）与 updateChannel（§68：部分列更新、乐观守卫与 live 校验器）、事务内自动补价（§74：create / update 均按 supportedModels 补齐 channel_model_prices）、批量排序 / 批量自动禁用（§69）与端点保存（§70：类型与协议校验、updated_at 守卫）、API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key 五个变更）、端点自动检测（§72：detectChannelEndpoints）与定价写入（§73：saveChannelModelPrices）已接入，重复 / 批量创建 / 批量导入由 §75 接入，通道测试（testChannel / testChannelAPIKeys / testChannelAPIKey）由 §76 接入，模型同步（syncChannelModels / ModelFetcher）由 §77 接入，通道覆盖模板（channelOverrideTemplates 查询与五个变更）由 §78 接入，自助身份（me / myProjects / updateMe / updateMyPassword / unlinkOIDCIdentity）由 §79 接入，管理面登录端点（`POST /admin/auth/signin`、`POST /admin/auth/refresh`）与 JWT 会话由 §80 接入，管理员 GraphQL 鉴权（WithAdminGraphqlAuth / WithProjectID / service_account 只读）由 §81 接入（27 例），但请求超时与其余 SDL 成员（user / role 单实体查询、pricing、backups、dashboard、其余系统设置类查询（diagnostics / version / catalog）等）未移植（视频存储扫描 worker 未移植，C234）（traces / threads 已由 §101 闭合，requests 根查询与 Request 详情 / executions / usageLogs 边由 §102 接入，usageLogs 根查询与 node(UsageLog) 由 §103 接入，analytics 的四个根字段由 §104 接入，dashboard 的 21 个根字段由 §105 接入，数据存储管理面（dataStorages / node(DataStorage) / createDataStorage / updateDataStorage）由 §106 接入（14 例），备份与自动备份管理面（autoBackupSettings / backup / restore / updateAutoBackupSettings / triggerAutoBackup）由 §107 接入（57 + 24 例）），API key profile template 管理面（apiKeyProfileTemplates 根字段、四个变更与 linkedProfilesCount）由 §109 接入（21 例），邀请的 REST 面（`POST /admin/invitations`、`GET /auth/invitations/:token`、`POST /auth/invitations/:token/register`，含角色删除同事务撤销）由 §110 接入（59 + 14 例；邀请 schema 标注 entgql.SkipAll，SDL 无邀请成员，故无 GraphQL 面）；前端实际调用的 215 个根字段中 145 个已接入（约 67%）；前端 project-users 用到的 `node` 查询（Project / User 的 projectUsers 边）与 `addUserToProject` / `removeUserFromProject` / `updateProjectUser` 三个变更由 §85 接入（32 例；node() 其余 7 个 ent 类型（ChannelProbe / ChannelOverrideTemplate / RequestExecution / Role / System / UserProject / UserRole）见 C165，node(Channel) 与价格读取边由 §136 接入）；静态托管与 SPA fallback 已接入（§62：NoRoute 三分支、JSON 404 信封、资产 404 与 SPA no-cache 头，C116 已解决，磁盘根差异登记为 C129）；OIDC 提供方配置、启动发现、图标内联与 `GET /oauth/oidc/providers` 由 §82 接入（53 例），登录流程（authorize / callback / exchange / link）由 §83 接入（143 例，C014 的 OIDC 部分闭合），权限校验器与 users / roles 写入校验由 §84 接入（25 例），项目成员查询与写入由 §85 接入（32 例），模型管理（models / queryModels / queryModelChannelConnections / queryUnassociatedChannels / fetchModels 与八个变更）由 §88 接入（32 例） | 中 | 以现有前端的查询/变更为契约，按实体切片 |
 | 通道管理面：写入校验与覆盖模板 CRUD | 参照的 `ValidateBodyOverrideOperations` / `ValidateOverrideHeaders` / `ValidateRateLimit` 在写入时拒绝非法操作与限流参数，`channel_override_template_test.go` 的 6 例锁定模板 CRUD；端口已有读取/执行路径、§66 的生命周期写入与 §67 的 createChannel 写入校验（body / header 操作、限流与其余设置项）；updateChannel 由 §68 接入（非法配置在写入时拒绝），通道测试由 §76 接入，模型同步由 §77 接入，覆盖模板的 `channel_override_templates` 表、`channelOverrideTemplates` 查询与 create/update/delete/apply/clear 五个变更由 §78 接入（隐私作用域 C161、where 子集 C162、通道顺序 C163），其余通道写操作（C037）未移植 | 中 | 随通道管理面落地（C014） |
 | 负载均衡：adaptive 策略链、WeightRoundRobin、rate-limit、error-aware / additive scoring | 已由 §7 的 24 例与 §7.1 的 18 例锁定（C012 已解决；RateLimitAware 已接入真实限流状态，C035 已解决）；残余 C034（无延迟样本）与 C036（无模型级熔断状态） | 中 | 随延迟指标与模型级熔断落地 |
 | 持久化（channels / projects / users / api_keys / channel_model_prices / models / channel_override_templates / oidc_identities / requests / request_executions / usage_logs / systems / traces / threads / data_storages / api_key_profile_templates） | 已实现 EF Core 写 + Dapper 读 + PostgreSQL 层并由 56 例锁定，覆盖模板存储另由 §78 的 7 例锁定，`models` 管理存储由 §88 的 7 例锁定，`data_storages` 管理存储由 §106 的 8 例锁定，`api_key_profile_templates` 存储由 §109 的 4 例锁定，`invitations` 存储与注册事务由 §110 的 14 例锁定，`oidc_identities` 与自助存储由 §79 的 6 例锁定；生产宿主经 `EnabledChannelsGrain`（`PostgresEnabledChannelSource`）读取启用通道快照，请求/执行/用量/成本经 `RequestChainPersistenceMiddleware` 落库并由 5 例锁定；`traces` 表与 `GetOrCreateTrace` 由第 30 节的 6 例锁定，`threads` 表与 `GetOrCreateThread` 由第 31 节的 5 例锁定。流式归档（external id / body）、终态分类与响应头回填已按参照补齐（C019）；`response_chunks` 的请求链路归档与存储策略的运行时消费未接入（C020）；存储策略的读写、body 清理与 GC 由 §113 接入，响应头捕获点差异已登记（C021） | 低 | 容器化验收；C020 随请求链路存储策略落地 |

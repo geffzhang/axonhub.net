@@ -23,10 +23,12 @@ namespace AxonHub.Api.Tests;
 public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
 {
     private readonly FakeSystemStore _store = new();
+    private readonly FakeDataStorageStore _dataStorages = new();
     private readonly FakeProviderQuotaStatusStore _quotaStatuses = new();
     private readonly FakeChannelStore _quotaChannels = new();
     private readonly ProviderQuotaSettingsCache _quotaCache = new();
     private readonly RecordingAutoBackupRescheduleSignal _reschedule = new();
+    private readonly RecordingVideoStorageRescheduleSignal _videoReschedule = new();
     private readonly AdminGraphqlGateServices _gate = new();
 
     private WebApplication _app = null!;
@@ -39,7 +41,8 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         builder.Services.AddAxonHubGraphQL();
         _gate.Register(builder.Services);
         builder.Services.AddScoped<ISystemSettingsAdminService>(
-            _ => new SystemSettingsAdminService(_store));
+            _ => new SystemSettingsAdminService(_store, _dataStorages));
+        builder.Services.AddSingleton<IDataStorageStore>(_dataStorages);
         builder.Services.AddSingleton<IProviderQuotaStatusStore>(_quotaStatuses);
         builder.Services.AddSingleton(_quotaCache);
         builder.Services.AddScoped(
@@ -55,6 +58,7 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IProviderQuotaCheckerRegistry, ProviderQuotaCheckerRegistry>();
         builder.Services.AddSingleton<ProviderQuotaService>();
         builder.Services.AddSingleton<IAutoBackupRescheduleSignal>(_reschedule);
+        builder.Services.AddSingleton<IVideoStorageRescheduleSignal>(_videoReschedule);
 
         _app = builder.Build();
         _app.MapAdminGraphql();
@@ -1050,6 +1054,652 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         error = Assert.Single(response.GetProperty("errors").EnumerateArray());
         Assert.Equal(
             "failed to update user-agent pass-through settings: "
+            + "failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task VideoStorageSettingsQueryReturnsTheReferenceDefaults()
+    {
+        var data = await QueryAsync(
+            "{ videoStorageSettings { enabled dataStorageID scanIntervalMinutes scanLimit } }");
+
+        var settings = data.GetProperty("videoStorageSettings");
+        Assert.False(settings.GetProperty("enabled").GetBoolean());
+        Assert.Equal(0, settings.GetProperty("dataStorageID").GetInt32());
+        Assert.Equal(1, settings.GetProperty("scanIntervalMinutes").GetInt32());
+        Assert.Equal(50, settings.GetProperty("scanLimit").GetInt32());
+    }
+
+    [Fact]
+    public async Task VideoStorageSettingsQueryNormalizesNonPositiveScanValues()
+    {
+        _store.Add(
+            SystemSettingsAdminService.VideoStorageSettingsKey,
+            """{"enabled":true,"data_storage_id":7,"scan_interval_minutes":0,"scan_limit":-3}""");
+
+        var data = await QueryAsync(
+            "{ videoStorageSettings { enabled dataStorageID scanIntervalMinutes scanLimit } }");
+
+        var settings = data.GetProperty("videoStorageSettings");
+        Assert.True(settings.GetProperty("enabled").GetBoolean());
+        Assert.Equal(7, settings.GetProperty("dataStorageID").GetInt32());
+        Assert.Equal(1, settings.GetProperty("scanIntervalMinutes").GetInt32());
+        Assert.Equal(50, settings.GetProperty("scanLimit").GetInt32());
+    }
+
+    [Fact]
+    public async Task VideoStorageSettingsQuerySurfacesLookupAndUnmarshalErrors()
+    {
+        _store.GetFailuresByKey[SystemSettingsAdminService.VideoStorageSettingsKey] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync("{ videoStorageSettings { enabled } }");
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to get video storage settings: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        _store.GetFailuresByKey.Clear();
+        _store.Rows.Clear();
+        _store.Add(SystemSettingsAdminService.VideoStorageSettingsKey, "not json");
+
+        response = await PostAsync("{ videoStorageSettings { enabled } }");
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.StartsWith(
+            "failed to unmarshal video storage settings: ",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateVideoStorageSettingsNormalizesAndWritesTheDocument()
+    {
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateVideoStorageSettings(input: {
+                enabled: false
+                dataStorageID: 0
+                scanIntervalMinutes: 0
+                scanLimit: 0
+              })
+            }
+            """);
+
+        Assert.True(data.GetProperty("updateVideoStorageSettings").GetBoolean());
+        var row = Assert.Single(_store.Rows);
+        Assert.Equal(
+            """{"enabled":false,"data_storage_id":0,"scan_interval_minutes":1,"scan_limit":50}""",
+            row.Value);
+        Assert.Equal(1, _videoReschedule.Calls);
+    }
+
+    [Fact]
+    public async Task UpdateVideoStorageSettingsValidatesTheTargetStorage()
+    {
+        var response = await PostAsync(
+            """
+            mutation {
+              updateVideoStorageSettings(input: { enabled: true })
+            }
+            """);
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update video storage settings: "
+            + "data_storage_id is required when video storage is enabled",
+            error.GetProperty("message").GetString());
+
+        response = await PostAsync(
+            """
+            mutation {
+              updateVideoStorageSettings(input: { enabled: true, dataStorageID: 99 })
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update video storage settings: "
+            + "failed to get data storage: ent: data storage not found",
+            error.GetProperty("message").GetString());
+
+        _dataStorages.Seed(row =>
+        {
+            row.Id = 1;
+            row.Primary = true;
+            row.Type = "fs";
+        });
+        response = await PostAsync(
+            """
+            mutation {
+              updateVideoStorageSettings(input: { enabled: true, dataStorageID: 1 })
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update video storage settings: "
+            + "video storage must use a non-database data storage",
+            error.GetProperty("message").GetString());
+
+        _dataStorages.Seed(row =>
+        {
+            row.Id = 2;
+            row.Type = "database";
+        });
+        response = await PostAsync(
+            """
+            mutation {
+              updateVideoStorageSettings(input: { enabled: true, dataStorageID: 2 })
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update video storage settings: "
+            + "video storage must use a non-database data storage",
+            error.GetProperty("message").GetString());
+
+        _dataStorages.Seed(row =>
+        {
+            row.Id = 3;
+            row.Type = "fs";
+        });
+        var data = await QueryAsync(
+            """
+            mutation {
+              updateVideoStorageSettings(input: { enabled: true, dataStorageID: 3 })
+            }
+            """);
+
+        Assert.True(data.GetProperty("updateVideoStorageSettings").GetBoolean());
+        Assert.Equal(
+            """{"enabled":true,"data_storage_id":3,"scan_interval_minutes":1,"scan_limit":50}""",
+            Assert.Single(_store.Rows).Value);
+        Assert.Equal(1, _videoReschedule.Calls);
+    }
+
+    [Fact]
+    public async Task UpdateVideoStorageSettingsSurfacesTheWritePrefixAndSkipsTheReschedule()
+    {
+        _store.SetFailuresByKey[SystemSettingsAdminService.VideoStorageSettingsKey] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync(
+            """
+            mutation {
+              updateVideoStorageSettings(input: { enabled: false })
+            }
+            """);
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to update video storage settings: "
+            + "failed to set video storage settings: "
+            + "failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+        Assert.Equal(0, _videoReschedule.Calls);
+    }
+
+    [Fact]
+    public async Task ProxyPresetsQueryReturnsAnEmptyListWhenMissingOrStoredNull()
+    {
+        var data = await QueryAsync("{ proxyPresets { name url username password } }");
+        Assert.Empty(data.GetProperty("proxyPresets").EnumerateArray());
+
+        _store.Add(SystemConfigBackupKeys.ProxyPresets, "null");
+
+        data = await QueryAsync("{ proxyPresets { name url username password } }");
+        Assert.Empty(data.GetProperty("proxyPresets").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ProxyPresetsQueryReadsTheStoredDocuments()
+    {
+        _store.Add(
+            SystemConfigBackupKeys.ProxyPresets,
+            """
+            [{"name":"corp","url":"http://proxy-a:8080","username":"u","password":"p"},
+             {"url":"socks5://proxy-b:1080"}]
+            """);
+
+        var data = await QueryAsync("{ proxyPresets { name url username password } }");
+
+        var presets = data.GetProperty("proxyPresets").EnumerateArray().ToArray();
+        Assert.Equal(2, presets.Length);
+        Assert.Equal("corp", presets[0].GetProperty("name").GetString());
+        Assert.Equal("http://proxy-a:8080", presets[0].GetProperty("url").GetString());
+        Assert.Equal("u", presets[0].GetProperty("username").GetString());
+        Assert.Equal("p", presets[0].GetProperty("password").GetString());
+        Assert.Equal("", presets[1].GetProperty("name").GetString());
+        Assert.Equal("socks5://proxy-b:1080", presets[1].GetProperty("url").GetString());
+        Assert.Equal("", presets[1].GetProperty("username").GetString());
+        Assert.Equal("", presets[1].GetProperty("password").GetString());
+    }
+
+    [Fact]
+    public async Task ProxyPresetsQuerySurfacesLookupAndUnmarshalErrors()
+    {
+        _store.GetFailuresByKey[SystemConfigBackupKeys.ProxyPresets] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync("{ proxyPresets { url } }");
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to get proxy presets: "
+            + "failed to get proxy presets: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        _store.GetFailuresByKey.Clear();
+        _store.Rows.Clear();
+        _store.Add(SystemConfigBackupKeys.ProxyPresets, "not json");
+
+        response = await PostAsync("{ proxyPresets { url } }");
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.StartsWith(
+            "failed to get proxy presets: failed to unmarshal proxy presets: ",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task SaveProxyPresetAppendsThenReplacesByUrl()
+    {
+        await QueryAsync(
+            """
+            mutation {
+              saveProxyPreset(input: { url: "http://a:1" })
+            }
+            """);
+        var row = Assert.Single(_store.Rows);
+        Assert.Equal("""[{"url":"http://a:1"}]""", row.Value);
+
+        await QueryAsync(
+            """
+            mutation {
+              saveProxyPreset(input: { name: "first", url: "http://b:2", username: "u" })
+            }
+            """);
+        Assert.Equal(
+            """[{"url":"http://a:1"},{"name":"first","url":"http://b:2","username":"u"}]""",
+            row.Value);
+
+        await QueryAsync(
+            """
+            mutation {
+              saveProxyPreset(input: { name: "replaced", url: "http://a:1", password: "p" })
+            }
+            """);
+        Assert.Equal(
+            """[{"name":"replaced","url":"http://a:1","password":"p"},{"name":"first","url":"http://b:2","username":"u"}]""",
+            row.Value);
+    }
+
+    [Fact]
+    public async Task DeleteProxyPresetFiltersByUrlAndKeepsAnEmptyArray()
+    {
+        _store.Add(SystemConfigBackupKeys.ProxyPresets, "null");
+        await QueryAsync(
+            """
+            mutation {
+              deleteProxyPreset(url: "http://a:1")
+            }
+            """);
+
+        var row = Assert.Single(_store.Rows);
+        Assert.Equal("[]", row.Value);
+
+        row.Value = """[{"url":"http://a:1"},{"name":"b","url":"http://b:2"}]""";
+        await QueryAsync(
+            """
+            mutation {
+              deleteProxyPreset(url: "http://a:1")
+            }
+            """);
+        Assert.Equal("""[{"name":"b","url":"http://b:2"}]""", row.Value);
+
+        // Deleting an absent URL rewrites the same document.
+        await QueryAsync(
+            """
+            mutation {
+              deleteProxyPreset(url: "http://missing:9")
+            }
+            """);
+        Assert.Equal("""[{"name":"b","url":"http://b:2"}]""", row.Value);
+    }
+
+    [Fact]
+    public async Task ProxyPresetMutationsSurfaceTheReferencePrefixes()
+    {
+        _store.GetFailuresByKey[SystemConfigBackupKeys.ProxyPresets] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync(
+            """
+            mutation {
+              saveProxyPreset(input: { url: "http://a:1" })
+            }
+            """);
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to save proxy preset: "
+            + "failed to get proxy presets: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        response = await PostAsync(
+            """
+            mutation {
+              deleteProxyPreset(url: "http://a:1")
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to delete proxy preset: "
+            + "failed to get proxy presets: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        _store.GetFailuresByKey.Clear();
+        _store.SetFailuresByKey[SystemConfigBackupKeys.ProxyPresets] =
+            new InvalidOperationException("boom");
+
+        response = await PostAsync(
+            """
+            mutation {
+              saveProxyPreset(input: { url: "http://a:1" })
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to save proxy preset: failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+
+        response = await PostAsync(
+            """
+            mutation {
+              deleteProxyPreset(url: "http://a:1")
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to delete proxy preset: failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task OnboardingInfoIsNullBeforeAnyCompletion()
+    {
+        var data = await QueryAsync("{ onboardingInfo { onboarded completedAt } }");
+
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("onboardingInfo").ValueKind);
+    }
+
+    [Fact]
+    public async Task CompleteOnboardingCreatesTheRecordAndAutoCompletesTheChannelModule()
+    {
+        var data = await QueryAsync(
+            """
+            mutation {
+              completeOnboarding(input: {})
+            }
+            """);
+
+        Assert.True(data.GetProperty("completeOnboarding").GetBoolean());
+        var row = Assert.Single(_store.Rows);
+        Assert.Equal(SystemSettingsAdminService.OnboardedKey, row.Key);
+
+        using var document = JsonDocument.Parse(row.Value);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("onboarded").GetBoolean());
+        Assert.False(root.TryGetProperty("system_model_setting", out _));
+
+        var module = root.GetProperty("auto_disable_channel");
+        Assert.True(module.GetProperty("onboarded").GetBoolean());
+        Assert.Equal(
+            root.GetProperty("completed_at").GetString(),
+            module.GetProperty("completed_at").GetString());
+
+        data = await QueryAsync(
+            """
+            {
+              onboardingInfo {
+                onboarded completedAt
+                systemModelSetting { onboarded completedAt }
+                autoDisableChannel { onboarded completedAt }
+              }
+            }
+            """);
+
+        var info = data.GetProperty("onboardingInfo");
+        Assert.True(info.GetProperty("onboarded").GetBoolean());
+        Assert.EndsWith("Z", info.GetProperty("completedAt").GetString());
+        Assert.Equal(
+            JsonValueKind.Null,
+            info.GetProperty("systemModelSetting").ValueKind);
+        Assert.True(
+            info.GetProperty("autoDisableChannel").GetProperty("onboarded").GetBoolean());
+        Assert.EndsWith(
+            "Z",
+            info.GetProperty("autoDisableChannel").GetProperty("completedAt").GetString());
+    }
+
+    [Fact]
+    public async Task CompleteOnboardingPreservesAnExistingChannelModule()
+    {
+        _store.Add(
+            SystemSettingsAdminService.OnboardedKey,
+            """
+            {"onboarded":false,
+             "system_model_setting":{"onboarded":true,"completed_at":"2026-01-02T03:04:05Z"},
+             "auto_disable_channel":{"onboarded":true,"completed_at":"2026-02-03T04:05:06Z"}}
+            """);
+
+        await QueryAsync(
+            """
+            mutation {
+              completeOnboarding(input: {})
+            }
+            """);
+
+        using var document = JsonDocument.Parse(Assert.Single(_store.Rows).Value);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("onboarded").GetBoolean());
+        Assert.True(root.TryGetProperty("completed_at", out _));
+        Assert.Equal(
+            "2026-01-02T03:04:05Z",
+            root.GetProperty("system_model_setting").GetProperty("completed_at").GetString());
+        Assert.Equal(
+            "2026-02-03T04:05:06Z",
+            root.GetProperty("auto_disable_channel").GetProperty("completed_at").GetString());
+    }
+
+    [Fact]
+    public async Task CompleteSystemModelSettingOnboardingWritesTheModuleOnly()
+    {
+        await QueryAsync(
+            """
+            mutation {
+              completeSystemModelSettingOnboarding(input: {})
+            }
+            """);
+
+        using var document = JsonDocument.Parse(Assert.Single(_store.Rows).Value);
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("onboarded").GetBoolean());
+        Assert.False(root.TryGetProperty("completed_at", out _));
+        Assert.False(root.TryGetProperty("auto_disable_channel", out _));
+
+        var module = root.GetProperty("system_model_setting");
+        Assert.True(module.GetProperty("onboarded").GetBoolean());
+        Assert.True(module.TryGetProperty("completed_at", out _));
+    }
+
+    [Fact]
+    public async Task ModuleCompletionsPreserveEachOther()
+    {
+        await QueryAsync(
+            """
+            mutation {
+              completeSystemModelSettingOnboarding(input: {})
+            }
+            """);
+
+        var data = await QueryAsync(
+            """
+            {
+              onboardingInfo {
+                onboarded
+                systemModelSetting { onboarded completedAt }
+                autoDisableChannel { onboarded }
+              }
+            }
+            """);
+
+        var info = data.GetProperty("onboardingInfo");
+        Assert.False(info.GetProperty("onboarded").GetBoolean());
+        Assert.True(
+            info.GetProperty("systemModelSetting").GetProperty("onboarded").GetBoolean());
+        Assert.Equal(
+            JsonValueKind.String,
+            info.GetProperty("systemModelSetting").GetProperty("completedAt").ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            info.GetProperty("autoDisableChannel").ValueKind);
+
+        await QueryAsync(
+            """
+            mutation {
+              completeOnboarding(input: {})
+            }
+            """);
+
+        data = await QueryAsync(
+            """
+            {
+              onboardingInfo {
+                onboarded
+                systemModelSetting { onboarded }
+                autoDisableChannel { onboarded }
+              }
+            }
+            """);
+
+        info = data.GetProperty("onboardingInfo");
+        Assert.True(info.GetProperty("onboarded").GetBoolean());
+        Assert.True(
+            info.GetProperty("systemModelSetting").GetProperty("onboarded").GetBoolean());
+        Assert.True(
+            info.GetProperty("autoDisableChannel").GetProperty("onboarded").GetBoolean());
+
+        // An explicit module completion replaces its own timestamp.
+        var stored = Assert.Single(_store.Rows);
+        stored.Value =
+            """
+            {"onboarded":true,
+             "auto_disable_channel":{"onboarded":true,"completed_at":"2020-01-01T00:00:00Z"}}
+            """;
+
+        await QueryAsync(
+            """
+            mutation {
+              completeAutoDisableChannelOnboarding(input: {})
+            }
+            """);
+
+        using var document = JsonDocument.Parse(stored.Value);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("onboarded").GetBoolean());
+        Assert.NotEqual(
+            "2020-01-01T00:00:00Z",
+            root.GetProperty("auto_disable_channel").GetProperty("completed_at").GetString());
+    }
+
+    [Fact]
+    public async Task OnboardingSurfacesTheReferencePrefixes()
+    {
+        _store.GetFailuresByKey[SystemSettingsAdminService.OnboardedKey] =
+            new InvalidOperationException("boom");
+
+        var response = await PostAsync("{ onboardingInfo { onboarded } }");
+
+        var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to get onboarding info: "
+            + "failed to get onboarding info: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        response = await PostAsync(
+            """
+            mutation {
+              completeOnboarding(input: {})
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to complete onboarding: "
+            + "failed to get existing onboarding info: "
+            + "failed to get onboarding info: failed to get system value: boom",
+            error.GetProperty("message").GetString());
+
+        _store.GetFailuresByKey.Clear();
+        _store.Rows.Clear();
+        _store.Add(SystemSettingsAdminService.OnboardedKey, "not json");
+
+        response = await PostAsync("{ onboardingInfo { onboarded } }");
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.StartsWith(
+            "failed to get onboarding info: failed to unmarshal onboarding info: ",
+            error.GetProperty("message").GetString());
+
+        response = await PostAsync(
+            """
+            mutation {
+              completeSystemModelSettingOnboarding(input: {})
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.StartsWith(
+            "failed to complete system model setting onboarding: "
+            + "failed to get existing onboarding info: "
+            + "failed to unmarshal onboarding info: ",
+            error.GetProperty("message").GetString());
+
+        _store.Rows.Clear();
+        _store.SetFailuresByKey[SystemSettingsAdminService.OnboardedKey] =
+            new InvalidOperationException("boom");
+
+        response = await PostAsync(
+            """
+            mutation {
+              completeSystemModelSettingOnboarding(input: {})
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to complete system model setting onboarding: "
+            + "failed to create system setting: boom",
+            error.GetProperty("message").GetString());
+
+        response = await PostAsync(
+            """
+            mutation {
+              completeAutoDisableChannelOnboarding(input: {})
+            }
+            """);
+
+        error = Assert.Single(response.GetProperty("errors").EnumerateArray());
+        Assert.Equal(
+            "failed to complete auto disable channel onboarding: "
             + "failed to create system setting: boom",
             error.GetProperty("message").GetString());
     }
