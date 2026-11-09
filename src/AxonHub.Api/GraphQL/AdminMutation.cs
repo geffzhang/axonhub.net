@@ -2,6 +2,7 @@ using HotChocolate;
 using HotChocolate.Types;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using AxonHub.Api.Catalog;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
@@ -626,6 +627,116 @@ public sealed class AdminMutation
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateCatalogSettings
+    /// (system.resolvers.go:339-363). The reference starts from the lenient
+    /// CatalogSettingsOrDefault read, patches the supplied fields, stores the
+    /// result and then invalidates the live catalog and re-arms the scheduler
+    /// when the catalog service is present. The guard is
+    /// <c>scopes.UserHasScope</c>, so API keys never qualify.
+    /// </summary>
+    [GraphQLName("updateCatalogSettings")]
+    public async Task<bool> UpdateCatalogSettingsAsync(
+        UpdateCatalogSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        [Service] IServiceProvider services,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.WriteSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write_settings scope");
+        }
+
+        var updated = await settings
+            .GetCatalogSettingsOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (input.UpstreamUrl is { } upstreamUrl)
+        {
+            updated = updated with { UpstreamUrl = upstreamUrl };
+        }
+
+        if (input.RefreshSeconds is { } refreshSeconds)
+        {
+            updated = updated with { RefreshSeconds = refreshSeconds };
+        }
+
+        try
+        {
+            await settings.SetCatalogSettingsAsync(updated, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to update catalog settings: %w", err)
+            throw new InvalidOperationException(
+                "failed to update catalog settings: " + ex.Message,
+                ex);
+        }
+
+        var catalogService = services.GetService<ICatalogService>();
+        if (catalogService is not null)
+        {
+            catalogService.Invalidate();
+
+            var rescheduleSignal = services.GetService<ICatalogRescheduleSignal>();
+            if (rescheduleSignal is not null)
+            {
+                await rescheduleSignal.RescheduleAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.RefreshProvidersCatalog
+    /// (system.resolvers.go:366-381): a forced upstream fetch that propagates
+    /// the fetch error under the mutation prefix.
+    /// </summary>
+    [GraphQLName("refreshProvidersCatalog")]
+    public async Task<ProvidersCatalogType> RefreshProvidersCatalogAsync(
+        [Service] IServiceProvider services,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.WriteSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write_settings scope");
+        }
+
+        var catalogService = services.GetService<ICatalogService>();
+        if (catalogService is null)
+        {
+            throw new InvalidOperationException("catalog service is not configured");
+        }
+
+        CatalogSnapshot snapshot;
+        try
+        {
+            snapshot = await catalogService.RefreshAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to refresh providers catalog: " + ex.Message,
+                ex);
+        }
+
+        return CatalogMapping.ToGraphQL(snapshot);
     }
 
     /// <summary>

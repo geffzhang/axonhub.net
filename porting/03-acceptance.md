@@ -437,6 +437,25 @@ commit / buildTime 为空，goVersion / platform / uptime 为环境相关），c
 错误链内层文本来自 .NET 异常与 STJ；新增 C236（gap）：webhook 通知器运行时（通道
 自动禁用时按订阅发送）未移植，管理面配置读写完整但配置当前不被消费。
 
+§155 追加 64 个用例（`AxonHub.Api.Tests` 64：`CatalogFilterTests` 36、
+`AdminCatalogEndpointTests` 19、`CatalogServiceTests` 9），同样按项目规则未运行
+lint / build / test；§155 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、
+`AxonHub.Api.Tests` 5659、`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353，
+四项目合计 9264，下一次全量运行应以该数字复核。该切片接入 2 个查询与 2 个变更：
+`catalogSettings` / `providersCatalog` 与 `updateCatalogSettings` /
+`refreshProvidersCatalog`。设置面复刻 `catalog_settings` 文档（字段序、TrimSpace、
+<=0→3600、<60→60、>604800→604800）、缺行默认、双层读取前缀与 `updateCatalogSettings`
+的逐字段 patch + Invalidate/Reschedule 副作用；上游 URL 校验逐字符复刻 Go 1.26.3
+`net/url.Parse`（28 例 oracle 的接受 / 拒绝与错误文本，含 8 个接受例）。目录面复刻
+进程级单例缓存、singleflight 并发去重、鲜度窗口、20 秒抓取超时、失败回落内嵌 /
+last-good、filtered 默认 true 与允许列表 + meta/llama、ibm、bytedance、tencent、
+xiaomi、kwaipilot、nvidia、thinkingmachines 后处理、extra models 合并与
+release_date 降序 + id 升序排序；`refreshProvidersCatalog` 强制抓取且失败不回落。
+新增 C237（accepted）：URL 校验不读取 `GODEBUG=urlstrictcolons=0`，`%q` 引号对不可打印
+非 ASCII / 非法 UTF-8 的转义与 `strconv.Quote` 不同（仅在解析失败时可见）；新增
+C238（accepted）：调度器与作用域实现细节（BackgroundService + TCS 重排、scoped
+settings 读取、无 tick 补发、串行刷新不重叠），可观察行为由测试锁定。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

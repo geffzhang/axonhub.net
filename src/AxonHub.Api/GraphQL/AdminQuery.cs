@@ -2,6 +2,7 @@ using HotChocolate;
 using HotChocolate.Resolvers;
 using HotChocolate.Types;
 using Microsoft.Extensions.DependencyInjection;
+using AxonHub.Api.Catalog;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
@@ -443,6 +444,85 @@ public sealed class AdminQuery
 
         // The reference returns the worker's error untouched.
         return [.. items.Select(SystemSettingsMapping.ToGraphQL)];
+    }
+
+    /// <summary>
+    /// Port of queryResolver.ProvidersCatalog (system.resolvers.go:442-462).
+    /// The guard is <c>scopes.UserHasScope(read_channels)</c>; <c>filtered</c>
+    /// defaults to true and a filtered read applies the developer allow-list
+    /// plus the bundled extra models, exactly like the reference.
+    /// </summary>
+    [GraphQLName("providersCatalog")]
+    public async Task<ProvidersCatalogType> ProvidersCatalogAsync(
+        [Service] IServiceProvider services,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken,
+        bool? filtered = true)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.ReadChannels,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires read_channels scope");
+        }
+
+        var catalogService = services.GetService<ICatalogService>();
+        if (catalogService is null)
+        {
+            throw new InvalidOperationException("catalog service is not configured");
+        }
+
+        CatalogSnapshot snapshot;
+        try
+        {
+            snapshot = await catalogService
+                .SnapshotAsync(filtered ?? true, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to load providers catalog: " + ex.Message,
+                ex);
+        }
+
+        return CatalogMapping.ToGraphQL(snapshot);
+    }
+
+    /// <summary>
+    /// Port of queryResolver.CatalogSettings (system.resolvers.go:465-476):
+    /// the strict read, so an unreadable stored value surfaces as a field error
+    /// under the "failed to get catalog settings" prefix.
+    /// </summary>
+    [GraphQLName("catalogSettings")]
+    public async Task<CatalogSettingsType> CatalogSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.ReadSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires read_settings scope");
+        }
+
+        try
+        {
+            return CatalogMapping.ToGraphQL(
+                await settings.GetCatalogSettingsAsync(cancellationToken)
+                    .ConfigureAwait(false));
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get catalog settings: " + ex.Message,
+                ex);
+        }
     }
 
     /// <summary>Port of queryResolver.AutoBackupSettings (backup.resolvers.go:130-132).</summary>

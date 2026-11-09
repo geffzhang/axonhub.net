@@ -8071,7 +8071,75 @@ uptime 精度受 TimeSpan 限制），checkForUpdate 的错误链内层文本来
 新增 C236（gap）：webhook 通知器运行时（通道自动禁用时按订阅发送）未移植，管理面
 配置读写完整但配置当前不被消费。
 
-## 覆盖缺口
+## 155. 模型目录（catalog）查询与变更（2 查询 / 2 变更，64 例，2026-11-09）
+
+参照：`internal/server/biz/catalog_settings.go:16-29`（`catalog_settings` 键、默认上游 URL、默认 / 最小 / 最大刷新间隔 3600 / 60 / 604800、`upstream_url` / `refresh_seconds` 标签）、`31-42`（normalizeCatalogSettings：TrimSpace、<=0 → 3600、<60 → 60、>604800 → 604800）、`44-63`（validateCatalogSettings：空串放行；`url.Parse` 失败 → `invalid catalog upstream url: %w`；scheme 非 http/https → `catalog upstream url must be http or https`；Host 空 → `catalog upstream url is missing a host`）、`65-78`（EffectiveUpstreamURL：TrimSpace 后为空回落默认 URL；defaultCatalogSettings）、`80-125`（CatalogSettings：缺行 → 默认；读错误 `failed to get catalog settings`；解码错误 `failed to unmarshal catalog settings`；解码后归一化。CatalogSettingsOrDefault 吞掉全部错误。SetCatalogSettings：先归一化再校验，marshal 错误 `failed to marshal catalog settings`，再 setSystemValue——与 `system.go:943-959` 的 `failed to get system value: %w` 叠成读取时的双层前缀）、`internal/server/biz/catalog.go:36-41`（CatalogSnapshot 的 data / fetched_at omitempty / source / filtered）、`43-59`（catalogCache 与 CatalogService：RWMutex + singleflight）、`68-90`（RegisterScheduledTasks：注册 providers-catalog-refresh FixRate 任务，并用 context.WithoutCancel 分离启动初始刷新）、`92-115`（Reschedule / taskSpec / refreshPeriodically）、`117-119`（Snapshot 读缓存）、`121-133`（Refresh：强制抓取，20s 超时，失败直接返回不回落）、`135-174`（ensureCache：外层鲜度检查 → singleflight 内二次检查 → 抓取失败回落 last-good，否则内嵌 fallback 并存入缓存）、`176-195`（freshCache：`time.Since(fetchedAt) >= RefreshSeconds` 即过期；fallbackOrCached）、`197-227`（fetchUpstream：nil client `catalog http client is not configured`；GET + `Accept: application/json`；非 200 `fetch catalog: unexpected status %d`；解码 `parse catalog`；缺 providers `catalog is missing providers`）、`229-261`（snapshotFromCache：filtered 时过滤 + 合并 extra models（错误 `merge extra catalog models`）+ 排序；source 空回落 fallback）、`263-296`（storeCache / cached / fallbackCache：内嵌 JSON 解码失败或无 providers 时替换为空 map）、`298-303`（Invalidate 置空缓存）、`internal/server/biz/catalog_filter.go:112-158`（filterCatalogProviders：按 provider.ID 允许列表复制；meta / ibm / bytedance / tencent / xiaomi / kwaipilot / nvidia 后处理；thinkingmachines 在允许列表中仍显式删除）、`159-198`（mapLlamaToMeta：upstream meta 模型按 id 优先，llama 中 id 前缀 llama（大小写不敏感）且未重复的模型补入，id / 名称固定为 meta）、`200-239`（aggregateIBMGranite：跨 provider 收集 id 含 granite / ibm 的模型，按小写 id 去重，排除 embedding / guardian 与 @cf/ / workers-ai/，合成 ibm provider）、`241-265`（mapDoubaoToByteDance：doubao provider 中 doubao 前缀模型合成 bytedance）、`267-317`（mergeTencentPlans：tencent 基础模型 + tencent-token-plan / tencent-tokenhub / tencent-coding-plan 中 hy3 / hy4 / hunyuan- 前缀模型，去 `tencent/` 前缀并按 id 去重）、`319-363`（mergeXiaomiTokenPlans：xiaomi 基础模型 + xiaomi-token-plan-cn / sgp / ams，按 id 去重且基础优先）、`365-435`（KAT family → kwaipilot：family=kat-coder 或 id 前缀 kwaipilot/ / kuaishou/ 或含 kat-coder / kat-dev；id 取最后一个 / 之后的小写片段，缺 family 补 kat-coder，重复 id 用 mergeDefined 合并）、`437-456`（nvidia 只保留 `nvidia/` 前缀模型）、`458-476`（mergeDefined）、`478-558`（mergeExtraModels / appendExtraModels：models.json 以 provider 键补入并按 id 合并）、`560-...`（sortCatalogModels / sortModelsByReleaseDate：release_date 降序，同日按 id 升序）、`internal/server/gql/system.graphql:392-410、433-440`（SDL）、`internal/server/gql/system.resolvers.go:339-364、366-373、442-462、464-475`（变更 / 查询前缀与副作用）、`internal/server/biz/catalog_test.go:22-139` 与 `catalog_filter_test.go:13-...`（参照测试）。
+
+| 项 | 参照值 |
+|---|---|
+| catalogSettings 读 | 缺行 → `{upstream_url:"", refresh_seconds:3600}`；解码后归一化（TrimSpace、<=0→3600、<60→60、>604800→604800）；读取不加前缀，存储失败叠成 `failed to get catalog settings: failed to get catalog settings: failed to get system value: ...` |
+| catalogSettings 写 | `input:{}` 从当前存储值出发（缺行即默认）只 patch 非 nil 字段；先归一化再校验；空 URL 放行；`url.Parse` 失败 `invalid catalog upstream url: parse %q: ...`；非 http/https `catalog upstream url must be http or https`；无 host `catalog upstream url is missing a host`；错误前缀 `failed to update catalog settings: ...`；成功后 Invalidate + Reschedule（service 为 nil 时两者跳过，写库仍成功） |
+| providersCatalog | `filtered` 默认 true；返回 data / fetchedAt / source / filtered；读失败 `failed to load providers catalog: ...`；未配置服务 `catalog service is not configured`；作用域 read_channels（服务账号 key 不通过） |
+| refreshProvidersCatalog | 作用域 write_settings；未配置服务同样报错；强制抓取并返回 upstream 快照，抓取失败 `failed to refresh providers catalog: ...` 且不回落 |
+| 快照过滤 | 22 个开发者 id 允许列表（与前端 constants.ts 一致）、meta/llama 合并、ibm granite 聚合、doubao→bytedance、tencent/xiaomi 计划合并、KAT family→kwaipilot、nvidia 前缀过滤、thinkingmachines 显式删除（models.json 仍可补回）、extra models 合并、release_date 降序 + id 升序 |
+| 缓存语义 | 进程级单例；鲜度 `time.Since(fetchedAt) < RefreshSeconds`；并发冷读 singleflight 只抓一次；抓取 20s 超时；失败回落 last-good / 内嵌 providers.json；Refresh 失败不写缓存、不回落 |
+
+端口实现：
+
+- `src/AxonHub.Api/Settings/CatalogSettings.cs`：`CatalogSettings` 记录、`CatalogSettingsRules`
+  （默认 URL、默认 / 最小 / 最大间隔、Normalize、EffectiveUpstreamUrl、Validate 及 Go
+  1.26.3 `net/url.Parse` 管线的逐字符复刻：fragment 剥离、控制字符、scheme 小写、
+  authority、userinfo、host 方括号 / IPv6 / zone、端口、百分号转义、相对与 opaque URL）、
+  `CatalogSettingsCodec`（Go 字段序 `upstream_url` → `refresh_seconds` 编解码）。
+- `src/AxonHub.Api/Settings/SystemSettingsAdminService.cs`：`GetCatalogSettingsAsync`（缺行
+  默认、双层前缀、`failed to unmarshal catalog settings`）、
+  `GetCatalogSettingsOrDefaultAsync`（吞掉全部异常）、`SetCatalogSettingsAsync`（归一化、
+  校验、序列化、写存储）与参照逐层对齐。
+- `src/AxonHub.Api/Catalog/CatalogJson.cs`：`CatalogFile` / `CatalogProvider` / 模型
+  `JsonElement` 的解析与 Go 键序序列化（`ToUtf8Bytes`）。
+- `src/AxonHub.Api/Catalog/CatalogFilter.cs`：22 个 `DefaultDeveloperIds`（与前端常量一致）、
+  `FilterProviders` 及全部后处理（meta/llama、ibm、bytedance、tencent、xiaomi、
+  kwaipilot KAT、nvidia）、`MergeExtraModels`、`SortCatalogModels` /
+  `SortModelsByReleaseDate`。
+- `src/AxonHub.Api/Catalog/CatalogService.cs`：单例缓存 + `lock` + 共享
+  `_refreshInFlight` 复刻 singleflight；鲜度窗口、20s 抓取超时、fallback /
+  last-good、filtered 快照（过滤 + extra models + 排序）、source 空回落 fallback、
+  `fetch catalog` / `parse catalog` / `catalog is missing providers` 错误文本；settings
+  经 `IServiceScopeFactory` 取 scoped 服务（C238）。
+- `src/AxonHub.Api/Catalog/CatalogRefreshScheduler.cs`：`BackgroundService` 复刻 FixRate
+  定时任务与分离的初始刷新，`ICatalogRescheduleSignal` 用唤醒 TCS 从当前时刻重新计时
+  （C238）。
+- `src/AxonHub.Api/Catalog/Data/providers.json` / `models.json`：内嵌回落数据，与参照
+  `internal/server/biz/catalogdata/` 的两个文件 SHA-256 一致。
+- `src/AxonHub.Api/GraphQL/CatalogTypes.cs`：`CatalogSettingsType`（`upstreamURL` /
+  `refreshSeconds`）、`UpdateCatalogSettingsInput`、`ProvidersCatalogType`
+  （JsonRawMessage 的 data、GoTimeType 的 fetchedAt、source、filtered）与域映射。
+- `src/AxonHub.Api/GraphQL/AdminQuery.cs`：`providersCatalog`（`filtered` 默认 true、
+  read_channels、未配置与失败前缀）、`catalogSettings`（read_settings、读前缀）；
+  `AdminMutation.cs`：`updateCatalogSettings`（write_settings、OrDefault patch、
+  Invalidate + 可选 Reschedule）、`refreshProvidersCatalog`（write_settings、未配置与
+  失败前缀）。
+- `src/AxonHub.Api/Program.cs`：`CatalogService` / `ICatalogService` 单例、
+  `CatalogRefreshScheduler` 单例 + hosted service、`ICatalogRescheduleSignal` 映射。
+
+测试（64 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/CatalogFilterTests.cs` | 36 | 允许列表与 meta/llama/nvidia/kwaipilot/thinkingmachines 的特殊合并；upstream meta 与 llama 的 id 合并与来源；参照接受 / 拒绝四例；Go `net/url` 28 例 oracle（8 个接受例，20 个逐字错误文本：无效端口、IP-literal、ParseAddr、zone、转义窗口、userinfo、控制字符、缺失 scheme 等）；内嵌 providers.json 与 models.json 可解析并可合并；20 轮确定性序列化与 tencent/xiaomi/kwaipilot/ibm 顺序；release_date 同日 id 升序；DefaultDeveloperIds 与前端 constants.ts 一致 |
+| `tests/AxonHub.Api.Tests/AdminCatalogEndpointTests.cs` | 19 | catalogSettings 默认值与存储归一化、双层存储错误前缀、read_settings；update 的逐字段 patch、间隔归一（5→60、0→3600）、非法 URL / Go 解析文本不写库、write_settings、Invalidate/Reschedule 计数；providersCatalog 默认 filtered=true 与显式 false、快照失败前缀、read_channels、服务账号拒绝；refresh 强制快照、失败前缀、write_settings；未注册服务时的 not configured 与 update 仍写库 |
+| `tests/AxonHub.Api.Tests/CatalogServiceTests.cs` | 9 | 无 client 回落 + 刷新 + Invalidate 重取；502 + 延迟下 8 并发冷读只抓一次、失败 fallback 缓存一个窗口；请求线路形状（GET、URL、Accept）、鲜度窗口内单次抓取、Invalidate 重取；502 / 缺 providers 的三条抓取错误；解码错误 `parse catalog: `；传输失败包装；无 client `catalog http client is not configured` |
+
+静态计数：`AxonHub.Api.Tests` 由 5595 增至 5659（+64），`AxonHub.Grains.Tests` 1746、
+`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 353 不变，四项目合计由 9200 增至
+9264。**按项目规则未运行 lint / build / test。**
+
+差异：新增 C237（accepted）：catalog 上游 URL 校验复刻 Go `net/url.Parse` 的接受与错误
+文本（28 例 oracle），近似为不读取 `GODEBUG=urlstrictcolons=0` 与 `%q` 引号对不可打印
+非 ASCII / 非法 UTF-8 的转义差异。新增 C238（accepted）：目录服务的进程级单例、
+singleflight、BackgroundService 调度与 scoped settings 读取，差异限于调度实现细节与
+日志文案。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|

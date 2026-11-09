@@ -2,6 +2,7 @@ using AxonHub.Abstractions;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Auth.Oidc;
 using AxonHub.Api.Billing;
+using AxonHub.Api.Catalog;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Http;
@@ -539,6 +540,21 @@ builder.Services.AddSingleton<IChannelModelSyncGuard>(static services
         services.GetRequiredService<ILogger<GrainChannelModelSyncGuard>>()));
 builder.Services.AddScoped<ChannelModelSyncService>();
 builder.Services.AddHostedService<ChannelModelSyncScheduler>();
+
+// Built-in model catalog (biz/catalog.go): the process-wide snapshot cache with
+// its bundled fallback data and the "providers-catalog-refresh" FixRate task.
+// The reference reads CatalogSettingsOrDefault through the singleton system
+// service; the port opens a scope per settings read (C238). The refresh
+// scheduler also carries the settings mutation's reschedule seam, mirroring
+// CatalogService.Reschedule(ctx, sched).
+builder.Services.AddSingleton<CatalogService>();
+builder.Services.AddSingleton<ICatalogService>(
+    static services => services.GetRequiredService<CatalogService>());
+builder.Services.AddSingleton<CatalogRefreshScheduler>();
+builder.Services.AddSingleton<ICatalogRescheduleSignal>(
+    static services => services.GetRequiredService<CatalogRefreshScheduler>());
+builder.Services.AddHostedService(
+    static services => services.GetRequiredService<CatalogRefreshScheduler>());
 
 // Channel price writes (saveChannelModelPrices): the ordered action plan and
 // its active/archived version history run in one store transaction

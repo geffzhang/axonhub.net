@@ -24,4 +24,8 @@
          只对测试程序集开放。 -->
     <InternalsVisibleTo Include="AxonHub.Api.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 内置目录快照与 internal/server/biz/catalogdata/ 逐字节一致（go:embed）。 -->
+    <EmbeddedResource Include="Catalog\Data\*.json" />
+  </ItemGroup>
 </Project>

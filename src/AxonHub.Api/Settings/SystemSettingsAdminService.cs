@@ -206,6 +206,21 @@ public interface ISystemSettingsAdminService
     Task SetWebhookNotifierConfigAsync(
         WebhookNotifierConfig config,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.CatalogSettings (catalog_settings.go:80-98).</summary>
+    Task<CatalogSettings> GetCatalogSettingsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Port of SystemService.CatalogSettingsOrDefault: read failures fall back to defaults.</summary>
+    Task<CatalogSettings> GetCatalogSettingsOrDefaultAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of SystemService.SetCatalogSettings (catalog_settings.go:107-123):
+    /// normalize, validate, then write the marshalled document.
+    /// </summary>
+    Task SetCatalogSettingsAsync(
+        CatalogSettings settings,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="ISystemSettingsAdminService"/>
@@ -1287,6 +1302,65 @@ public sealed class SystemSettingsAdminService(
                 "failed to unmarshal webhook notifier config: " + ex.Message,
                 ex);
         }
+    }
+
+    public async Task<CatalogSettings> GetCatalogSettingsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var row = await GetValueAsync(
+                CatalogSettingsRules.Key,
+                "failed to get catalog settings",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (row is null)
+        {
+            // ent.IsNotFound: defaultCatalogSettings (upstream URL "", 3600).
+            return CatalogSettingsRules.Default;
+        }
+
+        try
+        {
+            return CatalogSettingsCodec.Deserialize(row.Value);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal catalog settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    public async Task<CatalogSettings> GetCatalogSettingsOrDefaultAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await GetCatalogSettingsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The reference swallows every read failure, cancellation included.
+            return CatalogSettingsRules.Default;
+        }
+    }
+
+    public async Task SetCatalogSettingsAsync(
+        CatalogSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var normalized = CatalogSettingsRules.Normalize(settings);
+        var validation = CatalogSettingsRules.Validate(normalized);
+        if (validation is not null)
+        {
+            throw new InvalidOperationException(validation);
+        }
+
+        var value = CatalogSettingsCodec.Serialize(normalized);
+        await SetValueAsync(CatalogSettingsRules.Key, value, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task SetWebhookNotifierConfigAsync(
