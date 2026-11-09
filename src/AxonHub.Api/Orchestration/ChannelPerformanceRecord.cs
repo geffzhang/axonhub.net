@@ -18,6 +18,15 @@ public sealed class ChannelPerformanceRecord
 
     public required DateTimeOffset StartTime { get; init; }
 
+    /// <summary>
+    /// Port of PerformanceRecord.APIKey: the key this attempt authenticated
+    /// with (the <c>contexts.GetChannelAPIKey</c> value in the reference), or
+    /// <see cref="AxonHub.Abstractions.ChannelCredentials.OAuthCredentialRef"/>
+    /// for an OAuth channel, so the round_robin_success report can match the key
+    /// the cursor is using.
+    /// </summary>
+    public string ApiKey { get; init; } = string.Empty;
+
     public bool Stream { get; init; }
 
     public bool Success { get; private set; }

@@ -585,6 +585,21 @@ operation`，其它错误立即返回。序列化沿用 Go tags：非 omitempty 
 已在本路径采用（C144 更新）；`apiKeyStrategy` 的 present-empty 指针折叠为缺失登记为
 C250（accepted）。
 
+§164 追加 57 个用例（`AxonHub.Api.Tests` 57：`ChannelApiKeyStrategiesTests` 50 Fact +
+2 Theory / 7 InlineData），同样按项目规则未运行 lint / build / test；§164 落地后的静态
+计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5901、`AxonHub.Llm.Tests` 1512、
+`AxonHub.Persistence.Tests` 363，四项目合计 9522，下一次全量运行应以该数字复核。该切片为
+post-baseline 漂移（冻结基线 `b8bb3421` 只有 trace-sticky 规则），按 `f272549f` 接入
+`apiKeyStrategy` 的六种策略：sticky（默认 / 空 / 未知）、random、round_robin
+（`apiKeyRoundRobinSwitchAfter`，缺省 1、<1 归一）、round_robin_success（Get 不计数、成功
+回报按 per 推进游标）、priority（恒首）、fixed（游标失效才沿完整数组前进并跳过禁用项）。
+共享的每通道选择状态（游标 / rr 计数器 / 1024 项 trace 粘性 LRU）由
+`ChannelApiKeySelectionRegistry` 单例持有，跨通道快照重建存活；启用通道读取时为每个通道
+发布完整 key 数组与禁用集，`ChannelMetricsMiddleware` 成功分支回报 key，删除 / 批量删除后
+遗忘状态。多 key 分派条件与参照一致（启用 > 1 或配置 > 1）；单 key 与 override 保持静态
+provider，`VideoService` 按参照「状态查询不读 key」不接 registry。`isServing` 用代际内容
+等价替代参照的指针相等，登记为 C251（accepted）；C247 由 gap 更新为 resolved。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

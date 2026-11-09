@@ -65,10 +65,19 @@ public sealed class ChannelEndpointDetectService
     private readonly IExecutor executor;
     private readonly TimeProvider timeProvider;
 
+    /// <summary>
+    /// The shared key-selection state. Detection reads the current cursors (the
+    /// reference builds its probe channels through buildChannelWithTransformer,
+    /// which attaches the same state) but must never publish a served snapshot,
+    /// so the success report never walks a generation built for detection.
+    /// </summary>
+    private readonly ChannelApiKeySelectionRegistry? apiKeySelection;
+
     public ChannelEndpointDetectService(
         IChannelWriteStore channels,
         IExecutor executor,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ChannelApiKeySelectionRegistry? apiKeySelection = null)
     {
         ArgumentNullException.ThrowIfNull(channels);
         ArgumentNullException.ThrowIfNull(executor);
@@ -77,6 +86,7 @@ public sealed class ChannelEndpointDetectService
         this.channels = channels;
         this.executor = executor;
         this.timeProvider = timeProvider;
+        this.apiKeySelection = apiKeySelection;
     }
 
     public async Task<DetectChannelEndpointsResult> DetectAsync(
@@ -114,7 +124,8 @@ public sealed class ChannelEndpointDetectService
             primary = ChannelOutboundFactory.Create(
                 candidate,
                 new LlmRequest { ApiFormat = primaryFormat ?? ApiFormats.OpenAIChatCompletion },
-                now);
+                now,
+                apiKeySelection: apiKeySelection);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -191,7 +202,8 @@ public sealed class ChannelEndpointDetectService
                 outbound = ChannelOutboundFactory.CreateNonDefaultEndpointOutbound(
                     candidate,
                     apiFormat,
-                    now);
+                    now,
+                    apiKeySelection);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

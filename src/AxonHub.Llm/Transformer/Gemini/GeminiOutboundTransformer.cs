@@ -15,9 +15,12 @@ namespace AxonHub.Llm.Transformer.Gemini;
 /// (outbound_stream.go/aggregator.go) lives in the GeminiOutboundStream/
 /// GeminiAggregator files.
 /// </summary>
-public sealed partial class GeminiOutboundTransformer : IOutboundTransformer
+public sealed partial class GeminiOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
 {
     private readonly GeminiOutboundConfig _config;
+
+    /// <summary>The key the latest TransformRequest used; null until it runs.</summary>
+    private string? _selectedApiKey;
 
     /// <summary>Port of NewOutboundTransformerWithConfig (outbound.go:90-96).</summary>
     public GeminiOutboundTransformer(GeminiOutboundConfig config)
@@ -39,6 +42,10 @@ public sealed partial class GeminiOutboundTransformer : IOutboundTransformer
     /// <summary>Port of APIFormat (outbound.go:99-101).</summary>
     public string ApiFormat => ApiFormats.GeminiContents;
 
+    public string? SelectedApiKey => _selectedApiKey;
+
+    public int? SelectedApiKeyIndex => _config.ChannelApiKeyIndex;
+
     /// <summary>Port of TransformRequest (outbound.go:104-192).</summary>
     public HttpRequestData TransformRequest(LlmRequest? request)
     {
@@ -48,6 +55,7 @@ public sealed partial class GeminiOutboundTransformer : IOutboundTransformer
         }
 
         var apiKey = _config.ApiKeyProvider?.Get() ?? "";
+        _selectedApiKey = apiKey;
 
         switch (request.RequestType)
         {

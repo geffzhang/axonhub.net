@@ -268,6 +268,11 @@ public sealed class VideoService(
                 DisabledApiKeys = channel.DisabledApiKeys,
             };
 
+            // Task status operations never read the API key (BuildGetVideoTask
+            // Request only carries the external id), and the reference builds the
+            // channel without ever calling the key provider's Get, so the shared
+            // selection state is deliberately not wired here: doing so would
+            // advance the round_robin counter on every status poll.
             outbound = ChannelOutboundFactory.Create(
                 candidate,
                 new LlmRequest { ApiFormat = videoKey },

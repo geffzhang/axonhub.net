@@ -24,6 +24,13 @@ public sealed class GeminiOutboundConfig
     /// <summary>Provides API keys for authentication.</summary>
     public IApiKeyProvider? ApiKeyProvider { get; set; }
 
+    /// <summary>
+    /// Port-only audit field: 1-based position of the key the provider serves in
+    /// the channel's full key list, or null when the channel has a single key
+    /// (request_executions.channel_api_key_index).
+    /// </summary>
+    public int? ChannelApiKeyIndex { get; set; }
+
     /// <summary>An optional custom path override for this endpoint. Must start with "/".</summary>
     public string? EndpointPath { get; set; }
 
@@ -49,6 +56,7 @@ public static class GeminiOutboundConfigExtensions
         {
             BaseUrl = config.BaseUrl,
             ApiKeyProvider = config.ApiKeyProvider,
+            ChannelApiKeyIndex = config.ChannelApiKeyIndex,
             EndpointPath = config.EndpointPath,
             ApiVersion = config.ApiVersion,
             PlatformType = config.PlatformType,

@@ -38,29 +38,7 @@ public sealed class ChannelApiKeyProvider : IApiKeyProvider
         ArgumentNullException.ThrowIfNull(enabledKeys);
         ArgumentNullException.ThrowIfNull(allKeys);
 
-        if (enabledKeys.Count == 0)
-        {
-            // Reference fallback when every key is disabled: the first configured
-            // key. ChannelOutboundFactory rejects this case before building a
-            // transformer, so the branch only matters to direct callers.
-            _key = allKeys.Count > 0 ? allKeys[0] : string.Empty;
-        }
-        else if (enabledKeys.Count == 1)
-        {
-            _key = enabledKeys[0];
-        }
-        else if (!string.IsNullOrEmpty(traceId))
-        {
-            // The reference's TraceStickyKeyProvider branch: deterministic
-            // rendezvous selection so one trace keeps using one channel key.
-            _key = RendezvousSelect(enabledKeys, traceId);
-        }
-        else
-        {
-            // rand.IntN(len(enabled)): uniform over the enabled keys.
-            _key = enabledKeys[Random.Shared.Next(enabledKeys.Count)];
-        }
-
+        _key = SelectTraceSticky(enabledKeys, allKeys, traceId);
         KeyIndex = IndexOf(allKeys, _key);
     }
 
@@ -86,6 +64,55 @@ public sealed class ChannelApiKeyProvider : IApiKeyProvider
         ArgumentNullException.ThrowIfNull(allKeys);
 
         return new ChannelApiKeyProvider(key, allKeys);
+    }
+
+    /// <summary>
+    /// Builds the provider for a key the multi-key strategy already selected
+    /// (channel_apikey_strategies.go's <c>newMultiKeyProvider</c>). The audit
+    /// index is still derived from the channel's full key list.
+    /// </summary>
+    public static ChannelApiKeyProvider ForSelection(string key, IReadOnlyList<string> allKeys)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(allKeys);
+
+        return new ChannelApiKeyProvider(key, allKeys);
+    }
+
+    /// <summary>
+    /// Port of TraceStickyKeyProvider's selection rules: no enabled key falls
+    /// back to the first key of <paramref name="fallbackKeys"/> (the configured
+    /// <c>apiKeys</c> array on the strategy path), one enabled key is used as
+    /// is, several keys are picked by rendezvous when traced and at random
+    /// otherwise.
+    /// </summary>
+    internal static string SelectTraceSticky(
+        IReadOnlyList<string> enabledKeys,
+        IReadOnlyList<string> fallbackKeys,
+        string? traceId)
+    {
+        ArgumentNullException.ThrowIfNull(enabledKeys);
+        ArgumentNullException.ThrowIfNull(fallbackKeys);
+
+        if (enabledKeys.Count == 0)
+        {
+            return fallbackKeys.Count > 0 ? fallbackKeys[0] : string.Empty;
+        }
+
+        if (enabledKeys.Count == 1)
+        {
+            return enabledKeys[0];
+        }
+
+        if (!string.IsNullOrEmpty(traceId))
+        {
+            // The reference's TraceStickyKeyProvider branch: deterministic
+            // rendezvous selection so one trace keeps using one channel key.
+            return RendezvousSelect(enabledKeys, traceId);
+        }
+
+        // rand.IntN(len(enabled)): uniform over the enabled keys.
+        return enabledKeys[Random.Shared.Next(enabledKeys.Count)];
     }
 
     /// <summary>The channel key this attempt sends upstream.</summary>

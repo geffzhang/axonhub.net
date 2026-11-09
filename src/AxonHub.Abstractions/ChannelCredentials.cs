@@ -54,6 +54,67 @@ public static class ChannelCredentials
     }
 
     /// <summary>
+    /// Port of <c>buildChannel</c>'s <c>cachedDisabledKeySet</c>
+    /// (channel_llm.go:130-140): every non-empty key of the
+    /// <c>disabled_api_keys</c> document, regardless of its expiry. The
+    /// multi-key strategies use this set when walking the full key array; the
+    /// enabled set, by contrast, only excludes active (unexpired) disables.
+    /// A malformed document counts zero, matching the lenient credential reads
+    /// (C013).
+    /// </summary>
+    public static IReadOnlySet<string> GetDisabledApiKeySet(string? disabledApiKeysJson)
+    {
+        var disabled = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(disabledApiKeysJson))
+        {
+            return disabled;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(disabledApiKeysJson);
+        }
+        catch (JsonException)
+        {
+            return disabled;
+        }
+
+        using (document)
+        {
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return disabled;
+            }
+
+            foreach (var entry in document.RootElement.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var key = string.Empty;
+                foreach (var property in entry.EnumerateObject())
+                {
+                    if (FoldAscii(property.Name) == "key"
+                        && property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        key = property.Value.GetString() ?? string.Empty;
+                    }
+                }
+
+                if (key.Length > 0)
+                {
+                    disabled.Add(key);
+                }
+            }
+        }
+
+        return disabled;
+    }
+
+    /// <summary>
     /// Port of <c>len(channel.DisabledAPIKeys)</c>: the number of stored
     /// disable entries, including elapsed ones and entries whose key is empty
     /// (<c>filterDisabled</c> only decides which entries are active). A

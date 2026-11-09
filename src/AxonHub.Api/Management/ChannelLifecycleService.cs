@@ -24,7 +24,8 @@ public sealed class ChannelLifecycleService(
     IChannelModelPriceStore prices,
     IProviderQuotaInvalidator? quotaInvalidator = null,
     IEnabledChannelsCacheRefresher? enabledChannelsRefresher = null,
-    ILogger<ChannelLifecycleService>? logger = null)
+    ILogger<ChannelLifecycleService>? logger = null,
+    ChannelApiKeySelectionRegistry? apiKeySelection = null)
 {
     /// <summary>
     /// Port of ChannelService.apiKeyOpsLock: the reference serializes every
@@ -1235,6 +1236,9 @@ public sealed class ChannelLifecycleService(
 
         limiters.Forget(id);
 
+        // channel.go:1331: the deleted channel keeps no key-selection state.
+        apiKeySelection?.Forget(id);
+
         // channel.go:1319: reloadChannelsAfterCommit.
         RequestEnabledChannelsRefresh();
     }
@@ -1288,6 +1292,10 @@ public sealed class ChannelLifecycleService(
         foreach (var id in ids)
         {
             limiters.Forget(id);
+
+            // channel_bulk.go:356: the deleted channels keep no key-selection
+            // state.
+            apiKeySelection?.Forget(id);
         }
 
         // channel_bulk.go:360: reloadChannelsAfterCommit.

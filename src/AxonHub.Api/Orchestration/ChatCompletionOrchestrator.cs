@@ -52,6 +52,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly IModelSettingsProvider? _modelSettingsProvider;
     private readonly IApiKeyQuotaChecker? _quotaChecker;
     private readonly IPromptProvider? _promptProvider;
+    private readonly ChannelApiKeySelectionRegistry? _apiKeySelection;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -75,7 +76,8 @@ public sealed class ChatCompletionOrchestrator
         IApiKeyQuotaChecker? quotaChecker = null,
         IPromptProvider? promptProvider = null,
         ChannelLimiterMetrics? channelLimiterMetrics = null,
-        IChannelRateLimitRecorder? rateLimitRecorder = null)
+        IChannelRateLimitRecorder? rateLimitRecorder = null,
+        ChannelApiKeySelectionRegistry? apiKeySelection = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -140,6 +142,12 @@ public sealed class ChatCompletionOrchestrator
         // a no-op exactly like the reference's nil QuotaService (the tester).
         _quotaChecker = quotaChecker;
 
+        // Production passes the process-wide multi-key selection state so the
+        // fixed / round_robin_success cursors and the round_robin rotation
+        // survive channel rebuilds. Direct constructions keep the historical
+        // per-provider behavior.
+        _apiKeySelection = apiKeySelection;
+
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
         // is the same as no provider.
@@ -180,7 +188,8 @@ public sealed class ChatCompletionOrchestrator
             _modelSettingsProvider,
             _quotaChecker,
             _promptProvider,
-            rateLimitRecorder: _rateLimitRecorder);
+            rateLimitRecorder: _rateLimitRecorder,
+            apiKeySelection: _apiKeySelection);
     }
 
     /// <summary>
@@ -603,7 +612,8 @@ public sealed class ChatCompletionOrchestrator
                 request,
                 now,
                 _executor,
-                _grainFactory));
+                _grainFactory,
+                _apiKeySelection));
 
         // orchestrator.go mounts injectPrompts then protectPrompts as inbound
         // middlewares; the reference reads the enabled prompts and rules from
@@ -667,7 +677,8 @@ public sealed class ChatCompletionOrchestrator
             outbound,
             _metrics,
             performance,
-            _timeProvider));
+            _timeProvider,
+            _apiKeySelection));
 
         // Channel request rewriting runs after the outbound transform (so the
         // body it patches is the provider body) and before persistence (so the

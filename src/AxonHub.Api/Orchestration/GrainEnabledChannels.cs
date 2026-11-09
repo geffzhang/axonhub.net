@@ -10,7 +10,9 @@ namespace AxonHub.Api.Orchestration;
 /// selection, matching the reference's <c>ChannelService.GetEnabledChannels()</c>
 /// (<c>enabledChannelsCache.GetData()</c>).
 /// </summary>
-public sealed class GrainEnabledChannelProvider(IGrainFactory grainFactory) : IEnabledChannelProvider
+public sealed class GrainEnabledChannelProvider(
+    IGrainFactory grainFactory,
+    ChannelApiKeySelectionRegistry? apiKeySelection = null) : IEnabledChannelProvider
 {
     public async Task<ChannelDescriptor[]> ListEnabledAsync(
         CancellationToken cancellationToken = default)
@@ -22,7 +24,26 @@ public sealed class GrainEnabledChannelProvider(IGrainFactory grainFactory) : IE
 
         // Orleans delivers a deserialized copy; the mapping only restores the
         // in-process descriptor shape the selector consumes.
-        return [.. snapshot.Channels.Select(channel => channel.ToDescriptor())];
+        var channels = new ChannelDescriptor[snapshot.Channels.Count];
+        for (var index = 0; index < snapshot.Channels.Count; index++)
+        {
+            channels[index] = snapshot.Channels[index].ToDescriptor();
+        }
+
+        // Port of the enabled-channel cache publishing each freshly built
+        // channel (channel.go's enabledChannelsCache load): this is the only
+        // read that feeds the serving set, so it is the only one that may
+        // publish the generation the round_robin_success report walks. Single
+        // lookups, key tests and endpoint detection never come through here.
+        if (apiKeySelection is not null)
+        {
+            foreach (var channel in channels)
+            {
+                ChannelApiKeyStrategies.Publish(apiKeySelection, channel);
+            }
+        }
+
+        return channels;
     }
 }
 

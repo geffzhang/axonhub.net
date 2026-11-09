@@ -249,12 +249,18 @@ public static class ChannelOutboundFactory
     /// throwaway per-attempt <see cref="TokenProvider"/> (§146). Direct callers
     /// (endpoint detection, tests) leave it null and keep the local provider.
     /// </param>
+    /// <param name="apiKeySelection">
+    /// The process-wide multi-key selection state
+    /// (<c>ChannelService.apiKeyStates</c>). Direct callers and tests leave it
+    /// null and keep the per-provider historical behavior.
+    /// </param>
     public static IOutboundTransformer Create(
         ChannelCandidate candidate,
         LlmRequest request,
         DateTimeOffset now,
         IExecutor? tokenRefreshExecutor = null,
-        IGrainFactory? grainFactory = null)
+        IGrainFactory? grainFactory = null,
+        ChannelApiKeySelectionRegistry? apiKeySelection = null)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(request);
@@ -341,19 +347,40 @@ public static class ChannelOutboundFactory
         }
 
         var allKeys = ChannelCredentials.GetAllApiKeys(candidate.Credentials);
+        var configuredApiKeys = ChannelCredentials.GetApiKeys(candidate.Credentials);
 
         // getAPIKeyProvider (channel_llm.go:169-184): the override is a static
-        // key; otherwise the enabled set chooses between static, trace-sticky
-        // rendezvous and random. WithTrace publishes the resolved trace id as
-        // the shared session id, which the endpoint threads onto the wire
-        // request; the reference provider reads it back from the request context
-        // with contexts.GetTrace.
+        // key. Otherwise the channel keeps its configured policy active whenever
+        // it holds more than one key — even when only one is selectable right
+        // now — so the fixed cursor and the round_robin_success counter survive
+        // a key being disabled. A single key stays static; several keys dispatch
+        // on the channel's apiKeyStrategy.
+        //
+        // The shared state is attached at build time for every strategy that
+        // remembers something (channel_llm.go:770), even when this build ends up
+        // with a single selectable key, so the success report keeps counting.
+        var settings = ChannelTransformOptions.SettingsOf(candidate);
+        var strategy = ChannelApiKeyStrategies.StrategyOf(settings);
+        var apiKeyState = apiKeySelection?.StateFor(
+            candidate.ChannelId,
+            strategy,
+            ChannelApiKeyStrategies.SwitchAfterOf(settings));
+
+        var traceId = request.RawRequest?.SessionId;
         var provider = overrideApiKey.Length > 0
             ? ChannelApiKeyProvider.ForOverride(overrideApiKey, allKeys)
-            : new ChannelApiKeyProvider(
-                enabledKeys,
-                allKeys,
-                request.RawRequest?.SessionId);
+            : enabledKeys.Count > 1 || configuredApiKeys.Count > 1
+                ? ChannelApiKeyProvider.ForSelection(
+                    ChannelApiKeyStrategies.Select(
+                        settings,
+                        apiKeyState,
+                        enabledKeys,
+                        configuredApiKeys,
+                        allKeys,
+                        ChannelCredentials.GetDisabledApiKeySet(candidate.DisabledApiKeys),
+                        traceId),
+                    allKeys)
+                : new ChannelApiKeyProvider(enabledKeys, allKeys, traceId);
 
         // The reference keys each channel's outbounds by API format (the channel
         // endpoint map) and picks the map entry the candidate selected
@@ -941,6 +968,7 @@ public static class ChannelOutboundFactory
                     ? ZenmuxBaseUrl(candidate)
                     : candidate.BaseUrl ?? string.Empty,
                 ApiKeyProvider = provider,
+                ChannelApiKeyIndex = provider.KeyIndex,
             }),
             // channel_llm.go:1336-1346: the gemini_vertex channel pins the
             // Vertex platform (URL shape + function ID clearing).
@@ -949,6 +977,7 @@ public static class ChannelOutboundFactory
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
                 ApiKeyProvider = provider,
                 PlatformType = GeminiConstants.PlatformVertex,
+                ChannelApiKeyIndex = provider.KeyIndex,
             }),
             // channel_llm.go:1375-1391: antigravity wraps the native Gemini
             // outbound in the project envelope and authenticates exclusively
@@ -1020,10 +1049,16 @@ public static class ChannelOutboundFactory
     /// <exception cref="InvalidOperationException">
     /// The format is not one of the three detection surfaces.
     /// </exception>
+    /// <param name="apiKeySelection">
+    /// The shared multi-key selection state; endpoint detection passes it so the
+    /// probe authenticates the same way a real request would, but never
+    /// publishes a snapshot, exactly like the reference's other channel builds.
+    /// </param>
     public static IOutboundTransformer CreateNonDefaultEndpointOutbound(
         ChannelCandidate candidate,
         string apiFormat,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        ChannelApiKeySelectionRegistry? apiKeySelection = null)
     {
         ArgumentNullException.ThrowIfNull(candidate);
 
@@ -1046,9 +1081,29 @@ public static class ChannelOutboundFactory
             candidate.DisabledApiKeys,
             now);
         var allKeys = ChannelCredentials.GetAllApiKeys(candidate.Credentials);
+        var configuredApiKeys = ChannelCredentials.GetApiKeys(candidate.Credentials);
+
+        var settings = ChannelTransformOptions.SettingsOf(candidate);
+        var strategy = ChannelApiKeyStrategies.StrategyOf(settings);
+        var apiKeyState = apiKeySelection?.StateFor(
+            candidate.ChannelId,
+            strategy,
+            ChannelApiKeyStrategies.SwitchAfterOf(settings));
+
         var provider = overrideApiKey.Length > 0
             ? ChannelApiKeyProvider.ForOverride(overrideApiKey, allKeys)
-            : new ChannelApiKeyProvider(enabledKeys, allKeys);
+            : enabledKeys.Count > 1 || configuredApiKeys.Count > 1
+                ? ChannelApiKeyProvider.ForSelection(
+                    ChannelApiKeyStrategies.Select(
+                        settings,
+                        apiKeyState,
+                        enabledKeys,
+                        configuredApiKeys,
+                        allKeys,
+                        ChannelCredentials.GetDisabledApiKeySet(candidate.DisabledApiKeys),
+                        traceId: null),
+                    allKeys)
+                : new ChannelApiKeyProvider(enabledKeys, allKeys);
 
         switch (apiFormat)
         {
@@ -1065,14 +1120,22 @@ public static class ChannelOutboundFactory
 
                 if (ProviderChatEndpointUsesFamilyVersion(candidate.Type, baseUrl))
                 {
-                    return Create(candidate, new LlmRequest { ApiFormat = apiFormat }, now);
+                    return Create(
+                        candidate,
+                        new LlmRequest { ApiFormat = apiFormat },
+                        now,
+                        apiKeySelection: apiKeySelection);
                 }
 
                 return OpenAiOutboundTransformer.Create(baseUrl, provider, provider.KeyIndex);
             case ApiFormats.OpenAIResponse:
                 if (candidate.Type is CodexChannelType or FennoChannelType)
                 {
-                    return Create(candidate, new LlmRequest { ApiFormat = apiFormat }, now);
+                    return Create(
+                        candidate,
+                        new LlmRequest { ApiFormat = apiFormat },
+                        now,
+                        apiKeySelection: apiKeySelection);
                 }
 
                 return new ResponsesOutboundTransformer(new ResponsesOutboundConfig
@@ -1100,7 +1163,11 @@ public static class ChannelOutboundFactory
 
                 if (candidate.Type == CommandcodeAnthropicChannelType)
                 {
-                    return Create(candidate, new LlmRequest { ApiFormat = apiFormat }, now);
+                    return Create(
+                        candidate,
+                        new LlmRequest { ApiFormat = apiFormat },
+                        now,
+                        apiKeySelection: apiKeySelection);
                 }
 
                 return new AnthropicOutboundTransformer(new AnthropicOutboundConfig

@@ -57,6 +57,13 @@ builder.Services.AddSingleton<IAxonHubDbContextFactory>(
 // mutation). The port hosts it in EnabledChannelsGrain; this registration is
 // the grain's database half, and the selection path reads the grain snapshot.
 builder.Services.AddSingleton<IEnabledChannelSource, PostgresEnabledChannelSource>();
+
+// Multi-key selection state: the reference keeps apiKeyStates on the
+// process-wide ChannelService, so the round_robin rotation, the sticky
+// trace→key memory and the fixed / round_robin_success cursors survive every
+// channel rebuild (channel_apikey_state.go). Registered before the provider
+// that publishes the served generation.
+builder.Services.AddSingleton<ChannelApiKeySelectionRegistry>();
 builder.Services.AddSingleton<IEnabledChannelProvider, GrainEnabledChannelProvider>();
 builder.Services.AddSingleton<IEnabledChannelsCacheRefresher, GrainEnabledChannelsCacheRefresher>();
 

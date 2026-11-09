@@ -25,8 +25,15 @@ internal static class ChannelTransformOptions
     /// load (C157); the reference would have failed the channel load.
     /// </summary>
     internal static ChannelSettingsDraft? SettingsOf(ChannelCandidate candidate)
+        => SettingsOfRaw(candidate.Settings);
+
+    /// <summary>
+    /// Same lenient decode for a raw <c>channels.settings</c> column, used by
+    /// paths that only hold the descriptor (the enabled-cache snapshot
+    /// publication for the multi-key strategies).
+    /// </summary>
+    internal static ChannelSettingsDraft? SettingsOfRaw(string? raw)
     {
-        var raw = candidate.Settings;
         if (string.IsNullOrWhiteSpace(raw) || raw == "null")
         {
             return null;

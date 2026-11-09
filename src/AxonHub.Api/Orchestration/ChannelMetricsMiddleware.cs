@@ -1,3 +1,4 @@
+using AxonHub.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -27,6 +28,7 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
     private readonly IChannelMetricsRecorder _metrics;
     private readonly ChannelPerformanceState _state;
     private readonly TimeProvider _timeProvider;
+    private readonly ChannelApiKeySelectionRegistry? _apiKeySelection;
 
     private bool _stream;
 
@@ -34,7 +36,8 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         PersistentOutboundTransformer outbound,
         IChannelMetricsRecorder metrics,
         ChannelPerformanceState state,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ChannelApiKeySelectionRegistry? apiKeySelection = null)
     {
         ArgumentNullException.ThrowIfNull(outbound);
         ArgumentNullException.ThrowIfNull(metrics);
@@ -45,6 +48,7 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         _metrics = metrics;
         _state = state;
         _timeProvider = timeProvider;
+        _apiKeySelection = apiKeySelection;
     }
 
     /// <summary>Port of performanceRecording.OnInboundLlmRequest: the client's stream intent.</summary>
@@ -70,11 +74,23 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
             return request;
         }
 
+        // performance.go:79-83: the provider publishes the selected key through
+        // the request context; OAuth channels never pass through a key provider,
+        // so they carry the fixed OAuth credential ref instead.
+        var apiKey = _outbound.CurrentApiKey ?? string.Empty;
+        if (apiKey.Length == 0
+            && _outbound.CurrentCandidate is { } candidate
+            && ChannelCredentials.IsOAuth(candidate.Credentials))
+        {
+            apiKey = ChannelCredentials.OAuthCredentialRef;
+        }
+
         _state.Current = new ChannelPerformanceRecord
         {
             ChannelId = channelId,
             StartTime = _timeProvider.GetUtcNow(),
             Stream = _stream,
+            ApiKey = apiKey,
         };
 
         return request;
@@ -150,6 +166,10 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
 
         if (record.Success)
         {
+            // channel_metrics.go:531: a success lets the round_robin_success
+            // strategy count the key and move its cursor once the key has
+            // served its share of successful requests.
+            _apiKeySelection?.OnApiKeySuccess(record.ChannelId, record.ApiKey);
             _metrics.RecordSuccess(record.ChannelId, record.EndTime);
         }
         else

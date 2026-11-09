@@ -8620,6 +8620,83 @@ GraphQL Int 32 位截断沿用 C190。
 `apiKeyStrategy` 的 present-empty 指针在端口折叠为缺失（Go 经 omitempty 保留 `""`），
 覆盖 parse / 完整更新 / 本节合并三条路径。
 
+## 164. 多 API key 策略分派（apiKeyStrategy 六策略与共享选择状态，57 例，2026-11-10）
+
+参照（漂移基线：冻结基线 `b8bb3421` 只有 trace-sticky 规则，按 live `f272549f` 补齐）：
+`internal/server/biz/channel_apikey_strategies.go:1-344`（策略名、`channelAPIKeyStrategy` /
+`channelAPIKeySwitchAfter`、`strategyKeepsSelectionState`、`newMultiKeyProvider` 的六种分派、
+`selectableKeys` / `positionOf` / `firstSelectableFrom`、sharedSticky / random / round_robin、
+fixed / round_robin_success 的 cursor 规则）、`internal/server/biz/channel_apikey_state.go:1-354`
+（共享每通道状态、round_robin 计数器、trace 粘性 LRU 1024、`isServing`、`onAPIKeySuccess`、
+`forgetAPIKeySelectionState`）、`internal/server/biz/channel_llm.go:169-184`（多 key 分派条件）、
+`channel_llm.go:768`（每次构建挂载共享状态）、`internal/server/biz/channel_metrics.go:515-535`
+与 `internal/server/orchestrator/performance.go:75-85`（成功回报与 `PerformanceRecord.APIKey`）、
+`internal/server/biz/channel.go:296,1331` 与 `channel_bulk.go:356`（启用缓存发布与删除时遗忘）、
+`internal/server/biz/channel_apikey_strategies_test.go`（43 个 Test 函数，含表驱动子用例）。
+
+行为：
+
+| 主题 | 参照语义 |
+|---|---|
+| 策略读取 | settings 为 nil 或 `apiKeyStrategy` 为 nil → `""`；否则解引用，空串等同 sticky；`apiKeyRoundRobinSwitchAfter` 缺失 → 1，≥1 原样，<1 归一为 1 |
+| 状态注册 | `strategyKeepsSelectionState` 仅对 `""` / sticky / round_robin / round_robin_success / fixed 返回 true；random 与 priority 不分配共享状态 |
+| 分派 | `newMultiKeyProvider`：random → random，round_robin → 轮转，round_robin_success → 成功计数，priority → 恒首，fixed → 游标，sticky / `""` / 未知值 → sharedSticky |
+| 可选 key 集 | 启用 key（按凭据顺序、过滤禁用与过期）；启用为空时回落 `Credentials.APIKeys[0]` |
+| sticky | 单启用 key 直接用；有 trace 时先查 1024 项 LRU，命中且该 key 仍在启用集则复用，否则用 rendezvous 选择并记忆；无 trace 时在启用集上随机 |
+| round_robin | 每次 Get 取 `index = (rrCounter / per) % len(enabled)` 后 `rrCounter++`，与调用结果无关 |
+| priority | 返回第一个可选 key（全禁用时回落首键） |
+| fixed | 游标 key 仍在完整数组且未禁用 → 直接返回；否则从 `positionOf`（key 被删除时用记忆下标）前向并环绕、跳过禁用项；只有 serving 代际写回游标（key 与下标） |
+| round_robin_success | Get 不计数，游标可选时直接返回；成功回报仅接受策略仍为 rr_success、key 等于当前游标、通道存在状态三项；`count++` 达到 `max(per,1)` 后从「serving 快照中游标位置 +1」前向选择并清零；游标失效时重置计数 |
+| serving 判定 | 提供者的快照为 nil 或与当前发布代际相同；stale 提供者只读不写，避免回退游标 |
+| 发布 | 启用通道缓存加载时为每个通道发布完整 key 数组与禁用集，成功回报从该快照走数组；单查、key 测试、端点探测不发布 |
+| 成功钩子 | `RecordPerformance` 成功分支调用 `onAPIKeySuccess(channelID, apiKey)`；`PerformanceRecord.APIKey` 取本次执行的通道 key（OAuth 通道记凭据引用） |
+| 删除 | 删除与批量删除通道后遗忘该通道的共享状态 |
+| 分派条件 | 启用 key > 1 或配置 key > 1 → 多 key provider；否则静态 provider（override key 恒静态） |
+
+端口实现：
+
+- `src/AxonHub.Api/Orchestration/ChannelApiKeyStrategies.cs`（新）：常量与 `StrategyOf` /
+  `SwitchAfterOf` / `NormalizeSwitchAfter` / `KeepsSelectionState` / `Select`（策略分派）/
+  `SelectableKeys` / `PositionOf` / `FirstSelectableFrom` / `SnapshotOf` / `Publish`（从
+  `ChannelDescriptor` 解码 settings、凭据与禁用集后发布）。
+- `src/AxonHub.Api/Orchestration/ChannelApiKeySelection.cs`（新）：内部 `ChannelKeySnapshot`
+  （完整数组 + 禁用集，内容等价比较）、内部 `ChannelApiKeyState`（锁、sticky LRU 1024、
+  `Configure` / `SetSnapshot` / `NextRoundRobinKey` / `StickyKeyFor` / `SelectFixedKey` /
+  `SelectRoundRobinSuccessKey` / `ReportSuccess` / `IsServing`）与公开
+  `ChannelApiKeySelectionRegistry`（`StateFor` / `Publish` / `Forget` / `OnApiKeySuccess`）。
+- `src/AxonHub.Api/Orchestration/ChannelApiKeyProvider.cs`：新增 `ForSelection`（已选 key + 完整
+  数组下标）并保留 `SelectTraceSticky`（单键 / 遗留路径）；`ForOverride` 不变。
+- `src/AxonHub.Api/Orchestration/ChannelOutboundFactory.cs`：构建时解析策略与共享状态，按
+  `enabledKeys.Count > 1 || configuredApiKeys.Count > 1` 选择 `ForSelection(Select(...))`，
+  单 key 保持静态 provider；trace 取 `RawRequest.SessionId`；带 key 的变换器回填
+  `ChannelApiKeyIndex`（Gemini 补 `IApiKeyProvenance`）；非默认端点构建走同一分派
+  （trace 为 null）。
+- `src/AxonHub.Api/Orchestration/ChannelMetricsMiddleware.cs`：成功分支先
+  `OnApiKeySuccess(record.ChannelId, record.ApiKey)` 再 `RecordSuccess`。
+- `src/AxonHub.Api/Orchestration/GrainEnabledChannels.cs`：`ListEnabledAsync` 在映射快照后为每个
+  通道 `Publish`（唯一发布点；单查 / key 测试 / 端点探测不经过）。
+- `src/AxonHub.Api/Management/ChannelLifecycleService.cs`：删除与批量删除后
+  `apiKeySelection.Forget(id)`（channel.go:1331 / channel_bulk.go:356）。
+- `src/AxonHub.Api/Program.cs`：`ChannelApiKeySelectionRegistry` 注册为单例；
+  `ChatCompletionOrchestrator` 与 `ChannelEndpointDetectService` 注入并透传；`VideoService`
+  按参照「状态查询不读 key」故意不接 registry，避免每次轮询推进 round_robin。
+
+测试（57 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/ChannelApiKeyStrategiesTests.cs` | 57（50 Fact + 2 Theory / 7 InlineData） | A 分派（10：null / 空 / sticky / 未知回落 trace-sticky；random 随机性、round_robin k1→k2→k3→k1、rr_success 恒首、priority 首键、fixed 恒稳；5 种记忆策略注册状态、2 种无状态不注册）；B priority（3：恒首、跳过前置禁用、全禁用回落）；C fixed（14：首键、跳过禁用、保持、禁用前进、连续禁用、环绕、删除后续走、删除越界归零、删除后跳过禁用尾、全禁用回落、own snapshot、stale 不回退、数组前插保 key、Forget 后从 k1 重来）；D rr_success（12：Get 不推进、成功推进、per=1、per<1 归一、忽略其他 key、忽略其他策略、未知通道 no-op、禁用重置、删除续走、own snapshot、stale 不回退、跳过禁用）；E RecordPerformance 接线（3：成功推进、失败不推进、fixed 成功 no-op）；F 并发（2：fixed 32×50 恒 k1、rr_success 16×50 Get+成功终态合法）；G 跨重建（6：round_robin 轮转 / per=2 / 跨重建继续、sticky 跨重建同 key、禁用后换 key、同 trace 稳定）；H 发布与工厂（7：发布代际喂给成功回报、工厂按策略轮转、单 key 静态、仅一个启用但配置多 key 仍走策略、override 优先、sticky trace 跨重建、Gemini 出站回填 key 与下标） |
+
+静态计数：`AxonHub.Api.Tests` 由 5844 增至 5901（+57），`AxonHub.Persistence.Tests` 363、
+`AxonHub.Grains.Tests` 1746、`AxonHub.Llm.Tests` 1512 不变，四项目合计由 9465 增至 9522。
+**按项目规则未运行 lint / build / test。**
+
+差异：C247 更新（gap → resolved）；新增 C251（accepted）：`isServing` 以代际内容等价（完整
+数组顺序相等 + 禁用集集合相等）替代参照的通道指针相等——端口每次读取重建描述符，内容相同的
+代际在两侧算出的游标写回完全一致，仅在「A→B→A 重发布」下 stale 提供者是否被允许写回的时机
+不同，结果不可观察；发布点也因此从参照的「缓存 reload 时发布」变为「每次启用列表读取时发布」，
+内容幂等且与游标更新共用同一把锁。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|
