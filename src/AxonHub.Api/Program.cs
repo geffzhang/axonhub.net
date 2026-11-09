@@ -1,4 +1,5 @@
 using AxonHub.Abstractions;
+using AxonHub.Api.Assets;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Auth.Oidc;
 using AxonHub.Api.Billing;
@@ -211,6 +212,9 @@ builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminServi
 // First-run initialization (biz/system.go:698-846): owner user, default
 // project, JWT secret, Primary storage, version — one transaction (C241).
 builder.Services.AddScoped<ISystemInitializationService, SystemInitializationService>();
+// Default favicon asset (internal/server/assets/favicon.go): the embedded
+// icon served by GET /favicon when no brand logo is configured (C242).
+builder.Services.AddSingleton<IFaviconProvider, EmbeddedFaviconProvider>();
 // Version surface (internal/build/info.go + biz/version.go): the static build
 // metadata and the GitHub release lookup behind checkForUpdate (C235).
 builder.Services.AddSingleton<ISystemVersionService, SystemVersionService>();

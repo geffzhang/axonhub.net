@@ -8273,6 +8273,50 @@ omitempty）、`internal/ent/migrate/datamigrate/migrator.go`（未初始化时�
 元数据、JSON 边界、email / rune 校验、时间戳来源、无迁移记账表）。新增 C242（gap）：
 GET /favicon 尚未接线，前端图标回落到静态 index。
 
+## 158. GET /favicon（品牌图标路由，14 例，2026-11-09）
+
+参照：`internal/server/api/system.go:187-251`（GetFavicon：BrandLogo 读取失败只记录日志
+并按空值处理；空值读内嵌 `favicon.ico`；两条分支的响应头与两类 400）、
+`internal/server/biz/system.go:899-914`（BrandLogo：NotFound → ""，其余错误
+`failed to get brand logo: %w`）、`internal/server/assets/favicon.go`
+（`//go:embed favicon.ico`）、`internal/server/routes.go:83-84`（公开路由）。
+
+| 项 | 参照值 |
+|---|---|
+| 无品牌标识 | 内嵌 favicon.ico 的字节、`image/x-icon`、`Cache-Control: public, max-age=3600`；不显式设置 Content-Length（28,882 字节超过 net/http 的 2048 字节缓冲，实际走 chunked） |
+| 读取失败 | 记录日志后按空值处理，仍返回默认图标 |
+| 默认资源缺失 | 500 `{"error":{"type":"Internal Server Error","message":"Failed to read default favicon"}}` |
+| 品牌标识格式 | 非 `data:` 前缀、逗号不是恰好一段（0 或 ≥2 个逗号）、头部缺 `:` / `;` → 400 `Invalid brand logo format` |
+| base64 | 载荷按 StdEncoding 解码：非法字符、缺失填充、非 CR/LF 空白 → 400 `Failed to decode brand logo`（Go 1.26 decodeQuantum：只忽略 CR/LF、要求完整填充、忽略非零尾随位） |
+| 成功 | `Content-Type: <mime>`、`Cache-Control: public, max-age=3600`、显式 `Content-Length`、原始字节 |
+
+端口实现：
+
+- `src/AxonHub.Api/Assets/favicon.ico`：与参照逐字节一致（SHA-256
+  `faadeaf0626d71ef774fdb899e54c82bd2f7717581c337e4d095ea681b2eefed`，28,882 字节），
+  以 `LogicalName=AxonHub.Api.Assets.favicon.ico` 嵌入。
+- `src/AxonHub.Api/Assets/FaviconProvider.cs`：`IFaviconProvider.ReadDefaultFavicon`
+  读取内嵌资源，缺失返回 null（对应参照的 ReadFile 错误）。
+- `src/AxonHub.Api/Endpoints/SystemHandlers.cs`：`GetFaviconAsync` 接线 `/favicon`；
+  品牌读取失败经 ILogger 记录后回退默认图标；`IsGoBase64` 预检把
+  `Convert.FromBase64String` 的空白容忍收窄到 StdEncoding 的字符集（字母表、`=`、
+  CR/LF），保留其「完整填充」与「忽略尾随位」语义。
+- `src/AxonHub.Api/Program.cs`：注册 `IFaviconProvider`。
+
+测试（14 例）：
+
+| 测试文件 | 例数 | 锁定内容 |
+|---|---|---|
+| `tests/AxonHub.Api.Tests/FaviconEndpointTests.cs` | 14（7 Fact + 7 InlineData） | 默认图标 / 缓存头 / 字节；读取失败回退；默认资源缺失 500；data URL 成功与显式 Content-Length；空载荷；CR/LF 忽略；四种格式 400（无 data: / 无逗号 / 多逗号 / 无分号）；三种 base64 400（非法字符 / 空格 / 缺失填充）；内嵌资源长度与 SHA-256 |
+
+静态计数：`AxonHub.Api.Tests` 由 5713 增至 5727（+14），`AxonHub.Persistence.Tests` 359、
+`AxonHub.Grains.Tests` 1746、`AxonHub.Llm.Tests` 1506 不变，四项目合计由 9324 增至
+9338。**按项目规则未运行 lint / build / test。**
+
+差异：C242 由 gap 改为 resolved（默认图标、data URL 解析、错误信封与响应头均已接线）；
+唯一残余为日志通道 / 类别名不同（ILogger 类别 vs narada 结构化日志），进程内可见，
+不影响响应。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|

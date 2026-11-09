@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using AxonHub.Api.Assets;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Settings;
 using AxonHub.Llm.Json;
@@ -7,24 +8,21 @@ using AxonHub.Llm.Json;
 namespace AxonHub.Api.Endpoints;
 
 /// <summary>
-/// Ports the REST half of internal/server/api/system.go: the two public routes
-/// (health and, in the reference, favicon) and the unauthenticated admin pair
-/// for first-run initialization (routes.go:81-99).
+/// Ports the REST half of internal/server/api/system.go: the public pair
+/// (health and favicon) and the unauthenticated admin pair for first-run
+/// initialization (routes.go:81-99).
 /// </summary>
 public static class SystemHandlers
 {
     private static readonly JsonSerializerOptions RequestJson =
         new(JsonSerializerDefaults.Web);
 
-    /// <summary>
-    /// routes.go:84,86,94-95. The favicon route (system.go:187-251) reads the
-    /// brand logo setting and is not wired yet (C242); GET `/favicon` still
-    /// falls through to the static index handler.
-    /// </summary>
+    /// <summary>routes.go:84,86,94-95.</summary>
     public static IEndpointRouteBuilder MapSystemRoutes(this IEndpointRouteBuilder endpoints)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
 
+        endpoints.MapGet("/favicon", GetFaviconAsync);
         endpoints.MapGet("/health", HealthAsync);
         endpoints.MapGet("/admin/system/status", GetSystemStatusAsync);
         endpoints.MapPost("/admin/system/initialize", InitializeSystemAsync);
@@ -254,6 +252,183 @@ public static class SystemHandlers
                 success: true,
                 "System initialized successfully",
                 cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Port of SystemHandlers.GetFavicon (system.go:187-251).</summary>
+    public static async Task GetFaviconAsync(
+        HttpContext context,
+        ISystemSettingsAdminService settings,
+        IFaviconProvider favicons,
+        ILoggerFactory logging,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(favicons);
+        ArgumentNullException.ThrowIfNull(logging);
+
+        string brandLogo;
+        try
+        {
+            brandLogo = await settings.GetBrandLogoAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // system.go:191-194: the read failure is logged, not surfaced; the
+            // empty logo then falls through to the default icon.
+            logging.CreateLogger(typeof(SystemHandlers).FullName!)
+                .LogError(ex, "Failed to get brand logo");
+            brandLogo = string.Empty;
+        }
+
+        if (string.IsNullOrEmpty(brandLogo))
+        {
+            var defaultFavicon = favicons.ReadDefaultFavicon();
+            if (defaultFavicon is null)
+            {
+                await AbortResponse.WriteErrorAsync(
+                        context,
+                        StatusCodes.Status500InternalServerError,
+                        "Failed to read default favicon",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            // The reference sets no Content-Length here; the embedded icon is
+            // larger than net/http's 2048-byte buffer, so it streams chunked.
+            await WriteFaviconAsync(
+                    context,
+                    "image/x-icon",
+                    defaultFavicon,
+                    setContentLength: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (!brandLogo.StartsWith("data:", StringComparison.Ordinal))
+        {
+            await WriteBrandLogoErrorAsync(context, invalidFormat: true, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        // strings.Split(brandLogo, ","): exactly one comma is required.
+        var parts = brandLogo.Split(',', StringSplitOptions.None);
+        if (parts.Length != 2)
+        {
+            await WriteBrandLogoErrorAsync(context, invalidFormat: true, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        // "data:<mime>;base64,<payload>": the MIME type sits between the first
+        // ':' and the first ';' of the header part.
+        var headerPart = parts[0];
+        var mimeStart = headerPart.IndexOf(':');
+        var mimeEnd = headerPart.IndexOf(';');
+        if (mimeStart == -1 || mimeEnd == -1)
+        {
+            await WriteBrandLogoErrorAsync(context, invalidFormat: true, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var mimeType = headerPart[(mimeStart + 1)..mimeEnd];
+
+        // base64.StdEncoding.DecodeString (base64.go decodeQuantum) accepts
+        // only the standard alphabet, '=' padding and CR/LF; it requires
+        // complete padding and ignores non-zero trailing bits. The pre-check
+        // narrows Convert.FromBase64String's broader whitespace tolerance
+        // (it ignores spaces and tabs too) to the reference's set.
+        if (!IsGoBase64(parts[1]))
+        {
+            await WriteBrandLogoErrorAsync(context, invalidFormat: false, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        byte[] imageData;
+        try
+        {
+            imageData = Convert.FromBase64String(parts[1]);
+        }
+        catch (FormatException)
+        {
+            await WriteBrandLogoErrorAsync(context, invalidFormat: false, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        await WriteFaviconAsync(
+                context,
+                mimeType,
+                imageData,
+                setContentLength: true,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>The two brand-logo 400s (system.go:214,240).</summary>
+    private static Task WriteBrandLogoErrorAsync(
+        HttpContext context,
+        bool invalidFormat,
+        CancellationToken cancellationToken)
+        => AbortResponse.WriteErrorAsync(
+            context,
+            StatusCodes.Status400BadRequest,
+            invalidFormat ? "Invalid brand logo format" : "Failed to decode brand logo",
+            cancellationToken);
+
+    /// <summary>Characters encoding/base64's decodeMap accepts (plus CR/LF).</summary>
+    private static bool IsGoBase64(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (ch is >= 'A' and <= 'Z'
+                or >= 'a' and <= 'z'
+                or >= '0' and <= '9'
+                or '+'
+                or '/'
+                or '='
+                or '\r'
+                or '\n')
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task WriteFaviconAsync(
+        HttpContext context,
+        string contentType,
+        byte[] data,
+        bool setContentLength,
+        CancellationToken cancellationToken)
+    {
+        // system.go:204-206,245-250: every favicon response carries the image
+        // type and a one-hour public cache; only the brand-logo branch sets
+        // Content-Length explicitly.
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = contentType;
+        context.Response.Headers.CacheControl = "public, max-age=3600";
+        if (setContentLength)
+        {
+            context.Response.ContentLength = data.Length;
+        }
+
+        await context.Response.Body.WriteAsync(data, cancellationToken)
             .ConfigureAwait(false);
     }
 

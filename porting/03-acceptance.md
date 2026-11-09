@@ -489,6 +489,19 @@ RFC3339Nano。新增 C241（accepted）：Primary settings 写 `"{}"`（C196）�
 差异（C235）、JSON 边界（C201）、email / rune 校验近似（C166）、时间戳来源与无迁移记账表
 （C020）；新增 C242（gap）：GET /favicon 尚未接线，前端图标回落到静态 index。
 
+§158 追加 14 个用例（`AxonHub.Api.Tests` 14：`FaviconEndpointTests`），同样按项目规则未
+运行 lint / build / test；§158 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、
+`AxonHub.Api.Tests` 5727、`AxonHub.Llm.Tests` 1506、`AxonHub.Persistence.Tests` 359，
+四项目合计 9338，下一次全量运行应以该数字复核。该切片接入 `GET /favicon`：内嵌
+favicon.ico 与参照逐字节一致（28,882 字节，SHA-256 `faadeaf0…eefed`），无品牌标识时返回
+`image/x-icon` 与 `Cache-Control: public, max-age=3600` 且不显式设置 Content-Length，
+品牌读取失败只经 ILogger 记录并回退默认图标；data URL 分支复刻 `data:` 前缀、按逗号恰好
+两段、首个 `:` 与 `;` 之间的 MIME 提取、四种 `Invalid brand logo format` 与 base64 失败
+的 `Failed to decode brand logo`，成功时返回该 MIME、同一缓存头与显式 Content-Length。
+base64 的接受 / 拒绝集合按 Go 1.26 `decodeQuantum` 对齐（只忽略 CR/LF、要求完整填充、
+忽略非零尾随位），`IsGoBase64` 预检把 `Convert.FromBase64String` 对空格 / 制表符的额外
+容忍收窄回参照字符集。C242 由 gap 改为 resolved，唯一残余为日志通道 / 类别名不同。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。

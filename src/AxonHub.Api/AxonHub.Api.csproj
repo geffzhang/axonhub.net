@@ -27,5 +27,8 @@
   <ItemGroup>
     <!-- 内置目录快照与 internal/server/biz/catalogdata/ 逐字节一致（go:embed）。 -->
     <EmbeddedResource Include="Catalog\Data\*.json" />
+    <!-- 默认 favicon 与 internal/server/assets/favicon.ico 逐字节一致（go:embed）。 -->
+    <EmbeddedResource Include="Assets\favicon.ico"
+                      LogicalName="AxonHub.Api.Assets.favicon.ico" />
   </ItemGroup>
 </Project>
