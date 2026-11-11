@@ -499,6 +499,31 @@ public sealed class AdminModelsEndpointTests : IAsyncLifetime
         Assert.Equal("openai", node.GetProperty("developer").GetString());
     }
 
+    [Fact]
+    public async Task ModelsValidateFirstAndLast()
+    {
+        // The reference resolver does not call validatePaginationArgs, but
+        // ent's generated ModelQuery.Paginate calls validateFirstLast before
+        // paging (gql_pagination.go:2817-2824), so both checks surface here.
+        var errors = await QueryErrorsAsync(
+            """
+            query Models { models(first: 1, last: 1) { edges { node { id } } } }
+            """);
+
+        Assert.Equal(
+            "Passing both `first` and `last` to paginate a connection is not supported.",
+            errors[0].GetProperty("message").GetString());
+
+        var negative = await QueryErrorsAsync(
+            """
+            query Models { models(first: -1) { edges { node { id } } } }
+            """);
+
+        Assert.Equal(
+            "`first` on a connection cannot be less than zero.",
+            negative[0].GetProperty("message").GetString());
+    }
+
     private static string Gid(long id) => "gid://axonhub/Model/" + id;
 
     private async Task<JsonElement> QueryDataAsync(string query, object? variables = null)

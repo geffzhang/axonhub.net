@@ -699,6 +699,29 @@ public sealed class AdminDataStoragesEndpointTests : IAsyncLifetime
         Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task DataStoragesValidateFirstAndLast()
+    {
+        var errors = await QueryErrorsAsync(
+            """
+            query DataStorages { dataStorages(first: 1, last: 1) { edges { node { id } } } }
+            """);
+
+        Assert.Equal(
+            "Passing both `first` and `last` to paginate a connection is not supported.",
+            errors[0].GetProperty("message").GetString());
+
+        // The resolver's validatePaginationArgs runs before ent's generated
+        // Paginate calls validateFirstLast (ent.resolvers.go:400-412), so a
+        // negative first surfaces the resolver wording.
+        var negative = await QueryErrorsAsync(
+            """
+            query DataStorages { dataStorages(first: -1) { edges { node { id } } } }
+            """);
+
+        Assert.Equal("first must be greater than 0", negative[0].GetProperty("message").GetString());
+    }
+
     private static string Gid(long id) => "gid://axonhub/DataStorage/" + id;
 
     private async Task<JsonElement> QueryDataAsync(

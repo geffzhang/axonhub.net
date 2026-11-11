@@ -912,6 +912,30 @@ lint 通过，`porting/02-differences.md` 已重新生成。
 C196 中「dataStorages 不要求 first / last 互斥」的措辞是对照 resolver 时的误读，需要
 修正并补测试。
 
+§174（2026-11-11）闭合 §173 的附加发现：`models` 与 `dataStorages` 缺少 entgql 生成层的
+`validateFirstLast`。参照的约束分两层——resolver 显式调用 `validatePaginationArgs`，
+随后 `Query.Paginate` 在开头调用 `validateFirstLast`（`internal/ent/gql_pagination.go:60`）。
+`DataStorages` resolver 先做前者（`internal/server/gql/ent.resolvers.go:400-412`）再进入
+`DataStorageQuery.Paginate`（`gql_pagination.go:2503-2510`）；`Models` resolver 不做前者，
+只进入 `ModelQuery.Paginate`（`ent.resolvers.go:416-424`、`gql_pagination.go:2817-2824`）。
+端口此前分别缺这一层，故 `first` + `last` 同时出现、或 `models(first: -1)` 不会被拒绝。
+修复：`AdminQuery.cs` 的 `DataStoragesAsync` 在 `ValidatePaginationArgs` 之后补
+`ValidateFirstLast`；`ModelsAsync` 只在方法开头补 `ValidateFirstLast`，保持两层校验的
+顺序与各自文案。
+
+测试：`AdminModelsEndpointTests.ModelsValidateFirstAndLast`（互斥文案与
+`` `first` on a connection cannot be less than zero. ``）、
+`AdminDataStoragesEndpointTests.DataStoragesValidateFirstAndLast`（互斥文案与 resolver
+先行的 `first must be greater than 0`），两文件现为 8 例与 15 例。
+
+本轮实测：`AxonHub.Api.Tests` 6115 通过 / 0 失败 / 0 跳过（24m28s，先重建测试程序集，
+`--no-build` 运行）；Persistence 376、Grains 175、Llm 3110 本轮未改动，沿用 §173 / §172
+的实测，四项目合计 9776。
+
+台账：C196 中「dataStorages 只做 validatePaginationArgs（不要求 first / last 互斥）」
+更正为两层校验的描述，C177 / C196 的测试计数同步更新；269 条不变（196 accepted / 7 gap /
+66 resolved），lint 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

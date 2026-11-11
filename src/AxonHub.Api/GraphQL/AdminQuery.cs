@@ -956,9 +956,10 @@ public sealed class AdminQuery
     /// Port of queryResolver.Models (ent.resolvers.go:416-424).
     /// </summary>
     /// <remarks>
-    /// The reference resolver does not call validatePaginationArgs or
-    /// validateFirstLast, so the port does not either. A CREATED_AT order is
-    /// rewritten to the default (id) sort field.
+    /// The reference resolver does not call validatePaginationArgs, but ent's
+    /// generated Paginate (gql_pagination.go:2817-2824) calls
+    /// validateFirstLast before paging, so the port does the latter only. A
+    /// CREATED_AT order is rewritten to the default (id) sort field.
     /// </remarks>
     [GraphQLName("models")]
     public async Task<ModelConnectionType> ModelsAsync(
@@ -971,6 +972,8 @@ public sealed class AdminQuery
         [Service] ModelManagementService models,
         CancellationToken cancellationToken)
     {
+        ManagementValidation.ValidateFirstLast(first, last);
+
         var sortField = ModelMapping.ToSortField(orderBy);
         var page = await models.ListAsync(
                 new ModelListQuery
@@ -1068,10 +1071,11 @@ public sealed class AdminQuery
 
     /// <summary>Port of queryResolver.DataStorages (ent.resolvers.go:400-412).</summary>
     /// <remarks>
-    /// The reference validates pagination (but not first/last exclusivity) and
-    /// rewrites a CREATED_AT order to ent.DefaultDataStorageOrder's field (id)
-    /// before paginating; the list runs through the DataStorage query policy
-    /// (C196).
+    /// The reference validates pagination, then ent's generated Paginate
+    /// (gql_pagination.go:2503-2510) validates first/last exclusivity, and only
+    /// then rewrites a CREATED_AT order to ent.DefaultDataStorageOrder's field
+    /// (id) before paginating; the list runs through the DataStorage query
+    /// policy (C196).
     /// </remarks>
     [GraphQLName("dataStorages")]
     public async Task<DataStorageConnectionType> DataStoragesAsync(
@@ -1085,6 +1089,7 @@ public sealed class AdminQuery
         CancellationToken cancellationToken)
     {
         ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
 
         var sortField = DataStorageMapping.ToSortField(orderBy);
         var page = await storages.ListAsync(
