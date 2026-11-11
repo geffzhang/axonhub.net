@@ -818,6 +818,26 @@ gjson 探针宽容度、解码错误文案、Timer 精度与上限。`porting/02
 §170 更新。`porting/02-differences.md` 重新生成（267 条：197 accepted / 7 gap / 63
 resolved），lint 通过。
 
+§171（2026-11-11）按用户要求对 `AxonHub.Api.Tests` 做了全量实测（不带过滤器，构建后
+`--no-build` 运行，TRX `E:\tmp\trx2\api-full-3.trx`）：总计 6102，通过 6102，失败 0，
+跳过 0，用时 19m11s（`AxonHub.Api.Tests.dll (net10.0)`）。实测比 §170 记录的静态计数
+6101 多 1 条，以 6102 为准；其余三项目本轮未重跑，沿用 §170 的静态计数
+`AxonHub.Grains.Tests` 1760、`AxonHub.Llm.Tests` 1517、`AxonHub.Persistence.Tests`
+372，四项目合计 9751。
+
+本轮起点是同一次全量运行的 6078 通过 / 24 失败。其中 23 条是陈旧二进制造成的假失败：
+测试程序集构建于当日 7:54，晚于它的若干修复（API key profile 模板、channel limiter
+metrics、system settings 等）未编入；重新构建后按 16 个失败测试类过滤复跑为 1139
+通过 / 1 失败。最后一条 `ResetChannelQuotaNowResolvesTheGidAndSurfacesTheServiceError`
+是测试期望写错：Go resolver 在 `system.resolvers.go:260` 用
+`fmt.Errorf("failed to reset channel quota: %w", err)` 包了一层，线上消息保留前缀（内层
+为 `provider quota reset is not supported for provider "claudecode"`，来自
+`provider_quota.go:683/688` 与 `provider_quota/types.go:25`）；端口
+`AdminMutation.cs:961` 本就输出前缀，故只改测试期望。修正后全量复跑清零。
+
+台账：本轮无新增差异条目；C206（无 body GET 的 Content-Type）与 C268（ChannelModelPrice
+内省字段顺序，决策为接受）均为 resolved，相关测试在本轮全量运行中通过。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
