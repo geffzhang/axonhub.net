@@ -156,7 +156,66 @@ internal sealed class FakeRequestStore : IRequestStore
         DateTime updatedAt,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("not used by the video task flow");
+
+    /// <summary>The rows the video-storage scan would pick up, oldest first.</summary>
+    public List<RequestRecord> UnsavedVideoRows(int limit)
+        => Rows
+            .Where(row => row.Status is "processing" or "completed")
+            .Where(row => row.Format is "openai/video" or "seedance/video")
+            .Where(row => !row.ContentSaved)
+            .OrderBy(row => row.Id)
+            .Take(limit)
+            .ToList();
+
+    /// <summary>Records of the content-columns writes the scan performed.</summary>
+    public List<ContentSavedWrite> ContentSavedWrites { get; } = [];
+
+    public Exception? MarkContentSavedFailure { get; set; }
+
+    /// <summary>Simulates a failed scan query (worker.go wraps it).</summary>
+    public Exception? ListUnsavedVideoRequestsFailure { get; set; }
+
+    public Task<IReadOnlyList<RequestRecord>> ListUnsavedVideoRequestsAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+        => ListUnsavedVideoRequestsFailure is null
+            ? Task.FromResult<IReadOnlyList<RequestRecord>>(UnsavedVideoRows(limit))
+            : Task.FromException<IReadOnlyList<RequestRecord>>(ListUnsavedVideoRequestsFailure);
+
+    public Task<bool> MarkContentSavedAsync(
+        long id,
+        long dataStorageId,
+        string storageKey,
+        DateTime savedAt,
+        CancellationToken cancellationToken = default)
+    {
+        if (MarkContentSavedFailure is not null)
+        {
+            return Task.FromException<bool>(MarkContentSavedFailure);
+        }
+
+        ContentSavedWrites.Add(new ContentSavedWrite(id, dataStorageId, storageKey, savedAt));
+
+        var row = Rows.FirstOrDefault(row => row.Id == id);
+        if (row is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        row.ContentSaved = true;
+        row.ContentStorageId = dataStorageId;
+        row.ContentStorageKey = storageKey;
+        row.ContentSavedAt = savedAt;
+        row.UpdatedAt = savedAt;
+        return Task.FromResult(true);
+    }
 }
+
+internal sealed record ContentSavedWrite(
+    long Id,
+    long DataStorageId,
+    string StorageKey,
+    DateTime SavedAt);
 
 /// <summary>In-memory port of the <c>request_executions</c> store.</summary>
 internal sealed class FakeRequestExecutionStore : IRequestExecutionStore
@@ -288,8 +347,12 @@ internal sealed class FakeChannelStore : IChannelStore
     /// <summary>Fails the selector's enabled-channel lookup only.</summary>
     public Exception? ListEnabledFailure { get; set; }
 
+    /// <summary>Number of enabled-channel lookups (the probe writer's gate).</summary>
+    public int ListEnabledCalls { get; private set; }
+
     public Task<IReadOnlyList<ChannelRecord>> ListEnabledAsync(CancellationToken cancellationToken = default)
     {
+        ListEnabledCalls++;
         if (ListEnabledFailure is not null)
         {
             return Task.FromException<IReadOnlyList<ChannelRecord>>(ListEnabledFailure);

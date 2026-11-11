@@ -61,6 +61,14 @@ public sealed class GrainClusterFixture : IAsyncLifetime
 
     public FakeProviderQuotaGroupRunner QuotaRunner { get; } = new();
 
+    /// <summary>The video-storage scan grain's seams (C234).</summary>
+    public FakeVideoStorageScheduleSource VideoStorageSchedule { get; } = new();
+
+    public FakeVideoStorageScanRunner VideoStorageScan { get; } = new();
+
+    /// <summary>The channel-probe minute task's runner seam (C249).</summary>
+    public FakeChannelProbeRunRunner ChannelProbeRun { get; } = new();
+
     public async Task InitializeAsync()
     {
         GrainTestSiloConfigurator.ChannelProvider = Channels;
@@ -75,6 +83,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.QuotaSchedule = QuotaSchedule;
         GrainTestSiloConfigurator.QuotaOperations = QuotaOperations;
         GrainTestSiloConfigurator.QuotaRunner = QuotaRunner;
+        GrainTestSiloConfigurator.VideoStorageSchedule = VideoStorageSchedule;
+        GrainTestSiloConfigurator.VideoStorageScan = VideoStorageScan;
+        GrainTestSiloConfigurator.ChannelProbeRun = ChannelProbeRun;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -98,6 +109,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.QuotaSchedule = null;
         GrainTestSiloConfigurator.QuotaOperations = null;
         GrainTestSiloConfigurator.QuotaRunner = null;
+        GrainTestSiloConfigurator.VideoStorageSchedule = null;
+        GrainTestSiloConfigurator.VideoStorageScan = null;
+        GrainTestSiloConfigurator.ChannelProbeRun = null;
     }
 }
 
@@ -127,6 +141,12 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static FakeProviderQuotaGroupRunner? QuotaRunner { get; set; }
 
+    public static FakeVideoStorageScheduleSource? VideoStorageSchedule { get; set; }
+
+    public static FakeVideoStorageScanRunner? VideoStorageScan { get; set; }
+
+    public static FakeChannelProbeRunRunner? ChannelProbeRun { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
@@ -150,6 +170,9 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton<IProviderQuotaScheduleSource>(QuotaSchedule!);
             services.AddSingleton<IProviderQuotaCoordinatorOperations>(QuotaOperations!);
             services.AddSingleton<IProviderQuotaGroupRunner>(QuotaRunner!);
+            services.AddSingleton<IVideoStorageScheduleSource>(VideoStorageSchedule!);
+            services.AddSingleton<IVideoStorageScanRunner>(VideoStorageScan!);
+            services.AddSingleton<IChannelProbeRunRunner>(ChannelProbeRun!);
         });
     }
 }

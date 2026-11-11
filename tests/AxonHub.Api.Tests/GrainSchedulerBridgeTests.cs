@@ -19,6 +19,8 @@ public sealed class GrainSchedulerBridgeTests(GrainClusterFixture fixture)
         fixture.AutoBackupSchedule.Reset(scheduled);
         fixture.GcSchedule.Reset(scheduled);
         fixture.QuotaSchedule.Reset(scheduled);
+        fixture.VideoStorageSchedule.Reset(TimeSpan.FromMinutes(10));
+        fixture.VideoStorageScan.Reset();
 
         var activator = new GrainSchedulerActivator(
             fixture.Cluster.Client,
@@ -30,6 +32,8 @@ public sealed class GrainSchedulerBridgeTests(GrainClusterFixture fixture)
         Assert.Single(fixture.AutoBackupSchedule.Calls);
         Assert.Single(fixture.GcSchedule.Calls);
         Assert.Single(fixture.QuotaSchedule.Calls);
+        Assert.Equal(1, fixture.VideoStorageSchedule.Calls);
+        Assert.Equal(0, fixture.VideoStorageScan.Calls);
 
         // updateAutoBackupSettings (backup.resolvers.go:114) asks the singleton
         // backup grain to re-arm from the calling instant.

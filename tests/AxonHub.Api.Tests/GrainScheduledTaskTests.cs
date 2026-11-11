@@ -55,11 +55,53 @@ public sealed class GrainScheduledTaskTests
         Assert.Equal(new DateTimeOffset(2024, 1, 1, 2, 0, 0, TimeSpan.Zero), next);
     }
 
+    [Fact]
+    public async Task TheVideoStorageSourceReadsTheStoredInterval()
+    {
+        var systems = VideoSettings("""{"enabled":true,"data_storage_id":7,"scan_interval_minutes":5,"scan_limit":50}""");
+        var source = new GrainVideoStorageScheduleSource(VideoScopeFactory(systems));
+
+        Assert.Equal(TimeSpan.FromMinutes(5), await source.GetIntervalAsync());
+    }
+
+    [Fact]
+    public async Task TheVideoStorageSourceFloorsANonPositiveInterval()
+    {
+        var systems = VideoSettings("""{"enabled":true,"data_storage_id":7,"scan_interval_minutes":0,"scan_limit":50}""");
+        var source = new GrainVideoStorageScheduleSource(VideoScopeFactory(systems));
+
+        Assert.Equal(TimeSpan.FromMinutes(1), await source.GetIntervalAsync());
+    }
+
+    [Fact]
+    public async Task TheVideoStorageSourceDefaultsWhenTheRowIsMissing()
+    {
+        var source = new GrainVideoStorageScheduleSource(VideoScopeFactory(new FakeSystemStore()));
+
+        Assert.Equal(TimeSpan.FromMinutes(1), await source.GetIntervalAsync());
+    }
+
+    private static FakeSystemStore VideoSettings(string json)
+    {
+        var systems = new FakeSystemStore();
+        systems.Add(SystemSettingsAdminService.VideoStorageSettingsKey, json);
+        return systems;
+    }
+
+    private static IServiceScopeFactory VideoScopeFactory(ISystemStore systems)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(systems);
+        services.AddSingleton<ISystemSettingsAdminService>(
+            new SystemSettingsAdminService(systems));
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+    }
+
     private static IServiceScopeFactory ScopeFactory(ISystemStore systems)
     {
         var services = new ServiceCollection();
         services.AddSingleton(systems);
-        return services.BuildServiceProvider();
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
     }
 }
 

@@ -64,6 +64,14 @@ public sealed class GrainClusterFixture : IAsyncLifetime
 
     public FakeProviderQuotaGroupRunner QuotaRunner { get; } = new();
 
+    /// <summary>The video-storage scan grain's seams (C234); the bridge is tested here.</summary>
+    public FakeVideoStorageScheduleSource VideoStorageSchedule { get; } = new();
+
+    public FakeVideoStorageScanRunner VideoStorageScan { get; } = new();
+
+    /// <summary>The channel-probe grain's runner seam (C249).</summary>
+    public FakeChannelProbeRunRunner ChannelProbeRun { get; } = new();
+
     /// <summary>
     /// The orchestrator's model-association selector. The reference's tests
     /// mark the context with <c>authz.WithTestBypass</c>, which allows every
@@ -86,6 +94,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.QuotaSchedule = QuotaSchedule;
         GrainTestSiloConfigurator.QuotaOperations = QuotaOperations;
         GrainTestSiloConfigurator.QuotaRunner = QuotaRunner;
+        GrainTestSiloConfigurator.VideoStorageSchedule = VideoStorageSchedule;
+        GrainTestSiloConfigurator.VideoStorageScan = VideoStorageScan;
+        GrainTestSiloConfigurator.ChannelProbeRun = ChannelProbeRun;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -108,6 +119,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.QuotaSchedule = null;
         GrainTestSiloConfigurator.QuotaOperations = null;
         GrainTestSiloConfigurator.QuotaRunner = null;
+        GrainTestSiloConfigurator.VideoStorageSchedule = null;
+        GrainTestSiloConfigurator.VideoStorageScan = null;
+        GrainTestSiloConfigurator.ChannelProbeRun = null;
     }
 }
 
@@ -135,6 +149,12 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static FakeProviderQuotaGroupRunner? QuotaRunner { get; set; }
 
+    public static FakeVideoStorageScheduleSource? VideoStorageSchedule { get; set; }
+
+    public static FakeVideoStorageScanRunner? VideoStorageScan { get; set; }
+
+    public static FakeChannelProbeRunRunner? ChannelProbeRun { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
@@ -161,6 +181,12 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton<IProviderQuotaScheduleSource>(QuotaSchedule!);
             services.AddSingleton<IProviderQuotaCoordinatorOperations>(QuotaOperations!);
             services.AddSingleton<IProviderQuotaGroupRunner>(QuotaRunner!);
+            services.AddSingleton<IVideoStorageScheduleSource>(VideoStorageSchedule!);
+            services.AddSingleton<IVideoStorageScanRunner>(VideoStorageScan!);
+
+            // The scheduler activator arms ChannelProbeGrain at startup, and the
+            // grain's constructor requires this runner.
+            services.AddSingleton<IChannelProbeRunRunner>(ChannelProbeRun!);
         });
     }
 }
@@ -321,6 +347,75 @@ public sealed class FakeGcCleanupRunner : IGcCleanupRunner
     }
 
     public Task RunAutomaticCleanupAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Failure is null ? Task.CompletedTask : Task.FromException(Failure);
+    }
+}
+
+/// <summary>Scripted IVideoStorageScheduleSource (C234): a queue of intervals.</summary>
+public sealed class FakeVideoStorageScheduleSource : IVideoStorageScheduleSource
+{
+    private readonly Queue<TimeSpan> _intervals = new();
+
+    public int Calls { get; private set; }
+
+    private TimeSpan Fallback { get; set; } = TimeSpan.FromMinutes(1);
+
+    public void Reset(params TimeSpan[] intervals)
+    {
+        Calls = 0;
+        _intervals.Clear();
+        foreach (var interval in intervals)
+        {
+            _intervals.Enqueue(interval);
+        }
+
+        Fallback = intervals.Length == 0 ? TimeSpan.FromMinutes(1) : intervals[^1];
+    }
+
+    public Task<TimeSpan> GetIntervalAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Task.FromResult(_intervals.Count > 0 ? _intervals.Dequeue() : Fallback);
+    }
+}
+
+public sealed class FakeChannelProbeRunRunner : IChannelProbeRunRunner
+{
+    public int Calls { get; private set; }
+
+    public Exception? Failure { get; set; }
+
+    public void Reset()
+    {
+        Calls = 0;
+        Failure = null;
+    }
+
+    public Task RunProbeAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Failure is null ? Task.CompletedTask : Task.FromException(Failure);
+    }
+}
+
+public sealed class FakeVideoStorageScanRunner : IVideoStorageScanRunner
+{
+    public int Calls { get; private set; }
+
+    public Exception? Failure { get; set; }
+
+    public void Reset()
+    {
+        Calls = 0;
+        Failure = null;
+    }
+
+    public Task ScanAsync(CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
         Calls++;

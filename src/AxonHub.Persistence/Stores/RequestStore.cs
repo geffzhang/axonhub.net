@@ -82,6 +82,27 @@ public interface IRequestStore
         long? channelId,
         DateTime updatedAt,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The video-storage scan's query (video_storage/worker.go:137-145):
+    /// processing or completed video requests whose payload has not been
+    /// archived yet, oldest id first, capped at <paramref name="limit"/>.
+    /// </summary>
+    Task<IReadOnlyList<RequestRecord>> ListUnsavedVideoRequestsAsync(
+        int limit,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of the content columns write in video_storage.Worker.processOne
+    /// (worker.go:203-212): content_saved, its storage id/key/time, and the
+    /// ent TimeMixin's updated_at. Returns false when the row no longer exists.
+    /// </summary>
+    Task<bool> MarkContentSavedAsync(
+        long id,
+        long dataStorageId,
+        string storageKey,
+        DateTime savedAt,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -310,6 +331,58 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
 
         request.ChannelId = channelId;
         request.UpdatedAt = updatedAt;
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<IReadOnlyList<RequestRecord>> ListUnsavedVideoRequestsAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        // request.StatusIn(processing, completed)
+        // request.FormatIn(openai/video, seedance/video)
+        // request.ContentSaved(false) — ent's equality predicate never matches
+        // NULL, which the column's non-null default makes unreachable here.
+        var sql = "SELECT " + Columns
+            + " FROM \"requests\""
+            + " WHERE \"status\" IN ('processing', 'completed')"
+            + " AND \"format\" IN ('openai/video', 'seedance/video')"
+            + " AND \"content_saved\" = @ContentSaved"
+            + " ORDER BY \"id\" ASC LIMIT @Limit;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<RequestRecord>(
+            new CommandDefinition(
+                sql,
+                new { ContentSaved = false, Limit = limit },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+
+        return rows.AsList();
+    }
+
+    public async Task<bool> MarkContentSavedAsync(
+        long id,
+        long dataStorageId,
+        string storageKey,
+        DateTime savedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var request = await db.Requests
+            .FirstOrDefaultAsync(request => request.Id == id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (request is null)
+        {
+            return false;
+        }
+
+        request.ContentSaved = true;
+        request.ContentStorageId = dataStorageId;
+        request.ContentStorageKey = storageKey;
+        request.ContentSavedAt = savedAt;
+        request.UpdatedAt = savedAt;
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return true;

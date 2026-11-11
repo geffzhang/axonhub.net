@@ -325,6 +325,58 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListUnsavedVideoRequestsSelectsOnlyEligibleRowsOldestFirst()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        // worker.go:137-146: processing/completed, the two video formats, and
+        // content_saved = false, ordered by id.
+        var completedVideo = await store.CreateAsync(
+            NewVideoRequest("completed", "openai/video"));
+        var processingVideo = await store.CreateAsync(
+            NewVideoRequest("processing", "seedance/video"));
+        await store.CreateAsync(NewVideoRequest("completed", "openai/video", contentSaved: true));
+        await store.CreateAsync(NewVideoRequest("failed", "openai/video"));
+        await store.CreateAsync(NewVideoRequest("completed", "openai/chat_completions"));
+
+        var rows = await store.ListUnsavedVideoRequestsAsync(50);
+        Assert.Equal(new[] { completedVideo, processingVideo }, rows.Select(row => row.Id));
+
+        var limited = await store.ListUnsavedVideoRequestsAsync(1);
+        Assert.Equal(new[] { completedVideo }, limited.Select(row => row.Id));
+    }
+
+    [Fact]
+    public async Task MarkContentSavedWritesTheContentColumnsAndUpdatedAt()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        var id = await store.CreateAsync(NewVideoRequest("completed", "openai/video"));
+        var savedAt = UpdatedAt.AddMinutes(5);
+
+        var updated = await store.MarkContentSavedAsync(id, 7, "/1/requests/9/video/clip.mp4", savedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        Assert.True(actual.ContentSaved);
+        Assert.Equal(7L, actual.ContentStorageId);
+        Assert.Equal("/1/requests/9/video/clip.mp4", actual.ContentStorageKey);
+        Assert.Equal(savedAt, actual.ContentSavedAt);
+        Assert.Equal(savedAt, actual.UpdatedAt);
+
+        // The next scan no longer selects the row.
+        Assert.Empty(await store.ListUnsavedVideoRequestsAsync(50));
+    }
+
+    [Fact]
     public async Task UpdatesReportMissingRows()
     {
         await using var db = new TestDatabase(fixture);
@@ -340,8 +392,24 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
         Assert.False(await store.UpdateChannelAsync(12345, 1, UpdatedAt));
         Assert.False(await store.UpdateStatusExternalIdAndResponseBodyAsync(
             12345, "completed", "video-task", "{}", true, UpdatedAt));
+        Assert.False(await store.MarkContentSavedAsync(
+            12345, 7, "/9/requests/12345/video/video.mp4", UpdatedAt));
         Assert.Null(await store.GetByIdAsync(12345));
     }
+
+    private static RequestRecord NewVideoRequest(
+        string status,
+        string format,
+        bool contentSaved = false) => new()
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            ModelId = "sora-2",
+            Format = format,
+            Status = status,
+            ContentSaved = contentSaved,
+            ProjectId = 1,
+        };
 
     private static RequestRecord NewRequest() => new()
     {
