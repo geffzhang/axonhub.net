@@ -60,7 +60,10 @@ public sealed class HttpRedirectTests
 
         var hop = handler.Requests[1];
         Assert.Equal("GET", hop.Method);
-        Assert.Null(hop.Body);
+        // C206: BuildMessage always attaches a zero-length ByteArrayContent so
+        // the Content-Type header travels; after the 302 rewrite the body is the
+        // empty string rather than null.
+        Assert.Equal(string.Empty, hop.Body);
         Assert.Equal(string.Empty, hop.Header("Content-Type"));
         // Same host keeps the credential headers; the safe ones always travel.
         Assert.Equal("Bearer sk-test", hop.Header("Authorization"));

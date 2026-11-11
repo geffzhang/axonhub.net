@@ -504,7 +504,7 @@ public sealed class PromptProtectionRuleStore(AxonHubDbContext db)
             .Append(args.Add(DateTime.UtcNow))
             .Append(", \"status\" = ").Append(args.Add(status))
             .Append(" WHERE \"id\" IN (").Append(string.Join(", ", parameters))
-            .Append(';');
+            .Append(");");
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
         return await connection.ExecuteAsync(

@@ -461,7 +461,8 @@ public sealed class PromptProtectionRuleStoreTests(PostgresFixture fixture)
         Assert.Equal(0, await store.BulkUpdateStatusAsync([], "disabled"));
 
         await using var verify = await db.Factory.OpenAsync();
-        Assert.Equal(1, await verify.ExecuteScalarAsync<long>(
+        // Both rows are soft-deleted now: one before the bulk call, one by it.
+        Assert.Equal(0, await verify.ExecuteScalarAsync<long>(
             "SELECT COUNT(*) FROM \"prompt_protection_rules\" WHERE \"deleted_at\" = 0;"));
         Assert.Equal(2, await verify.ExecuteScalarAsync<long>(
             "SELECT COUNT(*) FROM \"prompt_protection_rules\" WHERE \"status\" = 'enabled';"));

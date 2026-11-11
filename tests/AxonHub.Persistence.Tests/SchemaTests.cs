@@ -16,7 +16,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
     [
         "api_key_profile_templates",
         "api_keys", "channel_model_price_versions", "channel_model_prices",
-        "channel_override_templates", "channels", "data_storages", "invitations", "models",
+        "channel_override_templates", "channel_probes", "channels", "data_storages",
+        "invitations", "models",
         "oidc_identities", "projects", "prompt_protection_rules", "prompts",
         "provider_quota_status", "request_executions",
         "requests", "roles", "systems", "threads", "traces", "usage_logs",
@@ -34,6 +35,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
         [
             "id", "created_at", "updated_at", "deleted_at", "name", "description",
             "profile", "project_id",
+        ],
+        ["channel_probes"] =
+        [
+            "id", "total_request_count", "success_request_count", "avg_tokens_per_second",
+            "avg_time_to_first_token_ms", "timestamp", "channel_id",
         ],
         ["invitations"] =
         [
@@ -189,6 +195,11 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ["timestamp with time zone"] = ["created_at", "updated_at"],
                 ["jsonb"] = ["profile"],
                 ["character varying"] = ["name", "description"],
+            },
+            ["channel_probes"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["bigint"] = ["id", "total_request_count", "success_request_count", "timestamp", "channel_id"],
+                ["double precision"] = ["avg_tokens_per_second", "avg_time_to_first_token_ms"],
             },
             ["invitations"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
@@ -415,6 +426,8 @@ public sealed class SchemaTests(PostgresFixture fixture)
                 ("channel_model_price_versions", true, ["reference_id"]),
             ["channel_override_templates_by_user_name"] =
                 ("channel_override_templates", true, ["user_id", "name", "deleted_at"]),
+            ["channel_probes_by_channel_id_timestamp"] =
+                ("channel_probes", false, ["channel_id", "timestamp"]),
             ["channels_by_name"] = ("channels", true, ["name", "deleted_at"]),
             ["data_sources_by_name"] = ("data_storages", true, ["name"]),
             ["invitation_token_hash"] = ("invitations", true, ["token_hash"]),

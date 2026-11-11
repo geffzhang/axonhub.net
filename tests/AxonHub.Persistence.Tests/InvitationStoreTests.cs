@@ -143,7 +143,9 @@ public sealed class InvitationStoreTests(PostgresFixture fixture)
         Assert.False(stored.IsOwner);
 
         await using var connection = await db.Factory.OpenAsync();
-        Assert.True(await connection.ExecuteScalarAsync<bool>(
+        // user_project.go declares is_owner Default(false) and the reference's
+        // invitation registration never sets it, so the membership is not owner.
+        Assert.False(await connection.ExecuteScalarAsync<bool>(
             """
             SELECT "is_owner" FROM "user_projects"
             WHERE "user_id" = @UserId AND "project_id" = @ProjectId;
@@ -179,7 +181,9 @@ public sealed class InvitationStoreTests(PostgresFixture fixture)
 
         Assert.Equal("invitation is no longer valid", error.Message);
         await using var connection = await db.Factory.OpenAsync();
-        Assert.Equal(1L, await connection.ExecuteScalarAsync<long>(
+        // Validation happens before the user insert, so the rejected attempt
+        // leaves no row behind.
+        Assert.Equal(0L, await connection.ExecuteScalarAsync<long>(
             "SELECT count(*) FROM \"users\" WHERE \"email\" = 'second@example.com';"));
     }
 
@@ -313,7 +317,8 @@ public sealed class InvitationStoreTests(PostgresFixture fixture)
         await using var context = db.Factory.CreateDbContext();
         var projectId = await SeedProjectAsync(context, "project");
         var firstRoleId = await SeedRoleAsync(context, projectId, "write_requests");
-        var secondRoleId = await SeedRoleAsync(context, projectId, "write_requests");
+        // roles_by_project_id_name is unique, so the second role needs its own name.
+        var secondRoleId = await SeedRoleAsync(context, projectId, "read_requests", "Reader");
         var store = new InvitationStore(context);
         var first = NewInvitation(projectId, firstRoleId);
         var second = NewInvitation(projectId, secondRoleId);
@@ -405,12 +410,13 @@ public sealed class InvitationStoreTests(PostgresFixture fixture)
     private static Task<long> SeedRoleAsync(
         AxonHubDbContext context,
         long projectId,
-        string scope)
+        string scope,
+        string name = "Developer")
         => new RoleStore(context).CreateAsync(new RoleRecord
         {
             CreatedAt = CreatedAt,
             UpdatedAt = UpdatedAt,
-            Name = "Developer",
+            Name = name,
             Level = "project",
             ProjectId = projectId,
             Scopes = System.Text.Json.JsonSerializer.Serialize(new[] { scope }),

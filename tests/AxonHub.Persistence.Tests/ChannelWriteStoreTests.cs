@@ -87,7 +87,7 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         var version = await store.GetSettingsVersionAsync(channel.Id);
 
         Assert.NotNull(version);
-        Assert.Equal("""{"extraModelPrefix":"deepseek"}""", version.Settings);
+        RecordAssert.Json("""{"extraModelPrefix":"deepseek"}""", version.Settings);
         Assert.Equal(UpdatedAt, version.UpdatedAt);
 
         // The soft-delete predicate hides deleted and missing rows.

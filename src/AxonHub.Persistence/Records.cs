@@ -822,8 +822,12 @@ public sealed class ProviderQuotaStatusRecord
 
     public DateTime NextCheckAt { get; set; }
 
-    /// <summary>Ent field.String Default("") Optional().Nillable().</summary>
-    public string? AccountKey { get; set; } = string.Empty;
+    /// <summary>
+    /// Ent field.String Default("") Optional().Nillable(). No CLR initializer:
+    /// Dapper does not overwrite the default when the column is NULL, so an
+    /// initializer would turn ent's nil into "".
+    /// </summary>
+    public string? AccountKey { get; set; }
 
     /// <summary>Ent edge to Channel, unique and immutable.</summary>
     public long ChannelId { get; set; }

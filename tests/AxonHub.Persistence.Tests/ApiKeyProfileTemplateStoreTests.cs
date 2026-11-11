@@ -45,10 +45,10 @@ public sealed class ApiKeyProfileTemplateStoreTests(PostgresFixture fixture)
         var raw = await verify.Database.GetDbConnection().QuerySingleAsync<string>(
             "SELECT \"profile\"::text FROM \"api_key_profile_templates\" WHERE \"id\" = @Id;",
             new { created.Id });
-        Assert.Equal(
-            """{"name": "one", "modelMappings": [{"from": "a", "to": "b"}]}""",
+        RecordAssert.Json(
+            """{"name":"one","modelMappings":[{"from":"a","to":"b"}]}""",
             raw);
-        Assert.Equal(raw, read.Profile);
+        RecordAssert.Json(raw, read.Profile);
 
         // The query policy's project predicate narrows reads.
         Assert.Null(await store.GetAsync(

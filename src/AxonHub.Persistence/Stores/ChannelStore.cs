@@ -126,13 +126,13 @@ public sealed class ChannelStore(AxonHubDbContext db) : IChannelStore
 
         var sql = "SELECT " + Columns
             + " FROM \"channels\" WHERE \"deleted_at\" = 0 AND \"status\" = 'enabled'"
-            + " AND \"type\" IN @Types ORDER BY \"id\";";
+            + " AND \"type\" = ANY(@Types) ORDER BY \"id\";";
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
         var rows = await connection.QueryAsync<ChannelRecord>(
             new CommandDefinition(
                 sql,
-                new { Types = types },
+                new { Types = types.ToArray() },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
         return rows.AsList();

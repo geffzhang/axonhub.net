@@ -27,7 +27,7 @@ public sealed class ChannelTokenStoreTests(PostgresFixture fixture)
         Assert.NotNull(row);
         Assert.Equal(id, row.Id);
         Assert.Equal("codex", row.Type);
-        Assert.Equal("""{"apiKey":"legacy"}""", row.Credentials);
+        RecordAssert.Json("""{"apiKey":"legacy"}""", row.Credentials);
         Assert.Equal(UpdatedAt, row.UpdatedAt);
     }
 
@@ -52,7 +52,9 @@ public sealed class ChannelTokenStoreTests(PostgresFixture fixture)
 
         var row = await store.GetAsync(id);
         Assert.NotNull(row);
-        Assert.Equal("""{"apiKey":"rotated","oauth":{"access_token":"access-1"}}""", row.Credentials);
+        RecordAssert.Json(
+            """{"apiKey":"rotated","oauth":{"access_token":"access-1"}}""",
+            row.Credentials);
         Assert.Equal(changedAt, row.UpdatedAt);
     }
 
@@ -75,13 +77,13 @@ public sealed class ChannelTokenStoreTests(PostgresFixture fixture)
         Assert.NotNull(result.Current);
         Assert.Equal(id, result.Current!.Id);
         Assert.Equal("codex", result.Current.Type);
-        Assert.Equal("""{"apiKey":"legacy"}""", result.Current.Credentials);
+        RecordAssert.Json("""{"apiKey":"legacy"}""", result.Current.Credentials);
         Assert.Equal(UpdatedAt, result.Current.UpdatedAt);
 
         // The stale write left the row untouched.
         var row = await store.GetAsync(id);
         Assert.NotNull(row);
-        Assert.Equal("""{"apiKey":"legacy"}""", row.Credentials);
+        RecordAssert.Json("""{"apiKey":"legacy"}""", row.Credentials);
         Assert.Equal(UpdatedAt, row.UpdatedAt);
     }
 
