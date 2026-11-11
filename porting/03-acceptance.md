@@ -815,7 +815,7 @@ gjson 探针宽容度、解码错误文案、Timer 精度与上限。`porting/02
 未注册失败见 §167，本切片未触碰。）
 
 台账：C249 由 gap 更新为 resolved；C195 与 C203 中「probes 分支 / 清理缺席」的措辞按
-§170 更新。`porting/02-differences.md` 重新生成（267 条：197 accepted / 7 gap / 63
+§170 更新。`porting/02-differences.md` 重新生成（268 条：196 accepted / 7 gap / 65
 resolved），lint 通过。
 
 §171（2026-11-11）按用户要求对 `AxonHub.Api.Tests` 做了全量实测（不带过滤器，构建后
