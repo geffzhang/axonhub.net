@@ -342,6 +342,52 @@ public static class ClaudeCodeSafeguardsCodec
     }
 
     /// <summary>
+    /// Maps the settings runtime shape onto the reviewer's config
+    /// (safeguards.Config; evaluator.go:48-58). Durations pass through in
+    /// nanoseconds so no TimeSpan rounding is introduced.
+    /// </summary>
+    public static SafeguardsConfig ToSafeguardsConfig(
+        ClaudeCodeSafeguardsRuntimeConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return new SafeguardsConfig
+        {
+            ClassifierModel = config.ClassifierModel,
+            Policy = config.Policy,
+            FallbackModels = [.. config.FallbackModels],
+            EscalateOnDenial = config.EscalateOnDenial,
+            AttemptTimeoutNanoseconds = config.AttemptTimeoutNanoseconds,
+            TimeoutNanoseconds = config.TimeoutNanoseconds,
+            MaxTokens = config.MaxTokens,
+            TranscriptCharBudget = config.TranscriptCharBudget,
+        };
+    }
+
+    /// <summary>
+    /// Maps the server-level safeguards block (server.safeguards) onto the
+    /// reviewer's config; this is the static config used when the request does
+    /// not ask for the settings-backed reviewer.
+    /// </summary>
+    public static SafeguardsConfig ToSafeguardsConfig(
+        ClaudeCodeSafeguardsServerDefaults defaults)
+    {
+        ArgumentNullException.ThrowIfNull(defaults);
+
+        return new SafeguardsConfig
+        {
+            ClassifierModel = defaults.ClassifierModel,
+            Policy = defaults.Policy,
+            FallbackModels = [.. defaults.FallbackModels],
+            EscalateOnDenial = defaults.EscalateOnDenial,
+            AttemptTimeoutNanoseconds = defaults.AttemptTimeoutNanoseconds,
+            TimeoutNanoseconds = defaults.TimeoutNanoseconds,
+            MaxTokens = defaults.MaxTokens,
+            TranscriptCharBudget = defaults.TranscriptCharBudget,
+        };
+    }
+
+    /// <summary>
     /// Port of ClaudeCodeSafeguardsConfig.runtimeConfig
     /// (system_claude_code.go:48-86), including the validation order and the
     /// xerrors.ValidationError messages.

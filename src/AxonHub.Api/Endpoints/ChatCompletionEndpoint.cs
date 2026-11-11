@@ -2,6 +2,7 @@ using System.Text.Json;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Http;
 using AxonHub.Api.Orchestration;
+using AxonHub.Api.Safeguards;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
@@ -46,7 +47,8 @@ public static class ChatCompletionEndpoint
         ChatCompletionOrchestrator orchestrator,
         HttpRequestData? preReadRequest = null,
         StreamWriterDelegate? streamWriter = null,
-        bool nilResultIsInternalError = false)
+        bool nilResultIsInternalError = false,
+        SafeguardsEndpointOptions? safeguards = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(orchestrator);
@@ -86,88 +88,197 @@ public static class ChatCompletionEndpoint
             return;
         }
 
+        // WithAPIKeyConfig publishes the authenticated identity on the request
+        // context; direct calls (tests/internal handlers) fall back to Default.
+        var identity = RequestIdentity.FromHttpContext(context);
+
+        // api/chat.go:99-115: only Claude Code requests asking for server-side
+        // safeguards need the settings lookup; prepare then removes the locally
+        // handled safeguard from the upstream body.
+        var evaluator = (SafeguardsEvaluator?)null;
+        CancellationTokenSource? processCancellation = null;
+        var processToken = cancellationToken;
+
+        if (safeguards is not null)
+        {
+            var config = safeguards.Config;
+            if (safeguards.ConfigProvider is not null
+                && SafeguardsRequest.HasDangerousToolUse(genericRequest.Body))
+            {
+                try
+                {
+                    config = await safeguards.ConfigProvider(cancellationToken);
+                }
+                catch (Exception)
+                {
+                    await WriteJsonErrorAsync(
+                        context,
+                        500,
+                        GoHttpStatus.Text(500),
+                        "Unable to load Claude Code safeguards settings",
+                        cancellationToken);
+                    return;
+                }
+            }
+
+            var classifier = safeguards.ClassifierFactory?.Invoke(orchestrator, identity, genericRequest);
+            SafeguardsRequest.Prepared prepared;
+            try
+            {
+                prepared = SafeguardsRequest.Prepare(genericRequest, config, classifier);
+            }
+            catch (SafeguardsDecodeException ex)
+            {
+                await WriteJsonErrorAsync(context, 400, GoHttpStatus.Text(400), ex.Message, cancellationToken);
+                return;
+            }
+
+            evaluator = prepared.Evaluator;
+            genericRequest = prepared.Request;
+
+            if (evaluator is not null)
+            {
+                processCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                processToken = processCancellation.Token;
+            }
+        }
+
         // The request row id is only known once the persistence middleware has
         // created it; response headers are written by the HTTP boundary after
         // the handler produces the response (middleware/response_headers.go).
         var requestId = 0L;
 
-        // WithAPIKeyConfig publishes the authenticated identity on the request
-        // context; direct calls (tests/internal handlers) fall back to Default.
-        var identity = RequestIdentity.FromHttpContext(context);
-
-        ChatCompletionResult result;
         try
         {
-            result = await orchestrator.ProcessAsync(
-                genericRequest,
-                identity,
-                id => requestId = id,
-                cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            // api.transformOrchestratorError: classify, apply the upstream error
-            // policy, then map through the inbound transformer.
-            await WriteTransformedErrorAsync(
-                context,
-                await orchestrator.TransformErrorAsync(ex, cancellationToken),
-                cancellationToken);
-            RecordResponseHeaders(context, orchestrator, requestId);
-            return;
-        }
-
-        // api/chat.go:105: forward the small, explicit set of upstream headers
-        // that are safe at the client boundary (codex responses only).
-        WriteForwardResponseHeaders(context, genericRequest, result);
-
-        if (result.Response is { } response)
-        {
-            CopyCodexTurnStateHeader(context.Response.Headers, response.Headers);
-            await WriteResponseAsync(context, response, cancellationToken);
-            RecordResponseHeaders(context, orchestrator, requestId);
-            return;
-        }
-
-        if (result.Stream is { } stream)
-        {
-            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
-
-            // api/chat.go:134-136: the codex turn-state header travels on the
-            // first upstream event's transport headers, and SSE headers must be
-            // sent before the first flush, so prime it here.
-            if (genericRequest.Path.EndsWith("/responses", StringComparison.Ordinal))
-            {
-                stream = PrimeCodexTurnStateHeader(context.Response.Headers, stream);
-            }
-
-            var writer = streamWriter ?? new StreamWriterDelegate(SseStreamWriter.WriteAsync);
+            ChatCompletionResult result;
             try
             {
-                await writer(
-                    context,
-                    stream,
-                    ExpectedStreamChoices.FromRequestBody(genericRequest.Body),
-                    cancellationToken,
-                    orchestrator.TransformStreamErrorAsync);
+                result = await orchestrator.ProcessAsync(
+                    genericRequest,
+                    identity,
+                    id => requestId = id,
+                    processToken);
             }
-            finally
+            catch (Exception ex)
             {
-                stream.Dispose();
+                // api.transformOrchestratorError: classify, apply the upstream error
+                // policy, then map through the inbound transformer.
+                await WriteTransformedErrorAsync(
+                    context,
+                    await orchestrator.TransformErrorAsync(ex, cancellationToken),
+                    cancellationToken);
                 RecordResponseHeaders(context, orchestrator, requestId);
+                return;
             }
 
-            return;
-        }
+            // api/chat.go:105: forward the small, explicit set of upstream headers
+            // that are safe at the client boundary (codex responses only).
+            WriteForwardResponseHeaders(context, genericRequest, result);
 
-        if (nilResultIsInternalError)
+            if (result.Response is { } response)
+            {
+                CopyCodexTurnStateHeader(context.Response.Headers, response.Headers);
+
+                // api/chat.go:144-148: the reviewer annotates (or refuses) the
+                // complete response body before anything is written.
+                var body = response.Body ?? [];
+                if (evaluator is not null)
+                {
+                    try
+                    {
+                        body = evaluator.AnnotateResponse(cancellationToken, body);
+                    }
+                    catch (SafeguardsDecodeException ex)
+                    {
+                        await WriteJsonErrorAsync(
+                            context,
+                            502,
+                            GoHttpStatus.Text(502),
+                            ex.Message,
+                            cancellationToken);
+                        RecordResponseHeaders(context, orchestrator, requestId);
+                        return;
+                    }
+                }
+
+                await WriteResponseAsync(context, response, body, cancellationToken);
+                RecordResponseHeaders(context, orchestrator, requestId);
+                return;
+            }
+
+            if (result.Stream is { } stream)
+            {
+                context.Response.Headers["Access-Control-Allow-Origin"] = "*";
+
+                // api/chat.go:169-170: review (and strip) each event before the
+                // error-transforming and codex-priming wrappers see it.
+                Action? abortUpstream = null;
+                if (processCancellation is not null)
+                {
+                    abortUpstream = processCancellation.Cancel;
+                }
+
+                stream = SafeguardsStream.Wrap(
+                    stream,
+                    evaluator,
+                    cancellationToken,
+                    abortUpstream);
+
+                // api/chat.go:134-136: the codex turn-state header travels on the
+                // first upstream event's transport headers, and SSE headers must be
+                // sent before the first flush, so prime it here.
+                if (genericRequest.Path.EndsWith("/responses", StringComparison.Ordinal))
+                {
+                    stream = PrimeCodexTurnStateHeader(context.Response.Headers, stream);
+                }
+
+                var writer = streamWriter ?? new StreamWriterDelegate(SseStreamWriter.WriteAsync);
+                try
+                {
+                    await writer(
+                        context,
+                        stream,
+                        ExpectedStreamChoices.FromRequestBody(genericRequest.Body),
+                        cancellationToken,
+                        orchestrator.TransformStreamErrorAsync);
+                }
+                finally
+                {
+                    stream.Dispose();
+                    RecordResponseHeaders(context, orchestrator, requestId);
+                }
+
+                return;
+            }
+
+            if (nilResultIsInternalError)
+            {
+                // api/doubao.go:92-95: result.ChatCompletion == nil → 500 ErrInternal.
+                await WriteJsonErrorAsync(
+                    context,
+                    500,
+                    GoHttpStatus.Text(500),
+                    "server internal error, please try again later",
+                    cancellationToken);
+            }
+        }
+        finally
         {
-            // api/doubao.go:92-95: result.ChatCompletion == nil → 500 ErrInternal.
-            await WriteJsonErrorAsync(
-                context,
-                500,
-                GoHttpStatus.Text(500),
-                "server internal error, please try again later",
-                cancellationToken);
+            // api/chat.go:117-122: the abort callback cancels the upstream
+            // attempt once the response (or stream) has been handled.
+            if (processCancellation is not null)
+            {
+                try
+                {
+                    processCancellation.Cancel();
+                }
+                catch (Exception)
+                {
+                    // Cancellation callbacks are pipeline-owned.
+                }
+
+                processCancellation.Dispose();
+            }
         }
     }
 
@@ -205,9 +316,20 @@ public static class ChatCompletionEndpoint
     }
 
     /// <summary>gin: <c>c.Data(resp.StatusCode, contentType, resp.Body)</c>.</summary>
+    internal static Task WriteResponseAsync(
+        HttpContext context,
+        HttpResponseData response,
+        CancellationToken cancellationToken)
+        => WriteResponseAsync(context, response, response.Body ?? [], cancellationToken);
+
+    /// <summary>
+    /// gin: <c>c.Data(resp.StatusCode, contentType, body)</c>; the body may be
+    /// replaced by the safeguards reviewer before it is written.
+    /// </summary>
     internal static async Task WriteResponseAsync(
         HttpContext context,
         HttpResponseData response,
+        byte[] body,
         CancellationToken cancellationToken)
     {
         var contentType = HttpClientUtils.HeaderGet(response.Headers, "Content-Type");
@@ -218,7 +340,7 @@ public static class ChatCompletionEndpoint
 
         context.Response.StatusCode = response.StatusCode;
         context.Response.ContentType = contentType;
-        await WriteBodyAsync(context, response.Body ?? [], cancellationToken);
+        await WriteBodyAsync(context, body, cancellationToken);
     }
 
     /// <summary>Port of api.writeForwardResponseHeaders (chat.go:146-159).</summary>

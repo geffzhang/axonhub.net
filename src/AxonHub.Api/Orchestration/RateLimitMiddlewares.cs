@@ -141,14 +141,37 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
     /// </summary>
     private sealed class ChannelLimiterStream(IStream<LlmResponse> inner, LimiterSlot slot) : IStream<LlmResponse>
     {
+        private int _disposed;
+
         public LlmResponse? Current => inner.Current;
 
         public Exception? Err => inner.Err;
 
-        public bool Next() => inner.Next();
+        /// <summary>
+        /// Port of <c>channelLimiterStream.Next</c> (connection_tracking.go:182-191):
+        /// releases upstream admission when iteration ends, before downstream
+        /// delivery finishes, so a follow-up reviewer can use the same channel
+        /// slot. This is what lets the terminal-tail drain hand the slot to the
+        /// classifier call (C243).
+        /// </summary>
+        public bool Next()
+        {
+            if (inner.Next())
+            {
+                return true;
+            }
+
+            Dispose();
+            return false;
+        }
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
             try
             {
                 inner.Dispose();
