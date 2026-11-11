@@ -17,9 +17,8 @@ namespace AxonHub.Api.Tests;
 /// and zero remaining are exhausted, less than 20% remaining is a warning) and
 /// the monthly period start clamped to the previous month's last day. The wire
 /// shape is locked through the real <see cref="HttpExecutor"/> over a recording
-/// message handler; a bodyless GET loses its Content-Type on the wire, which is
-/// the accepted difference C206 (the checker still sets it on the request
-/// data, asserted separately).
+/// message handler; the bodyless GET keeps its Content-Type on the wire like
+/// Go (C206 resolved).
 /// </summary>
 public sealed class NeuralWattQuotaCheckerTests
 {
@@ -65,10 +64,9 @@ public sealed class NeuralWattQuotaCheckerTests
         Assert.Equal("GET", request.Method);
         Assert.Equal(QuotaUrl, request.Url);
         Assert.Equal("Bearer " + ApiKey, request.Header("Authorization"));
-        // C206: the checker sets Content-Type on the request data, but the
-        // executor only attaches content headers when a body exists, so this
-        // bodyless GET loses it on the wire (the reference sends it).
-        Assert.Equal(string.Empty, request.Header("Content-Type"));
+        // The executor always attaches content, so the bodyless GET keeps the
+        // Content-Type on the wire like Go's net/http (C206 resolved).
+        Assert.Equal("application/json", request.Header("Content-Type"));
         // The shared executor adds its default Accept (Go would send none).
         Assert.Equal("application/json", request.Header("Accept"));
         Assert.Equal(string.Empty, request.Body);
@@ -449,7 +447,7 @@ public sealed class NeuralWattQuotaCheckerTests
         var checker = CreateChecker(new ScriptedExecutor
         {
             OnDo = (_, _, _) => Ok(
-                $$"""{"subscription":{"kwh_included":20,"kwh_remaining":10,"kwh_reset_date":"{{reset}}"}}"""),
+                $$$"""{"subscription":{"kwh_included":20,"kwh_remaining":10,"kwh_reset_date":"{{{reset}}}"}}"""),
         });
 
         var quota = await checker.CheckQuotaAsync(Channel(), CancellationToken.None);
@@ -472,7 +470,7 @@ public sealed class NeuralWattQuotaCheckerTests
         var checker = CreateChecker(new ScriptedExecutor
         {
             OnDo = (_, _, _) => Ok(
-                $$"""{"subscription":{"kwh_included":20,"kwh_remaining":10,"kwh_reset_date":"{{reset}}"}}"""),
+                $$$"""{"subscription":{"kwh_included":20,"kwh_remaining":10,"kwh_reset_date":"{{{reset}}}"}}"""),
         });
 
         var quota = await checker.CheckQuotaAsync(Channel(), CancellationToken.None);
@@ -492,7 +490,7 @@ public sealed class NeuralWattQuotaCheckerTests
         var checker = CreateChecker(new ScriptedExecutor
         {
             OnDo = (_, _, _) => Ok(
-                $$"""{"subscription":{"kwh_included":20,"kwh_remaining":10,"kwh_reset_date":"{{reset}}"}}"""),
+                $$$"""{"subscription":{"kwh_included":20,"kwh_remaining":10,"kwh_reset_date":"{{{reset}}}"}}"""),
         });
 
         var quota = await checker.CheckQuotaAsync(Channel(), CancellationToken.None);

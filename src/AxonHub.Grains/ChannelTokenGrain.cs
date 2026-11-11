@@ -86,7 +86,7 @@ public sealed class ChannelTokenGrain(
             return _credentials;
         }
 
-        return await RefreshAsync(ensureFresh: false, CancellationToken.None).ConfigureAwait(false);
+        return await RefreshAsync(ensureFresh: false, CancellationToken.None).ConfigureAwait(true);
     }
 
     public async Task EnsureFreshAsync()
@@ -111,7 +111,7 @@ public sealed class ChannelTokenGrain(
             return;
         }
 
-        _ = await RefreshAsync(ensureFresh: true, CancellationToken.None).ConfigureAwait(false);
+        _ = await RefreshAsync(ensureFresh: true, CancellationToken.None).ConfigureAwait(true);
     }
 
     private async Task EnsureFreshTickAsync(CancellationToken cancellationToken)
@@ -138,7 +138,7 @@ public sealed class ChannelTokenGrain(
                 return;
             }
 
-            _ = await RefreshAsync(ensureFresh: true, cancellationToken).ConfigureAwait(false);
+            _ = await RefreshAsync(ensureFresh: true, cancellationToken).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -174,7 +174,7 @@ public sealed class ChannelTokenGrain(
                     EnsureFresh = ensureFresh,
                 },
                 cancellationToken)
-            .ConfigureAwait(false);
+            .ConfigureAwait(true);
 
         if (result.Stopped || result.Credentials is null)
         {

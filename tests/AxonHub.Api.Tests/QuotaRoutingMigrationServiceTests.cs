@@ -80,7 +80,11 @@ public sealed class QuotaRoutingMigrationServiceTests
             .ToArray();
         await Task.WhenAll(starts);
 
-        Assert.Equal("ignore_quota", DefaultMode());
+        // The first writer persists the default routing mode it resolved from
+        // the legacy settings: enabled && !exhaustedOnly && !dePrioritize, which
+        // quotaRoutingModeFromLegacy maps to remove_on_exhausted, not the
+        // ignore_quota fallback used when the legacy row is absent.
+        Assert.Equal("remove_on_exhausted", DefaultMode());
         Assert.Equal("ignore_quota", ChannelMode(channel));
         Assert.Equal("true", MarkerValue());
     }
@@ -434,6 +438,10 @@ public sealed class QuotaRoutingMigrationServiceTests
         }
 
         public Task<IReadOnlyList<ChannelRecord>> ListEnabledAsync(
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<DateTime?> GetLatestUpdatedAtAsync(
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Text.Json;
 using AxonHub.Api.Management;
 using HotChocolate;

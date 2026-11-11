@@ -17,6 +17,12 @@ public static class SystemHandlers
     private static readonly JsonSerializerOptions RequestJson =
         new(JsonSerializerDefaults.Web);
 
+    private static readonly Action<ILogger, Exception?> LogBrandLogoReadFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "BrandLogoReadFailed"),
+            "Failed to get brand logo");
+
     /// <summary>routes.go:84,86,94-95.</summary>
     public static IEndpointRouteBuilder MapSystemRoutes(this IEndpointRouteBuilder endpoints)
     {
@@ -282,8 +288,8 @@ public static class SystemHandlers
         {
             // system.go:191-194: the read failure is logged, not surfaced; the
             // empty logo then falls through to the default icon.
-            logging.CreateLogger(typeof(SystemHandlers).FullName!)
-                .LogError(ex, "Failed to get brand logo");
+            LogBrandLogoReadFailed(
+                logging.CreateLogger(typeof(SystemHandlers).FullName!), ex);
             brandLogo = string.Empty;
         }
 

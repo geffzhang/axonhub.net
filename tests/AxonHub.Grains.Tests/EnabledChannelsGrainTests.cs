@@ -15,6 +15,7 @@ namespace AxonHub.Grains.Tests;
 public sealed class EnabledChannelsGrainTests(GrainClusterFixture fixture)
 {
     private static readonly DateTime Start = new(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly long[] ExpectedChannelIds = [101L, 102L];
 
     [Fact]
     public async Task ColdLoadServesTheEnabledSnapshot()
@@ -29,7 +30,7 @@ public sealed class EnabledChannelsGrainTests(GrainClusterFixture fixture)
 
         Assert.Equal(1, snapshot.Version);
         Assert.Equal(Start, snapshot.LastUpdatedAt);
-        Assert.Equal(new[] { 101L, 102L }, snapshot.Channels.Select(channel => channel.Id).ToArray());
+        Assert.Equal(ExpectedChannelIds, snapshot.Channels.Select(channel => channel.Id).ToArray());
         Assert.Equal("alpha", snapshot.Channels[0].Name);
         Assert.Equal(1, fixture.Channels.LatestUpdatedAtCalls);
         Assert.Equal(1, fixture.Channels.ListEnabledCalls);

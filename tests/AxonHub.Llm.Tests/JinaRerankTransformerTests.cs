@@ -809,7 +809,7 @@ public sealed class JinaRerankTransformerTests
                 Request = new HttpRequestData { ApiFormat = ApiFormats.JinaEmbedding },
             });
 
-        var data = Assert.Single(resp.Embedding!.Data);
+        var data = Assert.Single(resp.Embedding!.Data!);
         Assert.Equal(string.Empty, data.Object);
         Assert.Equal(0L, data.Index);
         Assert.Null(data.Embedding.Values);

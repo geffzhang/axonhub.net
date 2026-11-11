@@ -504,16 +504,19 @@ public sealed class CacheDiagnosticsTests
         Assert.Equal(5, entries.GetArrayLength());
         Assert.Equal(
             new[] { "a", "alias", "azure/a", "azure/b", "b" },
-            [.. entries.EnumerateArray().Select(static entry =>
-                entry.GetProperty("requestModel").GetString()!)]);
+            entries.EnumerateArray().Select(static entry =>
+                entry.GetProperty("requestModel").GetString()!)
+                .ToArray());
         Assert.Equal(
             new[] { "direct", "mapping", "prefix", "prefix", "direct" },
-            [.. entries.EnumerateArray().Select(static entry =>
-                entry.GetProperty("source").GetString()!)]);
+            entries.EnumerateArray().Select(static entry =>
+                entry.GetProperty("source").GetString()!)
+                .ToArray());
         Assert.Equal(
             new[] { "a", "a", "a", "b", "b" },
-            [.. entries.EnumerateArray().Select(static entry =>
-                entry.GetProperty("actualModel").GetString()!)]);
+            entries.EnumerateArray().Select(static entry =>
+                entry.GetProperty("actualModel").GetString()!)
+                .ToArray());
     }
 
     [Fact]
@@ -570,8 +573,13 @@ public sealed class CacheDiagnosticsTests
         Assert.Equal(
             "failed to build cache diagnostics export: failed to query channels: db down",
             ex.Message);
-        Assert.IsType<InvalidOperationException>(ex.InnerException);
-        Assert.Null(ex.InnerException!.InnerException);
+        // The build wrapper wraps the store wrapper, which wraps the driver
+        // error in turn (three nodes, root has no inner).
+        var queryError = Assert.IsType<InvalidOperationException>(ex.InnerException);
+        Assert.Equal("failed to query channels: db down", queryError.Message);
+        var root = Assert.IsType<InvalidOperationException>(queryError.InnerException);
+        Assert.Equal("db down", root.Message);
+        Assert.Null(root.InnerException);
     }
 
     [Fact]

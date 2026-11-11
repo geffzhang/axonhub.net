@@ -580,7 +580,9 @@ public sealed class InvitationServiceTests
             "failed to create user: boom",
             new InvalidOperationException("boom"));
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+        // The store's exception type passes through unchanged; the service only
+        // re-keys unknown errors, so this must stay a StoreFailureException.
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
             () => _service.RegisterInvitationAsync(
                 "token",
                 "member@example.com",

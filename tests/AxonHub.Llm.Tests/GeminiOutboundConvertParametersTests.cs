@@ -33,7 +33,7 @@ public sealed class GeminiOutboundConvertParametersTests
                     {
                         Name = "test_tool",
                         Description = "A test tool",
-                        ParametersJsonSchema = JsonDocument.Parse(
+                        ParametersJsonSchema = JsonElement.Parse(
                             """
                             {
                                 "type": "object",
@@ -51,7 +51,7 @@ public sealed class GeminiOutboundConvertParametersTests
                                 },
                                 "required": ["mode"]
                             }
-                            """).RootElement,
+                            """),
                     },
                 },
             ],

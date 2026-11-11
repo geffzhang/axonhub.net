@@ -224,7 +224,7 @@ public sealed class XaiSubscriptionQuotaChecker : IQuotaChecker
 
         // rawBilling is a non-nil empty map when both windows are absent, so
         // "billing" is always present in rawData.
-        var rawBilling = new Dictionary<string, object?>(StringComparer.Ordinal, capacity: 2);
+        var rawBilling = new Dictionary<string, object?>(2, StringComparer.Ordinal);
         if (summary.Weekly is not null)
         {
             rawBilling["weekly"] = summary.Weekly;

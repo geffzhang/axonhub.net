@@ -356,7 +356,7 @@ public sealed class GithubCopilotQuotaCheckerTests
             () => checker.CheckQuotaAsync(Channel(), CancellationToken.None));
 
         Assert.StartsWith("failed to parse copilot user response: ", error.Message, StringComparison.Ordinal);
-        Assert.IsType<JsonException>(error.InnerException);
+        Assert.IsAssignableFrom<JsonException>(error.InnerException);
     }
 
     [Fact]

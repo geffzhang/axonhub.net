@@ -59,8 +59,8 @@ public sealed class HttpMetricsMiddlewareTests
             static _ => Task.CompletedTask,
             RoutePatternFactory.Parse("{**path}"),
             int.MaxValue,
-            "Fallback {**path}",
-            new EndpointMetadataCollection(StaticFallbackMetadata.Instance)));
+            new EndpointMetadataCollection(StaticFallbackMetadata.Instance),
+            "Fallback {**path}"));
 
         var middleware = new HttpMetricsMiddleware(
             static _ => Task.CompletedTask,
@@ -114,5 +114,6 @@ public sealed class HttpMetricsMiddlewareTests
             static _ => Task.CompletedTask,
             RoutePatternFactory.Parse(pattern),
             0,
-            pattern);
+            metadata: null,
+            displayName: pattern);
 }

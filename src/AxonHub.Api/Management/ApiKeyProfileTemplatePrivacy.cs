@@ -136,7 +136,7 @@ public sealed class ApiKeyProfileTemplatePrivacy(
 
     private static bool HasScope(string? scopesJson, string scope)
     {
-        var scopes = ManagementMapping.ParseScopes(scopesJson);
+        var scopes = AxonHub.Api.GraphQL.ManagementMapping.ParseScopes(scopesJson);
         return scopes is not null
             && scopes.Contains(scope, StringComparer.Ordinal);
     }

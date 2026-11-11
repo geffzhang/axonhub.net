@@ -86,9 +86,18 @@ internal sealed class MetricsCapture : IDisposable
 internal sealed record MetricPoint(double Value, IReadOnlyDictionary<string, object?> Tags);
 
 /// <summary>Returns a fixed elapsed time for every GetTimestamp/GetElapsedTime pair.</summary>
+/// <remarks>
+/// .NET 10 seals <c>GetElapsedTime</c> on <see cref="TimeProvider"/>, so the
+/// fake pins the pair through <see cref="GetTimestamp"/> instead: the first
+/// timestamp is 0 and every later one is <c>elapsed</c> expressed at a
+/// frequency of <see cref="TimeSpan.TicksPerSecond"/>.
+/// </remarks>
 internal sealed class FixedElapsedClock(TimeSpan elapsed) : TimeProvider
 {
-    public override long GetTimestamp() => 0;
+    private long _timestamp;
 
-    public override TimeSpan GetElapsedTime(long startingTimestamp) => elapsed;
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+    public override long GetTimestamp()
+        => Interlocked.Exchange(ref _timestamp, elapsed.Ticks);
 }

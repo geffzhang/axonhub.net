@@ -112,7 +112,8 @@ public sealed class StorageBackendTests : IDisposable
         using var backend = new FsDataStorageBackend(_root);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => backend.WriteAsync("../escape.json", [1], CancellationToken.None));
+            () => backend.WriteAsync(
+                "../escape.json", new ReadOnlyMemory<byte>([1]), CancellationToken.None));
 
         Assert.Equal("invalid path: ../escape.json", ex.Message);
     }

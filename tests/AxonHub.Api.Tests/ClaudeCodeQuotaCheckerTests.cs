@@ -559,12 +559,12 @@ public sealed class ClaudeCodeQuotaCheckerTests
         string credentials,
         string settings = "{}",
         string? baseUrl = null) => new()
-    {
-        Type = "claudecode",
-        BaseUrl = baseUrl,
-        Credentials = credentials,
-        Settings = settings,
-    };
+        {
+            Type = "claudecode",
+            BaseUrl = baseUrl,
+            Credentials = credentials,
+            Settings = settings,
+        };
 
     private static HttpResponseMessage QuotaResponse(Dictionary<string, List<string>> headers)
     {
@@ -608,7 +608,12 @@ public sealed class ClaudeCodeQuotaCheckerTests
             CancellationToken cancellationToken)
         {
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (name, values) in request.Headers)
+
+            // NonValidated exposes the raw values that go on the wire. The
+            // parsed view re-serializes known headers (Accept, User-Agent,
+            // ...) into their .NET shapes, e.g. "text/html, application/
+            // xhtml+xml", which is exactly what Go's RoundTripper does NOT do.
+            foreach (var (name, values) in request.Headers.NonValidated)
             {
                 headers[name] = string.Join(", ", values);
             }
@@ -616,7 +621,7 @@ public sealed class ClaudeCodeQuotaCheckerTests
             var body = string.Empty;
             if (request.Content is not null)
             {
-                foreach (var (name, values) in request.Content.Headers)
+                foreach (var (name, values) in request.Content.Headers.NonValidated)
                 {
                     headers[name] = string.Join(", ", values);
                 }

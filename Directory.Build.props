@@ -18,7 +18,10 @@
          CA1711：streams.Stream / MapStream 等名字直接沿用参照实现，便于逐项对照；
          它们不是 System.IO.Stream，该命名规则在此不适用。
          CA1068：参照实现（Go）一律把 ctx 作为首个参数，移植代码保持同一签名顺序，
-         便于逐项对照；改成 CT 末位会破坏这层映射。 -->
-    <NoWarn>$(NoWarn);CA1068;CA1710;CA1711;CA1716;CA1720;CA1822;CA1812</NoWarn>
+         便于逐项对照；改成 CT 末位会破坏这层映射。
+         CA1859：Go 侧 any 值在 C# 侧是 GoValue 层次（GoMapValue / GoSliceValue 等），
+         返回/参数保持抽象基类型是这层映射的一部分；按调用点推断成具体节点类型会把
+         内部表示泄漏给调用方，故按项目豁免。 -->
+    <NoWarn>$(NoWarn);CA1068;CA1710;CA1711;CA1716;CA1720;CA1822;CA1812;CA1859</NoWarn>
   </PropertyGroup>
 </Project>

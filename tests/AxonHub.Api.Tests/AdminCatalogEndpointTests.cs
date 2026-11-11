@@ -64,6 +64,9 @@ public sealed class AdminCatalogEndpointTests : IAsyncLifetime
 
         var builder = CreateBuilder();
         _app = builder.Build();
+        // CreateBuilder replaces the gate's ISystemStore with _store; the JWT
+        // secret must live in the store the auth middleware actually reads.
+        _gate.SeedJwtSecret(_app.Services);
         _app.MapAdminGraphql();
         await _app.StartAsync();
 
@@ -203,7 +206,7 @@ public sealed class AdminCatalogEndpointTests : IAsyncLifetime
         Assert.Equal(
             "failed to update catalog settings: catalog upstream url must be http or https",
             errors[0].GetProperty("message").GetString());
-        Assert.Empty(_store.Rows);
+        AssertNoCatalogSettingsWritten();
         Assert.Equal(0, _catalog.InvalidateCalls);
         Assert.Equal(0, _reschedule.Calls);
     }
@@ -219,7 +222,7 @@ public sealed class AdminCatalogEndpointTests : IAsyncLifetime
             "failed to update catalog settings: invalid catalog upstream url: "
             + "parse \"https://example.com:80:90/x\": invalid port \":80:90\" after host",
             errors[0].GetProperty("message").GetString());
-        Assert.Empty(_store.Rows);
+        AssertNoCatalogSettingsWritten();
         Assert.Equal(0, _catalog.InvalidateCalls);
         Assert.Equal(0, _reschedule.Calls);
     }
@@ -235,7 +238,7 @@ public sealed class AdminCatalogEndpointTests : IAsyncLifetime
         Assert.Equal(
             "permission denied: requires write_settings scope",
             errors[0].GetProperty("message").GetString());
-        Assert.Empty(_store.Rows);
+        AssertNoCatalogSettingsWritten();
         Assert.Equal(0, _catalog.InvalidateCalls);
         Assert.Equal(0, _reschedule.Calls);
     }
@@ -352,11 +355,12 @@ public sealed class AdminCatalogEndpointTests : IAsyncLifetime
     public async Task CatalogReadsWithoutTheServiceReportNotConfigured()
     {
         var app = CreateBuilder(registerCatalog: false).Build();
+        app.MapAdminGraphql();
         await app.StartAsync();
         try
         {
             using var client = app.GetTestClient();
-            AdminGraphqlGateServices.Authorize(client);
+            _gate.Authorize(client);
 
             var errors = await QueryErrorsAsync(client, ProvidersCatalogQuery);
             Assert.Equal(
@@ -378,11 +382,12 @@ public sealed class AdminCatalogEndpointTests : IAsyncLifetime
     public async Task UpdateCatalogSettingsWithoutTheServiceStillPersists()
     {
         var app = CreateBuilder(registerCatalog: false).Build();
+        app.MapAdminGraphql();
         await app.StartAsync();
         try
         {
             using var client = app.GetTestClient();
-            AdminGraphqlGateServices.Authorize(client);
+            _gate.Authorize(client);
 
             var data = await QueryDataAsync(
                 client,
@@ -419,6 +424,15 @@ public sealed class AdminCatalogEndpointTests : IAsyncLifetime
 
         return builder;
     }
+
+    /// <summary>
+    /// The fixture seeds the JWT secret into the same system store, so "nothing
+    /// written" means "no catalog settings row", not "no rows at all".
+    /// </summary>
+    private void AssertNoCatalogSettingsWritten()
+        => Assert.DoesNotContain(
+            _store.Rows,
+            row => string.Equals(row.Key, CatalogSettingsRules.Key, StringComparison.Ordinal));
 
     private string StoredCatalogSettings()
         => _store.Rows.Single(
@@ -503,9 +517,13 @@ public sealed class AdminCatalogEndpointTests : IAsyncLifetime
                 Encoding.UTF8,
                 "application/json"),
         };
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
-            "Bearer",
-            token ?? _gate.Jwt);
+        // Without an explicit token, keep the client's own default header: the
+        // service-account client sends its API key instead of the fixture JWT.
+        if (token is not null)
+        {
+            request.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        }
 
         using var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();

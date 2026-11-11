@@ -67,6 +67,9 @@ public sealed class SystemInitializationService(
     /// <summary>The Primary storage seeded by the same transaction.</summary>
     public const string PrimaryStorageName = "Primary";
 
+    /// <summary>The owner's implicit full scope (system.go:800).</summary>
+    private static readonly string[] OwnerScopes = ["*"];
+
     public Task<bool> IsInitializedAsync(CancellationToken cancellationToken = default)
         => systemSettings.IsInitializedAsync(cancellationToken);
 
@@ -122,7 +125,7 @@ public sealed class SystemInitializationService(
                     cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (InitializationStepException)
+        catch (Exception ex) when (ex is not OperationCanceledException && IsStepFailure(ex))
         {
             throw;
         }
@@ -148,7 +151,7 @@ public sealed class SystemInitializationService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new InitializationStepException(
+            throw StepFailure(
                 "failed to hash password: " + ex.Message,
                 ex);
         }
@@ -172,7 +175,7 @@ public sealed class SystemInitializationService(
             FirstName = parameters.OwnerFirstName,
             LastName = parameters.OwnerLastName,
             IsOwner = true,
-            Scopes = JsonSerializer.Serialize(new[] { "*" }),
+            Scopes = JsonSerializer.Serialize(OwnerScopes),
         };
 
         try
@@ -181,7 +184,7 @@ public sealed class SystemInitializationService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new InitializationStepException(
+            throw StepFailure(
                 "failed to create owner user: " + ex.Message,
                 ex);
         }
@@ -203,7 +206,7 @@ public sealed class SystemInitializationService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new InitializationStepException(
+            throw StepFailure(
                 "failed to create default project: " + ex.Message,
                 ex);
         }
@@ -245,7 +248,7 @@ public sealed class SystemInitializationService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new InitializationStepException(
+            throw StepFailure(
                 "failed to create primary data storage: " + ex.Message,
                 ex);
         }
@@ -287,7 +290,7 @@ public sealed class SystemInitializationService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new InitializationStepException(
+            throw StepFailure(
                 stepPrefix + "failed to create system setting: " + ex.Message,
                 ex);
         }
@@ -309,9 +312,23 @@ public sealed class SystemInitializationService(
     }
 
     /// <summary>
-    /// A step already carries the reference's full error chain; the outer
-    /// transaction wrapper must not re-prefix it.
+    /// Marks an error raised by an initialization step. A step already carries
+    /// the reference's full error chain; the outer transaction wrapper must not
+    /// re-prefix it. The marker lives in <see cref="Exception.Data"/> rather
+    /// than a dedicated exception subtype so callers can catch the plain
+    /// <see cref="InvalidOperationException"/> the reference's error chain
+    /// surfaces (Go returns errors, not a distinct step type).
     /// </summary>
-    private sealed class InitializationStepException(string message, Exception inner)
-        : InvalidOperationException(message, inner);
+    private const string StepFailureMarker = "AxonHub.InitializationStepFailure";
+
+    private static InvalidOperationException StepFailure(string message, Exception inner)
+    {
+        var error = new InvalidOperationException(message, inner);
+        error.Data[StepFailureMarker] = true;
+        return error;
+    }
+
+    private static bool IsStepFailure(Exception error)
+        => error is InvalidOperationException
+           && error.Data.Contains(StepFailureMarker);
 }

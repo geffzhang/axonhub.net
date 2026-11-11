@@ -17,10 +17,8 @@ namespace AxonHub.Api.Tests;
 /// billing requests, the credential resolution (typed oauth object over the
 /// legacy apiKey JSON), the window merge and the reset handling. The wire shape
 /// (URLs, auth, CLI headers) is locked through the real
-/// <see cref="HttpExecutor"/> over a recording message handler; a bodyless
-/// request loses its Content-Type header on the wire, which is the accepted
-/// difference C206 (the checker still sets it on the request data, asserted
-/// separately).
+/// <see cref="HttpExecutor"/> over a recording message handler; the bodyless
+/// GETs keep their Content-Type header on the wire like Go (C206 resolved).
 /// </summary>
 public sealed class XaiSubscriptionQuotaCheckerTests
 {
@@ -72,11 +70,10 @@ public sealed class XaiSubscriptionQuotaCheckerTests
             Assert.Equal(
                 "grok-pager/0.2.114 grok-shell/0.2.114 (macos; aarch64)",
                 request.Header("User-Agent"));
-            // C206: the checker sets Content-Type on the request data, but the
-            // port's executor only attaches content headers when a body exists,
-            // so the wire loses it for these bodyless GETs (the reference
-            // sends it).
-            Assert.Equal(string.Empty, request.Header("Content-Type"));
+            // The executor always attaches content, so these bodyless GETs
+            // keep the Content-Type on the wire like Go's net/http (C206
+            // resolved).
+            Assert.Equal("application/json", request.Header("Content-Type"));
             Assert.Equal(string.Empty, request.Body);
         }
 

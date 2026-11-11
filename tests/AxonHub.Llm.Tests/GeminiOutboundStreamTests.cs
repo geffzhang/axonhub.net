@@ -156,7 +156,7 @@ public sealed class GeminiOutboundStreamTests
                                     Name = "get_weather",
                                     Args = new Dictionary<string, JsonElement>
                                     {
-                                        ["location"] = JsonDocument.Parse("\"Tokyo\"").RootElement,
+                                        ["location"] = JsonElement.Parse("\"Tokyo\""),
                                     },
                                 },
                             },
@@ -308,7 +308,7 @@ public sealed class GeminiOutboundStreamTests
                                         Name = "get_weather",
                                         Args = new Dictionary<string, JsonElement>
                                         {
-                                            ["location"] = JsonDocument.Parse("\"Tokyo\"").RootElement,
+                                            ["location"] = JsonElement.Parse("\"Tokyo\""),
                                         },
                                     },
                                 },
@@ -339,7 +339,7 @@ public sealed class GeminiOutboundStreamTests
                                         Name = "get_time",
                                         Args = new Dictionary<string, JsonElement>
                                         {
-                                            ["timezone"] = JsonDocument.Parse("\"JST\"").RootElement,
+                                            ["timezone"] = JsonElement.Parse("\"JST\""),
                                         },
                                     },
                                 },
@@ -395,7 +395,7 @@ public sealed class GeminiOutboundStreamTests
                                         Name = "func_a",
                                         Args = new Dictionary<string, JsonElement>
                                         {
-                                            ["param"] = JsonDocument.Parse("\"value_a\"").RootElement,
+                                            ["param"] = JsonElement.Parse("\"value_a\""),
                                         },
                                     },
                                 },
@@ -407,7 +407,7 @@ public sealed class GeminiOutboundStreamTests
                                         Name = "func_b",
                                         Args = new Dictionary<string, JsonElement>
                                         {
-                                            ["param"] = JsonDocument.Parse("\"value_b\"").RootElement,
+                                            ["param"] = JsonElement.Parse("\"value_b\""),
                                         },
                                     },
                                 },
@@ -562,7 +562,7 @@ public sealed class GeminiOutboundStreamTests
                                         Name = "get_weather",
                                         Args = new Dictionary<string, JsonElement>
                                         {
-                                            ["location"] = JsonDocument.Parse("\"Tokyo\"").RootElement,
+                                            ["location"] = JsonElement.Parse("\"Tokyo\""),
                                         },
                                     },
                                 },

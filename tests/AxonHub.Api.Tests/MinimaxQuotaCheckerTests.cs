@@ -75,7 +75,9 @@ public sealed class MinimaxQuotaCheckerTests
         Assert.Equal(DefaultUsageUrl, request.Url);
         Assert.Equal("Bearer minimax-token", request.Header("Authorization"));
         Assert.Equal("application/json", request.Header("Content-Type"));
-        Assert.Equal(string.Empty, request.Header("Accept"));
+        // The checker builds no Accept, but the real executor installs the Go
+        // client's default (client.go:281-284).
+        Assert.Equal("application/json", request.Header("Accept"));
         Assert.Equal(string.Empty, request.Body);
 
         Assert.Equal(ProviderQuotaStatuses.Available, quota.Status);
@@ -684,7 +686,9 @@ public sealed class MinimaxQuotaCheckerTests
     [InlineData("available", "exhausted", "exhausted")]
     [InlineData("exhausted", "available", "exhausted")]
     [InlineData("available", "unknown", "available")]
-    [InlineData("unknown", "available", "available")]
+    // The reference's rank map has no "unknown" key, so Go's zero value ties
+    // with "available" and the first argument wins (minimax_checker.go:304-310).
+    [InlineData("unknown", "available", "unknown")]
     [InlineData("warning", "unknown", "warning")]
     public void WorseStatusKeepsTheWorseCandidate(string current, string candidate, string expected)
     {

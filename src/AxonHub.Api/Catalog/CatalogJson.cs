@@ -284,12 +284,12 @@ internal sealed class CatalogArray(List<CatalogValue> items) : CatalogValue
 {
     public List<CatalogValue> Items { get; } = items;
 
-    public static CatalogArray FromElement(JsonElement element)
+    public new static CatalogArray FromElement(JsonElement element)
     {
         var items = new List<CatalogValue>(element.GetArrayLength());
         foreach (var item in element.EnumerateArray())
         {
-            items.Add(FromElement(item));
+            items.Add(CatalogValue.FromElement(item));
         }
 
         return new CatalogArray(items);
@@ -321,7 +321,7 @@ internal sealed class CatalogObject : CatalogValue
 
     public int Count => _members.Count;
 
-    public static CatalogObject FromElement(JsonElement element)
+    public new static CatalogObject FromElement(JsonElement element)
     {
         var value = new CatalogObject();
         // encoding/json keeps the last occurrence of a duplicate key.

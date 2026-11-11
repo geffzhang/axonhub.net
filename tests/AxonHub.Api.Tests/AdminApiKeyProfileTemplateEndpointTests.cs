@@ -84,11 +84,14 @@ public sealed class AdminApiKeyProfileTemplateEndpointTests : IAsyncLifetime
             item.Name = "Operations";
             item.Description = "first template";
             item.ProjectId = 12;
-            item.Profile = ApiKeyProfilesCodec.SerializeProfile(new ApiKeyProfileModel
-            {
-                Name = "ops",
-                ModelMappings = [new ApiKeyModelMapping { From = "old", To = "new" }],
-            });
+            // Rows created through the service always carry the routing-policy
+            // defaults, so seed the same persisted shape.
+            item.Profile = ApiKeyProfilesCodec.SerializeProfile(
+                ApiKeyProfilesCodec.NormalizeAndValidateRoutingPolicy(new ApiKeyProfileModel
+                {
+                    Name = "ops",
+                    ModelMappings = [new ApiKeyModelMapping { From = "old", To = "new" }],
+                }));
         });
         _templates.Add(item =>
         {

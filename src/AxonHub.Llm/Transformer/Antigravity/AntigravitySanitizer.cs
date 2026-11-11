@@ -984,7 +984,7 @@ public static class AntigravitySanitizer
 
     /// <summary>Decodes a JSON fragment into the Go-shaped tree (for tests and callers).</summary>
     internal static Dictionary<string, object?>? ParseSchema(string json)
-        => ToGoAny(JsonDocument.Parse(json).RootElement) as Dictionary<string, object?>;
+        => ToGoAny(JsonElement.Parse(json)) as Dictionary<string, object?>;
 
     /// <summary>Marshals a Go-shaped tree back into a JSON element (xjson.MustMarshal).</summary>
     internal static JsonElement MarshalToElement(Dictionary<string, object?>? schema)

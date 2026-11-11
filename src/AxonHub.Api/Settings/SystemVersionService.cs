@@ -234,7 +234,12 @@ public sealed class SystemVersionService(
                 continue;
             }
 
-            if (latestVersion is null || CompareSemVersions(version, latestVersion) > 0)
+            if (latestVersion is null)
+            {
+                latestVersion = version;
+                latestTag = release.TagName;
+            }
+            else if (CompareSemVersions(version, latestVersion.Value) > 0)
             {
                 latestVersion = version;
                 latestTag = release.TagName;
@@ -393,7 +398,9 @@ public sealed class SystemVersionService(
             return numericA ? -1 : 1;
         }
 
-        return string.CompareOrdinal(a, b);
+        // Go's strings.Compare is normalized to -1/0/1; CompareOrdinal returns
+        // the raw code-unit difference ("beta" vs "rc" is -16, not -1).
+        return Math.Sign(string.CompareOrdinal(a, b));
     }
 
     /// <summary>Port of splitDigitRuns (version.go:319-349).</summary>
@@ -436,7 +443,7 @@ public sealed class SystemVersionService(
             return lengthResult;
         }
 
-        return string.CompareOrdinal(trimmedA, trimmedB);
+        return Math.Sign(string.CompareOrdinal(trimmedA, trimmedB));
     }
 
     private static bool IsDigitRun(string value)

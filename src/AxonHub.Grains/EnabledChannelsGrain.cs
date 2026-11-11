@@ -1,3 +1,4 @@
+using AxonHub.Abstractions;
 using AxonHub.Grains.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -69,7 +70,7 @@ public sealed class EnabledChannelsGrain(
         {
             // The reference loads synchronously in NewChannelService and panics
             // on failure; the port's first caller gets the error instead.
-            await RefreshCoreAsync(force: true, CancellationToken.None).ConfigureAwait(false);
+            await RefreshCoreAsync(force: true, CancellationToken.None).ConfigureAwait(true);
         }
 
         return BuildSnapshot();
@@ -79,7 +80,7 @@ public sealed class EnabledChannelsGrain(
     {
         // live.Cache.Load(ctx, force) runs without the cache's own timeout:
         // the caller's context bounds it. RefreshCore keeps the 30s guard.
-        await RefreshCoreAsync(force, CancellationToken.None).ConfigureAwait(false);
+        await RefreshCoreAsync(force, CancellationToken.None).ConfigureAwait(true);
         return BuildSnapshot();
     }
 
@@ -116,7 +117,7 @@ public sealed class EnabledChannelsGrain(
         _debounceTimer = null;
         var force = _pendingForceRefresh;
         _pendingForceRefresh = false;
-        await RefreshSafelyAsync(force, cancellationToken).ConfigureAwait(false);
+        await RefreshSafelyAsync(force, cancellationToken).ConfigureAwait(true);
     }
 
     private Task PeriodicRefreshAsync(CancellationToken cancellationToken)
@@ -126,7 +127,7 @@ public sealed class EnabledChannelsGrain(
     {
         try
         {
-            await RefreshCoreAsync(force, cancellationToken).ConfigureAwait(false);
+            await RefreshCoreAsync(force, cancellationToken).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -146,7 +147,7 @@ public sealed class EnabledChannelsGrain(
         timeout.CancelAfter(RefreshTimeout);
         var token = timeout.Token;
 
-        var latestUpdate = Normalize(await source.GetLatestUpdatedAtAsync(token).ConfigureAwait(false));
+        var latestUpdate = Normalize(await source.GetLatestUpdatedAtAsync(token).ConfigureAwait(true));
 
         if (!force)
         {
@@ -167,7 +168,7 @@ public sealed class EnabledChannelsGrain(
             }
         }
 
-        var descriptors = await source.ListEnabledAsync(token).ConfigureAwait(false);
+        var descriptors = await source.ListEnabledAsync(token).ConfigureAwait(true);
 
         // The reference builds each channel and skips the ones whose outbound
         // construction fails (C178); the port's descriptor projection is pure,

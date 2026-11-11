@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -712,10 +713,10 @@ public sealed class CommandCodeQuotaCheckerTests
         // (C217 family); the instant itself keeps millisecond precision.
         var windows = Map(quota.RawData["windows"]);
         Assert.Equal(
-            fiveHourReset.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+            fiveHourReset.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
             Map(windows["five_hour"])["reset_time"]);
         Assert.Equal(
-            weeklyReset.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+            weeklyReset.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
             Map(windows["weekly"])["reset_time"]);
         Assert.NotNull(quota.NextResetAt);
         Assert.Equal(fiveHourReset.ToUnixTimeMilliseconds(), quota.NextResetAt!.Value.ToUnixTimeMilliseconds());
@@ -779,7 +780,7 @@ public sealed class CommandCodeQuotaCheckerTests
             + JsonSerializer.Serialize(planId)
             + ""","planLabel":"""
             + JsonSerializer.Serialize(planLabel)
-            + """","status":"active"}}""";
+            + ",\"status\":\"active\"}}";
 
         var quota = Parse(credits, subscriptions);
         var creditsRaw = Map(quota.RawData["credits"]);
@@ -1051,7 +1052,7 @@ public sealed class CommandCodeQuotaCheckerTests
         Assert.NotNull(parsed);
         Assert.Equal(
             expectedIso,
-            parsed!.Value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"));
+            parsed!.Value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture));
     }
 
     [Fact]

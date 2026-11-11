@@ -453,12 +453,15 @@ public sealed class AntigravityQuotaCheckerTests
     [Fact]
     public void ParseQuotaSummaryPrefersResponseThenSummaryThenTopLevel()
     {
-        static string Bucket(string id, double remaining) =>
-            $$"""{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"{{id}}","remainingFraction":{{remaining}}}]}]}""";
+        // The pool is classified from "bucketId displayName groupName"
+        // (antigravity_summary.go:123), so a 3p- bucket belongs to the
+        // Claude/GPT pool only when its group is not the Gemini one.
+        static string Bucket(string id, double remaining, string displayName = "Gemini Models") =>
+            $$"""{"groups":[{"displayName":"{{displayName}}","buckets":[{"bucketId":"{{id}}","remainingFraction":{{remaining}}}]}]}""";
 
         var allThree =
             """{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","remainingFraction":0.9}]}],"""
-            + "\"summary\":" + Bucket("3p-weekly", 0.9)
+            + "\"summary\":" + Bucket("3p-weekly", 0.9, "Claude and GPT models")
             + ",\"response\":" + Bucket("gemini-weekly", 0.9) + "}";
 
         var withResponse = AntigravityQuotaChecker.ParseQuotaSummary(
@@ -468,7 +471,7 @@ public sealed class AntigravityQuotaCheckerTests
 
         var summaryAndTopLevel =
             """{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","remainingFraction":0.9}]}],"""
-            + "\"summary\":" + Bucket("3p-weekly", 0.9) + "}";
+            + "\"summary\":" + Bucket("3p-weekly", 0.9, "Claude and GPT models") + "}";
 
         var withSummary = AntigravityQuotaChecker.ParseQuotaSummary(
             Encoding.UTF8.GetBytes(summaryAndTopLevel),
@@ -677,8 +680,12 @@ public sealed class AntigravityQuotaCheckerTests
         Assert.Equal(utc, Reset("\"2099-09-04T08:00:00Z\""));
         Assert.Equal(utc, Reset("\"2099-09-04T08:00:00+00:00\""));
 
+        // Go's time.Parse keeps the zone from the literal (wall clock 08:00 at
+        // +08:00, i.e. 00:00Z), it does not normalize to UTC.
         var offset = Reset("\"2099-09-04T08:00:00+08:00\"");
-        Assert.Equal(utc, offset);
+        Assert.Equal(
+            new DateTimeOffset(2099, 9, 4, 8, 0, 0, TimeSpan.FromHours(8)),
+            offset);
         Assert.Equal(TimeSpan.FromHours(8), offset.GetValueOrDefault().Offset);
 
         Assert.Equal(utc.AddTicks(1_234_567), Reset("\"2099-09-04T08:00:00.123456789Z\""));
@@ -787,7 +794,11 @@ public sealed class AntigravityQuotaCheckerTests
             CancellationToken cancellationToken)
         {
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (name, values) in request.Headers)
+
+            // NonValidated exposes the raw values that go on the wire; the
+            // parsed view re-serializes known headers into .NET's normalized
+            // shapes (Accept would become "text/html, application/xhtml+xml").
+            foreach (var (name, values) in request.Headers.NonValidated)
             {
                 headers[name] = string.Join(", ", values);
             }
@@ -795,7 +806,7 @@ public sealed class AntigravityQuotaCheckerTests
             var body = string.Empty;
             if (request.Content is not null)
             {
-                foreach (var (name, values) in request.Content.Headers)
+                foreach (var (name, values) in request.Content.Headers.NonValidated)
                 {
                     headers[name] = string.Join(", ", values);
                 }

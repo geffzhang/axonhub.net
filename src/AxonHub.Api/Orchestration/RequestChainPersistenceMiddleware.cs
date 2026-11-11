@@ -406,6 +406,13 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     }
 
     /// <summary>
+    /// Port of <c>outbound.GetRequestExecution() != nil</c> for the failure
+    /// hook: the orchestrator evaluates API key rules only once a request
+    /// execution row exists (orchestrator.go:327-339).
+    /// </summary>
+    public bool HasRequestExecution => _attempt is { ExecutionId: not 0 };
+
+    /// <summary>
     /// Port of the orchestrator's post-Process failure handling: the last
     /// execution and the request are marked canceled (when the failure itself is
     /// a cancellation) or failed. Called once the pipeline throws.

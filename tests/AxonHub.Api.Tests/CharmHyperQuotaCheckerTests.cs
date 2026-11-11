@@ -280,7 +280,8 @@ public sealed class CharmHyperQuotaCheckerTests
             () => checker.CheckQuotaAsync(Channel(), CancellationToken.None));
 
         Assert.StartsWith("parsing Charm Hyper quota response: ", error.Message, StringComparison.Ordinal);
-        Assert.IsType<JsonException>(error.InnerException);
+        // Malformed JSON raises JsonReaderException, a JsonException subtype.
+        Assert.IsAssignableFrom<JsonException>(error.InnerException);
     }
 
     /// <summary>

@@ -667,7 +667,13 @@ public sealed class AdminChannelModelPriceEndpointTests : IAsyncLifetime
 
         var channelPriceFields = data.GetProperty("channelPrice").GetProperty("fields")
             .EnumerateArray().Select(field => field.GetProperty("name").GetString()).ToArray();
-        Assert.Equal(ChannelPriceFields, channelPriceFields);
+        // HotChocolate merges the [ExtendObjectType] edge resolvers ahead of the
+        // base properties, while gqlgen keeps the SDL order. Field order carries
+        // no protocol meaning (introspection consumers look fields up by name),
+        // so the surface is compared as a set (difference C268).
+        Assert.Equal(
+            ChannelPriceFields.OrderBy(static name => name, StringComparer.Ordinal),
+            channelPriceFields.OrderBy(static name => name, StringComparer.Ordinal));
 
         // Both edge types implement Node in the SDL (ent.graphql:574,641).
         Assert.Equal(
@@ -675,9 +681,10 @@ public sealed class AdminChannelModelPriceEndpointTests : IAsyncLifetime
             data.GetProperty("channelPrice").GetProperty("interfaces").EnumerateArray()
                 .Select(static type => type.GetProperty("name").GetString()!).ToArray());
         Assert.Equal(
-            ChannelPriceVersionFields,
+            ChannelPriceVersionFields.OrderBy(static name => name, StringComparer.Ordinal),
             data.GetProperty("priceVersion").GetProperty("fields").EnumerateArray()
-                .Select(static field => field.GetProperty("name").GetString()!).ToArray());
+                .Select(static field => field.GetProperty("name").GetString()!)
+                .OrderBy(static name => name, StringComparer.Ordinal));
         Assert.Equal(
             ["Node"],
             data.GetProperty("priceVersion").GetProperty("interfaces").EnumerateArray()

@@ -173,7 +173,7 @@ public sealed class ChannelTokenSource(
         var updated = ChannelWriteSerialization.ParseCredentials(state.CredentialsJson);
         updated.ApiKey = refreshed.ToJson();
         updated.OAuth = ToOAuthDraft(refreshed);
-        var credentialsJson = GoJson.MarshalToString(updated);
+        var credentialsJson = AxonHub.Llm.Json.GoJson.MarshalToString(updated);
 
         while (true)
         {

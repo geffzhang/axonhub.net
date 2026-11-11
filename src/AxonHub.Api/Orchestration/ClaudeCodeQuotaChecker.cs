@@ -119,7 +119,7 @@ public sealed class ClaudeCodeQuotaChecker : IQuotaChecker
             Method = "POST",
             Url = GetEndpointUrl(channel.BaseUrl),
             Headers = headers,
-            Body = GoJson.Marshal(body),
+            Body = AxonHub.Llm.Json.GoJson.Marshal(body),
             Auth = new AuthConfig
             {
                 Type = AuthTypes.Bearer,

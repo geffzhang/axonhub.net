@@ -46,7 +46,7 @@ public sealed class GcGrain(
             return pending;
         }
 
-        return await ScheduleNextAsync(now).ConfigureAwait(false);
+        return await ScheduleNextAsync(now).ConfigureAwait(true);
     }
 
     public async Task<DateTimeOffset> FireScheduledAsync(DateTimeOffset now)
@@ -56,7 +56,7 @@ public sealed class GcGrain(
         // Arm the following occurrence first: if the cleanup fails, yesterday's
         // registration can still deliver a stale tick, which the pending check
         // below ignores.
-        var next = await ScheduleNextAsync(now).ConfigureAwait(false);
+        var next = await ScheduleNextAsync(now).ConfigureAwait(true);
 
         if (pending is { } scheduled && now < scheduled)
         {
@@ -67,7 +67,7 @@ public sealed class GcGrain(
 
         try
         {
-            await cleanup.RunAutomaticCleanupAsync(CancellationToken.None).ConfigureAwait(false);
+            await cleanup.RunAutomaticCleanupAsync(CancellationToken.None).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -105,7 +105,7 @@ public sealed class GcGrain(
                 IGcGrain.ReminderName,
                 due,
                 ReminderPeriod)
-            .ConfigureAwait(false);
+            .ConfigureAwait(true);
 
         _next = next;
         return next;

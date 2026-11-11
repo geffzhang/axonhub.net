@@ -97,8 +97,8 @@ public sealed class OllamaQuotaCheckerTests
     public async Task WarningAtEightyFivePercentEscalatesTheOverallStatus()
     {
         var html = SettingsHtml().Replace(
-            """aria-label="Weekly usage 62.5% used"""",
-            """aria-label="Weekly usage 85% used"""",
+            "aria-label=\"Weekly usage 62.5% used\"",
+            "aria-label=\"Weekly usage 85% used\"",
             StringComparison.Ordinal);
         var checker = CreateChecker(OkExecutor(html));
 
@@ -117,8 +117,8 @@ public sealed class OllamaQuotaCheckerTests
     public async Task AHundredPercentWindowIsExhaustedAndNotReady()
     {
         var html = SettingsHtml().Replace(
-            """aria-label="Weekly usage 62.5% used"""",
-            """aria-label="Weekly usage 100% used"""",
+            "aria-label=\"Weekly usage 62.5% used\"",
+            "aria-label=\"Weekly usage 100% used\"",
             StringComparison.Ordinal);
         var checker = CreateChecker(OkExecutor(html));
 
@@ -430,8 +430,11 @@ public sealed class OllamaQuotaCheckerTests
         Assert.Null(credits.PeriodStart);
 
         Assert.Equal(new DateTimeOffset(2026, 10, 15, 9, 30, 0, TimeSpan.Zero), quota.NextResetAt);
+        // (1 - 72.5/100) * 100 is 27.500000000000004 under IEEE 754; Go's
+        // json.Marshal emits the shortest round-trip form of that exact value,
+        // which is why the reference test compares it with require.InDelta.
         Assert.Equal(
-            """{"credits":{"purchased_usd":25},"windows":{"monthly":{"percent_remaining":72.5,"reset_time":"2026-10-15T09:30:00Z","status":"available","usage_percent":27.5}}}""",
+            """{"credits":{"purchased_usd":25},"windows":{"monthly":{"percent_remaining":72.5,"reset_time":"2026-10-15T09:30:00Z","status":"available","usage_percent":27.500000000000004}}}""",
             GoJson.MarshalToString(quota.RawData));
     }
 
@@ -656,7 +659,9 @@ public sealed class OllamaQuotaCheckerTests
 
     /// <summary>TestOllama_CheckQuota_BalanceSkipsDisabledKey (ollama_checker_test.go:562-577).</summary>
     [Theory]
-    [InlineData(null, "Bearer good-key")]
+    // No disabled list means the first configured key serves; only an entry for
+    // revoked-key (with an unexpired expiry) parks it.
+    [InlineData(null, "Bearer revoked-key")]
     [InlineData("[]", "Bearer revoked-key")]
     [InlineData("""[{"key":"revoked-key","expiresAt":"2026-10-07T00:00:00Z"}]""", "Bearer revoked-key")]
     [InlineData("""[{"key":"revoked-key","expiresAt":"2026-10-09T00:00:00Z"}]""", "Bearer good-key")]
@@ -691,7 +696,8 @@ public sealed class OllamaQuotaCheckerTests
                 "session": {"remaining_percent": 0, "resets_at": "2026-10-08T05:00:00Z"},
                 "weekly": {"remaining_percent": 60, "resets_at": "2026-10-12T00:00:00Z"}
               },
-              "purchased": {"balance_usd": """
+              "purchased": {"balance_usd":
+            """
             + purchased
             + """
               }
@@ -1011,7 +1017,8 @@ public sealed class OllamaQuotaCheckerTests
     public async Task ResetTimeKeepsTheSourceOffset(string resetsAt, string expected)
     {
         var body = """
-            {"included":{"session":{"remaining_percent":75,"resets_at":"""
+            {"included":{"session":{"remaining_percent":75,"resets_at":
+            """
             + "\""
             + resetsAt
             + "\""
@@ -1064,10 +1071,10 @@ public sealed class OllamaQuotaCheckerTests
         string expectedStatus)
     {
         var body = """
-            {"included":{"session":{"remaining_percent":"""
+            {"included":{"session":{"remaining_percent":
+            """
             + remainingPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            + """}},"purchased":{"balance_usd":0}}
-            """;
+            + "}},\"purchased\":{\"balance_usd\":0}}";
         var checker = CreateChecker(OkExecutor(body));
 
         var quota = await checker.CheckQuotaAsync(

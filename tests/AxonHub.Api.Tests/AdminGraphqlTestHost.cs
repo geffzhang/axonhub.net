@@ -143,6 +143,27 @@ internal sealed class AdminGraphqlGateServices
         }
     }
 
+    /// <summary>
+    /// Fixtures that replace the gate's ISystemStore after <see cref="Register"/>
+    /// must still make the JWT secret readable to the auth middleware, which
+    /// resolves the last-registered ISystemStore. Call after <c>Build()</c>.
+    /// </summary>
+    public void SeedJwtSecret(IServiceProvider services)
+    {
+        var systems = services.GetRequiredService<ISystemStore>();
+        if (systems.GetByKeyAsync(ManagementAuthService.SecretKeyKey)
+            .GetAwaiter().GetResult() is not null)
+        {
+            return;
+        }
+
+        systems.CreateAsync(new SystemRecord
+        {
+            Key = ManagementAuthService.SecretKeyKey,
+            Value = Secret,
+        }).GetAwaiter().GetResult();
+    }
+
     /// <summary>Sends the fixture JWT on every request.</summary>
     public void Authorize(HttpClient client)
         => client.DefaultRequestHeaders.Authorization =

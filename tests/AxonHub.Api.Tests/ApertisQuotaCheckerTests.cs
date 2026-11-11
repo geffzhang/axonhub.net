@@ -17,8 +17,8 @@ namespace AxonHub.Api.Tests;
 /// apertis_capacity availability group, and the cycle boundary reported as
 /// both the reset instant and the limit period start. The wire shape is locked
 /// through the real <see cref="HttpExecutor"/> over a recording message
-/// handler; a bodyless GET loses its Content-Type on the wire (C206, the
-/// checker still sets it on the request data, asserted separately).
+/// handler; the bodyless GET keeps its Content-Type on the wire like Go
+/// (C206 resolved).
 /// </summary>
 public sealed class ApertisQuotaCheckerTests
 {
@@ -58,9 +58,9 @@ public sealed class ApertisQuotaCheckerTests
         Assert.Equal("GET", request.Method);
         Assert.Equal(QuotaUrl, request.Url);
         Assert.Equal("Bearer " + ApiKey, request.Header("Authorization"));
-        // C206: the checker sets Content-Type on the request data, but the
-        // executor only attaches content headers when a body exists.
-        Assert.Equal(string.Empty, request.Header("Content-Type"));
+        // The executor always attaches content, so the bodyless GET keeps the
+        // Content-Type on the wire like Go's net/http (C206 resolved).
+        Assert.Equal("application/json", request.Header("Content-Type"));
         // The shared executor adds its default Accept (Go would send none).
         Assert.Equal("application/json", request.Header("Accept"));
         Assert.Equal(string.Empty, request.Body);
@@ -867,7 +867,11 @@ public sealed class ApertisQuotaCheckerTests
         { Payg(credits: 0, used: 0, total: null, unlimited: true), ProviderQuotaStatuses.Available },
         { Payg(credits: 0, used: 0, total: "garbage", unlimited: true), ProviderQuotaStatuses.Available },
         { Payg(credits: 5, used: 2, total: 7.0), ProviderQuotaStatuses.Available },
-        { Payg(credits: 5, used: 5.6, total: 7.0), ProviderQuotaStatuses.Warning },
+        // 5.6/7.0 is 0.7999999999999999 under IEEE 754 in Go and .NET alike, so
+        // it stays just below the 0.8 warning threshold (the reference test uses
+        // 8/10 for the warning case).
+        { Payg(credits: 5, used: 5.6, total: 7.0), ProviderQuotaStatuses.Available },
+        { Payg(credits: 5, used: 8, total: 10.0), ProviderQuotaStatuses.Warning },
         { Payg(credits: 5, used: 7, total: 7.0), ProviderQuotaStatuses.Available },
         { Payg(credits: 5, used: 7.1, total: 7.0), ProviderQuotaStatuses.Available },
         { Payg(credits: 5, used: 0, total: null), ProviderQuotaStatuses.Available },
@@ -1389,8 +1393,9 @@ public sealed class ApertisQuotaCheckerTests
         });
 
         // The reference returns the parse error together with discarded data;
-        // the service keeps only the error (C211).
-        await Assert.ThrowsAsync<JsonException>(
+        // the service keeps only the error (C211). The decoder's malformed-JSON
+        // subtype is JsonReaderException, so the assertion accepts derivations.
+        await Assert.ThrowsAnyAsync<JsonException>(
             async () => await checker.CheckQuotaAsync(Channel(), CancellationToken.None));
     }
 
@@ -1847,23 +1852,23 @@ public sealed class ApertisQuotaCheckerTests
         ApertisPayg? payg,
         ApertisSubscription? subscription,
         bool isSubscriber) => new()
-    {
-        IsSubscriber = isSubscriber,
-        Payg = payg,
-        Subscription = subscription,
-    };
+        {
+            IsSubscriber = isSubscriber,
+            Payg = payg,
+            Subscription = subscription,
+        };
 
     private static ApertisPayg Payg(
         double credits,
         double used,
         object? total,
         bool unlimited = false) => new()
-    {
-        AccountCredits = credits,
-        TokenUsed = used,
-        TokenTotal = total,
-        TokenIsUnlimited = unlimited,
-    };
+        {
+            AccountCredits = credits,
+            TokenUsed = used,
+            TokenTotal = total,
+            TokenIsUnlimited = unlimited,
+        };
 
     private static ApertisSubscription Subscription(
         string status,
@@ -1871,11 +1876,11 @@ public sealed class ApertisQuotaCheckerTests
         long used = 500,
         long remaining = 500,
         bool fallback = false) => new()
-    {
-        Status = status,
-        CycleQuotaLimit = limit,
-        CycleQuotaUsed = used,
-        CycleQuotaRemaining = remaining,
-        PaygFallbackEnabled = fallback,
-    };
+        {
+            Status = status,
+            CycleQuotaLimit = limit,
+            CycleQuotaUsed = used,
+            CycleQuotaRemaining = remaining,
+            PaygFallbackEnabled = fallback,
+        };
 }

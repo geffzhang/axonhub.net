@@ -64,10 +64,9 @@ public sealed class SyntheticQuotaCheckerTests
         Assert.Equal("GET", request.Method);
         Assert.Equal(QuotaUrl, request.Url);
         Assert.Equal("Bearer " + ApiKey, request.Header("Authorization"));
-        // C206: the checker sets Content-Type on the request data, but the
-        // executor only attaches content headers when a body exists, so this
-        // bodyless GET loses it on the wire (the reference sends it).
-        Assert.Equal(string.Empty, request.Header("Content-Type"));
+        // The executor always attaches content, so the bodyless GET keeps the
+        // Content-Type on the wire like Go's net/http (C206 resolved).
+        Assert.Equal("application/json", request.Header("Content-Type"));
         // The shared executor adds its default Accept (Go would send none).
         Assert.Equal("application/json", request.Header("Accept"));
         Assert.Equal(string.Empty, request.Body);
@@ -381,7 +380,7 @@ public sealed class SyntheticQuotaCheckerTests
     [InlineData("5.", ".5", 4.5, 5)]
     public async Task WeeklyCreditAmounts(string maxCredits, string remainingCredits, double cost, double quota)
     {
-        var body = $$"""{"weeklyTokenLimit":{"percentRemaining":50,"maxCredits":"{{maxCredits}}","remainingCredits":"{{remainingCredits}}"}}""";
+        var body = $$$"""{"weeklyTokenLimit":{"percentRemaining":50,"maxCredits":"{{{maxCredits}}}","remainingCredits":"{{{remainingCredits}}}"}}""";
         var checker = CreateChecker(new ScriptedExecutor { OnDo = (_, _, _) => Ok(body) });
 
         var result = await checker.CheckQuotaAsync(Channel(), CancellationToken.None);
@@ -418,7 +417,7 @@ public sealed class SyntheticQuotaCheckerTests
     [InlineData("$10.50", "-Infinity")]
     public async Task WeeklyCreditAmountsAreOmittedWhenUnusable(string maxCredits, string remainingCredits)
     {
-        var body = $$"""{"weeklyTokenLimit":{"percentRemaining":50,"maxCredits":"{{maxCredits}}","remainingCredits":"{{remainingCredits}}"}}""";
+        var body = $$$"""{"weeklyTokenLimit":{"percentRemaining":50,"maxCredits":"{{{maxCredits}}}","remainingCredits":"{{{remainingCredits}}}"}}""";
         var checker = CreateChecker(new ScriptedExecutor { OnDo = (_, _, _) => Ok(body) });
 
         var quota = await checker.CheckQuotaAsync(Channel(), CancellationToken.None);
@@ -584,7 +583,7 @@ public sealed class SyntheticQuotaCheckerTests
         string expectedRouting)
     {
         var fiveHourReset = new DateTimeOffset(2099, 10, 20, 6, 0, 0, TimeSpan.Zero);
-        var body = $$"""{"weeklyTokenLimit":{"nextRegenAt":"2099-10-23T04:00:00.000Z","percentRemaining":50.0,"maxCredits":"$10.50","remainingCredits":"$5.25"},"planWeeklyLimit":{{planWeekly}},"rollingFiveHourLimit":{"nextTickAt":"2099-10-20T06:00:00.000Z","tickPercent":0.05,"remaining":700,"max":750,"limited":false}}""";
+        var body = $$$"""{"weeklyTokenLimit":{"nextRegenAt":"2099-10-23T04:00:00.000Z","percentRemaining":50.0,"maxCredits":"$10.50","remainingCredits":"$5.25"},"planWeeklyLimit":{{{planWeekly}}},"rollingFiveHourLimit":{"nextTickAt":"2099-10-20T06:00:00.000Z","tickPercent":0.05,"remaining":700,"max":750,"limited":false}}""";
         var checker = CreateChecker(new ScriptedExecutor { OnDo = (_, _, _) => Ok(body) });
 
         var quota = await checker.CheckQuotaAsync(Channel(), CancellationToken.None);
@@ -810,7 +809,7 @@ public sealed class SyntheticQuotaCheckerTests
         string expectedStatus,
         double expectedRatio)
     {
-        var body = $$"""{"rollingFiveHourLimit":{"tickPercent":{{tickPercent}},"limited":false}}""";
+        var body = $$$"""{"rollingFiveHourLimit":{"tickPercent":{{{tickPercent}}},"limited":false}}""";
         var checker = CreateChecker(new ScriptedExecutor { OnDo = (_, _, _) => Ok(body) });
 
         var quota = await checker.CheckQuotaAsync(Channel(), CancellationToken.None);
@@ -826,7 +825,7 @@ public sealed class SyntheticQuotaCheckerTests
     [InlineData(-1.0, 0)]
     public async Task NegativeUsageRatiosAreDroppedByNormalization(double tickPercent, int expectedLimits)
     {
-        var body = $$"""{"rollingFiveHourLimit":{"tickPercent":{{tickPercent}}}}""";
+        var body = $$$"""{"rollingFiveHourLimit":{"tickPercent":{{{tickPercent}}}}}""";
         var checker = CreateChecker(new ScriptedExecutor { OnDo = (_, _, _) => Ok(body) });
 
         var quota = await checker.CheckQuotaAsync(Channel(), CancellationToken.None);
@@ -853,7 +852,10 @@ public sealed class SyntheticQuotaCheckerTests
         Assert.Empty(quota.Limits);
         Assert.Equal(ProviderQuotaStatuses.Available, quota.Status);
         Assert.True(quota.Ready);
-        Assert.Equal(new DateTimeOffset(2099, 4, 25, 8, 47, 39, 947, TimeSpan.Zero), quota.NextResetAt);
+        // The reset aggregation reads the raw payload, not the surviving
+        // limits: the weekly regeneration instant is earlier than renewsAt, so
+        // it still wins even though the over-100% weekly limit was dropped.
+        Assert.Equal(new DateTimeOffset(2099, 4, 25, 4, 48, 26, TimeSpan.Zero), quota.NextResetAt);
     }
 
     [Fact]
@@ -1064,7 +1066,7 @@ public sealed class SyntheticQuotaCheckerTests
             () => checker.CheckQuotaAsync(Channel(), CancellationToken.None));
 
         Assert.StartsWith("quota request failed: ", error.Message);
-        Assert.Contains(statusCode.ToString(), error.Message);
+        Assert.Contains(statusCode.ToString(CultureInfo.InvariantCulture), error.Message);
     }
 
     [Fact]

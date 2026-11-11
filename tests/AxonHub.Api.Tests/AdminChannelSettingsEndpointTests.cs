@@ -4,6 +4,7 @@ using System.Text.Json;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
 using AxonHub.Api.Orchestration;
+using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;

@@ -79,7 +79,7 @@ public sealed class StorageProtocolTests
 
         await backend.WriteAsync(
             "a/b/backup.json",
-            [1, 2, 3],
+            new ReadOnlyMemory<byte>([1, 2, 3]),
             CancellationToken.None);
 
         Assert.Equal(
@@ -223,7 +223,8 @@ public sealed class StorageProtocolTests
             });
         using var backend = NewGcsBackend(handler, credential);
 
-        await backend.WriteAsync("backup.json", [7], CancellationToken.None);
+        await backend.WriteAsync(
+            "backup.json", new ReadOnlyMemory<byte>([7]), CancellationToken.None);
 
         var form = ParseForm(handler.Requests[0].Body!);
         Assert.Equal("urn:ietf:params:oauth:grant-type:jwt-bearer", form["grant_type"]);
@@ -273,10 +274,10 @@ public sealed class StorageProtocolTests
             request.RequestUri!.AbsolutePath == "/token"
                 ? JsonResponse("""{"access_token":"tok","expires_in":3600}""")
                 : new HttpResponseMessage(HttpStatusCode.NotFound)
-            {
-                Content = new StringContent(
+                {
+                    Content = new StringContent(
                     """{"error":{"code":404,"message":"No such object","status":"NOT_FOUND"}}"""),
-            });
+                });
         using var backend = NewGcsBackend(
             handler,
             """
@@ -308,8 +309,7 @@ public sealed class StorageProtocolTests
                 ? JsonResponse(
                     """{"items":[{"name":"axonhub-backup-b.json","updated":"2026-01-03T04:05:06Z"}]}""")
                 : JsonResponse(
-                    """{"items":[{"name":"axonhub-backup-a.json","updated":"2026-01-02T03:04:05Z"}],
-                        "nextPageToken":"next"}""");
+                    """{"items":[{"name":"axonhub-backup-a.json","updated":"2026-01-02T03:04:05Z"}],"nextPageToken":"next"}""");
         });
         using var backend = NewGcsBackend(
             handler,

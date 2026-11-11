@@ -43,7 +43,8 @@ namespace AxonHub.Api.Orchestration;
 public sealed class ProviderQuotaService :
     IProviderQuotaStatusProvider,
     IProviderQuotaInvalidator,
-    IProviderQuotaGroupRunner
+    IProviderQuotaGroupRunner,
+    IDisposable
 {
     /// <summary>Port of maxConcurrentQuotaChecks (provider_quota.go:26).</summary>
     public const int MaxConcurrentQuotaChecks = 8;
@@ -198,6 +199,9 @@ public sealed class ProviderQuotaService :
     /// semantics (§150; C230).
     /// </summary>
     private readonly SemaphoreSlim _mutex = new(1, 1);
+
+    /// <summary>Releases the in-process quota-check mutex at host shutdown.</summary>
+    public void Dispose() => _mutex.Dispose();
 
     public ProviderQuotaService(
         IServiceScopeFactory scopeFactory,
@@ -1247,18 +1251,18 @@ public sealed class ProviderQuotaService :
     private static ProviderQuotaChannelSnapshot ToChannelSnapshot(
         ChannelRecord channel,
         ProviderQuotaStatusRecord? status) => new()
-    {
-        Id = channel.Id,
-        Name = channel.Name,
-        Type = channel.Type,
-        BaseUrl = channel.BaseUrl,
-        Credentials = channel.Credentials,
-        Settings = channel.Settings,
-        SupportedModels = channel.SupportedModels,
-        ManualModels = channel.ManualModels,
-        DisabledApiKeys = channel.DisabledApiKeys,
-        Status = status is null ? null : ToStoredStatus(status),
-    };
+        {
+            Id = channel.Id,
+            Name = channel.Name,
+            Type = channel.Type,
+            BaseUrl = channel.BaseUrl,
+            Credentials = channel.Credentials,
+            Settings = channel.Settings,
+            SupportedModels = channel.SupportedModels,
+            ManualModels = channel.ManualModels,
+            DisabledApiKeys = channel.DisabledApiKeys,
+            Status = status is null ? null : ToStoredStatus(status),
+        };
 
     private static ProviderQuotaStoredStatus ToStoredStatus(ProviderQuotaStatusRecord status) => new()
     {

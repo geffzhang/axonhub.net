@@ -187,7 +187,7 @@ public sealed class RequestPayloadStorageTests
         var storage = new DataStorageRecord { Id = 1, Type = "database", Primary = true };
         var payloads = NewStorage();
 
-        await payloads.SaveDataAsync(storage, "{\"a\":1}", "{\"a\":1}"u8);
+        await payloads.SaveDataAsync(storage, "{\"a\":1}", "{\"a\":1}"u8.ToArray());
         await payloads.DeleteDataAsync(storage, "{\"a\":1}");
 
         // The row itself is the storage: no backend is ever built.
@@ -206,7 +206,7 @@ public sealed class RequestPayloadStorageTests
         var storage = new DataStorageRecord { Id = 2, Type = "fs" };
         var payloads = NewStorage();
 
-        await payloads.SaveDataAsync(storage, "/k", "v"u8);
+        await payloads.SaveDataAsync(storage, "/k", "v"u8.ToArray());
         Assert.Equal(new[] { "/k" }, _backends.Backend.Writes);
         Assert.Same(storage, _backends.LastStorage);
 

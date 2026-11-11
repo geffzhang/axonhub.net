@@ -343,8 +343,12 @@ public sealed class ZaiQuotaCheckerTests
         var error = await Assert.ThrowsAsync<WrappedException>(
             () => checker.CheckQuotaAsync(Channel(), CancellationToken.None));
 
+        // Go wraps the *httpclient.Error verbatim: "%s - %s with status %s".
         Assert.Contains(
-            "zhipu quota request failed: " + status,
+            "zhipu quota request failed: GET - "
+                + DefaultQuotaUrl
+                + " with status "
+                + status,
             error.Message,
             StringComparison.Ordinal);
     }

@@ -13,7 +13,7 @@ namespace AxonHub.Llm.Tests;
 public sealed class GeminiStrictTests
 {
     private static JsonElement WeatherParameters()
-        => JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement;
+        => JsonElement.Parse("""{"type":"object","properties":{}}""");
 
     // ------------------------------------------------------------ TestStrictFunctionToolChoice (strict_test.go:14-52)
 

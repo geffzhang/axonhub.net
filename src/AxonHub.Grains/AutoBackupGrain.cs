@@ -49,13 +49,13 @@ public sealed class AutoBackupGrain(
             return pending;
         }
 
-        return await ScheduleNextAsync(now).ConfigureAwait(false);
+        return await ScheduleNextAsync(now).ConfigureAwait(true);
     }
 
     public async Task<DateTimeOffset> RescheduleAsync(DateTimeOffset now)
     {
         _next = null;
-        return await ScheduleNextAsync(now).ConfigureAwait(false);
+        return await ScheduleNextAsync(now).ConfigureAwait(true);
     }
 
     public async Task<DateTimeOffset> FireScheduledAsync(DateTimeOffset now)
@@ -65,7 +65,7 @@ public sealed class AutoBackupGrain(
         // Arm the following occurrence first: if the backup fails, yesterday's
         // registration can still deliver a stale tick, which the pending check
         // below ignores.
-        var next = await ScheduleNextAsync(now).ConfigureAwait(false);
+        var next = await ScheduleNextAsync(now).ConfigureAwait(true);
 
         if (pending is { } scheduled && now < scheduled)
         {
@@ -76,7 +76,7 @@ public sealed class AutoBackupGrain(
 
         try
         {
-            await runner.TriggerAsync(CancellationToken.None).ConfigureAwait(false);
+            await runner.TriggerAsync(CancellationToken.None).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -101,7 +101,7 @@ public sealed class AutoBackupGrain(
     private async Task<DateTimeOffset> ScheduleNextAsync(DateTimeOffset now)
     {
         var next = await schedule.GetNextOccurrenceAsync(now, CancellationToken.None)
-            .ConfigureAwait(false);
+            .ConfigureAwait(true);
 
         var due = next - now;
         if (due <= TimeSpan.Zero)
@@ -115,7 +115,7 @@ public sealed class AutoBackupGrain(
                 IAutoBackupGrain.ReminderName,
                 due,
                 ReminderPeriod)
-            .ConfigureAwait(false);
+            .ConfigureAwait(true);
 
         _next = next;
         return next;

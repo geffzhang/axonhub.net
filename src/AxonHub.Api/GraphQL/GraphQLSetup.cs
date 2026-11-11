@@ -51,6 +51,8 @@ public static class GraphQLSetup
             .AddTypeExtension<ProjectTypeExtensions>()
             .AddTypeExtension<UserTypeExtensions>()
             .AddTypeExtension<ModelTypeExtensions>()
+            .AddTypeExtension<ChannelModelPriceTypeExtensions>()
+            .AddTypeExtension<ChannelModelPriceVersionTypeExtensions>()
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
     }
@@ -61,15 +63,26 @@ public static class GraphQLSetup
 /// request opts in (HC0046 "Introspection is not allowed for the current
 /// request"). The reference schema is discoverable, so every request opts in.
 /// </summary>
-internal sealed class IntrospectionRequestInterceptor : IHttpRequestInterceptor
+/// <remarks>
+/// Derives from <see cref="DefaultHttpRequestInterceptor"/> because replacing
+/// the interceptor also replaces its work: copying the multipart
+/// <c>IFileLookup</c> feature onto the operation request (what the Upload
+/// scalar resolves), plus HttpContext/ClaimsPrincipal features. Without the
+/// base call, restore(file:) fails with "specified file could not be found".
+/// </remarks>
+internal sealed class IntrospectionRequestInterceptor : DefaultHttpRequestInterceptor
 {
-    public ValueTask OnCreateAsync(
+    public override ValueTask OnCreateAsync(
         HttpContext context,
         IRequestExecutor requestExecutor,
         OperationRequestBuilder requestBuilder,
         CancellationToken cancellationToken)
     {
         requestBuilder.AllowIntrospection();
-        return default;
+        return base.OnCreateAsync(
+            context,
+            requestExecutor,
+            requestBuilder,
+            cancellationToken);
     }
 }

@@ -159,7 +159,7 @@ public sealed class ModelSettingsCodecTests
     public void ConditionValueNormalizationSortsObjectKeysAndKeepsGoNumbers()
     {
         var normalized = ModelSettingsCodec.NormalizeValue(
-            JsonDocument.Parse("""{"b":2,"a":1.5,"c":{"z":1,"y":true}}""").RootElement);
+            JsonElement.Parse("""{"b":2,"a":1.5,"c":{"z":1,"y":true}}"""));
 
         Assert.NotNull(normalized);
         Assert.Equal(

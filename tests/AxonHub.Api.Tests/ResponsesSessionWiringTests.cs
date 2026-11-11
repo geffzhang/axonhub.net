@@ -4,6 +4,7 @@ using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
 
 namespace AxonHub.Api.Tests;
@@ -46,14 +47,14 @@ public sealed class ResponsesSessionWiringTests
         string type,
         string? baseUrl,
         string credentials = """{"apiKey":"provider-key"}""") => new()
-    {
-        ChannelId = 95,
-        ChannelName = type + "-session-wiring",
-        ActualModel = "gpt-5",
-        Type = type,
-        BaseUrl = baseUrl,
-        Credentials = credentials,
-    };
+        {
+            ChannelId = 95,
+            ChannelName = type + "-session-wiring",
+            ActualModel = "gpt-5",
+            Type = type,
+            BaseUrl = baseUrl,
+            Credentials = credentials,
+        };
 
     private static string? PromptCacheKey(HttpRequestData request)
     {

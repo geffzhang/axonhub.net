@@ -91,9 +91,9 @@ public sealed class GeminiOpenAiChannelWiringTests
         var request = Request();
         request.Metadata = new Dictionary<string, string> { ["account"] = "identity" };
         request.ReasoningEffort = "high";
-        request.ExtraBody = JsonDocument.Parse("""
+        request.ExtraBody = JsonElement.Parse("""
             {"google":{"thinking_config":{"include_thoughts":true}}}
-            """).RootElement.Clone();
+            """).Clone();
 
         var httpRequest = transformer.TransformRequest(request);
 

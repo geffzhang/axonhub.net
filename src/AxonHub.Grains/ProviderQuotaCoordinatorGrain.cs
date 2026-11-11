@@ -62,7 +62,7 @@ public sealed class ProviderQuotaCoordinatorGrain(
             return pending;
         }
 
-        return await ScheduleNextAsync(now).ConfigureAwait(false);
+        return await ScheduleNextAsync(now).ConfigureAwait(true);
     }
 
     public async Task<DateTimeOffset> FireScheduledAsync(DateTimeOffset now)
@@ -71,7 +71,7 @@ public sealed class ProviderQuotaCoordinatorGrain(
 
         // Arm the following occurrence first: a failed sweep or a failed
         // re-arm must not lose the schedule.
-        var next = await ScheduleNextAsync(now).ConfigureAwait(false);
+        var next = await ScheduleNextAsync(now).ConfigureAwait(true);
 
         if (pending is { } scheduled && now < scheduled)
         {
@@ -83,7 +83,7 @@ public sealed class ProviderQuotaCoordinatorGrain(
         await RunGuardedAsync(
                 static ops => ops.RunAsync(force: false, CancellationToken.None),
                 LogRunFailed)
-            .ConfigureAwait(false);
+            .ConfigureAwait(true);
 
         return next;
     }
@@ -95,7 +95,7 @@ public sealed class ProviderQuotaCoordinatorGrain(
         await RunGuardedAsync(
                 static ops => ops.RunAsync(force: true, CancellationToken.None),
                 LogManualRunFailed)
-            .ConfigureAwait(false);
+            .ConfigureAwait(true);
     }
 
     public async Task RefreshChannelAsync(ProviderQuotaRefreshRequest request)
@@ -105,7 +105,7 @@ public sealed class ProviderQuotaCoordinatorGrain(
         await RunGuardedAsync(
                 ops => ops.RefreshChannelAsync(request, CancellationToken.None),
                 LogRefreshFailed)
-            .ConfigureAwait(false);
+            .ConfigureAwait(true);
     }
 
     public Task InvalidateAsync(long channelId)
@@ -131,7 +131,7 @@ public sealed class ProviderQuotaCoordinatorGrain(
     {
         try
         {
-            await operation(operations).ConfigureAwait(false);
+            await operation(operations).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -155,7 +155,7 @@ public sealed class ProviderQuotaCoordinatorGrain(
                 IProviderQuotaCoordinatorGrain.ReminderName,
                 due,
                 ReminderPeriod)
-            .ConfigureAwait(false);
+            .ConfigureAwait(true);
 
         _next = next;
         return next;

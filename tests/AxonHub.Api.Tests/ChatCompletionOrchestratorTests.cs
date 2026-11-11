@@ -612,7 +612,13 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
                 upstreamHeaders),
         };
         var metrics = new RecordingMetricsRecorder();
-        var orchestrator = NewOrchestrator(executor, metrics, FastPolicy());
+        // The persistence middleware owns markStreamTerminal for chat streams,
+        // and it is only installed when a recorder is present.
+        var orchestrator = NewOrchestrator(
+            executor,
+            metrics,
+            FastPolicy(),
+            new RecordingRequestChainRecorder());
 
         var result = await orchestrator.ProcessAsync(TestChannels.ChatRequest("header-model", stream: true));
 

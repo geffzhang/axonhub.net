@@ -887,7 +887,7 @@ public sealed class OpenCodeGoQuotaCheckerTests
         var prefix = Encoding.UTF8.GetBytes(
             """{"usage":{"rolling":{"percent":12,"status":"ok""");
         var suffix = Encoding.UTF8.GetBytes(
-            """","resetsAt":"2099-01-01T00:00:00Z"}}}""");
+            "\",\"resetsAt\":\"2099-01-01T00:00:00Z\"}}}");
         byte[] body = [.. prefix, 0xFF, .. suffix];
 
         var response = OpenCodeGoQuotaChecker.ParseUsageResponse(body);

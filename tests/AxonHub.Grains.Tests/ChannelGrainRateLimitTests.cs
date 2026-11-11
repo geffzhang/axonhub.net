@@ -13,6 +13,7 @@ namespace AxonHub.Grains.Tests;
 public sealed class ChannelGrainRateLimitTests(GrainClusterFixture fixture)
 {
     private static readonly DateTimeOffset Start = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+    private static readonly long[] ExpectedSortedChannelIds = [5302L, 5301L];
 
     [Fact]
     public async Task TryAcquireRequestEnforcesTheLimit()
@@ -168,7 +169,7 @@ public sealed class ChannelGrainRateLimitTests(GrainClusterFixture fixture)
 
         // Both candidates have the same round-robin score; the rate-limit score
         // is 90 for idle (1/10) and 10 for busy (9/10).
-        Assert.Equal(new[] { 5302L, 5301L }, sorted.Select(candidate => candidate.ChannelId).ToArray());
+        Assert.Equal(ExpectedSortedChannelIds, sorted.Select(candidate => candidate.ChannelId).ToArray());
     }
 
     private IChannelGrain Channel(long id) => fixture.Cluster.GrainFactory.GetGrain<IChannelGrain>(id);

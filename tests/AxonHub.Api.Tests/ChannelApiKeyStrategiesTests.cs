@@ -421,8 +421,8 @@ public sealed class ChannelApiKeyStrategiesTests
         // to a different channel generation than the endpoint it calls.
         Publish(registry, settings, keys, ["k1"]);
 
-        Assert.Equal("k1", Get(registry, settings, keys), "the in-flight generation keeps its own snapshot");
-        Assert.Equal("k2", Get(registry, settings, keys, ["k1"]), "the rebuilt generation moves on");
+        Assert.Equal("k1", Get(registry, settings, keys));
+        Assert.Equal("k2", Get(registry, settings, keys, ["k1"]));
     }
 
     [Fact]
@@ -437,9 +437,9 @@ public sealed class ChannelApiKeyStrategiesTests
         var rebuiltKeys = new[] { "k1", "k2", "k3" };
         Publish(registry, settings, rebuiltKeys, ["k2"]);
 
-        Assert.Equal("k3", Get(registry, settings, rebuiltKeys, ["k2"]), "the served generation moves on to k3");
-        Assert.Equal("k1", Get(registry, settings, original), "the stale generation answers from its own snapshot");
-        Assert.Equal("k3", Get(registry, settings, rebuiltKeys, ["k2"]), "the cursor must still be on k3");
+        Assert.Equal("k3", Get(registry, settings, rebuiltKeys, ["k2"]));
+        Assert.Equal("k1", Get(registry, settings, original));
+        Assert.Equal("k3", Get(registry, settings, rebuiltKeys, ["k2"]));
     }
 
     [Fact]
@@ -637,8 +637,8 @@ public sealed class ChannelApiKeyStrategiesTests
         // onto another channel generation by a rebuild.
         Publish(registry, settings, ThreeKeys, ["k1"]);
 
-        Assert.Equal("k1", Get(registry, settings, ThreeKeys), "the in-flight generation keeps its own snapshot");
-        Assert.Equal("k2", Get(registry, settings, ThreeKeys, ["k1"]), "the rebuilt generation moves on");
+        Assert.Equal("k1", Get(registry, settings, ThreeKeys));
+        Assert.Equal("k2", Get(registry, settings, ThreeKeys, ["k1"]));
     }
 
     [Fact]
@@ -652,12 +652,12 @@ public sealed class ChannelApiKeyStrategiesTests
         var rebuiltKeys = new[] { "k1", "k2", "k3" };
         Publish(registry, settings, rebuiltKeys, ["k2"]);
 
-        Assert.Equal("k3", Get(registry, settings, rebuiltKeys, ["k2"]), "the served generation moves on to k3");
+        Assert.Equal("k3", Get(registry, settings, rebuiltKeys, ["k2"]));
 
         // The stale generation knows nothing about k3. It answers from its own
         // snapshot without dragging the shared cursor back.
         Assert.Equal("k1", Get(registry, settings, ["k1", "k2"]));
-        Assert.Equal("k3", Get(registry, settings, rebuiltKeys, ["k2"]), "the cursor must still be on k3");
+        Assert.Equal("k3", Get(registry, settings, rebuiltKeys, ["k2"]));
     }
 
     [Fact]

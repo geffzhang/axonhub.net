@@ -71,7 +71,7 @@ public sealed class ResponsesEndpointDispatchTests
             ChannelOutboundFactory.Create(
                 Candidate(
                     ChannelOutboundFactory.CodexChannelType,
-                    endpoints: """[{"api_format":"openai/alpha/search","path":"/v1/custom/alpha"}]"""),
+                    endpoints: """[{"api_format":"openai/alpha_search","path":"/v1/custom/alpha"}]"""),
                 new LlmRequest
                 {
                     Model = "gpt-5",

@@ -31,12 +31,12 @@ public sealed class GeminiOutboundTransformerCoreTests
         string userText,
         string? reasoningEffort = null,
         JsonElement? extraBody = null) => new()
-    {
-        Model = "gemini-2.5-flash",
-        Messages = [UserMessage(userText)],
-        ReasoningEffort = reasoningEffort,
-        ExtraBody = extraBody,
-    };
+        {
+            Model = "gemini-2.5-flash",
+            Messages = [UserMessage(userText)],
+            ReasoningEffort = reasoningEffort,
+            ExtraBody = extraBody,
+        };
 
     private static Message UserMessage(string text) => new()
     {
@@ -239,7 +239,7 @@ public sealed class GeminiOutboundTransformerCoreTests
     {
         var httpReq = NewTransformer().TransformRequest(ChatRequest(
             "Hello",
-            extraBody: JsonDocument.Parse("""
+            extraBody: JsonElement.Parse("""
                 {
                     "google": {
                         "thinking_config": {
@@ -248,7 +248,7 @@ public sealed class GeminiOutboundTransformerCoreTests
                         }
                     }
                 }
-                """).RootElement));
+                """)));
 
         var geminiReq = LlmJson.Deserialize<GenerateContentRequest>(httpReq.Body!)!;
         var thinking = geminiReq.GenerationConfig!.ThinkingConfig!;
@@ -263,7 +263,7 @@ public sealed class GeminiOutboundTransformerCoreTests
     {
         var httpReq = NewTransformer().TransformRequest(ChatRequest(
             "Hello",
-            extraBody: JsonDocument.Parse("""
+            extraBody: JsonElement.Parse("""
                 {
                     "google": {
                         "thinking_config": {
@@ -272,7 +272,7 @@ public sealed class GeminiOutboundTransformerCoreTests
                         }
                     }
                 }
-                """).RootElement));
+                """)));
 
         var geminiReq = LlmJson.Deserialize<GenerateContentRequest>(httpReq.Body!)!;
         var thinking = geminiReq.GenerationConfig!.ThinkingConfig!;
@@ -288,7 +288,7 @@ public sealed class GeminiOutboundTransformerCoreTests
         var httpReq = NewTransformer().TransformRequest(ChatRequest(
             "Hello",
             reasoningEffort: "high",
-            extraBody: JsonDocument.Parse("""
+            extraBody: JsonElement.Parse("""
                 {
                     "google": {
                         "thinking_config": {
@@ -297,7 +297,7 @@ public sealed class GeminiOutboundTransformerCoreTests
                         }
                     }
                 }
-                """).RootElement));
+                """)));
 
         var geminiReq = LlmJson.Deserialize<GenerateContentRequest>(httpReq.Body!)!;
         var thinking = geminiReq.GenerationConfig!.ThinkingConfig!;
@@ -317,7 +317,7 @@ public sealed class GeminiOutboundTransformerCoreTests
     {
         var httpReq = NewTransformer().TransformRequest(ChatRequest(
             "Hello",
-            extraBody: JsonDocument.Parse("42").RootElement));
+            extraBody: JsonElement.Parse("42")));
 
         Assert.NotNull(httpReq);
         Assert.NotNull(httpReq.Body);
@@ -374,7 +374,7 @@ public sealed class GeminiOutboundTransformerCoreTests
                         [
                             FunctionCallPart("call-1", "get_weather", new Dictionary<string, JsonElement>
                             {
-                                ["location"] = JsonDocument.Parse("\"Tokyo\"").RootElement,
+                                ["location"] = JsonElement.Parse("\"Tokyo\""),
                             }),
                         ],
                     },
@@ -409,11 +409,11 @@ public sealed class GeminiOutboundTransformerCoreTests
                         [
                             FunctionCallPart("call-1", "get_weather", new Dictionary<string, JsonElement>
                             {
-                                ["location"] = JsonDocument.Parse("\"Tokyo\"").RootElement,
+                                ["location"] = JsonElement.Parse("\"Tokyo\""),
                             }),
                             FunctionCallPart("call-2", "get_time", new Dictionary<string, JsonElement>
                             {
-                                ["timezone"] = JsonDocument.Parse("\"JST\"").RootElement,
+                                ["timezone"] = JsonElement.Parse("\"JST\""),
                             }),
                         ],
                     },
@@ -567,7 +567,7 @@ public sealed class GeminiOutboundTransformerCoreTests
     };
 
     private static Dictionary<string, JsonElement> Args(string key, string value)
-        => new() { [key] = JsonDocument.Parse($"\"{value}\"").RootElement };
+        => new() { [key] = JsonElement.Parse($"\"{value}\"") };
 
     // ------------------------------------------------------------ TestClearFunctionIDsForVertexAI (outbound_test.go:798-850)
 
@@ -591,7 +591,7 @@ public sealed class GeminiOutboundTransformerCoreTests
                                 Name = "get_weather",
                                 Args = new Dictionary<string, JsonElement>
                                 {
-                                    ["city"] = JsonDocument.Parse("\"Paris\"").RootElement,
+                                    ["city"] = JsonElement.Parse("\"Paris\""),
                                 },
                             },
                         },
@@ -611,7 +611,7 @@ public sealed class GeminiOutboundTransformerCoreTests
                                 Name = "get_weather",
                                 Response = new Dictionary<string, JsonElement>
                                 {
-                                    ["temperature"] = JsonDocument.Parse("22").RootElement,
+                                    ["temperature"] = JsonElement.Parse("22"),
                                 },
                             },
                         },

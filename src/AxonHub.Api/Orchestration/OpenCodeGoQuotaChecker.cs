@@ -468,7 +468,12 @@ public sealed class OpenCodeGoQuotaChecker : IQuotaChecker
                             + " of type float64");
                     }
 
-                    if (!property.Value.TryGetDouble(out var percent))
+                    // System.Text.Json maps literals outside double's range to
+                    // ±Infinity and reports success; Go's strconv.ParseFloat
+                    // fails with a range error, which encoding/json surfaces as
+                    // an UnmarshalTypeError naming the raw literal.
+                    if (!property.Value.TryGetDouble(out var percent)
+                        || !double.IsFinite(percent))
                     {
                         throw UnmarshalError(
                             "json: cannot unmarshal number " + property.Value.GetRawText()

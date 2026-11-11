@@ -75,6 +75,18 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
         builder.Services.AddScoped<RequestManagementService>();
         builder.Services.AddScoped<RequestQueryService>();
 
+        // DataStorageBootstrap seeds the primary database storage on a real
+        // install. Without it the payload loaders take the "external storage
+        // not configured" branch and return {} for every row body.
+        _dataStorages.Add(new DataStorageRecord
+        {
+            Name = "Primary",
+            Description = "Primary database storage",
+            Primary = true,
+            Type = "database",
+            Status = "active",
+        });
+
         // The gate's JWT user (id 9, owner) is the caller every fixture
         // client sends; the request policy treats owners as fully visible.
         await _users.CreateAsync(
@@ -339,9 +351,7 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
 
         // A non-completed execution reports the empty body even when a body was
         // stored (request.go:1758-1791).
-        Assert.Equal(
-            0,
-            failed.GetProperty("responseBody").EnumerateObject().Count());
+        Assert.Empty(failed.GetProperty("responseBody").EnumerateObject());
         // failed is a finished stream status, so the chunks pass through.
         Assert.Equal(
             "chunk-e1",
@@ -1039,6 +1049,10 @@ public sealed class RequestQueryServiceVisibilityTests
             => throw new InvalidOperationException("boom");
 
         public Task<IReadOnlyList<ChannelRecord>> ListEnabledAsync(
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<DateTime?> GetLatestUpdatedAtAsync(
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

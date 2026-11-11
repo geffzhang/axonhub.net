@@ -189,7 +189,7 @@ public sealed class CharmHyperQuotaChecker : IQuotaChecker
             var question = afterScheme.IndexOf('?');
             forceQuery = question >= 0 && question == afterScheme.Length - 1;
             opaquePart = question >= 0 ? afterScheme[..question] : afterScheme;
-            opaque = opaquePart.Length > 0 && !opaquePart.StartsWith("/", StringComparison.Ordinal);
+            opaque = opaquePart.Length > 0 && !opaquePart.StartsWith('/');
         }
 
         if (opaque)
@@ -273,6 +273,15 @@ public sealed class CharmHyperQuotaChecker : IQuotaChecker
     /// </exception>
     internal static CharmHyperCreditsResponse ParseCreditsResponse(byte[] data)
     {
+        // Go reports syntax errors as *json.SyntaxError; System.Text.Json's
+        // JsonReaderException is a different type, so the Go scanner runs
+        // first and the failure surfaces as a plain JsonException.
+        var syntaxError = GoJsonSyntax.Validate(data);
+        if (syntaxError is not null)
+        {
+            throw new JsonException(syntaxError);
+        }
+
         using var document = JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(data) ?? data);
         var root = document.RootElement;
 

@@ -87,7 +87,7 @@ internal static class ChannelApiKeyStrategies
             case Random:
                 // rand.IntN(len(enabled)): uniform over the selectable keys on
                 // every call, traced or not.
-                return selectable[Random.Shared.Next(selectable.Count)];
+                return selectable[System.Random.Shared.Next(selectable.Count)];
             case RoundRobin:
                 // Without shared state the reference provider keeps a
                 // provider-local counter; the port's provider serves one attempt,
@@ -250,7 +250,7 @@ internal static class ChannelApiKeyStrategies
         if (string.IsNullOrEmpty(traceId))
         {
             // Untraced requests are spread at random, same as the reference.
-            return enabled[Random.Shared.Next(enabled.Count)];
+            return enabled[System.Random.Shared.Next(enabled.Count)];
         }
 
         return state.StickyKeyFor(enabled, traceId);

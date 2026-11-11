@@ -94,7 +94,7 @@ public sealed class ChannelLimiterMetrics
     public void ObserveQueueWait(long channelId, string channelName, TimeSpan duration)
         => _queueWait?.Record(duration.TotalSeconds, Tags(channelId, channelName));
 
-    private static IEnumerable<Measurement<long>> Observe(
+    private static Measurement<long>[] Observe(
         ChannelLimiterManager? manager,
         Func<ChannelLimiterSnapshot, int> selector)
     {

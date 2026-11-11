@@ -354,7 +354,7 @@ public sealed class KimiCodeQuotaCheckerTests
     [InlineData("""{"limit":"not-a-number","remaining":true}""")]
     public void ParseUsageRowReturnsNullWithoutANumber(string json)
     {
-        var map = (Dictionary<string, object?>)DecodeAny(json);
+        var map = Assert.IsType<Dictionary<string, object?>>(DecodeAny(json));
 
         Assert.Null(KimiCodeQuotaChecker.ParseUsageRow(map, "fallback"));
     }
@@ -630,12 +630,13 @@ public sealed class KimiCodeQuotaCheckerTests
     [Fact]
     public void LimitWindowAndRowLabelCanPickDifferentSources()
     {
-        // kimiCodeLimitLabel prefers the item's title, while
-        // parseKimiCodeUsageRow runs only over detail and prefers its title.
+        // kimiCodeLimitLabel prefers the item's title, but parseKimiCodeUsageRow
+        // then overrides the fallback with the detail's own title, and the limit
+        // window finally falls back to the row label (kimi_code_checker.go:159-163).
         var quota = ParseResponse(
             """{"limits":[{"title":"ItemTitle","detail":{"title":"DetailTitle","used":1,"limit":2}}]}""");
 
-        Assert.Equal("ItemTitle", Assert.Single(quota.Limits).Window);
+        Assert.Equal("DetailTitle", Assert.Single(quota.Limits).Window);
 
         var row = Assert.IsType<List<KimiCodeUsageRow>>(quota.RawData["rows"])[0];
         Assert.Equal("DetailTitle", row.Label);
@@ -1149,7 +1150,7 @@ public sealed class KimiCodeQuotaCheckerTests
     public void ParseUsageResponseReplacesInvalidUtf8LikeGo()
     {
         var prefix = Encoding.UTF8.GetBytes("""{"usage":{"name":"ok""");
-        var suffix = Encoding.UTF8.GetBytes("""","used":1}}""");
+        var suffix = Encoding.UTF8.GetBytes("\",\"used\":1}}");
         byte[] body = [.. prefix, 0xFF, .. suffix];
 
         var response = KimiCodeQuotaChecker.ParseUsageResponse(body);

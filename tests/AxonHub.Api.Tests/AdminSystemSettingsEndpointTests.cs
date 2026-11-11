@@ -31,6 +31,10 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
     private readonly RecordingVideoStorageRescheduleSignal _videoReschedule = new();
     private readonly AdminGraphqlGateServices _gate = new();
 
+    // AuthorizationScope loads the principal through IUserAdminStore
+    // (rule_user_scope.go:66-77), so the gate user needs a row there too.
+    private readonly FakeUserAdminStore _adminUsers = new();
+
     private WebApplication _app = null!;
     private HttpClient _client = null!;
 
@@ -40,6 +44,17 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Services.AddAxonHubGraphQL();
         _gate.Register(builder.Services);
+        await _adminUsers.CreateAsync(
+            new UserRecord
+            {
+                Id = AdminGraphqlGateServices.UserId,
+                Email = "settings-gate@example.com",
+                Status = "activated",
+                IsOwner = true,
+            },
+            roleIds: null);
+        builder.Services.AddSingleton<IUserAdminStore>(_adminUsers);
+        builder.Services.AddScoped<AuthorizationScope>();
         builder.Services.AddScoped<ISystemSettingsAdminService>(
             _ => new SystemSettingsAdminService(_store, _dataStorages));
         builder.Services.AddSingleton<IDataStorageStore>(_dataStorages);
@@ -501,9 +516,11 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
             }
             """);
 
+        // The resolver re-wraps the service error with %w
+        // (system.resolvers.go:260), so the wire message keeps the prefix.
         var error = Assert.Single(response.GetProperty("errors").EnumerateArray());
         Assert.Equal(
-            "provider quota reset is not supported for provider \"claudecode\"",
+            "failed to reset channel quota: provider quota reset is not supported for provider \"claudecode\"",
             error.GetProperty("message").GetString());
     }
 
@@ -782,7 +799,8 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
                 probe: { enabled: true, frequency: NOPE }
               })
             }
-            """);
+            """,
+            allowRequestError: true);
 
         Assert.True(response.TryGetProperty("errors", out var errors));
         Assert.NotEmpty(errors.EnumerateArray());
@@ -1952,7 +1970,7 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         return response.GetProperty("data");
     }
 
-    private async Task<JsonElement> PostAsync(string query)
+    private async Task<JsonElement> PostAsync(string query, bool allowRequestError = false)
     {
         var payload = JsonSerializer.Serialize(new { query });
         using var response = await _client.PostAsync(
@@ -1960,7 +1978,12 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
             new StringContent(payload, Encoding.UTF8, "application/json"));
 
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, body);
+        // HotChocolate validates variable/enum literals before the resolver and
+        // answers 400; gqlgen returns 200 with an errors envelope (C198/C232).
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK
+                || (allowRequestError && (int)response.StatusCode is >= 400 and < 500),
+            body);
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();

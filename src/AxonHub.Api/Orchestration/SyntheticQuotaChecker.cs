@@ -408,9 +408,17 @@ public sealed class SyntheticQuotaChecker : IQuotaChecker
             return false;
         }
 
-        return GoCast.TryParseFloat(trimmed, out credits)
-            && !double.IsNaN(credits)
-            && !double.IsInfinity(credits);
+        if (!GoCast.TryParseFloat(trimmed, out credits)
+            || double.IsNaN(credits)
+            || double.IsInfinity(credits))
+        {
+            // Go returns 0 on every rejection (including the NaN/Inf that
+            // strconv.ParseFloat accepts without an error).
+            credits = 0;
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>Port of findEarliestSyntheticResetAt (synthetic_checker.go:410-444).</summary>

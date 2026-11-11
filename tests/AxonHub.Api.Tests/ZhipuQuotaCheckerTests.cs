@@ -569,7 +569,9 @@ public sealed class ZhipuQuotaCheckerTests
         var quota = await checker.CheckQuotaAsync(
             Channel(
                 credentials: """{"apiKeys":["aaaa-account-0001","bbbb-account-0002"]}""",
-                disabledApiKeys: DisabledEntry("aaaa-account-0001", Now.AddHours(1))),
+                // The column is a JSON array of objects; a bare object is
+                // malformed and reads as "no disabled keys" (C013).
+                disabledApiKeys: "[" + DisabledEntry("aaaa-account-0001", Now.AddHours(1)) + "]"),
             CancellationToken.None);
 
         var accounts = Assert.IsType<List<ZhipuAccountQuota>>(quota.RawData["accounts"]);
@@ -603,7 +605,7 @@ public sealed class ZhipuQuotaCheckerTests
             () => checker.CheckQuotaAsync(
                 Channel(
                     credentials: """{"apiKeys":["aaaa-account-0001","bbbb-account-0002"]}""",
-                    disabledApiKeys: DisabledEntry("bbbb-account-0002", Now.AddHours(1))),
+                    disabledApiKeys: "[" + DisabledEntry("bbbb-account-0002", Now.AddHours(1)) + "]"),
                 CancellationToken.None));
 
         Assert.Contains("failed for all 1 enabled keys", error.Message, StringComparison.Ordinal);
@@ -621,7 +623,7 @@ public sealed class ZhipuQuotaCheckerTests
         var quota = await checker.CheckQuotaAsync(
             Channel(
                 credentials: """{"apiKey":"aaaa-account-0001"}""",
-                disabledApiKeys: DisabledEntry("aaaa-account-0001", Now.AddHours(1))),
+                disabledApiKeys: "[" + DisabledEntry("aaaa-account-0001", Now.AddHours(1)) + "]"),
             CancellationToken.None);
 
         Assert.Equal("exhausted", quota.Status);
@@ -668,7 +670,7 @@ public sealed class ZhipuQuotaCheckerTests
         var quota = await checker.CheckQuotaAsync(
             Channel(
                 credentials: """{"apiKey":"aaaa-account-0001"}""",
-                disabledApiKeys: DisabledEntry("aaaa-account-0001", Now.AddHours(-1))),
+                disabledApiKeys: "[" + DisabledEntry("aaaa-account-0001", Now.AddHours(-1)) + "]"),
             CancellationToken.None);
 
         var account = Assert.Single(Assert.IsType<List<ZhipuAccountQuota>>(quota.RawData["accounts"]));
@@ -688,7 +690,7 @@ public sealed class ZhipuQuotaCheckerTests
         var quota = await checker.CheckQuotaAsync(
             Channel(
                 credentials: """{"apiKey":"aaaa-account-0001"}""",
-                disabledApiKeys: DisabledEntry("  aaaa-account-0001  ")),
+                disabledApiKeys: "[" + DisabledEntry("  aaaa-account-0001  ") + "]"),
             CancellationToken.None);
 
         var account = Assert.Single(Assert.IsType<List<ZhipuAccountQuota>>(quota.RawData["accounts"]));
@@ -1044,7 +1046,9 @@ public sealed class ZhipuQuotaCheckerTests
     [InlineData("available", "warning", "warning")]
     [InlineData("warning", "exhausted", "exhausted")]
     [InlineData("exhausted", "available", "exhausted")]
-    [InlineData("unknown", "available", "available")]
+    // The Go rank map has no "unknown" (or empty) key, so the lookup yields the
+    // zero value and the helper returns the current status unchanged.
+    [InlineData("unknown", "available", "unknown")]
     [InlineData("unknown", "warning", "warning")]
     [InlineData("available", "unknown", "available")]
     public void WorseStatusKeepsTheHigherRank(string current, string candidate, string expected)
@@ -1408,8 +1412,12 @@ public sealed class ZhipuQuotaCheckerTests
         var error = await Assert.ThrowsAsync<WrappedException>(
             () => checker.CheckQuotaAsync(Channel(), CancellationToken.None));
 
+        // Go wraps the *httpclient.Error verbatim: "%s - %s with status %s".
         Assert.Contains(
-            "zhipu quota request failed: " + status,
+            "zhipu quota request failed: GET - "
+                + DefaultQuotaUrl
+                + " with status "
+                + status,
             error.Message,
             StringComparison.Ordinal);
     }
@@ -1513,10 +1521,10 @@ public sealed class ZhipuQuotaCheckerTests
         double weeklyPercent)
         => string.Create(
             CultureInfo.InvariantCulture,
-            $$"""
-            {"success":true,"code":200,"data":{"level":"{{level}}","limits":[
-                {"type":"CREDIT_LIMIT","percentage":{{fiveHourPercent}},"unit":3,"number":5,"usage":28000,"currentValue":2896,"remaining":25103,"nextResetTime":4102731600000},
-                {"type":"CREDIT_LIMIT","percentage":{{weeklyPercent}},"unit":6,"number":1,"usage":140000,"currentValue":140019,"remaining":0,"nextResetTime":4103300000000}]}}
+            $$$"""
+            {"success":true,"code":200,"data":{"level":"{{{level}}}","limits":[
+                {"type":"CREDIT_LIMIT","percentage":{{{fiveHourPercent}}},"unit":3,"number":5,"usage":28000,"currentValue":2896,"remaining":25103,"nextResetTime":4102731600000},
+                {"type":"CREDIT_LIMIT","percentage":{{{weeklyPercent}}},"unit":6,"number":1,"usage":140000,"currentValue":140019,"remaining":0,"nextResetTime":4103300000000}]}}
             """);
 
     /// <summary>

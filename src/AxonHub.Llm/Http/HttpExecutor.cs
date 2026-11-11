@@ -420,10 +420,10 @@ public sealed class HttpExecutor : IExecutor
     {
         var raw = new HttpRequestMessage(new HttpMethod(method), url);
 
-        if (body is { Length: > 0 })
-        {
-            raw.Content = new ByteArrayContent(body);
-        }
+        // Always attach content: Content-Type (and the other content headers)
+        // cannot be added to HttpRequestMessage.Headers, and Go writes them on
+        // bodyless requests too (e.g. the quota checkers' GET requests).
+        raw.Content = new ByteArrayContent(body ?? []);
 
         foreach (var (key, values) in headers)
         {
@@ -731,7 +731,7 @@ public sealed class HttpExecutor : IExecutor
     /// </summary>
     private static string StripPassword(Uri uri)
     {
-        if (uri.UserInfo.Length == 0 || !uri.UserInfo.Contains(":", StringComparison.Ordinal))
+        if (uri.UserInfo.Length == 0 || !uri.UserInfo.Contains(':'))
         {
             return uri.AbsoluteUri;
         }

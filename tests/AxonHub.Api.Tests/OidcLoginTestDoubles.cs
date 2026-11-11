@@ -184,7 +184,8 @@ internal sealed class FakeOidcLoginStore : IOidcLoginStore
     public List<IReadOnlyList<string>> RoleQueries { get; } = [];
 
     public List<(UserRecord User, IReadOnlyList<string> RoleNames, OidcIdentityRecord Identity)>
-        CreationRequests { get; } = [];
+        CreationRequests
+    { get; } = [];
 
     public Exception? IdentityLookupFailure { get; set; }
 

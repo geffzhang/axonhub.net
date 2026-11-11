@@ -302,7 +302,7 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
         Assert.False(await store.UpdateStatusAsync(
             12345, "failed", null, null, null, null, null, null, UpdatedAt));
         Assert.False(await store.UpdateResultAsync(
-            12345, "failed", null, null, true, null, null, null, null, UpdatedAt));
+            12345, "failed", null, null, null, true, null, null, null, null, UpdatedAt));
         Assert.False(await store.UpdateResponseHeadersAsync(12345, "{}", UpdatedAt));
         Assert.False(await store.UpdateResponseChunksAsync(12345, "[]", UpdatedAt));
         Assert.Null(await store.GetByIdAsync(12345));

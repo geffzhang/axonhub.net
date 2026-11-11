@@ -125,11 +125,13 @@ internal static class CatalogFilter
 
     private static void MapLlamaToMeta(CatalogFile data, CatalogFile filtered)
     {
+        CatalogProvider? upstreamMetaValue = null;
         var hasMeta = data.Providers is not null
-            && data.Providers.TryGetValue("meta", out var upstreamMetaValue);
+            && data.Providers.TryGetValue("meta", out upstreamMetaValue);
         var upstreamMeta = hasMeta ? upstreamMetaValue! : new CatalogProvider();
+        CatalogProvider? llamaValue = null;
         var hasLlama = data.Providers is not null
-            && data.Providers.TryGetValue("llama", out var llamaValue);
+            && data.Providers.TryGetValue("llama", out llamaValue);
         var llama = hasLlama ? llamaValue! : new CatalogProvider();
 
         if (!hasMeta && !hasLlama)
@@ -323,7 +325,7 @@ internal static class CatalogFilter
 
         foreach (var key in new[] { "tencent-token-plan", "tencent-tokenhub", "tencent-coding-plan" })
         {
-            if (data.Providers?.TryGetValue(key, out var provider) != true)
+            if (data.Providers is null || !data.Providers.TryGetValue(key, out var provider))
             {
                 continue;
             }
@@ -377,7 +379,7 @@ internal static class CatalogFilter
                      "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams",
                  })
         {
-            if (data.Providers?.TryGetValue(key, out var provider) != true)
+            if (data.Providers is null || !data.Providers.TryGetValue(key, out var provider))
             {
                 continue;
             }
@@ -568,7 +570,7 @@ internal static class CatalogFilter
             return;
         }
 
-        using (JsonDocument.Parse(extra.ToArray()))
+        using (var document = JsonDocument.Parse(extra.ToArray()))
         {
             var root = document.RootElement;
             if (root.ValueKind == JsonValueKind.Null)
@@ -663,7 +665,7 @@ internal static class CatalogFilter
         string key,
         List<CatalogValue> models)
     {
-        if (data.Providers?.TryGetValue(key, out var existing) != true)
+        if (data.Providers is null || !data.Providers.TryGetValue(key, out var existing))
         {
             data.Providers![key] = new CatalogProvider { Id = key, Models = models };
             return;

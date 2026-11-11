@@ -3,7 +3,6 @@ using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Persistence;
-using GoJson = AxonHub.Llm.Json.GoJson;
 
 namespace AxonHub.Api.Tests;
 

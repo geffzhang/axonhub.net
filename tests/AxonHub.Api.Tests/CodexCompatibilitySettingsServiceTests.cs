@@ -197,7 +197,8 @@ public sealed class CodexCompatibilitySettingsServiceTests
     public async Task UpdatePersistsTheGoShapedValue()
     {
         AddCodexChannel();
-        var service = await SignInAsync("read_settings", "write_settings");
+        // A non-nil channelID also requires read_channels (system_codex.go:63).
+        var service = await SignInAsync("read_settings", "write_settings", "read_channels");
 
         await service.UpdateAsync(new CodexCompatibilitySettings
         {
@@ -243,7 +244,8 @@ public sealed class CodexCompatibilitySettingsServiceTests
     [Fact]
     public async Task AMissingChannelIsAValidationError()
     {
-        var service = await SignInAsync("read_settings", "write_settings");
+        // The channel lookup itself needs read_channels before it can miss.
+        var service = await SignInAsync("read_settings", "write_settings", "read_channels");
 
         var error = await Assert.ThrowsAsync<CodedException>(
             () => service.UpdateAsync(new CodexCompatibilitySettings
@@ -269,7 +271,7 @@ public sealed class CodexCompatibilitySettingsServiceTests
             Name = "openai",
             Status = "enabled",
         });
-        var service = await SignInAsync("read_settings", "write_settings");
+        var service = await SignInAsync("read_settings", "write_settings", "read_channels");
 
         var error = await Assert.ThrowsAsync<CodedException>(
             () => service.UpdateAsync(new CodexCompatibilitySettings

@@ -1508,6 +1508,13 @@ public sealed class SystemSettingsAdminService(
         {
             return await systems.GetByKeyAsync(key, cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            // Cancellation must stay distinguishable from a storage failure:
+            // callers that swallow the wrapped error would otherwise swallow a
+            // cancelled request too.
+            throw;
+        }
         catch (Exception ex)
         {
             // getSystemValue wraps the storage error; the caller adds its own
@@ -1526,6 +1533,10 @@ public sealed class SystemSettingsAdminService(
         try
         {
             await systems.SetAsync(key, value, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

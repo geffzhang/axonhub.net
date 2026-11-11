@@ -204,20 +204,31 @@ public sealed class ChannelModelPriceType : INode
 
     [GraphQLName("referenceID")]
     public string ReferenceID { get; init; } = string.Empty;
+}
 
+/// <summary>
+/// Edge fields of ChannelModelPrice. The entgql SDL declares the edges after the
+/// scalar columns, and the generated schema keeps that order; HotChocolate emits
+/// CLR resolver methods before properties, so the edges live in an extension,
+/// which is merged after the base fields.
+/// </summary>
+[ExtendObjectType(typeof(ChannelModelPriceType))]
+public sealed class ChannelModelPriceTypeExtensions
+{
     /// <summary>
     /// Port of the generated edge accessor (gql_edge.go:151-157):
     /// <c>QueryChannel().Only(ctx)</c> with the Channel query policy applied.
     /// </summary>
     [GraphQLName("channel")]
     public async Task<ChannelType> GetChannelAsync(
+        [Parent] ChannelModelPriceType price,
         [Service] ChannelPrivacy privacy,
         [Service] IChannelAdminStore channels,
         CancellationToken cancellationToken)
     {
         await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
 
-        var record = await channels.GetByIdAsync(DbChannelId, cancellationToken)
+        var record = await channels.GetByIdAsync(price.DbChannelId, cancellationToken)
             .ConfigureAwait(false);
         return record is null
             ? throw new InvalidOperationException("ent: channel not found")
@@ -231,13 +242,14 @@ public sealed class ChannelModelPriceType : INode
     /// </summary>
     [GraphQLName("versions")]
     public async Task<IReadOnlyList<ChannelModelPriceVersionType>> GetVersionsAsync(
+        [Parent] ChannelModelPriceType price,
         [Service] ChannelPrivacy privacy,
         [Service] IChannelModelPriceStore prices,
         CancellationToken cancellationToken)
     {
         await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
 
-        var rows = await prices.ListVersionsAsync(DbId, cancellationToken)
+        var rows = await prices.ListVersionsAsync(price.DbId, cancellationToken)
             .ConfigureAwait(false);
         return [.. rows.Select(PriceMapping.ToGraphQL)];
     }
@@ -286,7 +298,16 @@ public sealed class ChannelModelPriceVersionType : INode
 
     [GraphQLName("referenceID")]
     public string ReferenceID { get; init; } = string.Empty;
+}
 
+/// <summary>
+/// Edge field of ChannelModelPriceVersion, kept in an extension so the
+/// introspection field order matches the entgql SDL (see
+/// <see cref="ChannelModelPriceTypeExtensions"/>).
+/// </summary>
+[ExtendObjectType(typeof(ChannelModelPriceVersionType))]
+public sealed class ChannelModelPriceVersionTypeExtensions
+{
     /// <summary>
     /// Port of the generated edge accessor (gql_edge.go:171-177):
     /// <c>QueryChannelModelPrice().Only(ctx)</c> with the ChannelModelPrice
@@ -294,13 +315,14 @@ public sealed class ChannelModelPriceVersionType : INode
     /// </summary>
     [GraphQLName("channelModelPrice")]
     public async Task<ChannelModelPriceType> GetChannelModelPriceAsync(
+        [Parent] ChannelModelPriceVersionType version,
         [Service] ChannelPrivacy privacy,
         [Service] IChannelModelPriceStore prices,
         CancellationToken cancellationToken)
     {
         await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
 
-        var record = await prices.GetByIdAsync(DbChannelModelPriceId, cancellationToken)
+        var record = await prices.GetByIdAsync(version.DbChannelModelPriceId, cancellationToken)
             .ConfigureAwait(false);
         return record is null
             ? throw new InvalidOperationException("ent: channel_model_price not found")

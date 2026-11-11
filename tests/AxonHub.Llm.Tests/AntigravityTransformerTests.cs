@@ -115,7 +115,7 @@ public sealed class AntigravityTransformerTests
         req.ResponseFormat = new ResponseFormat
         {
             Type = "json_schema",
-            JsonSchema = JsonDocument.Parse(schemaJSON).RootElement.Clone(),
+            JsonSchema = JsonElement.Parse(schemaJSON).Clone(),
         };
 
         var httpReq = transformer.TransformRequest(req);
@@ -146,7 +146,7 @@ public sealed class AntigravityTransformerTests
                 Function = new Function
                 {
                     Name = "test_tool",
-                    Parameters = JsonDocument.Parse("""{"type":"object"}""").RootElement.Clone(),
+                    Parameters = JsonElement.Parse("""{"type":"object"}""").Clone(),
                 },
             },
         ];
@@ -221,9 +221,9 @@ public sealed class AntigravityTransformerTests
                 {
                     Name = "test_tool",
                     Description = "A test tool",
-                    Parameters = JsonDocument.Parse(
+                    Parameters = JsonElement.Parse(
                         """{"type":"object","properties":{"arg":{"type":"string"}},"required":["arg"]}""")
-                        .RootElement.Clone(),
+                        .Clone(),
                 },
             },
         ];

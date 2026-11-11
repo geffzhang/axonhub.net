@@ -623,7 +623,7 @@ public sealed class GeminiInboundTransformerTests
                                         Name = "get_weather",
                                         Args = new Dictionary<string, JsonElement>
                                         {
-                                            ["location"] = JsonDocument.Parse("\"Tokyo\"").RootElement.Clone(),
+                                            ["location"] = JsonElement.Parse("\"Tokyo\"").Clone(),
                                         },
                                     },
                                 },
@@ -749,146 +749,146 @@ public sealed class GeminiInboundTransformerTests
         switch (inputStreamFile)
         {
             case "llm-stop.stream.jsonl":
-            {
-                Assert.Equal("resp-gemini-stop-1", result.ResponseId);
-                Assert.Equal("gemini-2.0-flash", result.ModelVersion);
-
-                var stopText = new StringBuilder();
-                foreach (var part in PartsOf(result))
                 {
-                    if (!part.Thought)
-                    {
-                        stopText.Append(part.Text);
-                    }
-                }
+                    Assert.Equal("resp-gemini-stop-1", result.ResponseId);
+                    Assert.Equal("gemini-2.0-flash", result.ModelVersion);
 
-                Assert.Equal("Hello, world!", stopText.ToString());
-                Assert.Equal("STOP", SingleCandidate(result).FinishReason);
-                break;
-            }
+                    var stopText = new StringBuilder();
+                    foreach (var part in PartsOf(result))
+                    {
+                        if (!part.Thought)
+                        {
+                            stopText.Append(part.Text);
+                        }
+                    }
+
+                    Assert.Equal("Hello, world!", stopText.ToString());
+                    Assert.Equal("STOP", SingleCandidate(result).FinishReason);
+                    break;
+                }
 
             case "llm-tool.stream.jsonl":
-            {
-                Assert.Equal("resp-gemini-tool-1", result.ResponseId);
-
-                var hasToolCall = false;
-                foreach (var part in PartsOf(result))
                 {
-                    if (part.FunctionCall is { } fc)
-                    {
-                        hasToolCall = true;
-                        Assert.Equal("get_weather", fc.Name);
-                        Assert.Equal("Tokyo", fc.Args!["location"].GetString());
-                    }
-                }
+                    Assert.Equal("resp-gemini-tool-1", result.ResponseId);
 
-                Assert.True(hasToolCall, "should have function call part");
-                break;
-            }
+                    var hasToolCall = false;
+                    foreach (var part in PartsOf(result))
+                    {
+                        if (part.FunctionCall is { } fc)
+                        {
+                            hasToolCall = true;
+                            Assert.Equal("get_weather", fc.Name);
+                            Assert.Equal("Tokyo", fc.Args!["location"].GetString());
+                        }
+                    }
+
+                    Assert.True(hasToolCall, "should have function call part");
+                    break;
+                }
 
             case "llm-tool2.stream.jsonl":
-            {
-                Assert.Equal("chatcmpl-C2W6446YQfJg7YrSTSPbxFlnlM14H", result.ResponseId);
-                Assert.Equal("gpt-4o-2024-11-20", result.ModelVersion);
-
-                var tool2Text = new StringBuilder();
-                var hasTool2Call = false;
-                foreach (var part in PartsOf(result))
                 {
-                    if (part.FunctionCall is { } fc)
+                    Assert.Equal("chatcmpl-C2W6446YQfJg7YrSTSPbxFlnlM14H", result.ResponseId);
+                    Assert.Equal("gpt-4o-2024-11-20", result.ModelVersion);
+
+                    var tool2Text = new StringBuilder();
+                    var hasTool2Call = false;
+                    foreach (var part in PartsOf(result))
                     {
-                        hasTool2Call = true;
-                        Assert.Equal("get_user_city", fc.Name);
-                        Assert.Equal("123", fc.Args!["user_id"].GetString());
-                        continue;
+                        if (part.FunctionCall is { } fc)
+                        {
+                            hasTool2Call = true;
+                            Assert.Equal("get_user_city", fc.Name);
+                            Assert.Equal("123", fc.Args!["user_id"].GetString());
+                            continue;
+                        }
+
+                        if (!part.Thought)
+                        {
+                            tool2Text.Append(part.Text);
+                        }
                     }
 
-                    if (!part.Thought)
-                    {
-                        tool2Text.Append(part.Text);
-                    }
+                    Assert.Equal("Let me check that for you.", tool2Text.ToString());
+                    Assert.True(hasTool2Call, "should have function call part");
+                    break;
                 }
-
-                Assert.Equal("Let me check that for you.", tool2Text.ToString());
-                Assert.True(hasTool2Call, "should have function call part");
-                break;
-            }
 
             case "llm-tool-parallel.stream.jsonl":
-            {
-                Assert.Equal("msg_bdrk_01UJYyE5HVJvdHL9cSvFeFg2", result.ResponseId);
-                Assert.Equal("claude-sonnet-4-20250514", result.ModelVersion);
-
-                var parallelText = new StringBuilder();
-                var parallelToolCalls = new List<AxonHub.Llm.Transformer.Gemini.FunctionCall>();
-                foreach (var part in PartsOf(result))
                 {
-                    if (part.FunctionCall is { } fc)
+                    Assert.Equal("msg_bdrk_01UJYyE5HVJvdHL9cSvFeFg2", result.ResponseId);
+                    Assert.Equal("claude-sonnet-4-20250514", result.ModelVersion);
+
+                    var parallelText = new StringBuilder();
+                    var parallelToolCalls = new List<AxonHub.Llm.Transformer.Gemini.FunctionCall>();
+                    foreach (var part in PartsOf(result))
                     {
-                        parallelToolCalls.Add(fc);
-                        continue;
+                        if (part.FunctionCall is { } fc)
+                        {
+                            parallelToolCalls.Add(fc);
+                            continue;
+                        }
+
+                        if (!part.Thought)
+                        {
+                            parallelText.Append(part.Text);
+                        }
                     }
 
-                    if (!part.Thought)
-                    {
-                        parallelText.Append(part.Text);
-                    }
+                    Assert.Equal(
+                        "I'll help you get the weather information for San Francisco, CA. Let me start by getting the coordinates for San Francisco and determining the appropriate temperature unit for the US.",
+                        parallelText.ToString());
+                    Assert.Equal("STOP", SingleCandidate(result).FinishReason);
+                    Assert.Equal(2, parallelToolCalls.Count);
+                    Assert.Equal("get_coordinates", parallelToolCalls[0].Name);
+                    Assert.Equal("San Francisco, CA", parallelToolCalls[0].Args!["location"].GetString());
+                    Assert.Equal("get_temperature_unit", parallelToolCalls[1].Name);
+                    Assert.Equal("United States", parallelToolCalls[1].Args!["country"].GetString());
+                    break;
                 }
-
-                Assert.Equal(
-                    "I'll help you get the weather information for San Francisco, CA. Let me start by getting the coordinates for San Francisco and determining the appropriate temperature unit for the US.",
-                    parallelText.ToString());
-                Assert.Equal("STOP", SingleCandidate(result).FinishReason);
-                Assert.Equal(2, parallelToolCalls.Count);
-                Assert.Equal("get_coordinates", parallelToolCalls[0].Name);
-                Assert.Equal("San Francisco, CA", parallelToolCalls[0].Args!["location"].GetString());
-                Assert.Equal("get_temperature_unit", parallelToolCalls[1].Name);
-                Assert.Equal("United States", parallelToolCalls[1].Args!["country"].GetString());
-                break;
-            }
 
             case "llm-think.stream.jsonl":
-            {
-                Assert.Equal("resp-gemini-think-1", result.ResponseId);
-
-                var hasThinking = false;
-                var hasText = false;
-                foreach (var part in PartsOf(result))
                 {
-                    if (part.Thought)
+                    Assert.Equal("resp-gemini-think-1", result.ResponseId);
+
+                    var hasThinking = false;
+                    var hasText = false;
+                    foreach (var part in PartsOf(result))
                     {
-                        hasThinking = true;
-                        Assert.Contains("think", part.Text);
+                        if (part.Thought)
+                        {
+                            hasThinking = true;
+                            Assert.Contains("think", part.Text);
+                        }
+
+                        if (!part.Thought && part.Text != "")
+                        {
+                            hasText = true;
+                            Assert.Equal("The answer is 42.", part.Text);
+                        }
                     }
 
-                    if (!part.Thought && part.Text != "")
-                    {
-                        hasText = true;
-                        Assert.Equal("The answer is 42.", part.Text);
-                    }
+                    Assert.True(hasThinking, "should have thinking part");
+                    Assert.True(hasText, "should have text part");
+                    break;
                 }
-
-                Assert.True(hasThinking, "should have thinking part");
-                Assert.True(hasText, "should have text part");
-                break;
-            }
 
             case "llm-parallel_tool.stream.jsonl":
-            {
-                Assert.Equal("resp-gemini-parallel-1", result.ResponseId);
-
-                var functionCallCount = 0;
-                foreach (var part in PartsOf(result))
                 {
-                    if (part.FunctionCall is not null)
-                    {
-                        functionCallCount++;
-                    }
-                }
+                    Assert.Equal("resp-gemini-parallel-1", result.ResponseId);
 
-                Assert.Equal(2, functionCallCount);
-                break;
-            }
+                    var functionCallCount = 0;
+                    foreach (var part in PartsOf(result))
+                    {
+                        if (part.FunctionCall is not null)
+                        {
+                            functionCallCount++;
+                        }
+                    }
+
+                    Assert.Equal(2, functionCallCount);
+                    break;
+                }
 
             default:
                 throw new InvalidOperationException($"no aggregated validation for {inputStreamFile}");

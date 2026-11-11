@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Transformer.Shared;
+using GoJson = AxonHub.Llm.Json.GoJson;
 
 namespace AxonHub.Api.Settings;
 

@@ -2,6 +2,9 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Inline array literals are the idiom for test data; hoisting every one
+         to a static field obscures the case rather than improving it. -->
+    <NoWarn>$(NoWarn);CA1861</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\AxonHub.Api\AxonHub.Api.csproj" />

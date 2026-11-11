@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using AxonHub.Api.Diagnostics;
+using AxonHub.Api.GraphQL;
 using AxonHub.Api.Orchestration;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
@@ -139,8 +140,9 @@ public sealed class AdminDiagnosticsEndpointTests : IAsyncLifetime
             payload.GetProperty("fileName").GetString());
         Assert.Equal(
             new[] { "CHANNEL_CACHE" },
-            [.. payload.GetProperty("targets").EnumerateArray()
-                .Select(static target => target.GetString()!)]);
+            payload.GetProperty("targets").EnumerateArray()
+                .Select(static target => target.GetString()!)
+                .ToArray());
 
         using var content = JsonDocument.Parse(payload.GetProperty("content").GetString()!);
         var root = content.RootElement;
@@ -175,8 +177,9 @@ public sealed class AdminDiagnosticsEndpointTests : IAsyncLifetime
         var payload = data.GetProperty("getCacheDiagnostics");
         Assert.Equal(
             new[] { "CHANNEL_CACHE" },
-            [.. payload.GetProperty("targets").EnumerateArray()
-                .Select(static target => target.GetString()!)]);
+            payload.GetProperty("targets").EnumerateArray()
+                .Select(static target => target.GetString()!)
+                .ToArray());
 
         // Both reads use the fixed clock.
         Assert.Equal(
@@ -203,8 +206,9 @@ public sealed class AdminDiagnosticsEndpointTests : IAsyncLifetime
         Assert.Equal("cache cleared successfully", payload.GetProperty("message").GetString());
         Assert.Equal(
             new[] { "CHANNEL_CACHE" },
-            [.. payload.GetProperty("targets").EnumerateArray()
-                .Select(static target => target.GetString()!)]);
+            payload.GetProperty("targets").EnumerateArray()
+                .Select(static target => target.GetString()!)
+                .ToArray());
         Assert.Equal(1, _refresher.ReloadCount);
         Assert.Equal(0, _refresher.RequestCount);
     }
@@ -225,8 +229,9 @@ public sealed class AdminDiagnosticsEndpointTests : IAsyncLifetime
         Assert.True(data.GetProperty("clearCache").GetProperty("success").GetBoolean());
         Assert.Equal(
             new[] { "CHANNEL_CACHE" },
-            [.. data.GetProperty("clearCache").GetProperty("targets").EnumerateArray()
-                .Select(static target => target.GetString()!)]);
+            data.GetProperty("clearCache").GetProperty("targets").EnumerateArray()
+                .Select(static target => target.GetString()!)
+                .ToArray());
         Assert.Equal(1, _refresher.ReloadCount);
     }
 

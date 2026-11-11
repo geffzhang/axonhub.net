@@ -15,7 +15,7 @@ namespace AxonHub.Api.Tests;
 /// GitHub releases request shape, the release-selection rules ported from
 /// version_test.go and the Go duration layout used by uptime (C235).
 /// </summary>
-public sealed class AdminSystemVersionEndpointTests : IAsyncLifetime
+public sealed class AdminSystemVersionEndpointTests : IAsyncLifetime, IDisposable
 {
     private readonly RecordingReleaseHandler _releases = new();
     private readonly AdminGraphqlGateServices _gate = new();
@@ -43,7 +43,11 @@ public sealed class AdminSystemVersionEndpointTests : IAsyncLifetime
     {
         _client.Dispose();
         await _app.DisposeAsync();
+        _releases.Dispose();
     }
+
+    /// <summary>The handler owns no unmanaged state; this only satisfies CA1001.</summary>
+    public void Dispose() => _releases.Dispose();
 
     [Fact]
     public async Task SystemVersionReturnsTheReferenceBuildInfoShape()

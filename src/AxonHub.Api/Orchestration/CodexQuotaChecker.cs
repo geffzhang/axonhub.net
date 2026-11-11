@@ -233,7 +233,7 @@ public sealed class CodexQuotaChecker : IQuotaChecker, IQuotaResetter
             Method = "POST",
             Url = ConsumeResetCreditUrl,
             Headers = headers,
-            Body = GoJson.Marshal(body),
+            Body = AxonHub.Llm.Json.GoJson.Marshal(body),
             Auth = new AuthConfig
             {
                 Type = AuthTypes.Bearer,

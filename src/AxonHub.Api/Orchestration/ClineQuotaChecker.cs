@@ -326,7 +326,7 @@ public sealed class ClineQuotaChecker : IQuotaChecker
         // the quota URL. A base without a host falls back to the default.
         if (!GoUrl.TryParse(trimmed, out var scheme, out var host, out _) || host.Length == 0)
         {
-            GoUrl.TryParse(DefaultBaseUrl, out scheme, out host, out _);
+            _ = GoUrl.TryParse(DefaultBaseUrl, out scheme, out host, out _);
         }
 
         if (scheme.Length == 0 || scheme == "http")
@@ -336,7 +336,7 @@ public sealed class ClineQuotaChecker : IQuotaChecker
 
         if (host.Length == 0)
         {
-            GoUrl.TryParse(DefaultBaseUrl, out scheme, out host, out _);
+            _ = GoUrl.TryParse(DefaultBaseUrl, out scheme, out host, out _);
         }
 
         // url.URL.String escapes the already PathEscape'd path again, so a

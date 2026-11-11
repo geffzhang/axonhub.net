@@ -3,6 +3,7 @@ using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Json;
 using AxonHub.Persistence;
 using Microsoft.Extensions.Logging;
+using GoJson = AxonHub.Llm.Json.GoJson;
 
 namespace AxonHub.Api.Management;
 

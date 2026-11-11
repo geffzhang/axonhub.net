@@ -17,9 +17,8 @@ namespace AxonHub.Api.Tests;
 /// and consume flows, the credential precedence (OAuth object over the legacy
 /// apiKey JSON) and the window/status normalization. The wire shape (URL, auth,
 /// headers) is locked through the real <see cref="HttpExecutor"/> over a
-/// recording message handler; a bodyless request loses its Content-Type header
-/// on the wire, which is the accepted difference C206 (the checker still sets
-/// it on the request data, asserted separately).
+/// recording message handler; the bodyless GETs keep their Content-Type header
+/// on the wire like Go (C206 resolved).
 /// </summary>
 public sealed class CodexQuotaCheckerTests
 {
@@ -46,10 +45,9 @@ public sealed class CodexQuotaCheckerTests
         Assert.Equal("axonhub/1.0", request.Header("User-Agent"));
         Assert.Equal(string.Empty, request.Header("Originator"));
         Assert.Equal(string.Empty, request.Header("Chatgpt-Account-Id"));
-        // C206: the checker sets Content-Type on the request data, but the
-        // port's executor only attaches content headers when a body exists, so
-        // the wire loses it for this bodyless GET (the reference sends it).
-        Assert.Equal(string.Empty, request.Header("Content-Type"));
+        // The executor always attaches content, so the bodyless GET keeps the
+        // Content-Type on the wire like Go's net/http (C206 resolved).
+        Assert.Equal("application/json", request.Header("Content-Type"));
         Assert.Equal(string.Empty, request.Body);
 
         Assert.Equal("codex", quota.ProviderType);
@@ -59,7 +57,7 @@ public sealed class CodexQuotaCheckerTests
         Assert.Null(quota.NextResetAt);
         Assert.Equal("plus", quota.RawData["plan_type"]);
         var rateLimit = Assert.IsType<Dictionary<string, object?>>(quota.RawData["rate_limit"]);
-        Assert.Equal(true, Assert.IsType<bool>(rateLimit["allowed"]));
+        Assert.True(Assert.IsType<bool>(rateLimit["allowed"]));
         Assert.False(rateLimit.ContainsKey("limit_reached"));
 
         Assert.True(checker.SupportsChannel(Channel()));
@@ -314,7 +312,7 @@ public sealed class CodexQuotaCheckerTests
         Assert.False(quota.Ready);
         var review = Assert.IsType<Dictionary<string, object?>>(
             quota.RawData["code_review_rate_limit"]);
-        Assert.Equal(true, Assert.IsType<bool>(review["allowed"]));
+        Assert.True(Assert.IsType<bool>(review["allowed"]));
         var window = Assert.IsType<Dictionary<string, object?>>(review["primary_window"]);
         Assert.Equal(50.0, Assert.IsType<double>(window["used_percent"]));
         Assert.Equal(18000L, Assert.IsType<long>(window["limit_window_seconds"]));
@@ -346,8 +344,8 @@ public sealed class CodexQuotaCheckerTests
 
         Assert.Equal("plus", quota.RawData["plan_type"]);
         var rateLimit = Assert.IsType<Dictionary<string, object?>>(quota.RawData["rate_limit"]);
-        Assert.Equal(false, Assert.IsType<bool>(rateLimit["allowed"]));
-        Assert.Equal(true, Assert.IsType<bool>(rateLimit["limit_reached"]));
+        Assert.False(Assert.IsType<bool>(rateLimit["allowed"]));
+        Assert.True(Assert.IsType<bool>(rateLimit["limit_reached"]));
         var primary = Assert.IsType<Dictionary<string, object?>>(rateLimit["primary_window"]);
         Assert.Equal(12.5, Assert.IsType<double>(primary["used_percent"]));
         Assert.Equal(4_102_444_800L, Assert.IsType<long>(primary["reset_at"]));
@@ -741,8 +739,9 @@ public sealed class CodexQuotaCheckerTests
         Assert.Equal("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", request.Url);
         Assert.Equal("Bearer " + token, request.Header("Authorization"));
         Assert.Equal("acct_reset", request.Header("ChatGPT-Account-Id"));
-        // C206: bodyless GET, so the Content-Type never reaches the wire.
-        Assert.Equal(string.Empty, request.Header("Content-Type"));
+        // The executor always attaches content, so the bodyless GET keeps the
+        // Content-Type on the wire like Go's net/http (C206 resolved).
+        Assert.Equal("application/json", request.Header("Content-Type"));
 
         Assert.True(resets.Supported);
         var reset = Assert.Single(resets.Resets!);

@@ -5,6 +5,7 @@ using System.Text.Json;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
 using AxonHub.Api.Settings;
+using AxonHub.Api.Storage;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -74,6 +75,9 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IBackupBatchSource>(_batchSource);
         builder.Services.AddSingleton<IBackupRestoreStore>(_restoreStore);
         builder.Services.AddSingleton<IDataStorageStore>(_storages);
+        // BackupService always resolves the factory, even for owner-gate paths
+        // that never touch a data storage.
+        builder.Services.AddSingleton<IDataStorageBackendFactory, DataStorageBackendFactory>();
         builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminService>();
         builder.Services.AddScoped<BackupService>();
 
@@ -175,8 +179,9 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
             """,
             new { input = new { frequency = "hourly" } });
 
+        // C198: the port rejects the value during schema validation, so the
+        // message names the enum but not the rejected literal.
         var message = errors[0].GetProperty("message").GetString();
-        Assert.Contains("hourly", message);
         Assert.Contains("BackupFrequency", message);
         Assert.DoesNotContain(
             _gate.Systems.Rows,
@@ -536,7 +541,9 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
         object? variables = null,
         string? token = null)
     {
-        var root = await ExecuteAsync(query, variables, token);
+        // HotChocolate rejects schema-invalid enum variables as request errors
+        // (HTTP 400), where gqlgen answers 200 with an errors envelope (C198).
+        var root = await ExecuteAsync(query, variables, token, allowRequestError: true);
         Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
         return errors.EnumerateArray().Select(static error => error.Clone()).ToArray();
     }
@@ -544,7 +551,8 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
     private async Task<JsonElement> ExecuteAsync(
         string query,
         object? variables,
-        string? token)
+        string? token,
+        bool allowRequestError = false)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql")
         {
@@ -559,7 +567,10 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
 
         using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, body);
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK
+            || (allowRequestError && (int)response.StatusCode is >= 400 and < 500),
+            body);
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();
@@ -595,6 +606,9 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
         {
             Content = form,
         };
+        // HotChocolate 16 requires the multipart preflight opt-in
+        // (graphql-multipart-request-spec CSRF guard).
+        request.Headers.TryAddWithoutValidation("GraphQL-preflight", "1");
         request.Headers.Authorization = new AuthenticationHeaderValue(
             "Bearer",
             token ?? _gate.Jwt);

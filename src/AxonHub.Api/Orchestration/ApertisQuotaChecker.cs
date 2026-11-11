@@ -3,6 +3,7 @@ using System.Text.Json;
 using AxonHub.Abstractions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer.Shared;
 using AxonHub.Persistence;
 
@@ -646,6 +647,15 @@ public sealed class ApertisQuotaChecker : IQuotaChecker
     /// </summary>
     internal static ApertisBillingCreditsResponse ParseBillingCreditsResponse(byte[] data)
     {
+        // Go reports syntax errors as *json.SyntaxError; System.Text.Json's
+        // JsonReaderException is a different type, so the Go scanner runs
+        // first and the failure surfaces as a plain JsonException.
+        var syntaxError = GoJsonSyntax.Validate(data);
+        if (syntaxError is not null)
+        {
+            throw new JsonException(syntaxError);
+        }
+
         using var document = JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(data) ?? data);
         var root = document.RootElement;
 
@@ -1075,7 +1085,7 @@ public sealed class ApertisQuotaChecker : IQuotaChecker
 /// Scalar fields are Go non-pointer values: a JSON null is a no-op, and the
 /// nested objects keep Go's "null resets the pointer, objects merge" semantics.
 /// </summary>
-internal sealed class ApertisBillingCreditsResponse
+public sealed class ApertisBillingCreditsResponse
 {
     public string Object { get; set; } = string.Empty;
 
@@ -1087,7 +1097,7 @@ internal sealed class ApertisBillingCreditsResponse
 }
 
 /// <summary>Port of <c>ApertisPayg</c> (apertis_checker.go:37-46).</summary>
-internal sealed class ApertisPayg
+public sealed class ApertisPayg
 {
     public double AccountCredits { get; set; }
 
@@ -1110,7 +1120,7 @@ internal sealed class ApertisPayg
 }
 
 /// <summary>Port of <c>ApertisSubscription</c> (apertis_checker.go:49-60).</summary>
-internal sealed class ApertisSubscription
+public sealed class ApertisSubscription
 {
     public string PlanType { get; set; } = string.Empty;
 

@@ -677,6 +677,9 @@ public sealed class ApiKeyProfileTemplateServiceTests
 /// </summary>
 internal sealed class FakeApiKeyProfileTemplateStore : IApiKeyProfileTemplateStore
 {
+    private static readonly DateTime FixedTime =
+        new(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
     private long _nextId = 1;
 
     public List<ApiKeyProfileTemplateRecord> Rows { get; } = [];
@@ -722,8 +725,12 @@ internal sealed class FakeApiKeyProfileTemplateStore : IApiKeyProfileTemplateSto
         CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
-        return Task.FromResult(Rows.SingleOrDefault(row =>
-            row.Id == id && row.DeletedAt == 0 && MatchesAccess(access, row)));
+        // The Dapper store materializes a detached record; mutations performed
+        // by UpdateAsync must not reach the record a caller read earlier (the
+        // update path compares against the pre-update template).
+        var row = Rows.SingleOrDefault(item =>
+            item.Id == id && item.DeletedAt == 0 && MatchesAccess(access, item));
+        return Task.FromResult(row is null ? null : Clone(row));
     }
 
     public Task<ApiKeyProfileTemplateRecord?> GetByNameAsync(

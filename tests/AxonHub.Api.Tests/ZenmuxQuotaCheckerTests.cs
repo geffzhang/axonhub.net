@@ -192,7 +192,12 @@ public sealed class ZenmuxQuotaCheckerTests
     [Fact]
     public void ParseResponseClampsRatiosAboveOne()
     {
-        var quota = Parse("""{"success":true,"data":{"quota_5_hour":{"usage_percentage":1.5}}}""");
+        // A healthy account status is required for the overall status to be
+        // driven by the exhausted window: with an empty account_status the
+        // worst-status helper keeps "unknown", and the shared normalization
+        // then picks the still-ready 7-day window instead.
+        var quota = Parse(
+            """{"success":true,"data":{"account_status":"healthy","quota_5_hour":{"usage_percentage":1.5}}}""");
 
         Assert.Equal(ProviderQuotaStatuses.Exhausted, quota.Status);
         Assert.False(quota.Ready);
@@ -878,8 +883,8 @@ public sealed class ZenmuxQuotaCheckerTests
     private static ZenmuxSubscriptionResponse ParseSubscriptionResponse(string json)
         => ZenmuxQuotaChecker.ParseSubscriptionResponse(Encoding.UTF8.GetBytes(json));
 
-    private static string Fixture(string accountStatus, string usage, string reset) => $$"""
-        {"success":true,"data":{"plan":{"tier":"pro","amount_usd":200,"interval":"month","expires_at":"2099-10-01T00:00:00Z"},"account_status":"{{accountStatus}}","quota_5_hour":{"usage_percentage":{{usage}},"resets_at":{{reset}},"max_flows":1000,"used_flows":400,"remaining_flows":600,"used_value_usd":40,"max_value_usd":100},"quota_7_day":{"usage_percentage":0.6,"resets_at":"2099-09-10T10:00:00Z","max_flows":10000,"used_flows":6000,"remaining_flows":4000,"used_value_usd":120,"max_value_usd":200},"quota_monthly":{"max_flows":50000,"max_value_usd":500}}}
+    private static string Fixture(string accountStatus, string usage, string reset) => $$$$"""
+        {"success":true,"data":{"plan":{"tier":"pro","amount_usd":200,"interval":"month","expires_at":"2099-10-01T00:00:00Z"},"account_status":"{{{{accountStatus}}}}","quota_5_hour":{"usage_percentage":{{{{usage}}}},"resets_at":{{{{reset}}}},"max_flows":1000,"used_flows":400,"remaining_flows":600,"used_value_usd":40,"max_value_usd":100},"quota_7_day":{"usage_percentage":0.6,"resets_at":"2099-09-10T10:00:00Z","max_flows":10000,"used_flows":6000,"remaining_flows":4000,"used_value_usd":120,"max_value_usd":200},"quota_monthly":{"max_flows":50000,"max_value_usd":500}}}
         """;
 
     private static string RawAccountStatus(QuotaData quota)

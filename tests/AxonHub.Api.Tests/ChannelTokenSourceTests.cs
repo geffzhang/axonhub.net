@@ -103,17 +103,16 @@ public sealed class ChannelTokenSourceTests
     [Fact]
     public async Task MetadataOnlyRowChangeRetriesWithTheCurrentTimestamp()
     {
-        var store = new FakeChannelTokenStore
-        {
-            // A concurrent writer touched only metadata (the credentials are the
-            // snapshot's), so the reference retries instead of reporting a
-            // conflict: a rotated refresh token must not be discarded.
-            OnUpdate = call => store.Updates.Count == 1
-                ? new ChannelTokenUpdate(
-                    false,
-                    new ChannelTokenRow(501, "codex", SeedJson, Start.AddMinutes(3)))
-                : new ChannelTokenUpdate(true, null),
-        };
+        var store = new FakeChannelTokenStore();
+
+        // A concurrent writer touched only metadata (the credentials are the
+        // snapshot's), so the reference retries instead of reporting a
+        // conflict: a rotated refresh token must not be discarded.
+        store.OnUpdate = call => store.Updates.Count == 1
+            ? new ChannelTokenUpdate(
+                false,
+                new ChannelTokenRow(501, "codex", SeedJson, Start.AddMinutes(3)))
+            : new ChannelTokenUpdate(true, null);
 
         var source = NewSource(store, TokenExecutor());
 

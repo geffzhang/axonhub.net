@@ -187,6 +187,15 @@ public sealed class GithubCopilotQuotaChecker : IQuotaChecker
     /// </exception>
     internal static CopilotUserPayload ParseUserPayload(byte[] data)
     {
+        // Go reports syntax errors as *json.SyntaxError; System.Text.Json's
+        // JsonReaderException is a different type, so the Go scanner runs
+        // first and the failure surfaces as a plain JsonException.
+        var syntaxError = GoJsonSyntax.Validate(data);
+        if (syntaxError is not null)
+        {
+            throw new JsonException(syntaxError);
+        }
+
         using var document = JsonDocument.Parse(GoJsonUtf8.SanitizeStringLiterals(data) ?? data);
         var root = document.RootElement;
 

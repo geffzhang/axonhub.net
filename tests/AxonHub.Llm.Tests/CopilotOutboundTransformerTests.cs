@@ -894,7 +894,7 @@ public sealed class CopilotOutboundTransformerTests
             """{"type":"response.function_call_arguments.delta","item_id":"unknown","delta":"x"}"""u8.ToArray(),
             state);
 
-        Assert.Equal("call_0", JsonDocument.Parse(result).RootElement.GetProperty("item_id").GetString());
+        Assert.Equal("call_0", JsonElement.Parse(result).GetProperty("item_id").GetString());
     }
 
     [Fact]

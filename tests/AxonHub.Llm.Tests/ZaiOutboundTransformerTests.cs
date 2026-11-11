@@ -177,8 +177,8 @@ public sealed class ZaiOutboundTransformerTests
         {
             Type = type,
             JsonSchema = type == "json_schema"
-                ? JsonDocument.Parse("""{"type":"object","properties":{"name":{"type":"string"}}}""")
-                    .RootElement.Clone()
+                ? JsonElement.Parse("""{"type":"object","properties":{"name":{"type":"string"}}}""")
+                    .Clone()
                 : null,
         };
 

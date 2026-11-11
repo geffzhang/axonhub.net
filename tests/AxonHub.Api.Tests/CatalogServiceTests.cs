@@ -107,10 +107,14 @@ public sealed class CatalogServiceTests
         var snapshot = await service.SnapshotAsync(true);
 
         Assert.Equal(CatalogService.SourceUpstream, snapshot.Source);
-        Assert.Equal(
-            "gpt-hot",
-            snapshot.Data.GetProperty("providers").GetProperty("openai")
-                .GetProperty("models")[0].GetProperty("id").GetString());
+        // Extra models are merged in and the catalog is sorted, so only the
+        // presence of the upstream entry is contractual (catalog_test.go:46-66
+        // asserts require.Contains, not models[0]).
+        var openAiModels = snapshot.Data.GetProperty("providers").GetProperty("openai")
+            .GetProperty("models").EnumerateArray()
+            .Select(model => model.GetProperty("id").GetString())
+            .ToArray();
+        Assert.Contains("gpt-hot", openAiModels);
         Assert.False(snapshot.Data.GetProperty("providers").TryGetProperty(
             "unknown-lab",
             out _));

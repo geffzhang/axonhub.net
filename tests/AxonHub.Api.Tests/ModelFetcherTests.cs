@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using AxonHub.Api.Management;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -699,7 +700,7 @@ public sealed class ModelFetcherTests
         {
             OnSend = recorded => recorded.Url == "https://api.openai.test/v1/models"
                 ? RedirectTo("http://api.openai.test/v1/models")
-                : ModelFetchTestResponses.Json("""{"data":[{"id":"gpt-4"}]}"""),
+                : JsonResponse("""{"data":[{"id":"gpt-4"}]}"""),
         };
         var executor = new HttpExecutor(new HttpClient(handler)
         {
@@ -838,6 +839,12 @@ public sealed class ModelFetcherTests
         response.Headers.TryAddWithoutValidation("Location", location);
         return response;
     }
+
+    private static HttpResponseMessage JsonResponse(string body)
+        => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
 
     private static string HeaderValue(HttpRequestData request, string name)
         => HttpClientUtils.HeaderGet(request.Headers, name);

@@ -979,6 +979,7 @@ public sealed class KimiCodeQuotaChecker : IQuotaChecker
     private static List<byte> DecodePathBytes(string rawPath)
     {
         var bytes = new List<byte>(rawPath.Length);
+        Span<byte> buffer = stackalloc byte[4];
         for (var index = 0; index < rawPath.Length;)
         {
             if (rawPath[index] == '%'
@@ -992,7 +993,6 @@ public sealed class KimiCodeQuotaChecker : IQuotaChecker
             }
 
             var rune = Rune.GetRuneAt(rawPath, index);
-            Span<byte> buffer = stackalloc byte[4];
             var written = rune.EncodeToUtf8(buffer);
             for (var offset = 0; offset < written; offset++)
             {

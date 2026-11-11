@@ -69,6 +69,18 @@ public sealed class AdminTracesEndpointTests : IAsyncLifetime
         builder.Services.AddScoped<ThreadManagementService>();
         builder.Services.AddScoped<RequestManagementService>();
 
+        // DataStorageBootstrap seeds the primary database storage on a real
+        // install; without it the segment bodies load as {} and firstUserQuery
+        // / usage metadata come back null.
+        _dataStorages.Add(new DataStorageRecord
+        {
+            Name = "Primary",
+            Description = "Primary database storage",
+            Primary = true,
+            Type = "database",
+            Status = "active",
+        });
+
         // The gate's JWT user (id 9, owner) is the caller every fixture
         // client sends; the privacy policies see it as an owner.
         await _users.CreateAsync(

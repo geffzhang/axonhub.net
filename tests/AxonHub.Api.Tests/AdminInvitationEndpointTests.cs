@@ -61,6 +61,10 @@ public sealed class AdminInvitationEndpointTests : IAsyncLifetime
         _invitations.Profiles = _profiles;
         _adminUsers.RolesSource = _roles;
 
+        // The admin JWT gate authenticates against the system secret; without
+        // it every token-bearing request fails with "failed to validate token".
+        _systems.Add(ManagementAuthService.SecretKeyKey, Secret);
+
         _app = builder.Build();
 
         // Program.cs mounts the admin group's WithJWTAuth + WithProjectID on
@@ -291,7 +295,6 @@ public sealed class AdminInvitationEndpointTests : IAsyncLifetime
     public async Task RegisterCreatesTheUserAndReturnsASession()
     {
         var (token, projectId) = await SeedInvitationAsync();
-        _systems.Add(ManagementAuthService.SecretKeyKey, Secret);
 
         var (status, body) = await PostJsonAsync(
             $"/auth/invitations/{token}/register",
@@ -338,7 +341,7 @@ public sealed class AdminInvitationEndpointTests : IAsyncLifetime
     [InlineData("""{"email":"not-an-email","password":"password"}""")]
     [InlineData("""{"password":"password"}""")]
     [InlineData("""{"email":"member@example.com"}""")]
-    [InlineData("{" )]
+    [InlineData("{")]
     public async Task RegisterRejectsAnInvalidBody(string rawBody)
     {
         var (token, _) = await SeedInvitationAsync();
@@ -357,7 +360,6 @@ public sealed class AdminInvitationEndpointTests : IAsyncLifetime
         // binding:"required,min=7" counts runes: seven CJK runes pass even
         // though the service's byte check would also accept fewer.
         var (token, _) = await SeedInvitationAsync();
-        _systems.Add(ManagementAuthService.SecretKeyKey, Secret);
 
         var (status, body) = await PostJsonAsync(
             $"/auth/invitations/{token}/register",
@@ -394,6 +396,9 @@ public sealed class AdminInvitationEndpointTests : IAsyncLifetime
     public async Task RegisterMapsAMissingSecretToAFailedSession()
     {
         var (token, _) = await SeedInvitationAsync();
+        // The fixture seeds the system secret for the gate; drop it so the
+        // post-registration session creation fails like a fresh install.
+        _systems.Rows.RemoveAll(row => row.Key == ManagementAuthService.SecretKeyKey);
 
         var (status, body) = await PostJsonAsync(
             $"/auth/invitations/{token}/register",

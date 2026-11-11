@@ -45,7 +45,8 @@ internal sealed class CountingStream(Stream inner) : Stream
         int count,
         CancellationToken cancellationToken)
     {
-        var read = await inner.ReadAsync(buffer, offset, count, cancellationToken)
+        var read = await inner.ReadAsync(
+                buffer.AsMemory(offset, count), cancellationToken)
             .ConfigureAwait(false);
         BytesRead += read;
         return read;

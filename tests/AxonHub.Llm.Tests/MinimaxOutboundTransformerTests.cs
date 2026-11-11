@@ -197,9 +197,9 @@ public sealed class MinimaxOutboundTransformerTests
                 AspectRatio = "1:1",
                 N = 2,
                 PromptOptimizer = true,
-                SubjectReference = JsonDocument.Parse(
+                SubjectReference = JsonElement.Parse(
                     """{"type":"character","image_url":"https://img/ref.png"}""")
-                    .RootElement.Clone(),
+                    .Clone(),
             },
         };
 

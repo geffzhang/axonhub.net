@@ -80,7 +80,7 @@ public sealed class AntigravityQuotaChecker : IQuotaChecker
             Method = "POST",
             Url = QuotaSummaryUrl,
             Headers = headers,
-            Body = GoJson.Marshal(body),
+            Body = AxonHub.Llm.Json.GoJson.Marshal(body),
             Auth = new AuthConfig
             {
                 Type = AuthTypes.Bearer,

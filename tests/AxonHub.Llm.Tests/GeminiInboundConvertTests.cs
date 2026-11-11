@@ -437,7 +437,7 @@ public sealed class GeminiInboundConvertTests
         Assert.Equal("json_schema", result.ResponseFormat!.Type);
         Assert.NotNull(result.ResponseFormat.JsonSchema);
 
-        var wrapper = JsonDocument.Parse(result.ResponseFormat.JsonSchema!.Value.GetRawText()).RootElement;
+        var wrapper = JsonElement.Parse(result.ResponseFormat.JsonSchema!.Value.GetRawText());
         Assert.Equal("gemini_response", wrapper.GetProperty("name").GetString());
         AssertJsonEqual(
             """{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}}}""",
@@ -462,7 +462,7 @@ public sealed class GeminiInboundConvertTests
         var result = GeminiInboundConvert.ConvertGeminiToLlmRequest(input);
 
         Assert.NotNull(result.ResponseFormat);
-        var wrapper = JsonDocument.Parse(result.ResponseFormat!.JsonSchema!.Value.GetRawText()).RootElement;
+        var wrapper = JsonElement.Parse(result.ResponseFormat!.JsonSchema!.Value.GetRawText());
         Assert.Equal("gemini_response", wrapper.GetProperty("name").GetString());
         AssertJsonEqual(
             """{"type":"object","properties":{"answer":{"type":"string"}}}""",

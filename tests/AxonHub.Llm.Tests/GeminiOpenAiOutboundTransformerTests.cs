@@ -350,9 +350,9 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     {
         var request = ChatRequest();
         request.ReasoningEffort = "high";
-        request.ExtraBody = JsonDocument.Parse("""
+        request.ExtraBody = JsonElement.Parse("""
             {"google":{"thinking_config":{"thinking_budget":1024,"include_thoughts":true}}}
-            """).RootElement.Clone();
+            """).Clone();
 
         var body = Body(Create().TransformRequest(request));
 
@@ -369,9 +369,9 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     {
         var request = ChatRequest("models/gemini-2.5-flash");
         request.ReasoningEffort = "low";
-        request.ExtraBody = JsonDocument.Parse("""
+        request.ExtraBody = JsonElement.Parse("""
             {"google":{"thinking_config":{"include_thoughts":true}}}
-            """).RootElement.Clone();
+            """).Clone();
 
         var body = Body(Create().TransformRequest(request));
 
@@ -402,8 +402,8 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     {
         var request = ChatRequest(model);
         request.ReasoningEffort = reasoningEffort.Length == 0 ? null : reasoningEffort;
-        request.ExtraBody = JsonDocument.Parse(
-            "{\"google\":{\"thinking_config\":" + thinkingConfig + "}}").RootElement.Clone();
+        request.ExtraBody = JsonElement.Parse(
+            "{\"google\":{\"thinking_config\":" + thinkingConfig + "}}").Clone();
 
         var body = Body(Create().TransformRequest(request));
 
@@ -436,9 +436,9 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     {
         var request = ChatRequest("gemini-3-pro");
         request.ReasoningEffort = "Medium";
-        request.ExtraBody = JsonDocument.Parse("""
+        request.ExtraBody = JsonElement.Parse("""
             {"google":{"thinking_config":{"include_thoughts":true}}}
-            """).RootElement.Clone();
+            """).Clone();
 
         var body = Body(Create().TransformRequest(request));
         var thinking = body.GetProperty("extra_body").GetProperty("google").GetProperty("thinking_config");
@@ -451,7 +451,7 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     public void AnEmptyExtraBodyIsForwardedAsAnEmptyObject()
     {
         var request = ChatRequest();
-        request.ExtraBody = JsonDocument.Parse("{}").RootElement.Clone();
+        request.ExtraBody = JsonElement.Parse("{}").Clone();
 
         var body = Body(Create().TransformRequest(request));
 
@@ -468,7 +468,7 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     public void AnUndecodableExtraBodyIsDropped(string extraBody)
     {
         var request = ChatRequest();
-        request.ExtraBody = JsonDocument.Parse(extraBody).RootElement.Clone();
+        request.ExtraBody = JsonElement.Parse(extraBody).Clone();
 
         var body = Body(Create().TransformRequest(request));
 
@@ -483,7 +483,7 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     [InlineData("{\"google\":{\"thinking_config\":null}}")]
     public void ParseExtraBodyYieldsNoThinkingConfig(string input)
     {
-        var extra = GeminiExtraBodyParser.ParseExtraBody(JsonDocument.Parse(input).RootElement);
+        var extra = GeminiExtraBodyParser.ParseExtraBody(JsonElement.Parse(input));
 
         Assert.NotNull(extra);
         Assert.Null(extra!.Google?.ThinkingConfig);
@@ -492,9 +492,9 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     [Fact]
     public void ParseExtraBodyDecodesIntBudgetAndLevel()
     {
-        var extra = GeminiExtraBodyParser.ParseExtraBody(JsonDocument.Parse("""
+        var extra = GeminiExtraBodyParser.ParseExtraBody(JsonElement.Parse("""
             {"google":{"thinking_config":{"thinking_budget":1024,"thinking_level":"low","include_thoughts":true}}}
-            """).RootElement);
+            """));
 
         var thinking = extra!.Google!.ThinkingConfig!;
         Assert.Equal(1024L, thinking.ThinkingBudget!.IntValue!.Value);
@@ -506,9 +506,9 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     [Fact]
     public void ParseExtraBodyDecodesStringBudget()
     {
-        var extra = GeminiExtraBodyParser.ParseExtraBody(JsonDocument.Parse("""
+        var extra = GeminiExtraBodyParser.ParseExtraBody(JsonElement.Parse("""
             {"google":{"thinking_config":{"thinking_budget":"high","include_thoughts":true}}}
-            """).RootElement);
+            """));
 
         var thinking = extra!.Google!.ThinkingConfig!;
         Assert.Null(thinking.ThinkingBudget!.IntValue);
@@ -519,9 +519,9 @@ public sealed class GeminiOpenAiOutboundTransformerTests
     [Fact]
     public void ParseExtraBodyLetsALaterDuplicateKeyWin()
     {
-        var extra = GeminiExtraBodyParser.ParseExtraBody(JsonDocument.Parse("""
+        var extra = GeminiExtraBodyParser.ParseExtraBody(JsonElement.Parse("""
             {"google":{"thinking_config":{"thinking_budget":1024,"thinking_budget":"high"}}}
-            """).RootElement);
+            """));
 
         var budget = extra!.Google!.ThinkingConfig!.ThinkingBudget!;
         Assert.Equal("high", budget.StringValue);
@@ -534,7 +534,7 @@ public sealed class GeminiOpenAiOutboundTransformerTests
         Assert.Null(GeminiExtraBodyParser.ParseExtraBody(null));
         Assert.Null(GeminiExtraBodyParser.ParseExtraBody(default(JsonElement)));
         Assert.Null(GeminiExtraBodyParser.ParseExtraBody(
-            JsonDocument.Parse("null").RootElement));
+            JsonElement.Parse("null")));
     }
 
     // ------------------------------------------------------------------

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
@@ -7,6 +8,10 @@ using AxonHub.Persistence;
 namespace AxonHub.Api.Tests;
 
 /// <summary>In-memory systems table mirroring the Dapper store's live-row predicate.</summary>
+[SuppressMessage(
+    "Design",
+    "CA1001:Types that own disposable fields should be disposable",
+    Justification = "The in-memory semaphore owns no unmanaged state and the store lives for the test process.")]
 internal sealed class FakeSystemStore : ISystemStore
 {
     private readonly SemaphoreSlim _transactionLock = new(1, 1);

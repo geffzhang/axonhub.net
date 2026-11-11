@@ -67,10 +67,14 @@ public sealed class ChannelLimiterMetricsTests
         metrics.IncQueueTimeout(7, "openai");
         metrics.ObserveQueueWait(7, "openai", TimeSpan.Zero);
 
-        var full = Assert.Single(capture.Counters["axonhub_channel_queue_full_total"]);
-        Assert.Equal(2d, full.Value);
-        Assert.Equal(7L, (long)full.Tags["channel_id"]!);
-        Assert.Equal("openai", (string)full.Tags["channel_name"]!);
+        // The capture records one point per measurement, not an aggregated
+        // series, so two Add(1) calls yield two points whose sum is the counter.
+        var full = capture.Counters["axonhub_channel_queue_full_total"];
+        Assert.Equal(2, full.Count);
+        Assert.All(full, point => Assert.Equal(1d, point.Value));
+        Assert.Equal(2d, full.Sum(point => point.Value));
+        Assert.Equal(7L, (long)full[0].Tags["channel_id"]!);
+        Assert.Equal("openai", (string)full[0].Tags["channel_name"]!);
 
         var timeout = Assert.Single(capture.Counters["axonhub_channel_queue_timeout_total"]);
         Assert.Equal(1d, timeout.Value);

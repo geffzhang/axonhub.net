@@ -48,7 +48,7 @@ public sealed class ProviderQuotaGrain(
         {
             result = await runner
                 .RunGroupAsync(group, now, CancellationToken.None)
-                .ConfigureAwait(false);
+                .ConfigureAwait(true);
         }
         catch (Exception ex)
         {

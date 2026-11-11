@@ -94,6 +94,6 @@ public sealed record StoragePolicy
             order.Add(fallback.ResourceType);
         }
 
-        return order.Select(static resourceType => byType[resourceType]).ToList();
+        return order.Select(resourceType => byType[resourceType]).ToList();
     }
 }
