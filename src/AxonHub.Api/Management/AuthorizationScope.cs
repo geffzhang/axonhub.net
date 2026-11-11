@@ -32,6 +32,8 @@ public sealed class AuthorizationScope(
 
     public const string WriteSettings = "write_settings";
 
+    public const string ReadUsers = "read_users";
+
     /// <summary>
     /// Port of <c>scopes.UserHasScope</c> (rule_user_scope.go:66-77): only a
     /// management user principal is consulted — API keys never qualify and

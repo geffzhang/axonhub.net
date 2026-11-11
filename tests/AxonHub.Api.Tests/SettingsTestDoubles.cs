@@ -19,6 +19,9 @@ internal sealed class FakeSystemStore : ISystemStore
 
     public List<SystemRecord> Rows { get; } = [];
 
+    /// <summary>The connection queries the root systems resolver issued.</summary>
+    public List<SystemListQuery> ListQueries { get; } = [];
+
     public Exception? GetFailure { get; set; }
 
     public Exception? SetFailure { get; set; }
@@ -59,6 +62,105 @@ internal sealed class FakeSystemStore : ISystemStore
         }
 
         return Task.FromResult(Rows.SingleOrDefault(row => row.Key == key && row.DeletedAt == 0));
+    }
+
+    /// <summary>Entgql connection read behind the root systems query.</summary>
+    public Task<ListPage<SystemRecord>> ListAsync(
+        SystemListQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        ListQueries.Add(query);
+
+        var filtered = Rows
+            .Where(row => row.DeletedAt == 0 && Matches(row, query.Where))
+            .ToList();
+
+        var page = FakePagination.Paginate(
+            filtered,
+            query.SortField != SystemSortField.Id,
+            row => row.Id,
+            row => query.SortField == SystemSortField.CreatedAt
+                ? row.CreatedAt
+                : (object?)row.UpdatedAt,
+            query.Direction,
+            query.After,
+            query.Before,
+            query.First,
+            query.Last);
+
+        return Task.FromResult(new ListPage<SystemRecord>(
+            page.Items,
+            page.HasNextPage,
+            page.HasPreviousPage,
+            page.TotalCount));
+    }
+
+    private static bool Matches(SystemRecord row, SystemListFilter? filter)
+    {
+        if (filter is null)
+        {
+            return true;
+        }
+
+        if (filter.Id is not null && row.Id != filter.Id)
+        {
+            return false;
+        }
+
+        if (filter.IdIn is not null && !filter.IdIn.Contains(row.Id))
+        {
+            return false;
+        }
+
+        if (filter.Key is not null
+            && !string.Equals(row.Key, filter.Key, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (filter.KeyIn is not null
+            && !filter.KeyIn.Contains(row.Key, StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        if (filter.KeyHasPrefix is not null
+            && !row.Key.StartsWith(filter.KeyHasPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (filter.KeyContainsFold is not null
+            && !row.Key.Contains(filter.KeyContainsFold, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (filter.ValueContainsFold is not null
+            && !row.Value.Contains(
+                filter.ValueContainsFold,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (filter.Not is not null && Matches(row, filter.Not))
+        {
+            return false;
+        }
+
+        if (filter.And is not null && !filter.And.All(nested => Matches(row, nested)))
+        {
+            return false;
+        }
+
+        if (filter.Or is not null && !filter.Or.Any(nested => Matches(row, nested)))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>ent's plain System.Create() for the channel-settings CAS loop.</summary>

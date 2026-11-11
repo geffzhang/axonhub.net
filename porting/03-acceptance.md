@@ -872,6 +872,46 @@ metrics、system settings 等）未编入；重新构建后按 16 个失败测�
 台账：新增 C269（gap），现有 269 条（196 accepted / 8 gap / 65 resolved）；lint 通过，
 `porting/02-differences.md` 已重新生成。
 
+§173（2026-11-11）按上一节的盘点补齐 C269 中两个可用的根查询 `systems` 与
+`oidcIdentities`，`nodes` 保持不暴露（参照解析器是 `panic("not implemented")` 占位）。
+新增 `SystemAdminTypes.cs`（System / OIDCIdentity 的 order / where 子集 / connection /
+edge / node 类型与映射）、`SystemPrivacy.cs`（两套 ent 查询策略的显式求值）、
+`OidcIdentityAdminStore.cs`（Dapper 键集分页读取），`SystemStore` 增加 entgql 连接读取，
+`AdminQuery` 增加两个解析器，`Program.cs` 注册存储与隐私服务。
+
+保真要点：两个连接与参照一样先做 `validatePaginationArgs`，再由 ent 生成的 `Paginate`
+做 `validateFirstLast`（`internal/ent/gql_pagination.go:60`，端口在 resolver 中按同样
+顺序调用，故 `first` / `last` 同时出现与负数输入的错误文案一致）；`CREATED_AT` /
+`UPDATED_AT` 是真实排序字段，不做 users/roles 式的 id 改写；`first` 多取一行探测、
+`last` 反向扫描后还原顺序、totalCount 先于游标；System 查询策略
+Owner → read_settings → default deny，OIDCIdentity 查询策略
+Owner → read_users → user_id 本人谓词（作为额外 and 过滤），无 user 时
+`no user in context` 经错误过滤器表现为 permission denied / FORBIDDEN；
+OIDCIdentity.user 边按 user_id 加载（生成代码 `obj.User(ctx)`），不是身份行 id；
+where 输入只建模前端使用的子集（C269）。`nodes` 与参照一致不暴露。
+
+测试：`tests/AxonHub.Api.Tests/AdminSystemsOidcIdentitiesEndpointTests.cs` 11 例（连接
+形状与真实 CREATED_AT 排序、UPDATED_AT 键集游标、非 owner 无 read_settings 拒绝与有
+scope 放行、node(System) 策略、node(OIDCIdentity) unknown、OIDC 本人 / read_users
+全量 / where 与 user_id 求 AND、user 边按 user_id、API key 拒绝）；
+`tests/AxonHub.Persistence.Tests/SystemStoreTests.cs` 新增 2 例、
+`OidcIdentityAdminStoreTests.cs` 2 例（id 序分页与软删过滤、UPDATED_AT 排序 /
+标量过滤 / user_id AND）。
+
+本轮实测：`AxonHub.Api.Tests` 6113 通过 / 0 失败 / 0 跳过（26m43s，先重建测试程序集，
+`--no-build` 运行）；`AxonHub.Persistence.Tests` 376 通过 / 0 失败（较 §172 的 372
+增加 4 例）；`AxonHub.Grains.Tests` 175 与 `AxonHub.Llm.Tests` 3110 本轮未改动，沿用
+§172 的实测，四项目合计 9774。§172 的 Api 6102 + 新增 11 = 6113、Persistence
+372 + 4 = 376，与实测一致。
+
+台账：C269 由 gap 更新为 resolved；现有 269 条（196 accepted / 7 gap / 66 resolved），
+lint 通过，`porting/02-differences.md` 已重新生成。
+
+附加发现（下一小节的输入）：端口 `models` 与 `dataStorages` 两个根查询没有调用 entgql
+生成的 `Paginate` 内部的 `validateFirstLast`，参照会拒绝 `first` + `last` 同时出现；
+C196 中「dataStorages 不要求 first / last 互斥」的措辞是对照 resolver 时的误读，需要
+修正并补测试。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

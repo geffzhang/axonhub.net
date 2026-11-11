@@ -217,6 +217,7 @@ builder.Services.AddScoped<IUserStore, UserStore>();
 builder.Services.AddScoped<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
 builder.Services.AddScoped<ISystemStore, SystemStore>();
+builder.Services.AddScoped<IOidcIdentityAdminStore, OidcIdentityAdminStore>();
 builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminService>();
 // First-run initialization (biz/system.go:698-846): owner user, default
 // project, JWT secret, Primary storage, version — one transaction (C241).
@@ -755,6 +756,10 @@ builder.Services.AddScoped<IThreadAdminStore, ThreadAdminStore>();
 builder.Services.AddScoped<IRequestSegmentStore, RequestSegmentStore>();
 builder.Services.AddScoped<IUsageMetadataStore, UsageMetadataStore>();
 builder.Services.AddScoped<TracePrivacy>();
+
+// Systems / OIDCIdentity query policies for the root systems and
+// oidcIdentities connections (schema/system.go:52-64, oidc_identity.go:83-95).
+builder.Services.AddScoped<SystemPrivacy>();
 builder.Services.AddScoped<TraceSegmentService>();
 builder.Services.AddScoped<TraceManagementService>();
 builder.Services.AddScoped<ThreadManagementService>();

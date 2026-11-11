@@ -1,8 +1,62 @@
+using System.Text;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
 namespace AxonHub.Persistence;
+
+/// <summary>Ordering fields exposed by the reference SystemOrder type.</summary>
+public enum SystemSortField
+{
+    Id,
+    CreatedAt,
+    UpdatedAt,
+}
+
+/// <summary>
+/// Subset of <c>SystemWhereInput</c> used by the root <c>systems</c> query.
+/// The remaining entgql scalar predicates are not modelled (C269).
+/// </summary>
+public sealed record SystemListFilter
+{
+    public long? Id { get; init; }
+
+    public IReadOnlyList<long>? IdIn { get; init; }
+
+    public string? Key { get; init; }
+
+    public IReadOnlyList<string>? KeyIn { get; init; }
+
+    public string? KeyHasPrefix { get; init; }
+
+    public string? KeyContainsFold { get; init; }
+
+    public string? ValueContainsFold { get; init; }
+
+    public SystemListFilter? Not { get; init; }
+
+    public IReadOnlyList<SystemListFilter>? And { get; init; }
+
+    public IReadOnlyList<SystemListFilter>? Or { get; init; }
+}
+
+/// <summary>Entgql pagination request for systems.</summary>
+public sealed record SystemListQuery
+{
+    public SystemListFilter? Where { get; init; }
+
+    public SortDirection Direction { get; init; } = SortDirection.Asc;
+
+    public SystemSortField SortField { get; init; } = SystemSortField.Id;
+
+    public ListCursor? After { get; init; }
+
+    public ListCursor? Before { get; init; }
+
+    public int? First { get; init; }
+
+    public int? Last { get; init; }
+}
 
 /// <summary>Persistence seam for the reference <c>systems</c> table.</summary>
 public interface ISystemStore
@@ -13,6 +67,14 @@ public interface ISystemStore
 
     /// <summary>Port of SystemService.getSystemValue's query (live rows only).</summary>
     Task<SystemRecord?> GetByKeyAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Entgql connection read behind the root <c>systems</c> query
+    /// (ent.resolvers.go:519-528): a keyset on (order field, id) over live rows.
+    /// </summary>
+    Task<ListPage<SystemRecord>> ListAsync(
+        SystemListQuery query,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Port of the channel-settings loop's plain <c>System.Create()</c>: insert
@@ -114,6 +176,205 @@ public sealed class SystemStore(AxonHubDbContext db) : ISystemStore
                 new { Key = key },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<ListPage<SystemRecord>> ListAsync(
+        SystemListQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var args = new SqlArguments();
+        var where = BuildFilter(query.Where, "s", args);
+
+        var conditions = new StringBuilder(" WHERE s.\"deleted_at\" = 0");
+        if (where is not null)
+        {
+            conditions.Append(" AND ").Append(where);
+        }
+
+        // entgql reverses the scan for a `last` page and build() restores the
+        // requested direction afterwards (RoleStore does the same).
+        var direction = query.Last is null
+            ? query.Direction
+            : query.Direction == SortDirection.Asc ? SortDirection.Desc : SortDirection.Asc;
+
+        var countSql = "SELECT COUNT(*) FROM \"systems\" s" + conditions + ";";
+
+        var nodesSql = new StringBuilder("SELECT ");
+        nodesSql.Append(string.Join(", ", Columns
+            .Split(',')
+            .Select(static column => "s." + column.Trim())));
+        nodesSql.Append(" FROM \"systems\" s").Append(conditions);
+
+        var valueColumn = query.SortField switch
+        {
+            SystemSortField.CreatedAt => "created_at",
+            SystemSortField.UpdatedAt => "updated_at",
+            _ => null,
+        };
+
+        ConnectionSql.AppendCursor(
+            nodesSql,
+            "s",
+            "id",
+            valueColumn,
+            query.After,
+            query.Before,
+            direction,
+            args);
+
+        nodesSql.Append(" ORDER BY ")
+            .Append(ConnectionSql.OrderBy("s", "id", valueColumn, direction));
+
+        var limit = query.First is not null
+            ? query.First + 1
+            : query.Last is not null ? query.Last + 1 : (int?)null;
+        if (limit is not null)
+        {
+            nodesSql.Append(" LIMIT ").Append(limit.Value);
+        }
+
+        nodesSql.Append(';');
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        var totalCount = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(
+                countSql,
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+
+        var nodes = (await connection.QueryAsync<SystemRecord>(
+            new CommandDefinition(
+                nodesSql.ToString(),
+                args.Parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false)).AsList();
+
+        return BuildPage(nodes, query, totalCount);
+    }
+
+    private static ListPage<SystemRecord> BuildPage(
+        List<SystemRecord> nodes,
+        SystemListQuery query,
+        int totalCount)
+    {
+        var hasNextPage = query.Before is not null;
+        var hasPreviousPage = query.After is not null;
+
+        if (query.First is not null && query.First + 1 == nodes.Count)
+        {
+            hasNextPage = true;
+            nodes.RemoveAt(nodes.Count - 1);
+        }
+        else if (query.Last is not null && query.Last + 1 == nodes.Count)
+        {
+            hasPreviousPage = true;
+            nodes.RemoveAt(nodes.Count - 1);
+        }
+
+        if (query.Last is not null)
+        {
+            nodes.Reverse();
+        }
+
+        return new ListPage<SystemRecord>(nodes, hasNextPage, hasPreviousPage, totalCount);
+    }
+
+    private static string? BuildFilter(
+        SystemListFilter? filter,
+        string alias,
+        SqlArguments args)
+    {
+        if (filter is null)
+        {
+            return null;
+        }
+
+        var predicates = new List<string?>();
+
+        if (filter.Id is not null)
+        {
+            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
+        }
+
+        if (filter.IdIn is not null)
+        {
+            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+        }
+
+        if (filter.Key is not null)
+        {
+            predicates.Add(alias + ".\"key\" = " + args.Add(filter.Key));
+        }
+
+        if (filter.KeyIn is not null)
+        {
+            ConnectionSql.AppendStringIn(predicates, alias, "key", filter.KeyIn, args);
+        }
+
+        if (filter.KeyHasPrefix is not null)
+        {
+            // ent.HasPrefix: LIKE value + '%', no wildcard escaping.
+            predicates.Add(
+                alias + ".\"key\" LIKE " + args.Add(filter.KeyHasPrefix + "%"));
+        }
+
+        if (filter.KeyContainsFold is not null)
+        {
+            ConnectionSql.AppendStringFilter(
+                predicates,
+                alias,
+                "key",
+                "LIKE",
+                filter.KeyContainsFold,
+                args);
+        }
+
+        if (filter.ValueContainsFold is not null)
+        {
+            ConnectionSql.AppendStringFilter(
+                predicates,
+                alias,
+                "value",
+                "LIKE",
+                filter.ValueContainsFold,
+                args);
+        }
+
+        if (filter.Not is not null)
+        {
+            var not = BuildFilter(filter.Not, alias, args);
+            if (not is not null)
+            {
+                predicates.Add("NOT (" + not + ")");
+            }
+        }
+
+        if (filter.And is not null)
+        {
+            var and = filter.And
+                .Select(nested => BuildFilter(nested, alias, args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            if (and.Length > 0)
+            {
+                predicates.Add("(" + string.Join(" AND ", and) + ")");
+            }
+        }
+
+        if (filter.Or is not null)
+        {
+            var or = filter.Or
+                .Select(nested => BuildFilter(nested, alias, args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            predicates.Add(or.Length == 0 ? "FALSE" : "(" + string.Join(" OR ", or) + ")");
+        }
+
+        return ConnectionSql.Combine(predicates);
     }
 
     public async Task<bool> TryCreateAsync(

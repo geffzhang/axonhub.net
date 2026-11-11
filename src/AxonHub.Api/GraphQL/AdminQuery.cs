@@ -733,6 +733,106 @@ public sealed class AdminQuery
         return ProjectMapping.BuildConnection(page, sortField);
     }
 
+    /// <summary>Port of queryResolver.Systems (ent.resolvers.go:519-528).</summary>
+    /// <remarks>
+    /// Unlike users/roles/projects there is no CREATED_AT rewrite; a missing
+    /// orderBy is ent's default id order. The System privacy policy (owner or
+    /// read_settings) runs before the query, and a denied caller surfaces as
+    /// "permission denied" with FORBIDDEN through the error filter.
+    /// </remarks>
+    [GraphQLName("systems")]
+    public async Task<SystemConnectionType> SystemsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        SystemOrder? orderBy,
+        SystemWhereInput? where,
+        [Service] ISystemStore systems,
+        [Service] SystemPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        await privacy.EvaluateSystemQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var sortField = SystemAdminMapping.ToSortField(orderBy);
+        var page = await systems.ListAsync(
+                new SystemListQuery
+                {
+                    Where = SystemAdminMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = SystemAdminMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return SystemAdminMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.OidcIdentities (ent.resolvers.go:427-436).</summary>
+    /// <remarks>
+    /// The OIDCIdentity policy allows owners and read_users callers to see
+    /// every row; any other user only sees their own identities through the
+    /// UserOwnedQueryRule predicate, which is ANDed with the supplied where.
+    /// </remarks>
+    [GraphQLName("oidcIdentities")]
+    public async Task<OidcIdentityConnectionType> OidcIdentitiesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        OidcIdentityOrder? orderBy,
+        OidcIdentityWhereInput? where,
+        [Service] IOidcIdentityAdminStore identities,
+        [Service] SystemPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var ownerFilter = await privacy
+            .EvaluateOidcIdentityQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var filter = SystemAdminMapping.ToFilter(where);
+        if (ownerFilter is not null)
+        {
+            filter = filter is null
+                ? new OidcIdentityListFilter { UserId = ownerFilter }
+                : new OidcIdentityListFilter
+                {
+                    And =
+                    [
+                        filter,
+                        new OidcIdentityListFilter { UserId = ownerFilter },
+                    ],
+                };
+        }
+
+        var sortField = SystemAdminMapping.ToSortField(orderBy);
+        var page = await identities.ListAsync(
+                new OidcIdentityListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = SystemAdminMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return SystemAdminMapping.BuildConnection(page, sortField);
+    }
+
     /// <summary>Port of queryResolver.APIKeys (ent.resolvers.go:340-354).</summary>
     [GraphQLName("apiKeys")]
     public async Task<ApiKeyConnectionType> ApiKeysAsync(
@@ -1352,10 +1452,11 @@ public sealed class AdminQuery
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
     /// port resolves Project, User, APIKey, APIKeyProfileTemplate, Model,
-    /// Prompt, DataStorage, Channel, Trace, Thread, Request and UsageLog so
-    /// far and reports every other type as "unknown node type: %s" (C165).
-    /// PromptProtectionRule is absent from the reference map
-    /// (graphql.go:206-226) even though its SDL type implements Node.
+    /// Prompt, DataStorage, Channel, Trace, Thread, Request, UsageLog and
+    /// System so far and reports every other type as "unknown node type: %s"
+    /// (C165). PromptProtectionRule is absent from the reference map
+    /// (graphql.go:206-226) even though its SDL type implements Node, and so
+    /// is OIDCIdentity.
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -1470,6 +1571,22 @@ public sealed class AdminQuery
                     var usageLog = await usageLogs.GetNodeAsync(gid.Id, cancellationToken)
                         .ConfigureAwait(false);
                     return RequestMapping.ToGraphQL(usageLog);
+                }
+
+            case "System":
+                {
+                    // The reference's guidTypeToNodeType registration also runs
+                    // the System query policy through Noder.
+                    var systems = services.GetRequiredService<ISystemStore>();
+                    await services.GetRequiredService<SystemPrivacy>()
+                        .EvaluateSystemQueryAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var system = await systems.GetByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return system is null
+                        ? throw new InvalidOperationException("ent: system not found")
+                        : SystemAdminMapping.ToGraphQL(system);
                 }
 
             default:

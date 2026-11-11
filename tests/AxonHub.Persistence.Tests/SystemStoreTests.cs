@@ -407,11 +407,157 @@ public sealed class SystemStoreTests(PostgresFixture fixture)
             "SELECT COUNT(*) FROM \"systems\";"));
     }
 
-    private static SystemRecord NewSystem() => new()
+    [Fact]
+    public async Task ListPaginatesLiveRowsInIdOrder()
     {
-        CreatedAt = CreatedAt,
-        UpdatedAt = UpdatedAt,
-        Key = "security_settings",
-        Value = """{"blocked_ips":["203.0.113.0/24"]}""",
-    };
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        var alpha = NewSystem("alpha", "1", CreatedAt, UpdatedAt);
+        var beta = NewSystem("beta", "2", CreatedAt.AddMinutes(1), UpdatedAt.AddMinutes(1));
+        var gamma = NewSystem("gamma", "3", CreatedAt.AddMinutes(2), UpdatedAt.AddMinutes(2));
+        await store.CreateAsync(alpha);
+        await store.CreateAsync(beta);
+        await store.CreateAsync(gamma);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"systems\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, Id = gamma.Id });
+        }
+
+        // The connection counts and pages over live rows only.
+        var first = await store.ListAsync(new SystemListQuery { First = 1 });
+
+        Assert.Equal(Expected("alpha"), first.Nodes.Select(row => row.Key));
+        Assert.True(first.HasNextPage);
+        Assert.False(first.HasPreviousPage);
+        Assert.Equal(2, first.TotalCount);
+
+        var second = await store.ListAsync(new SystemListQuery
+        {
+            After = new ListCursor(first.Nodes[0].Id, null),
+            First = 1,
+        });
+
+        Assert.Equal(Expected("beta"), second.Nodes.Select(row => row.Key));
+        Assert.False(second.HasNextPage);
+        Assert.True(second.HasPreviousPage);
+
+        // `last` flips the scan direction and build() restores the id order.
+        var last = await store.ListAsync(new SystemListQuery { Last = 1 });
+
+        Assert.Equal(Expected("beta"), last.Nodes.Select(row => row.Key));
+        Assert.True(last.HasPreviousPage);
+        Assert.False(last.HasNextPage);
+    }
+
+    [Fact]
+    public async Task ListOrdersByEntgqlFieldsAndPushesFiltersDown()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        var security = NewSystem(
+            "security_settings",
+            """{"blocked_ips":[]}""",
+            CreatedAt,
+            UpdatedAt.AddMinutes(2));
+        var retry = NewSystem(
+            "retry_policy",
+            """{"enabled":true}""",
+            CreatedAt.AddMinutes(1),
+            UpdatedAt.AddMinutes(1));
+        var model = NewSystem(
+            "model_settings",
+            """{"default_model":"gpt"}""",
+            CreatedAt.AddMinutes(2),
+            UpdatedAt);
+        await store.CreateAsync(security);
+        await store.CreateAsync(retry);
+        await store.CreateAsync(model);
+
+        var newest = await store.ListAsync(new SystemListQuery
+        {
+            SortField = SystemSortField.UpdatedAt,
+            Direction = SortDirection.Desc,
+        });
+
+        Assert.Equal(
+            Expected("security_settings", "retry_policy", "model_settings"),
+            newest.Nodes.Select(row => row.Key));
+
+        // The cursor is the keyset (updated_at, id) pair of the last edge.
+        var after = await store.ListAsync(new SystemListQuery
+        {
+            SortField = SystemSortField.UpdatedAt,
+            Direction = SortDirection.Desc,
+            After = new ListCursor(newest.Nodes[0].Id, newest.Nodes[0].UpdatedAt),
+            First = 1,
+        });
+
+        Assert.Equal(Expected("retry_policy"), after.Nodes.Select(row => row.Key));
+
+        var byCreated = await store.ListAsync(new SystemListQuery
+        {
+            SortField = SystemSortField.CreatedAt,
+        });
+
+        Assert.Equal(
+            Expected("security_settings", "retry_policy", "model_settings"),
+            byCreated.Nodes.Select(row => row.Key));
+
+        var prefixed = await store.ListAsync(new SystemListQuery
+        {
+            Where = new SystemListFilter { KeyHasPrefix = "model_" },
+        });
+
+        Assert.Equal(Expected("model_settings"), prefixed.Nodes.Select(row => row.Key));
+        Assert.Equal(1, prefixed.TotalCount);
+
+        var folded = await store.ListAsync(new SystemListQuery
+        {
+            Where = new SystemListFilter { ValueContainsFold = "ENABLED" },
+        });
+
+        Assert.Equal(Expected("retry_policy"), folded.Nodes.Select(row => row.Key));
+
+        var excluded = await store.ListAsync(new SystemListQuery
+        {
+            Where = new SystemListFilter
+            {
+                Not = new SystemListFilter
+                {
+                    KeyIn = ["security_settings", "model_settings"],
+                },
+            },
+        });
+
+        Assert.Equal(Expected("retry_policy"), excluded.Nodes.Select(row => row.Key));
+    }
+
+    private static T[] Expected<T>(params T[] values) => values;
+
+    private static SystemRecord NewSystem() => NewSystem(
+        "security_settings",
+        """{"blocked_ips":["203.0.113.0/24"]}""",
+        CreatedAt,
+        UpdatedAt);
+
+    private static SystemRecord NewSystem(
+        string key,
+        string value,
+        DateTime createdAt,
+        DateTime updatedAt) => new()
+        {
+            CreatedAt = createdAt,
+            UpdatedAt = updatedAt,
+            Key = key,
+            Value = value,
+        };
 }
