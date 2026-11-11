@@ -289,7 +289,7 @@ public sealed class GcCronSchedule
 
         var index = Array.FindIndex(
             names,
-            static name => string.Equals(name, text, StringComparison.OrdinalIgnoreCase));
+            name => string.Equals(name, text, StringComparison.OrdinalIgnoreCase));
         if (index < 0)
         {
             return false;

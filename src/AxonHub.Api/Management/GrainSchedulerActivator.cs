@@ -7,9 +7,13 @@ namespace AxonHub.Api.Management;
 /// <summary>
 /// Arms the reminder-driven management tasks at startup: the backup cron
 /// (<c>BackupService.RegisterScheduledTasks</c>, service.go:39-55), the GC
-/// cron (<c>gc.Worker.RegisterScheduledTasks</c>, gc.go:77-84) and the
-/// provider quota cron
-/// (<c>ProviderQuotaService.RegisterScheduledTasks</c>, provider_quota.go:401-409).
+/// cron (<c>gc.Worker.RegisterScheduledTasks</c>, gc.go:77-84), the provider
+/// quota cron
+/// (<c>ProviderQuotaService.RegisterScheduledTasks</c>, provider_quota.go:401-409),
+/// the video-storage fixed-rate scan
+/// (<c>video_storage.Worker.RegisterScheduledTasks</c>, worker.go:54-71) and
+/// the channel-probe minute task
+/// (<c>ChannelProbeService.RegisterScheduledTasks</c>, channel_probe.go:70-79).
 /// </summary>
 /// <remarks>
 /// Orleans' in-memory reminder table does not survive a silo stop and never
@@ -45,6 +49,14 @@ public sealed class GrainSchedulerActivator(
                 .ConfigureAwait(false);
             await grainFactory
                 .GetGrain<IProviderQuotaCoordinatorGrain>(IProviderQuotaCoordinatorGrain.SingletonKey)
+                .EnsureScheduledAsync(now)
+                .ConfigureAwait(false);
+            await grainFactory
+                .GetGrain<IVideoStorageGrain>(IVideoStorageGrain.SingletonKey)
+                .EnsureScheduledAsync(now)
+                .ConfigureAwait(false);
+            await grainFactory
+                .GetGrain<IChannelProbeGrain>(IChannelProbeGrain.SingletonKey)
                 .EnsureScheduledAsync(now)
                 .ConfigureAwait(false);
         }

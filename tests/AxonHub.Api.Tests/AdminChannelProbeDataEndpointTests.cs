@@ -75,6 +75,8 @@ public sealed class AdminChannelProbeDataEndpointTests : IAsyncLifetime
         _gate.Register(builder.Services);
         builder.Services.AddSingleton<IUserAdminStore>(_adminUsers);
         builder.Services.AddSingleton<IChannelProbeStore>(_probes);
+        builder.Services.AddSingleton<IChannelStore>(new FakeChannelStore());
+        builder.Services.AddSingleton<ChannelProbeRunState>();
         builder.Services.AddSingleton<TimeProvider>(_clock);
         builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminService>();
         builder.Services.AddScoped<AuthorizationScope>();

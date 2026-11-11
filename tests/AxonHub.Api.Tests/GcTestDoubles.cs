@@ -9,8 +9,9 @@ using AxonHub.Persistence;
 namespace AxonHub.Api.Tests;
 
 /// <summary>
-/// The one settings method the GC worker reads; every other member is outside
-/// this slice and throws so an accidental call fails the test loudly.
+/// The settings methods the GC worker and the auto-disable/webhook slices read;
+/// every other member is outside those slices and throws so an accidental call
+/// fails the test loudly.
 /// </summary>
 internal sealed class FakeGcSettingsService : ISystemSettingsAdminService
 {
@@ -18,11 +19,21 @@ internal sealed class FakeGcSettingsService : ISystemSettingsAdminService
 
     public Exception? Failure { get; set; }
 
+    public RetryPolicy RetryPolicy { get; set; } = RetryPolicy.Default;
+
+    public Exception? RetryPolicyFailure { get; set; }
+
+    public WebhookNotifierConfig WebhookNotifier { get; set; } = WebhookNotifierConfigCodec.Default;
+
+    public Exception? WebhookNotifierFailure { get; set; }
+
     public Task<bool> IsInitializedAsync(CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
 
     public Task<RetryPolicy> GetRetryPolicyAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
+        => RetryPolicyFailure is null
+            ? Task.FromResult(RetryPolicy)
+            : Task.FromException<RetryPolicy>(RetryPolicyFailure);
 
     public Task<ModelSettings> GetModelSettingsAsync(CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
@@ -68,6 +79,146 @@ internal sealed class FakeGcSettingsService : ISystemSettingsAdminService
 
     public Task UpdateAutoBackupLastRunAsync(
         string lastError,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<long> GetDefaultDataStorageIdAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetDefaultDataStorageIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<SystemGeneralSettings> GetGeneralSettingsAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetGeneralSettingsAsync(
+        SystemGeneralSettings settings,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<SystemChannelSettings> GetChannelSettingsAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task UpdateChannelSettingsAsync(
+        SystemChannelSettingsPatch patch,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<string> GetBrandNameAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<string> GetBrandLogoAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<string> GetTitleAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetBrandNameAsync(
+        string brandName,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetBrandLogoAsync(
+        string brandLogo,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetTitleAsync(string title, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<bool> GetUserAgentPassThroughAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetUserAgentPassThroughAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<bool> GetPassThroughAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetPassThroughAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<bool> GetInjectUsageCostEnabledAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetInjectUsageCostEnabledAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    /// <summary>The video-storage scan's settings; scripted by the C234 tests.</summary>
+    public VideoStorageSettings VideoStorage { get; set; } = SystemSettingsDefaults.VideoStorage;
+
+    public Task<VideoStorageSettings> GetVideoStorageSettingsAsync(
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(VideoStorage);
+
+    public Task SetVideoStorageSettingsAsync(
+        VideoStorageSettings settings,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<IReadOnlyList<ProxyPreset>> GetProxyPresetsAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SaveProxyPresetAsync(
+        ProxyPreset preset,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task DeleteProxyPresetAsync(
+        string url,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<OnboardingRecord?> GetOnboardingInfoAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task CompleteOnboardingAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task CompleteSystemModelSettingOnboardingAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task CompleteAutoDisableChannelOnboardingAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<WebhookNotifierConfig> GetWebhookNotifierConfigAsync(
+        CancellationToken cancellationToken = default)
+        => WebhookNotifierFailure is null
+            ? Task.FromResult(WebhookNotifier)
+            : Task.FromException<WebhookNotifierConfig>(WebhookNotifierFailure);
+
+    public Task SetWebhookNotifierConfigAsync(
+        WebhookNotifierConfig config,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<CatalogSettings> GetCatalogSettingsAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<CatalogSettings> GetCatalogSettingsOrDefaultAsync(
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task SetCatalogSettingsAsync(
+        CatalogSettings settings,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
 }
@@ -126,6 +277,8 @@ internal sealed class FakeGcStore : IGcStore
 
     public Queue<IReadOnlyList<long>> OldTraceBatches { get; } = new();
 
+    public Queue<IReadOnlyList<long>> OldChannelProbeBatches { get; } = new();
+
     public Dictionary<GcPayloadKind, Queue<IReadOnlyList<GcRequestRef>>> RequestPayloadBatches { get; } = [];
 
     public Dictionary<GcPayloadKind, Queue<IReadOnlyList<GcExecutionRef>>> ExecutionPayloadBatches { get; } = [];
@@ -139,6 +292,10 @@ internal sealed class FakeGcStore : IGcStore
     public List<DateTime> ThreadCutoffs { get; } = [];
 
     public List<DateTime> TraceCutoffs { get; } = [];
+
+    public List<long> ChannelProbeCutoffs { get; } = [];
+
+    public Exception? ChannelProbeListFailure { get; set; }
 
     public List<long> CountRequestCutoffs { get; } = [];
 
@@ -163,6 +320,8 @@ internal sealed class FakeGcStore : IGcStore
     public List<IReadOnlyList<long>> DeletedThreads { get; } = [];
 
     public List<IReadOnlyList<long>> DeletedTraces { get; } = [];
+
+    public List<IReadOnlyList<long>> DeletedChannelProbes { get; } = [];
 
     public List<bool> VacuumCalls { get; } = [];
 
@@ -224,6 +383,18 @@ internal sealed class FakeGcStore : IGcStore
         return Task.FromResult(Dequeue(OldTraceBatches));
     }
 
+    public Task<IReadOnlyList<long>> ListOldChannelProbeIdsAsync(
+        long cutoffUnix,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        Assert.Equal(GcWorker.DefaultBatchSize, limit);
+        ChannelProbeCutoffs.Add(cutoffUnix);
+        return ChannelProbeListFailure is { } failure
+            ? Task.FromException<IReadOnlyList<long>>(failure)
+            : Task.FromResult(Dequeue(OldChannelProbeBatches));
+    }
+
     public Task<int> DeleteExecutionsAsync(
         IReadOnlyList<long> ids,
         CancellationToken cancellationToken = default)
@@ -261,6 +432,14 @@ internal sealed class FakeGcStore : IGcStore
         CancellationToken cancellationToken = default)
     {
         DeletedTraces.Add(ids);
+        return Task.FromResult(ids.Count);
+    }
+
+    public Task<int> DeleteChannelProbesAsync(
+        IReadOnlyList<long> ids,
+        CancellationToken cancellationToken = default)
+    {
+        DeletedChannelProbes.Add(ids);
         return Task.FromResult(ids.Count);
     }
 
@@ -381,6 +560,10 @@ internal sealed class FakeGcDataStorageStore : IDataStorageStore
         => Task.FromResult(Storages.TryGetValue(id, out var row) ? row : null);
 
     public Task<DataStorageRecord?> GetPrimaryAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(Primary);
+
+    public Task<DataStorageRecord?> GetPrimaryIncludingDeletedAsync(
+        CancellationToken cancellationToken = default)
         => Task.FromResult(Primary);
 
     public Task<bool> ExistsByNameAsync(

@@ -112,10 +112,10 @@ public interface IGcCleanupService
 /// predicates.
 /// </summary>
 /// <remarks>
-/// The channel-probes pass (gc.go:226-233, 606-640) has no table in the port
-/// schema (C195) and is skipped. The reference's process-wide data-storage
-/// caches are also absent (C196); a per-pass dictionary reproduces the
-/// per-cleanup memoisation.
+/// The channel-probes pass (gc.go:226-233, 606-640) always runs with the fixed
+/// three-day window, independent of the storage policy and the manual-day
+/// overrides. The reference's process-wide data-storage caches are absent
+/// (C196); a per-pass dictionary reproduces the per-cleanup memoisation.
 /// </remarks>
 public sealed class GcWorker(
     ISystemSettingsAdminService settings,
@@ -128,6 +128,12 @@ public sealed class GcWorker(
 {
     /// <summary>gc.defaultBatchSize (gc.go:27).</summary>
     public const int DefaultBatchSize = 500;
+
+    /// <summary>
+    /// The fixed retention the reference passes to cleanupChannelProbes
+    /// (gc.go:226): not part of the storage policy and not overridable manually.
+    /// </summary>
+    public const int ChannelProbeCleanupDays = 3;
 
     private static readonly Action<ILogger, bool, Exception?> LogStartingCleanup =
         LoggerMessage.Define<bool>(
@@ -165,47 +171,65 @@ public sealed class GcWorker(
             new EventId(0, "GcStrippedPayloads"),
             "Stripped stored payloads resource={Resource} requests={Requests} executions={Executions} cutoff_time={CutoffTime}");
 
-    private static readonly Action<ILogger, Exception, long, string, Exception?> LogSkipStripRequestPayload =
+    private static readonly Action<ILogger, long, string, Exception?> LogSkipStripRequestPayload =
         LoggerMessage.Define<long, string>(
             LogLevel.Warning,
             new EventId(0, "GcSkipStripRequestPayload"),
             "Skip stripping request payload; external delete failed request_id={RequestId} resource={Resource}");
 
-    private static readonly Action<ILogger, Exception, long, string, Exception?> LogSkipStripExecutionPayload =
+    private static readonly Action<ILogger, long, string, Exception?> LogSkipStripExecutionPayload =
         LoggerMessage.Define<long, string>(
             LogLevel.Warning,
             new EventId(0, "GcSkipStripExecutionPayload"),
             "Skip stripping execution payload; external delete failed execution_id={ExecutionId} resource={Resource}");
 
-    private static readonly Action<ILogger, Exception, long, Exception?> LogLoadStorageForRequestFailed =
+    private static readonly Action<ILogger, long, Exception?> LogLoadStorageForRequestFailed =
         LoggerMessage.Define<long>(
             LogLevel.Warning,
             new EventId(0, "GcLoadStorageForRequestFailed"),
             "Failed to load data storage for request cleanup request_id={RequestId}");
 
-    private static readonly Action<ILogger, Exception, long, Exception?> LogLoadStorageForExecutionFailed =
+    private static readonly Action<ILogger, long, Exception?> LogLoadStorageForExecutionFailed =
         LoggerMessage.Define<long>(
             LogLevel.Warning,
             new EventId(0, "GcLoadStorageForExecutionFailed"),
             "Failed to load data storage for execution cleanup execution_id={ExecutionId}");
 
-    private static readonly Action<ILogger, Exception, long, string, Exception?> LogDeleteRequestDataFailed =
+    private static readonly Action<ILogger, long, string, Exception?> LogDeleteRequestDataFailed =
         LoggerMessage.Define<long, string>(
             LogLevel.Warning,
             new EventId(0, "GcDeleteRequestDataFailed"),
             "Failed to delete request external data request_id={RequestId} key={Key}");
 
-    private static readonly Action<ILogger, Exception, long, string, Exception?> LogDeleteExecutionDataFailed =
+    private static readonly Action<ILogger, long, string, Exception?> LogDeleteExecutionDataFailed =
         LoggerMessage.Define<long, string>(
             LogLevel.Warning,
             new EventId(0, "GcDeleteExecutionDataFailed"),
             "Failed to delete execution external data execution_id={ExecutionId} key={Key}");
 
-    private static readonly Action<ILogger, string, Exception?> LogChannelProbesUnavailable =
-        LoggerMessage.Define<string>(
+    private static readonly Action<ILogger, Exception?> LogChannelProbesFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "GcChannelProbesFailed"),
+            "Failed to cleanup channel probes");
+
+    private static readonly Action<ILogger, int, Exception?> LogChannelProbesSucceeded =
+        LoggerMessage.Define<int>(
+            LogLevel.Information,
+            new EventId(0, "GcChannelProbesSucceeded"),
+            "Successfully cleaned up channel probes cleanup_days={CleanupDays}");
+
+    private static readonly Action<ILogger, int, DateTime, Exception?> LogCleanedChannelProbes =
+        LoggerMessage.Define<int, DateTime>(
             LogLevel.Debug,
-            new EventId(0, "GcChannelProbesUnavailable"),
-            "Channel probe cleanup is not available in the port schema resource={Resource}");
+            new EventId(0, "GcCleanedChannelProbes"),
+            "Cleaned up channel probes deleted_count={DeletedCount} cutoff_time={CutoffTime}");
+
+    private static readonly Action<ILogger, Exception?> LogNoChannelProbeCleanup =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(0, "GcNoChannelProbeCleanup"),
+            "No cleanup needed for channel probes");
 
     private static readonly Action<ILogger, string, bool, Exception?> LogVacuumStarting =
         LoggerMessage.Define<string, bool>(
@@ -376,8 +400,22 @@ public sealed class GcWorker(
         }
 
         // gc.go:226-233: the channel-probes pass always runs (fixed 3 days),
-        // independent of the policy and of the manual-day map.
-        await CleanupChannelProbesAsync(cancellationToken).ConfigureAwait(false);
+        // independent of the policy and of the manual-day map. A failure is
+        // logged and the pass continues to VACUUM.
+        try
+        {
+            await CleanupChannelProbesAsync(ChannelProbeCleanupDays, cancellationToken)
+                .ConfigureAwait(false);
+            LogChannelProbesSucceeded(logger, ChannelProbeCleanupDays, null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogChannelProbesFailed(logger, ex);
+        }
 
         if (options.VacuumEnabled)
         {
@@ -1003,11 +1041,69 @@ public sealed class GcWorker(
         }
     }
 
-    private async Task CleanupChannelProbesAsync(CancellationToken cancellationToken)
+    /// <summary>Port of Worker.cleanupChannelProbes (gc.go:606-640).</summary>
+    private async Task CleanupChannelProbesAsync(
+        int cleanupDays,
+        CancellationToken cancellationToken)
     {
-        _ = cancellationToken;
-        LogChannelProbesUnavailable(logger, "channel_probes", null);
-        await Task.CompletedTask.ConfigureAwait(false);
+        if (cleanupDays <= 0)
+        {
+            LogNoChannelProbeCleanup(logger, null);
+            return;
+        }
+
+        var cutoff = time.GetUtcNow().AddDays(-cleanupDays);
+        var cutoffUnix = cutoff.ToUnixTimeSeconds();
+
+        int deleted;
+        try
+        {
+            deleted = await DeleteInBatchesAsync(
+                    async () =>
+                    {
+                        IReadOnlyList<long> ids;
+                        try
+                        {
+                            ids = await gc.ListOldChannelProbeIdsAsync(
+                                    cutoffUnix,
+                                    DefaultBatchSize,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException(
+                                "failed to query old channel probes: " + ex.Message,
+                                ex);
+                        }
+
+                        if (ids.Count == 0)
+                        {
+                            return 0;
+                        }
+
+                        return await gc.DeleteChannelProbesAsync(ids, cancellationToken)
+                            .ConfigureAwait(false);
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to delete old channel probes: " + ex.Message,
+                ex);
+        }
+
+        LogCleanedChannelProbes(logger, deleted, cutoff.UtcDateTime, null);
     }
 
     /// <summary>gc.deleteInBatches (gc.go:86-105).</summary>
@@ -1433,7 +1529,9 @@ public sealed class GcWorker(
         DataStorageRecord? storage;
         try
         {
-            storage = await storages.GetPrimaryAsync(cancellationToken).ConfigureAwait(false);
+            // gc_bodies.go:367-382 runs under the worker's SkipSoftDelete context.
+            storage = await storages.GetPrimaryIncludingDeletedAsync(cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

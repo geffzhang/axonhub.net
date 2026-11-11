@@ -317,6 +317,59 @@ public sealed class GcWorkerTests
         Status = "active",
     };
 
+    [Fact]
+    public async Task ChannelProbesAlwaysUseTheFixedThreeDayWindow()
+    {
+        // The pass is independent of the storage policy and of the manual map:
+        // gc.go:226 always calls cleanupChannelProbes(ctx, 3, manual).
+        var harness = new Harness(PolicyWith(
+            new CleanupOption(CleanupResourceTypes.UsageLogs, true, 30)));
+        harness.Gc.OldChannelProbeBatches.Enqueue([2L, 1L]);
+        harness.Gc.OldChannelProbeBatches.Enqueue([3L]);
+
+        await harness.Worker.RunAutomaticCleanupAsync();
+
+        Assert.All(
+            harness.Gc.ChannelProbeCutoffs,
+            cutoff => Assert.Equal(
+                Now.AddDays(-3).ToUnixTimeSeconds(),
+                cutoff));
+        Assert.Equal(3, harness.Gc.ChannelProbeCutoffs.Count);
+        Assert.Equal(2, harness.Gc.DeletedChannelProbes.Count);
+        Assert.Equal([2L, 1L], harness.Gc.DeletedChannelProbes[0]);
+        Assert.Equal([3L], harness.Gc.DeletedChannelProbes[1]);
+    }
+
+    [Fact]
+    public async Task ManualCleanupKeepsTheFixedProbeWindow()
+    {
+        var harness = new Harness(PolicyWith(
+            new CleanupOption(CleanupResourceTypes.Requests, false, 3)));
+
+        await harness.Worker.RunCleanupNowAsync(new GcCleanupRequest
+        {
+            RequestsCleanupDays = 30,
+        });
+
+        Assert.Equal(
+            Now.AddDays(-3).ToUnixTimeSeconds(),
+            Assert.Single(harness.Gc.ChannelProbeCutoffs));
+    }
+
+    [Fact]
+    public async Task ProbeCleanupFailuresDoNotAbortTheRestOfThePass()
+    {
+        var harness = new Harness(
+            PolicyWith(),
+            new GcOptions { VacuumEnabled = true, VacuumFull = false });
+        harness.Gc.ChannelProbeListFailure = new InvalidOperationException("probe cleanup failed");
+
+        await harness.Worker.RunAutomaticCleanupAsync();
+
+        Assert.Equal([false], harness.Gc.VacuumCalls);
+        Assert.Empty(harness.Gc.DeletedChannelProbes);
+    }
+
     private sealed class Harness
     {
         public Harness(StoragePolicy policy, GcOptions? options = null)

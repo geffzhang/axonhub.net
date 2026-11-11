@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Dapper;
 
@@ -76,6 +77,15 @@ public interface IGcStore
         int limit,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// gc.go:606-624: old channel probes by ascending id. The table has no
+    /// status column, so the cutoff is the only predicate.
+    /// </summary>
+    Task<IReadOnlyList<long>> ListOldChannelProbeIdsAsync(
+        long cutoffUnix,
+        int limit,
+        CancellationToken cancellationToken = default);
+
     Task<int> DeleteExecutionsAsync(
         IReadOnlyList<long> ids,
         CancellationToken cancellationToken = default);
@@ -93,6 +103,11 @@ public interface IGcStore
         CancellationToken cancellationToken = default);
 
     Task<int> DeleteTracesAsync(
+        IReadOnlyList<long> ids,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>gc.go:626-635: <c>Delete().Where(IDIn(ids))</c>.</summary>
+    Task<int> DeleteChannelProbesAsync(
         IReadOnlyList<long> ids,
         CancellationToken cancellationToken = default);
 
@@ -171,6 +186,9 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
         )
         """;
 
+    private static readonly CompositeFormat RetainedTraceOfChildFormat =
+        CompositeFormat.Parse(RetainedTraceOfChild);
+
     public async Task<IReadOnlyList<GcExecutionRef>> ListOldExecutionsAsync(
         DateTime cutoff,
         int limit,
@@ -180,7 +198,7 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
             SELECT e."id", e."request_id", e."project_id", e."data_storage_id"
             FROM "request_executions" e
             WHERE e."created_at" < @Cutoff
-              AND {string.Format(RetainedTraceOfChild, "e")}
+              AND {string.Format(CultureInfo.InvariantCulture, RetainedTraceOfChildFormat, "e")}
             ORDER BY e."id" ASC
             LIMIT @Limit;
             """;
@@ -228,7 +246,7 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
             SELECT u."id"
             FROM "usage_logs" u
             WHERE u."created_at" < @Cutoff
-              AND {string.Format(RetainedTraceOfChild, "u")}
+              AND {string.Format(CultureInfo.InvariantCulture, RetainedTraceOfChildFormat, "u")}
             ORDER BY u."id" ASC
             LIMIT @Limit;
             """;
@@ -289,6 +307,29 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
         return rows.AsList();
     }
 
+    public async Task<IReadOnlyList<long>> ListOldChannelProbeIdsAsync(
+        long cutoffUnix,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var sql = """
+            SELECT m."id"
+            FROM "channel_probes" m
+            WHERE m."timestamp" < @CutoffUnix
+            ORDER BY m."id" ASC
+            LIMIT @Limit;
+            """;
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<long>(
+            new CommandDefinition(
+                sql,
+                new { CutoffUnix = cutoffUnix, Limit = limit },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.AsList();
+    }
+
     public Task<int> DeleteExecutionsAsync(
         IReadOnlyList<long> ids,
         CancellationToken cancellationToken = default)
@@ -313,6 +354,11 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
         IReadOnlyList<long> ids,
         CancellationToken cancellationToken = default)
         => DeleteByIdsAsync("traces", ids, cancellationToken);
+
+    public Task<int> DeleteChannelProbesAsync(
+        IReadOnlyList<long> ids,
+        CancellationToken cancellationToken = default)
+        => DeleteByIdsAsync("channel_probes", ids, cancellationToken);
 
     public async Task<long> CountOldRequestsAsync(
         DateTime cutoff,
@@ -340,7 +386,7 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
         var sql = $"""
             SELECT COUNT(*)::bigint
             FROM "request_executions" e
-            WHERE e."created_at" < @Cutoff AND {string.Format(RetainedTraceOfChild, "e")};
+            WHERE e."created_at" < @Cutoff AND {string.Format(CultureInfo.InvariantCulture, RetainedTraceOfChildFormat, "e")};
             """;
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -359,7 +405,7 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
         var sql = $"""
             SELECT COUNT(*)::bigint
             FROM "usage_logs" u
-            WHERE u."created_at" < @Cutoff AND {string.Format(RetainedTraceOfChild, "u")};
+            WHERE u."created_at" < @Cutoff AND {string.Format(CultureInfo.InvariantCulture, RetainedTraceOfChildFormat, "u")};
             """;
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -387,6 +433,7 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
                 WHERE r."created_at" < @Cutoff
                   AND
                 """)
+            .Append(' ')
             .Append(RetainedTraceOfRequest)
             .Append("  AND ").Append(BuildPayloadPredicate(kind, "r", primaryStorageId, args));
         AppendSkipIds(sql, "r", skipIds, args);
@@ -421,7 +468,8 @@ public sealed class GcStore(AxonHubDbContext db) : IGcStore
                 WHERE e."created_at" < @Cutoff
                   AND
                 """)
-            .Append(string.Format(RetainedTraceOfChild, "e"))
+            .Append(' ')
+            .Append(string.Format(CultureInfo.InvariantCulture, RetainedTraceOfChildFormat, "e"))
             .Append("  AND ").Append(BuildPayloadPredicate(kind, "e", primaryStorageId, args));
         AppendSkipIds(sql, "e", skipIds, args);
         sql.Append(" ORDER BY e.\"id\" ASC LIMIT @Limit;");

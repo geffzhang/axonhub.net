@@ -310,6 +310,19 @@ public interface IDashboardStore
         string timeZone,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Port of <c>queryChannelProbeStats</c> (channel_performance_helpers.go:35-62):
+    /// the preferred source of <c>channelPerformanceStats</c>. One bucket per
+    /// local date and channel with a request-count-weighted throughput and TTFT;
+    /// rows whose <c>avg_tokens_per_second</c> is NULL or above 2000 are
+    /// excluded by the SQL, and a bucket whose weighted throughput is NULL keeps
+    /// NULL (the service filters it later).
+    /// </summary>
+    Task<IReadOnlyList<DashboardChannelPerformanceRow>> GetDailyChannelPerformanceFromProbesAsync(
+        DateTime startUtc,
+        string timeZone,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<DashboardUserUsageRow>> GetUsageByUserAsync(
         long projectId,
         DateTime? createdAtGte,
@@ -792,6 +805,49 @@ public sealed class DashboardStore(AxonHubDbContext db) : IDashboardStore
                 new CommandDefinition(
                     sql,
                     new { start = startUtc, timeZone },
+                    transaction: db.CurrentDbTransaction,
+                    cancellationToken: cancellationToken)).ConfigureAwait(false)).AsList();
+    }
+
+    public async Task<IReadOnlyList<DashboardChannelPerformanceRow>> GetDailyChannelPerformanceFromProbesAsync(
+        DateTime startUtc,
+        string timeZone,
+        CancellationToken cancellationToken = default)
+    {
+        // Port of queryChannelProbeStats' ent builder
+        // (channel_performance_helpers.go:35-62, qb.BuildProbeStatsQuery is not
+        // reused: this is the dashboard's own grouping). The port keeps only
+        // the PostgreSQL branch (C195).
+        const string Sql =
+            """
+            SELECT
+                to_char(to_timestamp(p."timestamp") AT TIME ZONE @timeZone::text, 'YYYY-MM-DD') as date,
+                p."channel_id" as channel_id,
+                SUM(p."total_request_count") as request_count,
+                (SUM(CASE WHEN p."avg_tokens_per_second" IS NOT NULL
+                          THEN p."avg_tokens_per_second" * p."total_request_count" ELSE 0 END)
+                 / NULLIF(SUM(CASE WHEN p."avg_tokens_per_second" IS NOT NULL
+                                   THEN p."total_request_count" ELSE 0 END), 0))::double precision as throughput,
+                (SUM(CASE WHEN p."avg_time_to_first_token_ms" IS NOT NULL
+                          THEN p."avg_time_to_first_token_ms" * p."total_request_count" ELSE 0 END)
+                 / NULLIF(SUM(CASE WHEN p."avg_time_to_first_token_ms" IS NOT NULL
+                                   THEN p."total_request_count" ELSE 0 END), 0))::double precision as first_token_ms
+            FROM "channel_probes" p
+            WHERE p."timestamp" >= @StartUnix
+                AND p."avg_tokens_per_second" <= 2000
+            GROUP BY to_char(to_timestamp(p."timestamp") AT TIME ZONE @timeZone::text, 'YYYY-MM-DD'), p."channel_id"
+            ORDER BY to_char(to_timestamp(p."timestamp") AT TIME ZONE @timeZone::text, 'YYYY-MM-DD'), p."channel_id";
+            """;
+
+        // ent's TimestampGTE takes Unix seconds (channel_performance_helpers.go:43).
+        var startUnix = new DateTimeOffset(
+            DateTime.SpecifyKind(startUtc, DateTimeKind.Utc)).ToUnixTimeSeconds();
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return (await connection.QueryAsync<DashboardChannelPerformanceRow>(
+                new CommandDefinition(
+                    Sql,
+                    new { StartUnix = startUnix, timeZone },
                     transaction: db.CurrentDbTransaction,
                     cancellationToken: cancellationToken)).ConfigureAwait(false)).AsList();
     }

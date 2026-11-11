@@ -4,6 +4,7 @@ using AxonHub.Api.Auth;
 using AxonHub.Api.Auth.Oidc;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Catalog;
+using AxonHub.Api.Codex;
 using AxonHub.Api.Diagnostics;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.GraphQL;
@@ -15,6 +16,7 @@ using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.PromptProtection;
 using AxonHub.Api.Prompts;
+using AxonHub.Api.Safeguards;
 using AxonHub.Api.Security;
 using AxonHub.Api.Settings;
 using AxonHub.Api.Static;
@@ -348,6 +350,24 @@ builder.Services.AddScoped<ChannelQueryService>();
 builder.Services.AddScoped<IChannelWriteStore, ChannelWriteStore>();
 builder.Services.AddScoped<ChannelLifecycleService>();
 
+// Automatic credential/channel disabling (biz/channel_auto_disable.go, C236):
+// the counter maps live for the process lifetime like the reference's
+// ChannelService fields, the engine evaluates one failure at a time through the
+// same singleton queue the metrics middleware feeds, and the lifecycle service
+// is the credential mutation seam. The webhook notifier consumes the events
+// published when a channel is auto-disabled.
+builder.Services.AddSingleton<AutoDisableCounters>();
+builder.Services.AddScoped<IChannelCredentialMutations>(
+    static services => services.GetRequiredService<ChannelLifecycleService>());
+builder.Services.AddScoped<ChannelAutoDisableService>();
+builder.Services.AddSingleton<ChannelAutoDisableEvaluationQueue>();
+builder.Services.AddSingleton<IChannelAutoDisableEvaluationQueue>(
+    static services => services.GetRequiredService<ChannelAutoDisableEvaluationQueue>());
+builder.Services.AddHostedService(
+    static services => services.GetRequiredService<ChannelAutoDisableEvaluationQueue>());
+builder.Services.AddScoped<WebhookNotifier>();
+builder.Services.AddSingleton<IWebhookNotificationSink, BackgroundWebhookNotificationSink>();
+
 // Quota routing startup migration (biz/quota_routing_migration.go): one
 // transaction claims quota_routing_migration_done, copies the legacy
 // quota_enforcement_settings into quota_routing_settings when the new key is
@@ -581,10 +601,14 @@ builder.Services.AddScoped<ChannelTestService>();
 
 // Channel probes (biz.ChannelProbeService): the channelProbeData read over the
 // interval-aligned channel_probes buckets, gated by read_channels for the
-// stored probe setting. The writer, the per-minute scheduler and the manual
-// trigger are not ported (C249).
+// stored probe setting, and the probe writer. The reference's "* * * * *"
+// UTC task is one Orleans reminder (C249); the service is scoped, so the
+// last-execution guard is the singleton ChannelProbeRunState. The reference's
+// unused RunProbeNow has no caller and is not exposed.
 builder.Services.AddScoped<IChannelProbeStore, ChannelProbeStore>();
+builder.Services.AddSingleton<ChannelProbeRunState>();
 builder.Services.AddScoped<ChannelProbeService>();
+builder.Services.AddSingleton<IChannelProbeRunRunner, GrainChannelProbeRunRunner>();
 
 // Channel model sync (syncChannelModels): the per-channel fetch/merge/price
 // transaction and the hourly schedule guard (channel_model_sync.go). A changed
@@ -685,12 +709,21 @@ builder.Services.AddSingleton<IAutoBackupScheduleSource, GrainAutoBackupSchedule
 builder.Services.AddSingleton<IAutoBackupRunner, GrainAutoBackupRunner>();
 builder.Services.AddSingleton<IAutoBackupRescheduleSignal, GrainAutoBackupRescheduleSignal>();
 
+// Video storage (internal/server/video_storage): the fixed-rate scan entry
+// (C234) as one Orleans reminder; the settings mutation re-arms it through
+// IVideoStorageRescheduleSignal. The scan itself runs the reference's
+// scanAndSave in a fresh scope with its ten-minute budget.
+builder.Services.AddScoped<VideoStorageWorker>();
+builder.Services.AddSingleton<IVideoStorageScheduleSource, GrainVideoStorageScheduleSource>();
+builder.Services.AddSingleton<IVideoStorageScanRunner, GrainVideoStorageScanRunner>();
+builder.Services.AddSingleton<IVideoStorageRescheduleSignal, GrainVideoStorageRescheduleSignal>();
+
 // Garbage collection (internal/server/gc): the storage-policy-driven cleanup
 // worker and its "gc" cron entry in UTC. The reference registers the task
 // through fx.Invoke during app construction, so an unparsable gc.cron fails
-// startup; parsing eagerly reproduces that. Channel probes have no table in
-// the port schema (C195), and the reference's process-wide data-storage caches
-// are not ported (C196).
+// startup; parsing eagerly reproduces that. The fixed three-day channel-probes
+// pass and the probe writer's table are both wired (C249); the reference's
+// process-wide data-storage caches are not ported (C196).
 var gcOptions = GcOptions.FromConfiguration(builder.Configuration);
 GcCronSchedule gcSchedule;
 try
@@ -872,6 +905,16 @@ app.MapGraphQL("/admin/graphql")
     .WithOptions(static options => options.EnableGetRequests = false)
     .WithMetadata(new HttpMethodMetadata([HttpMethods.Post]));
 
+// The downstream Responses WebSocket mode (responses_websocket.go) upgrades
+// GET /v1/responses and GET /codex/responses. ASP.NET Core needs the WebSocket
+// middleware in the pipeline; the reference's 2.5 minute pings and 5 minute
+// read deadline map onto the keep-alive pair (C244).
+app.UseWebSockets(new WebSocketOptions
+{
+    KeepAliveInterval = ResponsesWebSocketEndpoint.ResponsesWebSocketPingInterval,
+    KeepAliveTimeout = TimeSpan.FromMinutes(5),
+});
+
 // Global request tracing (routes.go:63): every request gets an ar-<uuid> id
 // echoed in the configured response header and published for error bodies.
 app.UseMiddleware<RequestTracingMiddleware>();
@@ -958,6 +1001,23 @@ app.UseWhen(
         branch.UseMiddleware<TraceMiddleware>();
     });
 
+// The Codex compatibility surface (codex_routes.go:10-29): IP blocklist,
+// the Enabled gate (system bypass), strict API key auth (no no-auth fallback),
+// then the thread/trace pair. WithSource/WithResponseHeaders stay unregistered
+// like the rest of the port (C115); the group timeout rides the orchestrator's
+// own budget.
+app.UseWhen(
+    static context => !IsStaticFallback(context)
+        && context.Request.Path.StartsWithSegments("/codex"),
+    static branch =>
+    {
+        branch.UseMiddleware<IpBlocklistMiddleware>();
+        branch.UseMiddleware<CodexCompatibilityEnabledMiddleware>();
+        branch.UseMiddleware<StrictApiKeyAuthMiddleware>();
+        branch.UseMiddleware<ThreadMiddleware>();
+        branch.UseMiddleware<TraceMiddleware>();
+    });
+
 // The native Gemini surface (routes.go:266-289): the /gemini/:version group
 // and the /v1beta alias run IP blocklist + Gemini key auth (query `key` or
 // the regular header extractor) instead of WithAPIKeyConfig, then the same
@@ -996,11 +1056,31 @@ static Task HandleCompletionsAsync(
 app.MapPost("/v1/completions", HandleCompletionsAsync);
 
 // Anthropic Messages: both spellings the reference mounts in routes.go.
+// internal/server/api/anthropic.go:55-75 wires the Claude Code safeguards into
+// this handler: the static server config, the settings provider and a reviewer
+// over an OpenAI-inbound copy of the same orchestrator.
 static Task HandleAnthropicMessagesAsync(
     HttpContext context,
     ChatCompletionOrchestrator orchestrator,
-    AnthropicInboundTransformer anthropic)
-    => ChatCompletionEndpoint.HandleAsync(context, orchestrator.WithInbound(anthropic));
+    AnthropicInboundTransformer anthropic,
+    IClaudeCodeSafeguardsSettingsService safeguardsSettings,
+    ClaudeCodeSafeguardsServerDefaults safeguardsDefaults)
+{
+    var safeguards = new SafeguardsEndpointOptions
+    {
+        Config = ClaudeCodeSafeguardsCodec.ToSafeguardsConfig(safeguardsDefaults),
+        ConfigProvider = async cancellationToken =>
+            ClaudeCodeSafeguardsCodec.ToSafeguardsConfig(
+                await safeguardsSettings.GetRuntimeConfigAsync(cancellationToken)),
+        ClassifierFactory = static (parent, identity, request) =>
+            SafeguardsClassifier.Create(parent, identity, request.SessionId, request.SessionScope),
+    };
+
+    return ChatCompletionEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(anthropic),
+        safeguards: safeguards);
+}
 
 app.MapPost("/v1/messages", HandleAnthropicMessagesAsync);
 app.MapPost("/anthropic/v1/messages", HandleAnthropicMessagesAsync);
@@ -1019,8 +1099,18 @@ static Task HandleResponsesCompactAsync(
     ResponsesCompactInboundTransformer compact)
     => ChatCompletionEndpoint.HandleAsync(context, orchestrator.WithInbound(compact));
 
+// The WebSocket sibling owns a long-lived connection and applies no group
+// timeout (routes.go:200-204); each frame's response.create event is processed
+// through the same orchestrator. A plain GET answers the gin 400 envelope.
+static Task HandleResponsesWebSocketAsync(
+    HttpContext context,
+    ChatCompletionOrchestrator orchestrator,
+    ResponsesInboundTransformer responses)
+    => ResponsesWebSocketEndpoint.HandleAsync(context, orchestrator.WithInbound(responses));
+
 app.MapPost("/v1/responses", HandleResponsesAsync);
 app.MapPost("/v1/responses/compact", HandleResponsesCompactAsync);
+app.MapGet("/v1/responses", HandleResponsesWebSocketAsync);
 
 // Images API (routes.go:215-216): CreateImage/CreateImageEdit delegate to the
 // shared chat handler with the images inbound transformer. Variations stays
@@ -1041,6 +1131,18 @@ static Task HandleImageEditAsync(
 
 app.MapPost("/v1/images/generations", HandleImageGenerationAsync);
 app.MapPost("/v1/images/edits", HandleImageEditAsync);
+
+// Codex compatibility runtime surface (codex_routes.go:15-28): the whoami and
+// accounts stubs, the catalog-filtered model list, and the OpenAI image /
+// response handlers reused under /codex, except the websocket group, which
+// registers after the HTTP group and has no group timeout.
+app.MapGet("/codex/v1/user-auth-credential/whoami", CodexEndpoint.WhoamiAsync);
+app.MapGet("/codex/api/codex/accounts/check", CodexEndpoint.AccountsCheckAsync);
+app.MapGet("/codex/models", CodexEndpoint.ListModelsAsync);
+app.MapPost("/codex/images/generations", HandleImageGenerationAsync);
+app.MapPost("/codex/images/edits", HandleImageEditAsync);
+app.MapPost("/codex/responses", HandleResponsesAsync);
+app.MapGet("/codex/responses", HandleResponsesWebSocketAsync);
 
 // Video tasks (routes.go:217-219): creation reuses the shared chat handler with
 // the video inbound transformer; GET/DELETE run the biz.VideoService task

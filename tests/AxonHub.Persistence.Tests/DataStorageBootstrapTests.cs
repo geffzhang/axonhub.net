@@ -151,7 +151,7 @@ public sealed class DataStorageBootstrapTests(PostgresFixture fixture)
 
         var rows = await StoragesAsync(connection);
         Assert.Equal(2, rows.Count);
-        var seeded = Assert.Single(rows.Where(static row => row.Primary));
+        var seeded = Assert.Single(rows, static row => row.Primary);
         Assert.Equal("Primary", seeded.Name);
         Assert.Equal(
             seeded.Id.ToString(CultureInfo.InvariantCulture),

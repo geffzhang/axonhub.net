@@ -128,11 +128,20 @@ public interface IDataStorageStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// ent <c>DataStorage.Query().Where(Primary(true)).First(ctx)</c> under the
-    /// GC worker's SkipSoftDelete context (gc_bodies.go:367-382). Null stands
-    /// in for ent's NotFoundError; the caller renders that text.
+    /// ent <c>DataStorage.Query().Where(Primary(true)).First(ctx)</c> through
+    /// the SoftDeleteMixin: live rows only, id ASC. Null stands in for ent's
+    /// NotFoundError.
     /// </summary>
     Task<DataStorageRecord?> GetPrimaryAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// ent <c>DataStorage.Query().Where(Primary(true)).First(ctx)</c> under the
+    /// GC worker's SkipSoftDelete context (gc_bodies.go:367-382): soft-deleted
+    /// rows stay visible. Null stands in for ent's NotFoundError; the caller
+    /// renders that text.
+    /// </summary>
+    Task<DataStorageRecord?> GetPrimaryIncludingDeletedAsync(
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// ent <c>DataStorage.Query().Where(NameEQ[, IDNEQ]).Exist(ctx)</c> (live
@@ -232,6 +241,22 @@ public sealed class DataStorageStore(AxonHubDbContext db) : IDataStorageStore
         // invariant is at most one, and id ASC keeps the port deterministic.
         var sql = "SELECT " + Columns
             + " FROM \"data_storages\" WHERE \"primary\" = TRUE AND \"deleted_at\" = 0"
+            + " ORDER BY \"id\" ASC LIMIT 1;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<DataStorageRecord>(
+            new CommandDefinition(
+                sql,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<DataStorageRecord?> GetPrimaryIncludingDeletedAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // The GC worker's SkipSoftDelete context: no deleted_at predicate.
+        var sql = "SELECT " + Columns
+            + " FROM \"data_storages\" WHERE \"primary\" = TRUE"
             + " ORDER BY \"id\" ASC LIMIT 1;";
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);

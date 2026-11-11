@@ -700,6 +700,112 @@ public sealed class AdminDashboardEndpointTests : IAsyncLifetime
         var query = Assert.Single(_dashboard.ChannelQueries);
         Assert.False(query.IncludeDeleted);
         Assert.Equal(new long[] { 1, 2 }, query.Ids);
+
+        // Probe rows were empty, so the execution fallback ran exactly once.
+        Assert.Single(_dashboard.ChannelPerformanceQueries);
+        Assert.Single(_dashboard.ChannelPerformanceProbeQueries);
+    }
+
+    [Fact]
+    public async Task ChannelPerformanceStatsPreferProbeBuckets()
+    {
+        _dashboard.ChannelPerformanceProbeRows.AddRange(
+        [
+            new DashboardChannelPerformanceRow
+            {
+                Date = "2026-03-10",
+                ChannelId = 1,
+                Throughput = 42.5,
+                FirstTokenMs = 210,
+                RequestCount = 120,
+            },
+            new DashboardChannelPerformanceRow
+            {
+                Date = "2026-03-09",
+                ChannelId = 2,
+                Throughput = 0,
+                FirstTokenMs = 0,
+                RequestCount = 40,
+            },
+        ]);
+        // These would surface only if the execution fallback ran.
+        _dashboard.ChannelPerformanceRows.Add(new DashboardChannelPerformanceRow
+        {
+            Date = "2026-03-10",
+            ChannelId = 9,
+            Throughput = 1,
+            FirstTokenMs = 1,
+            RequestCount = 1,
+        });
+        _dashboard.Channels[1] = new DashboardChannelRow
+        {
+            Id = 1,
+            Name = "One",
+            Type = "openai",
+            Status = "enabled",
+        };
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              channelPerformanceStats {
+                date
+                channelId
+                channelName
+                throughput
+                ttftMs
+                requestCount
+              }
+            }
+            """);
+
+        var stats = data.GetProperty("channelPerformanceStats").EnumerateArray().ToArray();
+        Assert.Equal(2, stats.Length);
+        Assert.Equal("2026-03-09", stats[0].GetProperty("date").GetString());
+        Assert.Equal("2", stats[0].GetProperty("channelId").GetString());
+        Assert.Equal("channel-2", stats[0].GetProperty("channelName").GetString());
+        Assert.Equal(JsonValueKind.Null, stats[0].GetProperty("throughput").ValueKind);
+        Assert.Equal(JsonValueKind.Null, stats[0].GetProperty("ttftMs").ValueKind);
+        Assert.Equal(40, stats[0].GetProperty("requestCount").GetInt32());
+
+        Assert.Equal("2026-03-10", stats[1].GetProperty("date").GetString());
+        Assert.Equal("1", stats[1].GetProperty("channelId").GetString());
+        Assert.Equal("One", stats[1].GetProperty("channelName").GetString());
+        Assert.Equal(42.5, stats[1].GetProperty("throughput").GetDouble());
+        Assert.Equal(210, stats[1].GetProperty("ttftMs").GetDouble());
+        Assert.Equal(120, stats[1].GetProperty("requestCount").GetInt32());
+
+        // A non-empty probe result replaces the execution fallback entirely.
+        Assert.Empty(_dashboard.ChannelPerformanceQueries);
+        var probeQuery = Assert.Single(_dashboard.ChannelPerformanceProbeQueries);
+        Assert.Equal("UTC", probeQuery.TimeZone);
+        Assert.Equal(new DateTime(2026, 2, 9, 0, 0, 0, DateTimeKind.Utc), probeQuery.StartUtc);
+    }
+
+    [Fact]
+    public async Task ChannelPerformanceStatsProbeFailuresDoNotFallBack()
+    {
+        _dashboard.ChannelPerformanceProbeFailure =
+            new InvalidOperationException("probe query failed");
+        _dashboard.ChannelPerformanceRows.Add(new DashboardChannelPerformanceRow
+        {
+            Date = "2026-03-10",
+            ChannelId = 9,
+            Throughput = 1,
+            FirstTokenMs = 1,
+            RequestCount = 1,
+        });
+
+        var errors = await QueryErrorsAsync(
+            """
+            query {
+              channelPerformanceStats { date channelId }
+            }
+            """);
+
+        Assert.NotEmpty(errors);
+        Assert.Empty(_dashboard.ChannelPerformanceQueries);
+        Assert.Single(_dashboard.ChannelPerformanceProbeQueries);
     }
 
     [Fact]
@@ -1252,6 +1358,16 @@ internal sealed class FakeDashboardStore : IDashboardStore
 
     public List<(DateTime StartUtc, string TimeZone)> ChannelPerformanceQueries { get; } = [];
 
+    /// <summary>
+    /// channel_performance_helpers.go:1327-1405 prefers these probe buckets;
+    /// the execution fallback only runs when this list is empty.
+    /// </summary>
+    public List<DashboardChannelPerformanceRow> ChannelPerformanceProbeRows { get; } = [];
+
+    public List<(DateTime StartUtc, string TimeZone)> ChannelPerformanceProbeQueries { get; } = [];
+
+    public Exception? ChannelPerformanceProbeFailure { get; set; }
+
     public List<DashboardUserUsageRow> UserUsageRows { get; } = [];
 
     public List<(long ProjectId, DateTime? CreatedAtGte, DateTime? CreatedAtLte)> UserUsageQueries { get; } = [];
@@ -1398,6 +1514,18 @@ internal sealed class FakeDashboardStore : IDashboardStore
     {
         ChannelPerformanceQueries.Add((startUtc, timeZone));
         return Task.FromResult<IReadOnlyList<DashboardChannelPerformanceRow>>(ChannelPerformanceRows);
+    }
+
+    public Task<IReadOnlyList<DashboardChannelPerformanceRow>> GetDailyChannelPerformanceFromProbesAsync(
+        DateTime startUtc,
+        string timeZone,
+        CancellationToken cancellationToken = default)
+    {
+        ChannelPerformanceProbeQueries.Add((startUtc, timeZone));
+        return ChannelPerformanceProbeFailure is { } failure
+            ? Task.FromException<IReadOnlyList<DashboardChannelPerformanceRow>>(failure)
+            : Task.FromResult<IReadOnlyList<DashboardChannelPerformanceRow>>(
+                ChannelPerformanceProbeRows);
     }
 
     public Task<IReadOnlyList<DashboardUserUsageRow>> GetUsageByUserAsync(

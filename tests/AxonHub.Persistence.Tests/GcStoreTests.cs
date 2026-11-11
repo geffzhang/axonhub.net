@@ -14,6 +14,8 @@ public sealed class GcStoreTests(PostgresFixture fixture)
     private static readonly DateTime Old = new(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime Recent = new(2026, 3, 10, 0, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime Cutoff = new(2026, 3, 5, 0, 0, 0, DateTimeKind.Utc);
+    private static readonly long[] OldThreadIds = [1L];
+    private static readonly long[] OldTraceIds = [11L];
 
     [Fact]
     public async Task ListOldRequestsExcludesRetainedTracesAndOrdersById()
@@ -100,8 +102,37 @@ public sealed class GcStoreTests(PostgresFixture fixture)
         await using var context = db.Factory.CreateDbContext();
         var store = new GcStore(context);
 
-        Assert.Equal([1L], (await store.ListOldThreadIdsAsync(Cutoff, 500)).ToArray());
-        Assert.Equal([11L], (await store.ListOldTraceIdsAsync(Cutoff, 500)).ToArray());
+        Assert.Equal(OldThreadIds, (await store.ListOldThreadIdsAsync(Cutoff, 500)).ToArray());
+        Assert.Equal(OldTraceIds, (await store.ListOldTraceIdsAsync(Cutoff, 500)).ToArray());
+    }
+
+    [Fact]
+    public async Task ListOldChannelProbesUsesTheStrictTimestampCutoffAndAscendingIds()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+
+        var cutoffUnix = new DateTimeOffset(Cutoff).ToUnixTimeSeconds();
+        await SeedChannelProbeAsync(db, 30, cutoffUnix - 1);
+        await SeedChannelProbeAsync(db, 20, cutoffUnix - 100);
+        // The predicate is timestamp < cutoff: the boundary row stays.
+        await SeedChannelProbeAsync(db, 10, cutoffUnix);
+
+        await using var context = db.Factory.CreateDbContext();
+        var store = new GcStore(context);
+
+        // The awaits are hoisted: a collection expression binds to the span
+        // overload, and a span cannot survive an await boundary.
+        var firstBatch = (await store.ListOldChannelProbeIdsAsync(cutoffUnix, 500)).ToArray();
+        Assert.Equal([20L, 30L], firstBatch);
+
+        var limitedBatch = (await store.ListOldChannelProbeIdsAsync(cutoffUnix, 1)).ToArray();
+        Assert.Equal([20L], limitedBatch);
+
+        Assert.Equal(1, await store.DeleteChannelProbesAsync([20L]));
+
+        var remaining = (await store.ListOldChannelProbeIdsAsync(cutoffUnix, 500)).ToArray();
+        Assert.Equal([30L], remaining);
     }
 
     [Fact]
@@ -232,8 +263,8 @@ public sealed class GcStoreTests(PostgresFixture fixture)
         await using (var connection = await db.Factory.OpenAsync())
         {
             async Task<T> ScalarAsync<T>(string column)
-                => await connection.ExecuteScalarAsync<T>(
-                    "SELECT \"" + column + "\"::text FROM \"requests\" WHERE \"id\" = 1;");
+                => (await connection.ExecuteScalarAsync<T>(
+                    "SELECT \"" + column + "\"::text FROM \"requests\" WHERE \"id\" = 1;"))!;
 
             Assert.Equal("{}", await ScalarAsync<string>("request_body"));
             Assert.Null(await ScalarAsync<string>("request_headers"));
@@ -256,8 +287,8 @@ public sealed class GcStoreTests(PostgresFixture fixture)
         await using (var connection = await db.Factory.OpenAsync())
         {
             async Task<T> ScalarAsync<T>(string column)
-                => await connection.ExecuteScalarAsync<T>(
-                    "SELECT \"" + column + "\"::text FROM \"request_executions\" WHERE \"id\" = 10;");
+                => (await connection.ExecuteScalarAsync<T>(
+                    "SELECT \"" + column + "\"::text FROM \"request_executions\" WHERE \"id\" = 10;"))!;
 
             Assert.Equal("{}", await ScalarAsync<string>("response_body"));
             Assert.Null(await ScalarAsync<string>("response_headers"));
@@ -317,9 +348,11 @@ public sealed class GcStoreTests(PostgresFixture fixture)
         await using var context = db.Factory.CreateDbContext();
         var store = new DataStorageStore(context);
 
-        // The GC worker's context uses schematype.SkipSoftDelete.
-        var primary = await store.GetPrimaryAsync();
-        Assert.Equal(1L, primary?.Id);
+        // The GC worker's context uses schematype.SkipSoftDelete, so the
+        // soft-deleted primary row still wins by id order; the live-only
+        // lookup skips it.
+        Assert.Equal(1L, (await store.GetPrimaryIncludingDeletedAsync())?.Id);
+        Assert.Equal(2L, (await store.GetPrimaryAsync())?.Id);
         Assert.NotNull(await store.GetByIdIncludingDeletedAsync(1));
         Assert.Null(await store.GetByIdAsync(1));
     }
@@ -355,6 +388,21 @@ public sealed class GcStoreTests(PostgresFixture fixture)
                 TraceId = "trace-" + id,
                 Status = status,
             });
+    }
+
+    private static async Task SeedChannelProbeAsync(
+        TestDatabase db,
+        long id,
+        long timestamp)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "channel_probes"
+                ("id", "total_request_count", "success_request_count", "timestamp", "channel_id")
+            VALUES (@Id, 1, 1, @Timestamp, 7);
+            """,
+            new { Id = id, Timestamp = timestamp });
     }
 
     private static async Task SeedThreadAsync(

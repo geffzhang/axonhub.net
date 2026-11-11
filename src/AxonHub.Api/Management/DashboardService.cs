@@ -192,9 +192,9 @@ public readonly record struct DashboardFastestChannelsInput(string TimeWindow, i
 /// the principal is denied, topRequestsProjects lets the privacy deny propagate.
 /// Cached resolvers check <c>authz.RequireScope</c> before touching the cache.
 /// All cached queries use PostgreSQL-only SQL and the configured timezone name
-/// as a bound parameter (C195). The channel-probes branch of
-/// channelPerformanceStats is absent because the channel_probes subsystem is not
-/// ported; the execution fallback runs unconditionally (C195).
+/// as a bound parameter (C195). The channelPerformanceStats resolver prefers
+/// the channel_probes aggregation and falls back to request executions only
+/// when the probe query returns no rows (C249).
 /// </remarks>
 public sealed class DashboardService(
     IDashboardStore dashboard,
@@ -1379,10 +1379,11 @@ public sealed class DashboardService(
     }
 
     /// <summary>
-    /// Port of queryResolver.ChannelPerformanceStats. The reference first
-    /// queries channel_probes and falls back to request executions when the
-    /// probe rows are empty; the probes subsystem is not ported, so the
-    /// execution fallback runs directly (C195).
+    /// Port of queryResolver.ChannelPerformanceStats
+    /// (channel_performance_helpers.go:1327-1405): the channel_probes
+    /// aggregation is preferred; a non-empty result replaces the
+    /// request-execution fallback entirely, and only an empty probe result
+    /// runs the fallback. A probe query failure propagates wrapped.
     /// </summary>
     public async Task<IReadOnlyList<ChannelPerformanceStatModel>> GetChannelPerformanceStatsAsync(
         CancellationToken cancellationToken = default)
@@ -1413,7 +1414,7 @@ public sealed class DashboardService(
                     IReadOnlyList<DashboardChannelPerformanceRow> rows;
                     try
                     {
-                        rows = await store.GetDailyChannelPerformanceAsync(
+                        rows = await store.GetDailyChannelPerformanceFromProbesAsync(
                                 startUtc,
                                 location.Name,
                                 timeout.Token)
@@ -1421,10 +1422,31 @@ public sealed class DashboardService(
                     }
                     catch (Exception ex)
                     {
+                        // The reference returns the probe error untouched by any
+                        // fallback (channel_performance_helpers.go:1330-1334).
                         throw new InvalidOperationException(
-                            "failed to query channel performance stats from executions: "
+                            "failed to get channel performance stats from probes: "
                             + ex.Message,
                             ex);
+                    }
+
+                    if (rows.Count == 0)
+                    {
+                        try
+                        {
+                            rows = await store.GetDailyChannelPerformanceAsync(
+                                    startUtc,
+                                    location.Name,
+                                    timeout.Token)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException(
+                                "failed to query channel performance stats from executions: "
+                                + ex.Message,
+                                ex);
+                        }
                     }
 
                     var statsMap = new Dictionary<string, Dictionary<long, DashboardChannelPerformanceRow>>(

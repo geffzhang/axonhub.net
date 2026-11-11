@@ -1,6 +1,7 @@
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Settings;
 using AxonHub.Persistence;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Management;
 
@@ -22,13 +23,15 @@ public sealed record ChannelProbeDataModel(
     IReadOnlyList<ChannelProbePointModel> Points);
 
 /// <summary>
-/// Port of biz.ChannelProbeService's read side
-/// (internal/server/biz/channel_probe.go:345-465): the <c>channelProbeData</c>
-/// batch query over an interval-aligned window. The writer, the per-minute
-/// scheduler and the manual trigger are not ported (C249).
+/// Port of biz.ChannelProbeService
+/// (internal/server/biz/channel_probe.go): the <c>channelProbeData</c> batch
+/// query over an interval-aligned window and the probe writer
+/// (<c>runProbe</c>). The per-minute scheduler lives in the Orleans
+/// <c>ChannelProbeGrain</c>; the reference's unused <c>RunProbeNow</c> has no
+/// caller and is not exposed.
 /// </summary>
 /// <remarks>
-/// The reference reads the effective probe setting through
+/// The read side reads the effective probe setting through
 /// <c>authz.RunWithScopeDecision(ctx, scopes.ScopeReadChannels, ...)</c>:
 /// principals with the scope read the stored <c>system_channel_settings</c> row
 /// under an attached Allow decision, while a denied principal's read fails the
@@ -39,10 +42,73 @@ public sealed record ChannelProbeDataModel(
 /// </remarks>
 public sealed class ChannelProbeService(
     IChannelProbeStore probes,
+    IChannelStore channels,
     ISystemSettingsAdminService settings,
     AuthorizationScope scope,
-    TimeProvider timeProvider)
+    ChannelProbeRunState runState,
+    TimeProvider timeProvider,
+    ILogger<ChannelProbeService> logger)
 {
+    private static readonly Action<ILogger, Exception?> LogChannelSettingFailed =
+        LoggerMessage.Define(
+            LogLevel.Warning,
+            new EventId(0, "ChannelProbeSettingFailed"),
+            "failed to get channel setting");
+
+    private static readonly Action<ILogger, Exception?> LogProbeDisabled =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(0, "ChannelProbeDisabled"),
+            "Channel probe is disabled, skipping");
+
+    private static readonly Action<ILogger, long, Exception?> LogProbeAlreadyExecuted =
+        LoggerMessage.Define<long>(
+            LogLevel.Debug,
+            new EventId(0, "ChannelProbeAlreadyExecuted"),
+            "Skipping probe, already executed for this interval timestamp={Timestamp}");
+
+    private static readonly Action<ILogger, int, long, Exception?> LogProbeStarting =
+        LoggerMessage.Define<int, long>(
+            LogLevel.Debug,
+            new EventId(0, "ChannelProbeStarting"),
+            "Starting channel probe interval_minutes={IntervalMinutes} timestamp={Timestamp}");
+
+    private static readonly Action<ILogger, Exception?> LogQueryEnabledChannelsFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "ChannelProbeEnabledChannelsFailed"),
+            "Failed to query enabled channels");
+
+    private static readonly Action<ILogger, Exception?> LogNoEnabledChannels =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(0, "ChannelProbeNoEnabledChannels"),
+            "No enabled channels to probe");
+
+    private static readonly Action<ILogger, Exception?> LogComputeStatsFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "ChannelProbeStatsFailed"),
+            "Failed to compute channel probe stats");
+
+    private static readonly Action<ILogger, Exception?> LogNoProbeData =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(0, "ChannelProbeNoData"),
+            "No probe data to store (all channels have 0 requests)");
+
+    private static readonly Action<ILogger, Exception?> LogCreateProbesFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "ChannelProbeCreateFailed"),
+            "Failed to create channel probes");
+
+    private static readonly Action<ILogger, int, long, Exception?> LogProbeCompleted =
+        LoggerMessage.Define<int, long>(
+            LogLevel.Debug,
+            new EventId(0, "ChannelProbeCompleted"),
+            "Channel probe completed channels_probed={ChannelsProbed} timestamp={Timestamp}");
+
     /// <summary>Port of ChannelProbeService.BatchQueryChannelProbes.</summary>
     public async Task<IReadOnlyList<ChannelProbeDataModel>> BatchQueryChannelProbesAsync(
         IReadOnlyList<long> channelIds,
@@ -126,6 +192,151 @@ public sealed class ChannelProbeService(
         return result;
     }
 
+    /// <summary>
+    /// Port of ChannelProbeService.runProbe (channel_probe.go:237-335): one
+    /// probe pass for the aligned interval. Every failure is logged and the
+    /// pass returns; the aligned timestamp is consumed before the database
+    /// work, so a failing pass still blocks a rerun in the same interval.
+    /// </summary>
+    public async Task RunProbeAsync(CancellationToken cancellationToken = default)
+    {
+        // runProbePeriodically wraps the pass in a system bypass
+        // (channel_probe_internal.go:8-12): the scheduled task carries no
+        // principal and reads the stored setting as system.
+        var setting = await ChannelSettingOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (!setting.Probe.Enabled)
+        {
+            LogProbeDisabled(logger, null);
+            return;
+        }
+
+        var intervalMinutes = GetIntervalMinutes(setting.Probe.Frequency);
+        var now = timeProvider.GetUtcNow();
+        var alignedUnix = TruncateToInterval(now.ToUnixTimeSeconds(), intervalMinutes);
+
+        if (!runState.TryBeginRun(alignedUnix))
+        {
+            LogProbeAlreadyExecuted(logger, alignedUnix, null);
+            return;
+        }
+
+        LogProbeStarting(logger, intervalMinutes, alignedUnix, null);
+
+        IReadOnlyList<ChannelRecord> enabledChannels;
+        try
+        {
+            enabledChannels = await channels.ListEnabledAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LogQueryEnabledChannelsFailed(logger, ex);
+            return;
+        }
+
+        if (enabledChannels.Count == 0)
+        {
+            LogNoEnabledChannels(logger, null);
+            return;
+        }
+
+        var channelIds = new List<long>(enabledChannels.Count);
+        foreach (var channel in enabledChannels)
+        {
+            channelIds.Add(channel.Id);
+        }
+
+        // start = aligned - interval; end = aligned (the reference uses a
+        // half-open [start, aligned) window over created_at).
+        var endUtc = DateTimeOffset.FromUnixTimeSeconds(alignedUnix).UtcDateTime;
+        var startUtc = endUtc.AddMinutes(-intervalMinutes);
+
+        IReadOnlyList<ChannelProbeStatsRow> stats;
+        try
+        {
+            stats = await probes.ComputeStatsAsync(channelIds, startUtc, endUtc, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LogComputeStatsFailed(logger, ex);
+            return;
+        }
+
+        // The reference scans effective_latency_ms into int64; a NULL sample
+        // makes database/sql fail the whole pass.
+        var statsByChannel = new Dictionary<long, ChannelProbeStatsRow>(stats.Count);
+        foreach (var row in stats)
+        {
+            if (row.EffectiveLatencyMs is null)
+            {
+                LogComputeStatsFailed(
+                    logger,
+                    new InvalidOperationException(
+                        "failed to scan probe result: converting NULL to int64 is unsupported"));
+                return;
+            }
+
+            statsByChannel[row.ChannelId] = row;
+        }
+
+        var probesToCreate = new List<ChannelProbeRecord>();
+        foreach (var channel in enabledChannels)
+        {
+            if (!statsByChannel.TryGetValue(channel.Id, out var row) || row.TotalCount == 0)
+            {
+                continue;
+            }
+
+            // Streaming: tokens / ((latency - first_token_latency) / 1000);
+            // non-streaming: tokens / (latency / 1000).
+            double? tokensPerSecond = null;
+            if (row.TotalTokens > 0 && row.EffectiveLatencyMs is > 0)
+            {
+                tokensPerSecond = (double)row.TotalTokens
+                    / (row.EffectiveLatencyMs.Value / 1000.0);
+            }
+
+            // Only streaming requests carry a first-token sample.
+            double? timeToFirstTokenMs = null;
+            if (row.TotalFirstTokenLatency > 0 && row.StreamingRequestCount > 0)
+            {
+                timeToFirstTokenMs = (double)row.TotalFirstTokenLatency
+                    / row.StreamingRequestCount;
+            }
+
+            probesToCreate.Add(new ChannelProbeRecord
+            {
+                ChannelId = channel.Id,
+                TotalRequestCount = row.TotalCount,
+                SuccessRequestCount = row.SuccessCount,
+                AvgTokensPerSecond = tokensPerSecond,
+                AvgTimeToFirstTokenMs = timeToFirstTokenMs,
+                Timestamp = alignedUnix,
+            });
+        }
+
+        if (probesToCreate.Count == 0)
+        {
+            LogNoProbeData(logger, null);
+            return;
+        }
+
+        try
+        {
+            await probes.CreateRangeAsync(probesToCreate, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LogCreateProbesFailed(logger, ex);
+            return;
+        }
+
+        LogProbeCompleted(logger, probesToCreate.Count, alignedUnix, null);
+    }
+
     /// <summary>Port of biz.ChannelProbeSetting.GetQueryRangeMinutes (system.go:593-608).</summary>
     internal static int GetQueryRangeMinutes(string frequency) => frequency switch
     {
@@ -174,7 +385,7 @@ public sealed class ChannelProbeService(
         int intervalMinutes)
     {
         var step = (long)intervalMinutes * 60L;
-        var timestamps = new List<long>(((endUnix - startUnix) / step) + 1);
+        var timestamps = new List<long>((int)(((endUnix - startUnix) / step) + 1));
         for (var timestamp = startUnix; timestamp <= endUnix; timestamp += step)
         {
             timestamps.Add(timestamp);
@@ -184,10 +395,9 @@ public sealed class ChannelProbeService(
     }
 
     /// <summary>
-    /// The effective probe setting: the stored value for a principal with
-    /// <c>read_channels</c>, the default otherwise. Every read/decode failure
-    /// falls back to the default, like ChannelSettingOrDefault
-    /// (system.go:1355-1370).
+    /// The effective probe setting for a <c>read_channels</c> principal: the
+    /// stored value, or the default on a denied scope or any read failure
+    /// (ChannelSettingOrDefault, system.go:1355-1370).
     /// </summary>
     private async Task<ChannelProbeSetting> EffectiveProbeSettingAsync(
         CancellationToken cancellationToken)
@@ -200,17 +410,26 @@ public sealed class ChannelProbeService(
             return SystemSettingsDefaults.Channel.Probe;
         }
 
+        var stored = await ChannelSettingOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+        return stored.Probe;
+    }
+
+    /// <summary>
+    /// Port of SystemService.ChannelSettingOrDefault (system.go:1355-1370):
+    /// every read/decode failure is logged and returns defaultChannelSetting.
+    /// </summary>
+    private async Task<SystemChannelSettings> ChannelSettingOrDefaultAsync(
+        CancellationToken cancellationToken)
+    {
         try
         {
-            var stored = await settings.GetChannelSettingsAsync(cancellationToken)
+            return await settings.GetChannelSettingsAsync(cancellationToken)
                 .ConfigureAwait(false);
-            return stored.Probe;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // ChannelSettingOrDefault logs every non-NotFound error and falls
-            // back to the default (store failure, privacy deny, corrupt JSON).
-            return SystemSettingsDefaults.Channel.Probe;
+            LogChannelSettingFailed(logger, ex);
+            return SystemSettingsDefaults.Channel;
         }
     }
 }
