@@ -838,6 +838,40 @@ metrics、system settings 等）未编入；重新构建后按 16 个失败测�
 台账：本轮无新增差异条目；C206（无 body GET 的 Content-Type）与 C268（ChannelModelPrice
 内省字段顺序，决策为接受）均为 resolved，相关测试在本轮全量运行中通过。
 
+§172（2026-11-11）按用户要求重跑四个项目的全量测试，用实测校正 §170 / §171 沿用的静态
+计数。结果：`AxonHub.Grains.Tests` 175 通过 / 0 失败 / 0 跳过（5s）；`AxonHub.Llm.Tests`
+3110 / 0 / 0（1s）；`AxonHub.Persistence.Tests` 372 / 0 / 0（2m46s）；`AxonHub.Api.Tests`
+6102 / 0 / 0（46m11s，`--no-build`，日志 `E:\tmp\api-full-4.log`）。四项目合计 9759，
+而非 §170 / §171 的 9751；§170 记录的 Grains 1760 与 Llm 1517 均与实测不符（分别为
+175 与 3110），以本节为准。Api 运行前先重建测试程序集，避免 §171 的陈旧二进制假失败；
+本轮耗时 46m11s 明显长于 §171 的 19m11s，期间 testhost 持续占用 CPU 并正常完成，未见挂起。
+
+本轮起点是全量运行的 1 个 Llm 失败与 16 个 Persistence 失败，分诊后归类为产品缺陷与
+过期测试期望两类：
+
+- 产品修复：`PromptProtectionRuleStore.BulkUpdateStatusAsync` 的批量状态 SQL 在
+  `"id" IN (...)` 后漏掉右括号（PostgreSQL 42601，near ";"）；
+  `ChannelStore.ListEnabledByTypesAsync` 的 `IN @Types` 改为 `= ANY(@Types)` 并传
+  `ToArray()`（Npgsql 把数组参数当原生数组，`IN $1` 是语法错误，同 §170 的 GcStore 修正）；
+  `ProviderQuotaStatusRecord.AccountKey` 删除 `= string.Empty` 初始值（Dapper 不覆盖
+  引用类型默认值，NULL 会读成 ""，而参照 ent 的 nillable 字段返回 nil）。
+- 测试期望修正：5 处 jsonb 文本比较改用 `RecordAssert.Json`（PostgreSQL jsonb 会重排
+  key 并规范化空白）；`SchemaTests` / `EfCoreModelTests` 补上 §170 新增的 `channel_probes`
+  表与其索引，计数更新为 25 表 / 55 索引；邀请注册的 `user_projects.is_owner` 期望改为
+  false（`user_project.go:40-41` 默认 false，`invitation.go:238` 不设置）、被拒的第二次
+  注册不再创建用户、第二个角色改用不同名称；302 重定向后的 body 断言为空串（C206 的
+  零长度 ByteArrayContent）；批量软删后存活行数为 0。
+
+管理面 GraphQL 根字段盘点（静态对照 `internal/server/gql/*.graphql` 与 `AdminQuery.cs` /
+`AdminMutation.cs`）：参照 211 个根字段，端口 217 个；除 post-baseline 漂移的 9 个新增
+字段外，仅 `nodes` / `oidcIdentities` / `systems` 未实现，已登记 C269（真实缺口；`nodes`
+在参照中为 panic 占位，三者均未被 `frontend/src/gql` 使用）。`defaultDataStorageID` 的
+大小写由 `AdminQuery.cs:110` 的显式 `[GraphQLName]` 对齐，此前盘点误报为缺失，已复核为
+假阳性。
+
+台账：新增 C269（gap），现有 269 条（196 accepted / 8 gap / 65 resolved）；lint 通过，
+`porting/02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
