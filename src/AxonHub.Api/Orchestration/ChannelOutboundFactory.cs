@@ -389,9 +389,9 @@ public static class ChannelOutboundFactory
         // slice dispatches on the inbound format instead: a Responses request to
         // an openai channel uses the Responses transformer, everything else the
         // chat one.
-        var apiFormat = string.IsNullOrEmpty(candidate.ApiFormat)
+        var apiFormat = (string.IsNullOrEmpty(candidate.ApiFormat)
             ? request.ApiFormat
-            : candidate.ApiFormat;
+            : candidate.ApiFormat) ?? string.Empty;
 
         // The reference keys each channel's outbounds by API format and builds
         // a separate transformer per user-configured endpoint
@@ -447,7 +447,8 @@ public static class ChannelOutboundFactory
                     endpointBaseUrl,
                     provider,
                     endpointTransport,
-                    endpointPath),
+                    endpointPath,
+                    candidate.ChannelId),
             OpenAiChannelType when apiFormat == ApiFormats.OpenAIDecisions
                 => new DecisionsOutboundTransformer(new DecisionsOutboundConfig
                 {
@@ -521,7 +522,8 @@ public static class ChannelOutboundFactory
                 endpointBaseUrl,
                 provider,
                 endpointTransport,
-                endpointPath),
+                endpointPath,
+                candidate.ChannelId),
             // channel_llm.go:867-884: xai_subscription wraps the Responses
             // outbound with a refreshing OAuth token provider pinned to the
             // Grok CLI endpoints. The reference also registers the provider's
@@ -694,7 +696,8 @@ public static class ChannelOutboundFactory
                 endpointBaseUrl,
                 provider,
                 endpointTransport,
-                endpointPath),
+                endpointPath,
+                candidate.ChannelId),
             // channel_llm.go:831-841: OpenAI-compatible with a custom request
             // path (chat only, json_schema downgraded to json_object).
             MoonshotChannelType => new MoonshotOutboundTransformer(new MoonshotOutboundConfig
@@ -715,7 +718,8 @@ public static class ChannelOutboundFactory
                     endpointBaseUrl,
                     provider,
                     endpointTransport,
-                    endpointPath),
+                    endpointPath,
+                    candidate.ChannelId),
             XaiChannelType => new XaiOutboundTransformer(new XaiOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
@@ -832,7 +836,8 @@ public static class ChannelOutboundFactory
                         candidate.BaseUrl,
                         ApiFormats.OpenAIResponse)
                     : endpointTransport,
-                endpointPath),
+                endpointPath,
+                candidate.ChannelId),
             // channel_llm.go:1133-1143: DashScope's OpenAI-compatible outbound
             // with the tool-call merge, enable_thinking mapping and stream
             // filter; the default endpoint set is chat only
@@ -851,7 +856,8 @@ public static class ChannelOutboundFactory
                 endpointBaseUrl,
                 provider,
                 endpointTransport,
-                endpointPath),
+                endpointPath,
+                candidate.ChannelId),
             // channel_llm.go:1157-1167: bailian_anthropic and moonshot_coding
             // share the plain Anthropic direct outbound.
             BailianAnthropicChannelType or MoonshotCodingChannelType
@@ -922,7 +928,8 @@ public static class ChannelOutboundFactory
                     selectedEndpoint is null ? ZenmuxBaseUrl(candidate) : endpointBaseUrl,
                     provider,
                     endpointTransport,
-                    endpointPath),
+                    endpointPath,
+                    candidate.ChannelId),
             ZenmuxChannelType => OpenAiOutboundTransformer.Create(
                 ZenmuxBaseUrl(candidate),
                 provider,
@@ -934,7 +941,8 @@ public static class ChannelOutboundFactory
                 selectedEndpoint is null ? ZenmuxBaseUrl(candidate) : endpointBaseUrl,
                 provider,
                 endpointTransport,
-                endpointPath),
+                endpointPath,
+                candidate.ChannelId),
             // channel_llm.go:898: zenmux_anthropic is the plain Anthropic
             // direct platform on the ZenMux Anthropic base URL.
             ZenmuxAnthropicChannelType => new AnthropicOutboundTransformer(new AnthropicOutboundConfig
@@ -1144,6 +1152,7 @@ public static class ChannelOutboundFactory
                     ApiKeyProvider = provider,
                     ChannelApiKeyIndex = provider.KeyIndex,
                     Transport = InferTransport(baseUrl),
+                    ChannelId = candidate.ChannelId,
                 });
             case ApiFormats.AnthropicMessage:
                 if (candidate.Type == CommandcodeChannelType)
@@ -1685,6 +1694,9 @@ public static class ChannelOutboundFactory
             AlphaSearchPath = alphaSearchPath,
             EndpointPath = responsesPath,
             ImageMainModel = candidate.DefaultTestModel,
+            // Port-only: keeps the WebSocket pool scoped to the owning channel
+            // like the reference's per-channel outbound cache (C072).
+            ChannelId = candidate.ChannelId,
             // The reference reads the trace session from the request context;
             // the port threads the captured session through the wire request
             // (C062). Both are null until the inbound layer captures one.
@@ -1786,7 +1798,8 @@ public static class ChannelOutboundFactory
         string baseUrl,
         ChannelApiKeyProvider apiKeyProvider,
         string transport = "",
-        string endpointPath = "")
+        string endpointPath = "",
+        long channelId = 0)
         => new(new ResponsesOutboundConfig
         {
             BaseUrl = baseUrl,
@@ -1794,6 +1807,9 @@ public static class ChannelOutboundFactory
             ApiKeyProvider = apiKeyProvider,
             ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
             Transport = transport,
+            // Port-only: keeps the WebSocket pool scoped to the owning channel
+            // like the reference's per-channel outbound cache (C072).
+            ChannelId = channelId,
             SessionIdProvider = () => request.RawRequest?.SessionId,
             SessionScopeProvider = () => request.RawRequest?.SessionScope,
         });

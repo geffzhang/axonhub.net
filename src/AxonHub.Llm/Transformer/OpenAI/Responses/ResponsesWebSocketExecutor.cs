@@ -66,7 +66,10 @@ internal sealed class WebSocketExecutor : IExecutor
 
     internal const int DefaultMaxPoolSize = 128;
 
-    internal const int DefaultMaxRetainedInput = 1 << 20;
+    internal const int DefaultMaxRetainedInput = 16 << 20;
+
+    /// <summary>Go: the process-wide <c>NewResponsesBudget(64 &lt;&lt; 20)</c>.</summary>
+    internal const int DefaultRetainedBudget = 64 << 20;
 
     internal static readonly TimeSpan MinCleanupDelay = TimeSpan.FromMilliseconds(10);
 
@@ -124,6 +127,7 @@ internal sealed class WebSocketExecutor : IExecutor
     private readonly IExecutor? _inner;
     private readonly object _mu = new();
     private readonly Dictionary<WebSocketPoolKey, PooledWebSocketConnection> _pool = [];
+    private readonly ResponsesRetainedBudget _retainedBudget = new(DefaultRetainedBudget);
     private Timer? _cleanupTimer;
     private bool _cleanupScheduled;
     private bool _closed;
@@ -133,6 +137,15 @@ internal sealed class WebSocketExecutor : IExecutor
     {
         _inner = inner;
     }
+
+    /// <summary>
+    /// Go: the <c>ChannelID</c> half of <c>webSocketPoolKey</c>
+    /// (websocket_executor.go:314, 566-569). The reference's executor lives in
+    /// the per-channel outbound cache, so its pool is channel-scoped; the port
+    /// caches executors process-wide (<see cref="WebSocketExecutorCache"/>) and
+    /// keeps the channel in the key to preserve that separation.
+    /// </summary>
+    internal long ChannelId { get; init; }
 
     internal TimeSpan IdleTtl { get; set; } = DefaultIdleTtl;
 
@@ -547,6 +560,9 @@ internal sealed class WebSocketExecutor : IExecutor
                 throw new InvalidOperationException("websocket session pool is full");
             }
 
+            // Go: pc.budget = e.retainedBudget, assigned under the executor lock
+            // before the connection is visible in the pool.
+            pc.Budget = _retainedBudget;
             _pool[key] = pc;
             ScheduleCleanupLocked(now);
         }
@@ -562,7 +578,7 @@ internal sealed class WebSocketExecutor : IExecutor
         => ResponsesWebSocketClient.Connect(cancellationToken, wsUrl, headers, request);
 
     /// <summary>Port of poolKey; a session id and scope are both required.</summary>
-    internal static (WebSocketPoolKey Key, bool Poolable) PoolKey(
+    private (WebSocketPoolKey Key, bool Poolable) PoolKey(
         HttpRequestData request,
         string wsUrl,
         Dictionary<string, List<string>> headers)
@@ -586,6 +602,7 @@ internal sealed class WebSocketExecutor : IExecutor
 
         return (new WebSocketPoolKey
         {
+            ChannelId = ChannelId,
             Url = wsUrl,
             SessionId = sessionId,
             Scope = scope,
@@ -932,7 +949,13 @@ internal sealed class WebSocketExecutor : IExecutor
             return;
         }
 
-        lease.NextFullInput = CloneItems(fullInput);
+        // Go keeps the full input for the next turn only when it fits the
+        // retained-input cap; an oversized conversation is never cached, so the
+        // next turn sends the full context instead of evicting the session.
+        lease.NextFullInput = lease.Owner is null
+            || RawMessagesSize(fullInput) <= lease.Owner.MaxRetainedInput
+                ? CloneItems(fullInput)
+                : [];
 
         var (previousInput, previousResponseId) = lease.Pooled.PreviousTurn();
         if (!lease.Reused || previousResponseId.Length == 0)
@@ -1382,6 +1405,13 @@ internal readonly record struct WebSocketPoolKey
     {
     }
 
+    /// <summary>
+    /// Go: the <c>ChannelID</c> key field (websocket_executor.go:314, 568).
+    /// Zero when the executor was built without a channel (tests, wrappers that
+    /// do not carry one).
+    /// </summary>
+    public long ChannelId { get; init; }
+
     public string Url { get; init; } = string.Empty;
 
     public string SessionId { get; init; } = string.Empty;
@@ -1417,6 +1447,7 @@ internal sealed class PooledWebSocketConnection
     private bool _closed;
     private List<JsonElement> _lastInput = [];
     private string _lastResponseId = string.Empty;
+    private int _retainedBytes;
 
     public PooledWebSocketConnection(WebSocketPoolKey key, WebSocket? conn, DateTime now)
     {
@@ -1427,6 +1458,12 @@ internal sealed class PooledWebSocketConnection
     }
 
     public WebSocketPoolKey Key { get; }
+
+    /// <summary>
+    /// Go: <c>pooledWebSocketConn.budget</c> — the executor's shared 64 MiB
+    /// retained-input budget, attached when the connection enters the pool.
+    /// </summary>
+    public ResponsesRetainedBudget? Budget { get; set; }
 
     public WebSocket? Conn { get; }
 
@@ -1500,6 +1537,8 @@ internal sealed class PooledWebSocketConnection
             }
 
             _closed = true;
+            Budget?.Replace(_retainedBytes, 0);
+            _retainedBytes = 0;
             _lastInput = [];
             _lastResponseId = string.Empty;
         }
@@ -1515,6 +1554,12 @@ internal sealed class PooledWebSocketConnection
         }
     }
 
+    /// <summary>
+    /// Go: <c>pooledWebSocketConn.rememberTurn</c>
+    /// (websocket_retention.go:8-29). The response id is remembered even when
+    /// the input is dropped for exceeding the per-connection or shared budget;
+    /// the next turn then sends full context but still agrees on the last id.
+    /// </summary>
     public bool RememberTurn(List<JsonElement> input, string responseId, int maxInputBytes)
     {
         if (responseId.Trim().Length == 0)
@@ -1522,29 +1567,29 @@ internal sealed class PooledWebSocketConnection
             return false;
         }
 
-        if (input.Count == 0)
-        {
-            lock (_mu)
-            {
-                _lastInput = [];
-                _lastResponseId = string.Empty;
-            }
-
-            return true;
-        }
-
-        if (maxInputBytes > 0 && WebSocketExecutor.RawMessagesSize(input) > maxInputBytes)
-        {
-            return false;
-        }
-
         lock (_mu)
         {
-            _lastInput = WebSocketExecutor.CloneItems(input);
-            _lastResponseId = responseId.Trim();
-        }
+            if (_closed)
+            {
+                return false;
+            }
 
-        return true;
+            _lastResponseId = responseId.Trim();
+
+            var size = WebSocketExecutor.RawMessagesSize(input);
+            if ((maxInputBytes > 0 && size > maxInputBytes)
+                || (Budget is not null && !Budget.Replace(_retainedBytes, size)))
+            {
+                Budget?.Replace(_retainedBytes, 0);
+                _lastInput = [];
+                _retainedBytes = 0;
+                return false;
+            }
+
+            _lastInput = WebSocketExecutor.CloneItems(input);
+            _retainedBytes = size;
+            return true;
+        }
     }
 
     /// <summary>
@@ -1600,7 +1645,7 @@ internal sealed class WebSocketLease(
 
     public List<JsonElement> NextFullInput { get; set; } = [];
 
-    /// <summary>Go: <c>webSocketLease.rememberTurn</c>.</summary>
+    /// <summary>Go: <c>webSocketLease.rememberTurn</c> (websocket_retention.go:31-47).</summary>
     public bool RememberTurn(string responseId, List<JsonElement> output)
     {
         if (Pooled is null)
@@ -1609,6 +1654,22 @@ internal sealed class WebSocketLease(
         }
 
         var maxInputBytes = Owner?.MaxRetainedInput ?? 0;
+
+        // Without a cached full input only the response id is remembered; the
+        // next turn then sends full context while still agreeing on the last
+        // response id.
+        if (NextFullInput.Count == 0)
+        {
+            return Pooled.RememberTurn([], responseId, maxInputBytes);
+        }
+
+        if (maxInputBytes > 0
+            && WebSocketExecutor.RawMessagesSize(NextFullInput)
+                + WebSocketExecutor.RawMessagesSize(output) > maxInputBytes)
+        {
+            return Pooled.RememberTurn([], responseId, maxInputBytes);
+        }
+
         var input = new List<JsonElement>(NextFullInput.Count + output.Count);
         input.AddRange(NextFullInput);
         input.AddRange(output);
@@ -1767,6 +1828,15 @@ internal sealed class WebSocketStream : IStream<StreamEvent>
                 if (responseId.Length == 0)
                 {
                     evict = true;
+                }
+                else if (_lease?.Owner is { } owner && message.Data.Length > owner.MaxRetainedInput)
+                {
+                    // The completed event itself is larger than the retained
+                    // input cap, so the conversation is not cached; the healthy
+                    // connection is kept and the next turn sends full context
+                    // (websocket_executor.go:1207-1213).
+                    _lease.NextFullInput = [];
+                    _lease.RememberTurn(responseId, []);
                 }
                 else
                 {
@@ -1974,4 +2044,71 @@ internal sealed class WebSocketStream : IStream<StreamEvent>
         WebSocketCloseStatus? CloseStatus,
         string? Description,
         byte[] Data);
+}
+
+/// <summary>Port of <c>shared.ResponsesBudget</c> (responses_lane.go:8-24).</summary>
+internal sealed class ResponsesRetainedBudget(long limit)
+{
+    private readonly object _gate = new();
+    private long _used;
+
+    /// <summary>
+    /// Reserves <paramref name="next"/> bytes in place of
+    /// <paramref name="previous"/>; false when the replacement would exceed the
+    /// limit, leaving the reservation untouched.
+    /// </summary>
+    public bool Replace(int previous, int next)
+    {
+        lock (_gate)
+        {
+            if (next > limit - (_used - previous))
+            {
+                return false;
+            }
+
+            _used += next - previous;
+            return true;
+        }
+    }
+}
+
+/// <summary>
+/// Process-wide cache of Responses WebSocket executors, keyed by the inner
+/// executor and the channel.
+/// </summary>
+/// <remarks>
+/// The reference keeps one outbound transformer — and with it one
+/// <c>WebSocketExecutor</c> and its connection pool — per enabled channel in its
+/// channel cache (internal/server/biz/channel.go), so a later turn in the same
+/// session reuses the upstream WebSocket and its connection-local conversation
+/// state. The port builds one transformer per attempt
+/// (<c>ChannelOutboundFactory</c>), and the orchestrator stops that transformer
+/// when the attempt ends; caching the executors here gives the pool the
+/// reference's lifetime instead of the attempt's (C072). The reference closes
+/// executors when the channel cache swaps; the port has no swap event for
+/// per-attempt outbounds, so pooled connections are retired by the executor's
+/// idle TTL / max lifetime and its background cleanup instead.
+/// </remarks>
+internal static class WebSocketExecutorCache
+{
+    private static readonly object Gate = new();
+
+    private static readonly Dictionary<(IExecutor Inner, long ChannelId), WebSocketExecutor>
+        Executors = [];
+
+    public static WebSocketExecutor GetOrCreate(IExecutor inner, long channelId)
+    {
+        lock (Gate)
+        {
+            var key = (inner, channelId);
+            if (Executors.TryGetValue(key, out var cached))
+            {
+                return cached;
+            }
+
+            var executor = new WebSocketExecutor(inner) { ChannelId = channelId };
+            Executors[key] = executor;
+            return executor;
+        }
+    }
 }

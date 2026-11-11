@@ -420,6 +420,94 @@ public sealed class ResponsesWebSocketExecutorTests
     }
 
     [Fact]
+    public void SharedExecutorSurvivesAttemptStopAndReusesTheConnection()
+    {
+        using var server = new ResponsesWebSocketTestServer();
+        server.Handler = conn =>
+        {
+            for (var i = 0; i < 2; i++)
+            {
+                var payload = conn.ReadJson();
+                Assert.Equal("turn-" + (i + 1), payload.GetProperty("instructions").GetString());
+                conn.WriteJson(Completed("resp_" + (i + 1), sequenceNumber: i + 1));
+            }
+
+            conn.WaitUntilClosed();
+        };
+
+        // Every attempt builds its own transformer and stops it when the
+        // attempt ends (ChannelOutboundFactory + ChatCompletionOrchestrator).
+        // The process-wide executor cache keeps the pooled connection alive, so
+        // the second attempt reuses the same upstream WebSocket (C072).
+        var inner = new StubExecutor();
+        for (var i = 0; i < 2; i++)
+        {
+            var attempt = ResponsesAttempt(server, channelId: 7001);
+            var executor = Assert.IsType<WebSocketExecutor>(attempt.CustomizeExecutor(inner));
+            using (var stream = executor.DoStream(
+                CancellationToken.None,
+                Request(
+                    server,
+                    """{"model":"gpt-5","instructions":"turn-""" + (i + 1) + "\"}",
+                    sessionId: "shared-attempt-session")))
+            {
+                Assert.True(stream.Next());
+                Assert.Equal("response.completed", stream.Current?.Type);
+                Assert.False(stream.Next());
+                Assert.Null(stream.Err);
+            }
+
+            attempt.Stop();
+        }
+
+        Assert.Equal(1, server.Upgrades);
+        Finish(server);
+    }
+
+    [Fact]
+    public void ChannelScopedExecutorsDoNotSharePools()
+    {
+        using var server = new ResponsesWebSocketTestServer();
+        server.Handler = conn =>
+        {
+            _ = conn.ReadJson();
+            conn.WriteJson(Completed("resp_" + conn.UpgradeIndex));
+            conn.WaitUntilClosed();
+        };
+
+        // webSocketPoolKey carries ChannelID, and the reference's executor is
+        // per channel; two channels never share an upstream WebSocket even when
+        // the session id, scope and credentials match.
+        var inner = new StubExecutor();
+        foreach (var channelId in new long[] { 7002, 7003 })
+        {
+            var attempt = ResponsesAttempt(server, channelId);
+            var executor = Assert.IsType<WebSocketExecutor>(attempt.CustomizeExecutor(inner));
+            using var stream = executor.DoStream(
+                CancellationToken.None,
+                Request(server, """{"model":"gpt-5"}""", sessionId: "channel-scoped-session"));
+            Assert.True(stream.Next());
+            Assert.False(stream.Next());
+            Assert.Null(stream.Err);
+            attempt.Stop();
+        }
+
+        Assert.Equal(2, server.Upgrades);
+        Finish(server);
+    }
+
+    private static ResponsesOutboundTransformer ResponsesAttempt(
+        ResponsesWebSocketTestServer server,
+        long channelId)
+        => new(new ResponsesOutboundConfig
+        {
+            BaseUrl = server.Url + "/v1",
+            ApiKeyProvider = new StaticApiKeyProvider("test-key"),
+            Transport = ResponsesOutboundTransformer.TransportWebSocket,
+            ChannelId = channelId,
+        });
+
+    [Fact]
     public void DoesNotPoolWithoutSession()
     {
         using var server = new ResponsesWebSocketTestServer();
@@ -862,6 +950,75 @@ public sealed class ResponsesWebSocketExecutorTests
         Assert.Equal(1, server.Upgrades);
         Finish(server);
     }
+
+    [Fact]
+    public void LeaseRemembersTheResponseIdWithoutCachedInput()
+    {
+        var pooled = new PooledWebSocketConnection(default, conn: null, now: DateTime.UtcNow);
+        var lease = new WebSocketLease(conn: null, pooled: pooled, owner: null, reused: true);
+
+        // websocket_retention.go:39-40: with no cached full input the lease
+        // still remembers the response id, so the next turn agrees on it even
+        // though it sends full context.
+        Assert.True(lease.RememberTurn("resp_lease", []));
+
+        var (input, responseId) = pooled.PreviousTurn();
+        Assert.Empty(input);
+        Assert.Equal("resp_lease", responseId);
+    }
+
+    [Fact]
+    public void RetainsTheResponseIdWhenTheInputExceedsTheRetainedBudget()
+    {
+        var budget = new ResponsesRetainedBudget(16);
+        var pooled = new PooledWebSocketConnection(default, conn: null, now: DateTime.UtcNow)
+        {
+            Budget = budget,
+        };
+
+        Assert.False(pooled.RememberTurn([BudgetItem(20)], "resp_1", maxInputBytes: 0));
+
+        var (input, responseId) = pooled.PreviousTurn();
+        Assert.Empty(input);
+        Assert.Equal("resp_1", responseId);
+
+        // The failed reservation released the budget for another connection.
+        var next = new PooledWebSocketConnection(default, conn: null, now: DateTime.UtcNow)
+        {
+            Budget = budget,
+        };
+        Assert.True(next.RememberTurn([BudgetItem(12)], "resp_2", maxInputBytes: 0));
+
+        pooled.Close();
+        next.Close();
+    }
+
+    [Fact]
+    public void SharesTheRetainedBudgetAcrossPooledConnections()
+    {
+        var budget = new ResponsesRetainedBudget(16);
+        var first = new PooledWebSocketConnection(default, conn: null, now: DateTime.UtcNow)
+        {
+            Budget = budget,
+        };
+        var second = new PooledWebSocketConnection(default, conn: null, now: DateTime.UtcNow)
+        {
+            Budget = budget,
+        };
+
+        Assert.True(first.RememberTurn([BudgetItem(12)], "resp_1", maxInputBytes: 0));
+        Assert.False(second.RememberTurn([BudgetItem(12)], "resp_2", maxInputBytes: 0));
+
+        // Closing a connection releases what it retained (responses_lane.go's
+        // budget Replace(retainedBytes, 0)).
+        first.Close();
+        Assert.True(second.RememberTurn([BudgetItem(12)], "resp_2", maxInputBytes: 0));
+
+        second.Close();
+    }
+
+    private static JsonElement BudgetItem(int bytes)
+        => JsonSerializer.SerializeToElement(new string('x', bytes - 2));
 
     [Fact]
     public void ReconnectsWhenInputIsNotAppendOnly()

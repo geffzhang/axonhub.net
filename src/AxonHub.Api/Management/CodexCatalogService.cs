@@ -6,6 +6,7 @@ using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.OAuth;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
 using AxonHub.Llm.Transformer.Shared;
 using AxonHub.Persistence;
@@ -37,19 +38,122 @@ public sealed class CodexCatalogException : Exception
 }
 
 /// <summary>
-/// Port of biz.CodexCatalog (codex_catalog.go:32-36). The management surface
-/// only reads <see cref="Count"/>; the raw fragments <c>Intersect</c> returns
-/// belong to the not-yet-ported <c>/codex/*</c> runtime routes (C244).
+/// Port of biz.CodexCatalog (codex_catalog.go:32-36): the parsed root fields,
+/// the model fragments and their slugs. <see cref="Count"/> serves the
+/// management test mutation; <see cref="Intersect"/> serves
+/// <c>GET /codex/models</c> (C244).
 /// </summary>
 public sealed class CodexCatalog
 {
-    public CodexCatalog(int count)
+    private readonly List<KeyValuePair<string, string>> _fields;
+    private readonly List<string> _models;
+    private readonly List<string> _slugs;
+
+    internal CodexCatalog(
+        List<KeyValuePair<string, string>> fields,
+        List<string> models,
+        List<string> slugs)
     {
-        Count = count;
+        _fields = fields;
+        _models = models;
+        _slugs = slugs;
     }
 
     /// <summary>Port of <c>(*CodexCatalog).Count</c>.</summary>
-    public int Count { get; }
+    public int Count => _models.Count;
+
+    /// <summary>
+    /// Port of <c>(*CodexCatalog).Intersect</c> (codex_catalog.go:65-82): keep
+    /// the fragments whose slug is visible, replace <c>models</c>, and
+    /// re-marshal the root the way Go marshals a
+    /// <c>map[string]json.RawMessage</c> — keys sorted byte-wise, every raw
+    /// fragment compacted with HTML escaping.
+    /// </summary>
+    public byte[] Intersect(IReadOnlyList<string> ids)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+
+        var visible = new HashSet<string>(ids, StringComparer.Ordinal);
+        var models = new List<byte>();
+        models.Add((byte)'[');
+        var first = true;
+        for (var i = 0; i < _models.Count; i++)
+        {
+            if (!visible.Contains(_slugs[i]))
+            {
+                continue;
+            }
+
+            if (!first)
+            {
+                models.Add((byte)',');
+            }
+
+            first = false;
+            models.AddRange(AxonHub.Llm.Json.GoJson.Compact(
+                System.Text.Encoding.UTF8.GetBytes(_models[i])));
+        }
+
+        models.Add((byte)']');
+
+        // maps.Copy keeps the parsed fields (duplicates already collapsed by
+        // the parser); fields["models"] is replaced by the filtered array.
+        var fields = new List<KeyValuePair<string, byte[]>>(_fields.Count + 1);
+        foreach (var field in _fields)
+        {
+            if (string.Equals(field.Key, "models", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            fields.Add(new KeyValuePair<string, byte[]>(
+                field.Key,
+                AxonHub.Llm.Json.GoJson.Compact(System.Text.Encoding.UTF8.GetBytes(field.Value))));
+        }
+
+        fields.Add(new KeyValuePair<string, byte[]>("models", [.. models]));
+
+        // sort.Slice with `sv[i].ks < sv[j].ks`: Go compares the UTF-8 bytes,
+        // which is code-point order (not UTF-16 ordinal order).
+        fields.Sort(static (left, right) => CompareCodePoints(left.Key, right.Key));
+
+        var output = new List<byte>();
+        output.Add((byte)'{');
+        for (var i = 0; i < fields.Count; i++)
+        {
+            if (i > 0)
+            {
+                output.Add((byte)',');
+            }
+
+            output.AddRange(AxonHub.Llm.Json.GoJson.Marshal(fields[i].Key));
+            output.Add((byte)':');
+            output.AddRange(fields[i].Value);
+        }
+
+        output.Add((byte)'}');
+        return [.. output];
+    }
+
+    private static int CompareCodePoints(string left, string right)
+    {
+        var leftRunes = left.EnumerateRunes();
+        var rightRunes = right.EnumerateRunes();
+        while (true)
+        {
+            var hasLeft = leftRunes.MoveNext();
+            var hasRight = rightRunes.MoveNext();
+            if (!hasLeft || !hasRight)
+            {
+                return hasLeft == hasRight ? 0 : hasLeft ? 1 : -1;
+            }
+
+            if (leftRunes.Current.Value != rightRunes.Current.Value)
+            {
+                return leftRunes.Current.Value < rightRunes.Current.Value ? -1 : 1;
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -446,10 +550,14 @@ public sealed class CodexCatalogService(
                 throw InvalidCatalog();
             }
 
+            // Go decodes the root into map[string]json.RawMessage: duplicate
+            // keys keep the last raw value.
+            var fields = new Dictionary<string, string>(StringComparer.Ordinal);
             JsonElement models = default;
             var found = false;
             foreach (var property in root.EnumerateObject())
             {
+                fields[property.Name] = property.Value.GetRawText();
                 if (string.Equals(property.Name, "models", StringComparison.Ordinal))
                 {
                     // Go's map decode keeps the last duplicate key.
@@ -466,7 +574,8 @@ public sealed class CodexCatalogService(
                 throw InvalidCatalog();
             }
 
-            var count = 0;
+            var modelFragments = new List<string>();
+            var slugs = new List<string>();
             foreach (var element in models.EnumerateArray())
             {
                 if (element.ValueKind != JsonValueKind.Object)
@@ -503,10 +612,11 @@ public sealed class CodexCatalogService(
                     throw InvalidCatalog();
                 }
 
-                count++;
+                modelFragments.Add(element.GetRawText());
+                slugs.Add(slug);
             }
 
-            return new CodexCatalog(count);
+            return new CodexCatalog([.. fields], modelFragments, slugs);
         }
     }
 

@@ -34,6 +34,14 @@ public interface ICodexCompatibilitySettingsService
     /// <summary>Port of SystemService.CodexCompatibilitySettings.</summary>
     Task<CodexCompatibilitySettings> GetAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Port of <c>SystemService.CodexCompatibilitySettings</c> called inside
+    /// <c>authz.RunWithSystemBypass</c> (<c>CodexCompatibility.Enabled</c> and
+    /// <c>ListModels</c>): the full settings without the <c>read_settings</c>
+    /// scope check.
+    /// </summary>
+    Task<CodexCompatibilitySettings> GetBypassAsync(CancellationToken cancellationToken = default);
+
     /// <summary>Port of SystemService.CodexCompatibilityEnabled.</summary>
     Task<bool> IsEnabledAsync(CancellationToken cancellationToken = default);
 
@@ -67,6 +75,12 @@ public sealed class CodexCompatibilitySettingsService(
             .ConfigureAwait(false);
         return await ReadAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    public Task<CodexCompatibilitySettings> GetBypassAsync(
+        CancellationToken cancellationToken = default)
+        // authz.RunWithSystemBypass("codex-compatibility-switch"): the wrapper
+        // only skips the scope check; the read itself is the same.
+        => ReadAsync(cancellationToken);
 
     public async Task<bool> IsEnabledAsync(CancellationToken cancellationToken = default)
     {

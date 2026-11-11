@@ -25,6 +25,13 @@ public sealed class CodexOutboundParams
     public string EndpointPath { get; set; } = string.Empty;
 
     /// <summary>
+    /// Port-only: the owning channel id, used as the <c>ChannelID</c> half of
+    /// the WebSocket pool key (websocket_executor.go:314, 568). Zero when the
+    /// transformer is built without a channel.
+    /// </summary>
+    public long ChannelId { get; set; }
+
+    /// <summary>
     /// The resolved channel default test model used to call the image
     /// generation tool. Empty values and image models use the fallback.
     /// </summary>
@@ -67,6 +74,8 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
 
     private readonly ITokenGetter _tokens;
     private readonly string _transport;
+
+    private readonly long _channelId;
     private readonly string _baseUrl;
     private readonly string _alphaSearchPath;
     private readonly string _imageMainModel;
@@ -82,8 +91,6 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
     private readonly ResponsesOutboundTransformer _responsesOutbound;
     private readonly Func<string?>? _sessionIdProvider;
 
-    private readonly object _executorMu = new();
-    private Dictionary<IExecutor, WebSocketExecutor>? _webSocketExecutors;
 
     public CodexOutboundTransformer(CodexOutboundParams parameters)
     {
@@ -129,10 +136,12 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
             // same rule drops the Responses Lite header for relays in
             // TransformRequest.
             PreserveAdditionalTools = official,
+            ChannelId = parameters.ChannelId,
             SessionIdProvider = parameters.SessionIdProvider,
             SessionScopeProvider = parameters.SessionScopeProvider,
         });
 
+        _channelId = parameters.ChannelId;
         _tokens = tokenProvider;
         _transport = parameters.Transport;
         _baseUrl = baseUrl.EndsWith("##", StringComparison.Ordinal) ? baseUrl[..^2] : baseUrl;
@@ -589,42 +598,22 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
 
     private WebSocketExecutor CustomizeWebSocketExecutor(IExecutor executor)
     {
-        // Go guards the cache with reflect.TypeOf(executor).Comparable(): every
-        // CLR object can key a dictionary, so the port keeps the cache for every
-        // executor (same rule as ResponsesOutboundTransformer.CustomizeExecutor).
-        lock (_executorMu)
-        {
-            _webSocketExecutors ??= [];
-            if (_webSocketExecutors.TryGetValue(executor, out var cached))
-            {
-                return cached;
-            }
-
-            var webSocketExecutor = new WebSocketExecutor(executor);
-            _webSocketExecutors[executor] = webSocketExecutor;
-            return webSocketExecutor;
-        }
+        // The reference caches the executor on the channel-cached transformer;
+        // the port builds one transformer per attempt, so the cache lives
+        // process-wide keyed by the inner executor and the channel (C072).
+        return WebSocketExecutorCache.GetOrCreate(executor, _channelId);
     }
 
     /// <summary>
-    /// Port of <c>Stop</c>: closes every cached WebSocket executor. The port
-    /// builds one transformer per attempt instead of per channel, so the
-    /// orchestrator stops the attempt's transformer when the attempt ends or is
-    /// replaced (C072).
+    /// Port of <c>Stop</c>. The reference closes the WebSocket executors cached
+    /// on the channel provider when the enabled-channels cache swaps; the
+    /// port's executor cache is process-wide and shared across attempts, so
+    /// stopping one attempt must not close sessions other turns still reuse.
+    /// Pooled connections retire through the executor's idle TTL, max lifetime
+    /// and background cleanup instead (C072).
     /// </summary>
     public void Stop()
     {
-        List<WebSocketExecutor> executors;
-        lock (_executorMu)
-        {
-            executors = _webSocketExecutors is null ? [] : [.. _webSocketExecutors.Values];
-            _webSocketExecutors = null;
-        }
-
-        foreach (var executor in executors)
-        {
-            executor.Close();
-        }
     }
     /// <summary>Port of <c>FinalizeTransportRequest</c>.</summary>
     public HttpRequestData? FinalizeTransportRequest(HttpRequestData? request)

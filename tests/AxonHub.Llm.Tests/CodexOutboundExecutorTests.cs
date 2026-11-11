@@ -743,8 +743,8 @@ public sealed class CodexOutboundExecutorTests
                     Function = new Function
                     {
                         Name = "shell",
-                        Parameters = JsonDocument.Parse(
-                            """{"type":"object","properties":{}}""").RootElement.Clone(),
+                        Parameters = JsonElement.Parse(
+                            """{"type":"object","properties":{}}""").Clone(),
                     },
                 },
             ],
@@ -802,8 +802,8 @@ public sealed class CodexOutboundExecutorTests
                     Function = new Function
                     {
                         Name = "shell",
-                        Parameters = JsonDocument.Parse(
-                            """{"type":"object","properties":{}}""").RootElement.Clone(),
+                        Parameters = JsonElement.Parse(
+                            """{"type":"object","properties":{}}""").Clone(),
                     },
                 },
             ],

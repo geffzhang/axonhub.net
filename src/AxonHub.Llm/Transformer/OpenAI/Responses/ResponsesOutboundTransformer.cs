@@ -43,6 +43,14 @@ public sealed class ResponsesOutboundConfig
     public string Transport { get; set; } = string.Empty;
 
     /// <summary>
+    /// Port-only: the owning channel id, used as the <c>ChannelID</c> half of
+    /// the WebSocket pool key (websocket_executor.go:314, 568). Zero when the
+    /// transformer is built without a channel (tests, wrappers that do not
+    /// carry one).
+    /// </summary>
+    public long ChannelId { get; set; }
+
+    /// <summary>
     /// Port-only audit field: 1-based position of the key the provider serves in
     /// the channel's full key list, or null when the channel has a single key.
     /// Persisted on request_executions.channel_api_key_index.
@@ -93,10 +101,6 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
     public const string TransportWebSocket = "websocket";
 
     private readonly ResponsesOutboundConfig _config;
-
-    private readonly object _executorMu = new();
-
-    private Dictionary<IExecutor, WebSocketExecutor>? _webSocketExecutors;
 
     /// <summary>The key the latest TransformRequest used; null until it runs.</summary>
     private string? _selectedApiKey;
@@ -229,21 +233,21 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             switch (item.Type)
             {
                 case ToolTypes.ImageGeneration:
-                {
-                    var tool = ResponsesOutboundConvert.ConvertImageGenerationToTool(item);
-                    if (ResponsesMetadata.GetStringPtr(request.TransformerMetadata, "image_generation_action")
-                        is { } action)
                     {
-                        tool.Action = ResponsesConvertUtil.NullIfEmpty(action);
+                        var tool = ResponsesOutboundConvert.ConvertImageGenerationToTool(item);
+                        if (ResponsesMetadata.GetStringPtr(request.TransformerMetadata, "image_generation_action")
+                            is { } action)
+                        {
+                            tool.Action = ResponsesConvertUtil.NullIfEmpty(action);
+                        }
+
+                        (tools ??= []).Add(tool);
+
+                        // Store image output format in TransformerMetadata.
+                        request.TransformerMetadata["image_output_format"] =
+                            ResponsesConvertUtil.ToElement(tool.OutputFormat ?? string.Empty);
+                        break;
                     }
-
-                    (tools ??= []).Add(tool);
-
-                    // Store image output format in TransformerMetadata.
-                    request.TransformerMetadata["image_output_format"] =
-                        ResponsesConvertUtil.ToElement(tool.OutputFormat ?? string.Empty);
-                    break;
-                }
 
                 case ToolTypes.WebSearch:
                 case ToolTypes.GoogleSearch:
@@ -255,33 +259,33 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
                     break;
 
                 case "function":
-                {
-                    var tool = ResponsesOutboundConvert.ConvertFunctionToTool(item);
-                    var @namespace = item.Function.Namespace;
-                    if (!string.IsNullOrEmpty(@namespace))
                     {
-                        if (namespaceIndexes.TryGetValue(@namespace, out var index))
+                        var tool = ResponsesOutboundConvert.ConvertFunctionToTool(item);
+                        var @namespace = item.Function.Namespace;
+                        if (!string.IsNullOrEmpty(@namespace))
                         {
-                            tools![index].Tools!.Add(tool);
+                            if (namespaceIndexes.TryGetValue(@namespace, out var index))
+                            {
+                                tools![index].Tools!.Add(tool);
+                            }
+                            else
+                            {
+                                namespaceIndexes[@namespace] = tools?.Count ?? 0;
+                                (tools ??= []).Add(new ResponsesTool
+                                {
+                                    Type = "namespace",
+                                    Name = @namespace,
+                                    Tools = [tool],
+                                });
+                            }
                         }
                         else
                         {
-                            namespaceIndexes[@namespace] = tools?.Count ?? 0;
-                            (tools ??= []).Add(new ResponsesTool
-                            {
-                                Type = "namespace",
-                                Name = @namespace,
-                                Tools = [tool],
-                            });
+                            (tools ??= []).Add(tool);
                         }
-                    }
-                    else
-                    {
-                        (tools ??= []).Add(tool);
-                    }
 
-                    break;
-                }
+                        break;
+                    }
 
                 default:
                     // Skip unsupported tool types.
@@ -841,11 +845,13 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
 
     /// <summary>Port of OutboundTransformer.CustomizeExecutor.</summary>
     /// <remarks>
-    /// Go guards the cache with <c>reflect.TypeOf(executor).Comparable()</c>;
-    /// every CLR object can key a dictionary, so the port keeps the cache for
-    /// every executor and relies on the default equality comparer — identity
-    /// for the port's executor classes, field equality for comparable value
-    /// types, matching Go's map-key rules.
+    /// Go caches one executor per channel-cached transformer and guards the map
+    /// with <c>reflect.TypeOf(executor).Comparable()</c>. The port builds one
+    /// transformer per attempt, so the cache lives process-wide in
+    /// <see cref="WebSocketExecutorCache"/> keyed by the inner executor and the
+    /// channel: the returned executor — and with it the WebSocket pool — then
+    /// outlives the attempt and later turns in the same session reuse the
+    /// upstream connection (C072).
     /// </remarks>
     public IExecutor CustomizeExecutor(IExecutor executor)
     {
@@ -856,18 +862,7 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             return new HttpTransportExecutor(executor, FinalizeTransportRequest);
         }
 
-        lock (_executorMu)
-        {
-            _webSocketExecutors ??= [];
-            if (_webSocketExecutors.TryGetValue(executor, out var cached))
-            {
-                return cached;
-            }
-
-            var webSocketExecutor = new WebSocketExecutor(executor);
-            _webSocketExecutors[executor] = webSocketExecutor;
-            return webSocketExecutor;
-        }
+        return WebSocketExecutorCache.GetOrCreate(executor, _config.ChannelId);
     }
 
     /// <summary>Port of OutboundTransformer.FinalizeTransportRequest.</summary>
@@ -884,24 +879,15 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
     }
 
     /// <summary>
-    /// Port of OutboundTransformer.Stop: closes every cached WebSocket
-    /// executor. The reference calls it when the enabled-channels cache swaps;
-    /// the port builds one transformer per attempt, so the orchestrator stops
-    /// the attempt's transformer when the attempt ends or is replaced (C072).
+    /// Port of OutboundTransformer.Stop. The reference closes the WebSocket
+    /// executors cached on the channel provider when the enabled-channels cache
+    /// swaps; the port's executor cache is process-wide and shared across
+    /// attempts, so stopping one attempt must not close sessions other turns
+    /// still reuse. Pooled connections retire through the executor's idle TTL,
+    /// max lifetime and background cleanup instead (C072).
     /// </summary>
     public void Stop()
     {
-        List<WebSocketExecutor> executors;
-        lock (_executorMu)
-        {
-            executors = _webSocketExecutors is null ? [] : [.. _webSocketExecutors.Values];
-            _webSocketExecutors = null;
-        }
-
-        foreach (var executor in executors)
-        {
-            executor.Close();
-        }
     }
 
     private static string BodyText(byte[]? body)
