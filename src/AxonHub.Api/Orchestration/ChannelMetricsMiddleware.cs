@@ -1,4 +1,7 @@
+using System.Text;
 using AxonHub.Abstractions;
+using AxonHub.Api.Http;
+using AxonHub.Api.Management;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -29,6 +32,7 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
     private readonly ChannelPerformanceState _state;
     private readonly TimeProvider _timeProvider;
     private readonly ChannelApiKeySelectionRegistry? _apiKeySelection;
+    private readonly IChannelAutoDisableEvaluationQueue? _autoDisableQueue;
 
     private bool _stream;
 
@@ -37,7 +41,8 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         IChannelMetricsRecorder metrics,
         ChannelPerformanceState state,
         TimeProvider timeProvider,
-        ChannelApiKeySelectionRegistry? apiKeySelection = null)
+        ChannelApiKeySelectionRegistry? apiKeySelection = null,
+        IChannelAutoDisableEvaluationQueue? autoDisableQueue = null)
     {
         ArgumentNullException.ThrowIfNull(outbound);
         ArgumentNullException.ThrowIfNull(metrics);
@@ -49,6 +54,7 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         _state = state;
         _timeProvider = timeProvider;
         _apiKeySelection = apiKeySelection;
+        _autoDisableQueue = autoDisableQueue;
     }
 
     /// <summary>Port of performanceRecording.OnInboundLlmRequest: the client's stream intent.</summary>
@@ -132,12 +138,12 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         }
         else
         {
-            // Port of performance.ExtractErrorCode: only an HTTP error carries a
-            // provider status; anything else defaults to 500.
-            var statusCode = GoErrors.As<HttpClientError>(error) is { } httpError
-                ? httpError.StatusCode
-                : 500;
-            record.MarkFailed(statusCode, error.Message, now);
+            var statusCode = ExtractErrorCode(error);
+
+            // performance.go:268-281: the recorded message is the extracted
+            // error message plus the first 8 KiB of the response body, so the
+            // auto-disable keyword patterns can match provider text.
+            record.MarkFailed(statusCode, ExtractErrorMessageForMatching(error), now);
         }
 
         Record(record);
@@ -164,6 +170,11 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
             return;
         }
 
+        // channel_metrics.go:526-530: the auto-disable counters are updated
+        // before the window metrics. The reference hands the record to a
+        // background worker (perfCh); the port's queue is the same seam.
+        _autoDisableQueue?.Enqueue(record);
+
         if (record.Success)
         {
             // channel_metrics.go:531: a success lets the round_robin_success
@@ -177,6 +188,45 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
             _metrics.RecordFailure(record.ChannelId, record.EndTime);
         }
     }
+
+    /// <summary>
+    /// Port of performance.ExtractErrorCode (performance.go:255-266): only an
+    /// HTTP error carries a provider status; anything else defaults to 500.
+    /// </summary>
+    internal static int ExtractErrorCode(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+
+        return GoErrors.As<HttpClientError>(error) is { } httpError
+            ? httpError.StatusCode
+            : 500;
+    }
+
+    /// <summary>
+    /// Port of performance.extractErrorMessageForMatching (performance.go:268-281):
+    /// the extracted message plus the first 8 KiB of the raw response body, so
+    /// keyword patterns can also match provider prose outside the JSON envelope.
+    /// </summary>
+    internal static string ExtractErrorMessageForMatching(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+
+        var message = StreamErrorFormatter.ExtractErrorMessage(error);
+        if (GoErrors.As<HttpClientError>(error) is not { } httpError || httpError.Body.Length == 0)
+        {
+            return message;
+        }
+
+        var body = httpError.Body;
+        if (body.Length > ErrorMatchBodyLimit)
+        {
+            body = body[..ErrorMatchBodyLimit];
+        }
+
+        return message + "\n" + Encoding.UTF8.GetString(body);
+    }
+
+    private const int ErrorMatchBodyLimit = 8 * 1024;
 
     private sealed class PerformanceStream(IStream<LlmResponse> stream, ChannelMetricsMiddleware owner)
         : IStream<LlmResponse>

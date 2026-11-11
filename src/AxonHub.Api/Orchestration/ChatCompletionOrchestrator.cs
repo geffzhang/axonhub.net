@@ -1,3 +1,4 @@
+using AxonHub.Abstractions;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Management;
@@ -53,6 +54,8 @@ public sealed class ChatCompletionOrchestrator
     private readonly IApiKeyQuotaChecker? _quotaChecker;
     private readonly IPromptProvider? _promptProvider;
     private readonly ChannelApiKeySelectionRegistry? _apiKeySelection;
+    private readonly ChannelAutoDisableService? _autoDisable;
+    private readonly IChannelAutoDisableEvaluationQueue? _autoDisableQueue;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -77,7 +80,9 @@ public sealed class ChatCompletionOrchestrator
         IPromptProvider? promptProvider = null,
         ChannelLimiterMetrics? channelLimiterMetrics = null,
         IChannelRateLimitRecorder? rateLimitRecorder = null,
-        ChannelApiKeySelectionRegistry? apiKeySelection = null)
+        ChannelApiKeySelectionRegistry? apiKeySelection = null,
+        ChannelAutoDisableService? autoDisable = null,
+        IChannelAutoDisableEvaluationQueue? autoDisableQueue = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -148,6 +153,12 @@ public sealed class ChatCompletionOrchestrator
         // per-provider behavior.
         _apiKeySelection = apiKeySelection;
 
+        // Production passes the auto-disable engine; direct constructions leave
+        // it null, which makes both the counter queue and the failure fallback
+        // no-ops exactly like a nil ChannelService (C236).
+        _autoDisable = autoDisable;
+        _autoDisableQueue = autoDisableQueue;
+
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
         // is the same as no provider.
@@ -189,7 +200,9 @@ public sealed class ChatCompletionOrchestrator
             _quotaChecker,
             _promptProvider,
             rateLimitRecorder: _rateLimitRecorder,
-            apiKeySelection: _apiKeySelection);
+            apiKeySelection: _apiKeySelection,
+            autoDisable: _autoDisable,
+            autoDisableQueue: _autoDisableQueue);
     }
 
     /// <summary>
@@ -678,7 +691,8 @@ public sealed class ChatCompletionOrchestrator
             _metrics,
             performance,
             _timeProvider,
-            _apiKeySelection));
+            _apiKeySelection,
+            _autoDisableQueue));
 
         // Channel request rewriting runs after the outbound transform (so the
         // body it patches is the provider body) and before persistence (so the
@@ -752,6 +766,12 @@ public sealed class ChatCompletionOrchestrator
             passThroughSettings,
             cancellationToken));
 
+        // Run first on raw responses (reverse order), before capture fan-out:
+        // an Anthropic message_stop is the provider protocol boundary, so close
+        // the provider transport without canceling reviewed delivery
+        // (orchestrator.go:353-354).
+        options.Middlewares.Add(new AnthropicTerminalStreamMiddleware(outbound));
+
         var pipeline = new Pipeline(_executor, inbound, outbound, options);
 
         PipelineResult result;
@@ -764,6 +784,9 @@ public sealed class ChatCompletionOrchestrator
             // Port of orchestrator.Process's error branch: mark the last
             // execution and the request canceled (client cancellation) or failed.
             persistence?.FinalizeFailure(ex);
+
+            await MaybeEvaluateChannelApiKeyRulesOnFailureAsync(performance, outbound, persistence, ex)
+                .ConfigureAwait(false);
 
             // The reference stops each channel's outbound when the enabled
             // channels cache swaps; the port's transformer lives for one
@@ -808,6 +831,77 @@ public sealed class ChatCompletionOrchestrator
             Response = result.Response,
             CodexResponseHeadersSupported = codexResponseHeadersSupported,
         };
+    }
+
+    /// <summary>
+    /// Port of orchestrator.maybeEvaluateChannelAPIKeyRulesOnFailure
+    /// (orchestrator.go:377-409): an attempt that failed after its request
+    /// execution was created, and whose performance record was not completed by
+    /// the metrics middleware, still feeds the credential rules. The reference
+    /// evaluates synchronously on a detached ten-second context.
+    /// </summary>
+    private async Task MaybeEvaluateChannelApiKeyRulesOnFailureAsync(
+        ChannelPerformanceState performance,
+        PersistentOutboundTransformer outbound,
+        RequestChainPersistenceMiddleware? persistence,
+        Exception error)
+    {
+        if (_autoDisable is null || persistence is not { HasRequestExecution: true })
+        {
+            return;
+        }
+
+        // A completed record was already handed to the metrics worker.
+        if (performance.Current is { RequestCompleted: true })
+        {
+            return;
+        }
+
+        var channelId = outbound.CurrentChannelId;
+        if (channelId <= 0)
+        {
+            return;
+        }
+
+        // performance.go:79-83: the provider publishes the selected key; OAuth
+        // channels carry the fixed credential ref instead.
+        var apiKey = outbound.CurrentApiKey ?? string.Empty;
+        if (apiKey.Length == 0
+            && outbound.CurrentCandidate is { } candidate
+            && ChannelCredentials.IsOAuth(candidate.Credentials))
+        {
+            apiKey = ChannelCredentials.OAuthCredentialRef;
+        }
+
+        if (apiKey.Length == 0 && performance.Current is { } record)
+        {
+            apiKey = record.ApiKey;
+        }
+
+        if (apiKey.Length == 0)
+        {
+            return;
+        }
+
+        // orchestrator.go:322-323: DetachWithTimeout, so a canceled client
+        // request still records the credential failure.
+        using var detached = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            _ = await _autoDisable
+                .EvaluateApiKeyRulesForFailureAsync(
+                    channelId,
+                    apiKey,
+                    ChannelMetricsMiddleware.ExtractErrorCode(error),
+                    ChannelMetricsMiddleware.ExtractErrorMessageForMatching(error),
+                    detached.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // A failed rule evaluation must not replace the request error
+            // (C236: the reference would surface only a panic here).
+        }
     }
 
     /// <summary>

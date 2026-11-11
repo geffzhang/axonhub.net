@@ -1,8 +1,25 @@
 using System.Globalization;
 using System.Text;
 using AxonHub.Abstractions;
+using AxonHub.Api.Management;
 
 namespace AxonHub.Api.Orchestration;
+
+/// <summary>
+/// The custom function map a template is parsed with. The reference registers
+/// <c>overrideTemplateFuncs</c> (which includes <c>toJSON</c>) for channel
+/// overrides and an empty <c>template.FuncMap{}</c> for webhooks
+/// (webhook_notifier.go:242), so a webhook template using <c>toJSON</c> fails to
+/// parse and the target is skipped.
+/// </summary>
+internal enum GoTemplateFunctions
+{
+    /// <summary>orchestrator.overrideTemplateFuncs: toJSON plus the builtins.</summary>
+    Override,
+
+    /// <summary>text/template builtins only (webhook_notifier.go renderWebhookTemplate).</summary>
+    Webhook,
+}
 
 /// <summary>
 /// Template data for channel override rendering (the reference's
@@ -103,9 +120,8 @@ internal static class GoTextTemplate
         "continue",
     };
 
-    private static readonly HashSet<string> FunctionNames = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> BuiltinFunctionNames = new(StringComparer.Ordinal)
     {
-        "toJSON",
         "eq",
         "ne",
         "lt",
@@ -123,33 +139,58 @@ internal static class GoTextTemplate
     };
 
     /// <summary>
+    /// text/template resolves a function identifier at parse time; an unknown
+    /// name is a parse error. The reference's override map adds <c>toJSON</c>;
+    /// the webhook map is empty, so only the builtins resolve there.
+    /// </summary>
+    private static bool IsFunctionName(string name, GoTemplateFunctions functions)
+        => BuiltinFunctionNames.Contains(name)
+            || (functions == GoTemplateFunctions.Override && name == "toJSON");
+
+    /// <summary>
     /// Renders <paramref name="value"/> against <paramref name="context"/>; on
     /// any parse or execution error returns the original string (the reference
     /// logs the error and falls back).
     /// </summary>
     public static string Render(string value, OverrideRenderContext context)
+        => TryRender(value, context, GoTemplateFunctions.Override, out var rendered) ? rendered : value;
+
+    /// <summary>
+    /// Port of <c>renderWebhookTemplate</c> (webhook_notifier.go:237-253): a
+    /// value without both <c>{{</c> and <c>}}</c> is returned unchanged, and a
+    /// parse or execution failure is reported to the caller instead of falling
+    /// back, so the target can be skipped.
+    /// </summary>
+    public static bool TryRender(
+        string value,
+        object context,
+        GoTemplateFunctions functions,
+        out string rendered)
     {
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(context);
 
         if (!value.Contains("{{", StringComparison.Ordinal) || !value.Contains("}}", StringComparison.Ordinal))
         {
-            return value;
+            rendered = value;
+            return true;
         }
 
         try
         {
             var elements = Scan(value);
-            var parser = new TemplateParser(elements);
+            var parser = new TemplateParser(elements, functions);
             var nodes = parser.ParseRoot();
             var state = new TemplateState(context);
             var output = new StringBuilder(value.Length);
             ExecuteNodes(nodes, state, context, output);
-            return output.ToString();
+            rendered = output.ToString();
+            return true;
         }
         catch (GoTemplateException)
         {
-            return value;
+            rendered = string.Empty;
+            return false;
         }
     }
 
@@ -408,34 +449,34 @@ internal static class GoTextTemplate
                     break;
 
                 case '"':
-                {
-                    var (value, end) = ReadQuotedString(content, index);
-                    tokens.Add(new TemplateToken(TemplateTokenKind.String, content[start..end], start, end, value));
-                    index = end;
-                    break;
-                }
-
-                case '`':
-                {
-                    var end = content.IndexOf('`', index + 1);
-                    if (end < 0)
                     {
-                        throw new GoTemplateException("unterminated raw string");
+                        var (value, end) = ReadQuotedString(content, index);
+                        tokens.Add(new TemplateToken(TemplateTokenKind.String, content[start..end], start, end, value));
+                        index = end;
+                        break;
                     }
 
-                    var value = content[(index + 1)..end].Replace("\r", string.Empty, StringComparison.Ordinal);
-                    tokens.Add(new TemplateToken(TemplateTokenKind.String, content[start..(end + 1)], start, end + 1, value));
-                    index = end + 1;
-                    break;
-                }
+                case '`':
+                    {
+                        var end = content.IndexOf('`', index + 1);
+                        if (end < 0)
+                        {
+                            throw new GoTemplateException("unterminated raw string");
+                        }
+
+                        var value = content[(index + 1)..end].Replace("\r", string.Empty, StringComparison.Ordinal);
+                        tokens.Add(new TemplateToken(TemplateTokenKind.String, content[start..(end + 1)], start, end + 1, value));
+                        index = end + 1;
+                        break;
+                    }
 
                 case '\'':
-                {
-                    var (value, end) = ReadCharacter(content, index);
-                    tokens.Add(new TemplateToken(TemplateTokenKind.Character, content[start..end], start, end, value));
-                    index = end;
-                    break;
-                }
+                    {
+                        var (value, end) = ReadCharacter(content, index);
+                        tokens.Add(new TemplateToken(TemplateTokenKind.Character, content[start..end], start, end, value));
+                        index = end;
+                        break;
+                    }
 
                 case '.':
                     if (index + 1 < content.Length && IsAlphaNumeric(content[index + 1]))
@@ -457,16 +498,16 @@ internal static class GoTextTemplate
                     break;
 
                 case '$':
-                {
-                    var nameEnd = ReadNameEnd(content, index + 1);
-                    tokens.Add(new TemplateToken(
-                        TemplateTokenKind.Variable,
-                        content[(index + 1)..nameEnd],
-                        start,
-                        nameEnd));
-                    index = nameEnd;
-                    break;
-                }
+                    {
+                        var nameEnd = ReadNameEnd(content, index + 1);
+                        tokens.Add(new TemplateToken(
+                            TemplateTokenKind.Variable,
+                            content[(index + 1)..nameEnd],
+                            start,
+                            nameEnd));
+                        index = nameEnd;
+                        break;
+                    }
 
                 default:
                     if (char.IsDigit(current)
@@ -618,15 +659,15 @@ internal static class GoTextTemplate
             case 'u':
                 return (ReadHexEscape(content, start + 2, 4), start + 6);
             case 'U':
-            {
-                var scalar = Convert.ToInt32(ReadHexEscape(content, start + 2, 8), 16);
-                if (scalar is < 0 or > 0x10FFFF || (scalar >= 0xD800 && scalar <= 0xDFFF))
                 {
-                    throw new GoTemplateException("invalid Unicode code point");
-                }
+                    var scalar = Convert.ToInt32(ReadHexEscape(content, start + 2, 8), 16);
+                    if (scalar is < 0 or > 0x10FFFF || (scalar >= 0xD800 && scalar <= 0xDFFF))
+                    {
+                        throw new GoTemplateException("invalid Unicode code point");
+                    }
 
-                return (char.ConvertFromUtf32(scalar), start + 10);
-            }
+                    return (char.ConvertFromUtf32(scalar), start + 10);
+                }
 
             default:
                 if (escape is >= '0' and <= '7')
@@ -970,6 +1011,42 @@ internal static class GoTextTemplate
                     _ => throw new GoTemplateException($"can't evaluate field {field} in render context"),
                 };
 
+            case WebhookRenderContext webhook:
+                return field switch
+                {
+                    "Event" => webhook.Event,
+                    "Severity" => webhook.Severity,
+                    "OccurredAt" => webhook.OccurredAt,
+                    "Channel" => webhook.Channel,
+                    "Trigger" => webhook.Trigger,
+                    _ => throw new GoTemplateException(
+                        $"can't evaluate field {field} in biz.WebhookRenderContext"),
+                };
+
+            case WebhookChannelContext channel:
+                return field switch
+                {
+                    "ID" => channel.Id,
+                    "Name" => channel.Name,
+                    "Provider" => channel.Provider,
+                    "BaseURL" => channel.BaseUrl,
+                    "Status" => channel.Status,
+                    _ => throw new GoTemplateException(
+                        $"can't evaluate field {field} in struct {{ ID int; Name string; Provider string; BaseURL string; Status string }}"),
+                };
+
+            case WebhookTriggerContext trigger:
+                return field switch
+                {
+                    "Type" => trigger.Type,
+                    "StatusCode" => trigger.StatusCode,
+                    "Threshold" => trigger.Threshold,
+                    "ActualCount" => trigger.ActualCount,
+                    "Reason" => trigger.Reason,
+                    _ => throw new GoTemplateException(
+                        $"can't evaluate field {field} in struct {{ Type string; StatusCode int; Threshold int; ActualCount int; Reason string }}"),
+                };
+
             case TemplateMap map:
                 return map.TryGetValue(field, out var value) ? value : null;
 
@@ -1234,7 +1311,9 @@ internal static class GoTextTemplate
     // Parser
     // -----------------------------------------------------------------------
 
-    private sealed class TemplateParser(List<TemplateElement> elements)
+    private sealed class TemplateParser(
+        List<TemplateElement> elements,
+        GoTemplateFunctions functions)
     {
         // Bounds recursion on pathological settings values: the reference
         // parser recurses on native stacks, this port must not overflow.
@@ -1273,28 +1352,28 @@ internal static class GoTextTemplate
                         continue;
 
                     case TemplateActionElement action:
-                    {
-                        var tokens = LexAction(action.Content);
-                        if (tokens.Count == 0)
                         {
-                            throw new GoTemplateException("empty action");
-                        }
-
-                        var keyword = KeywordOf(tokens);
-                        if (keyword is "else" or "end")
-                        {
-                            if (Array.IndexOf(stops, keyword) < 0)
+                            var tokens = LexAction(action.Content);
+                            if (tokens.Count == 0)
                             {
-                                throw new GoTemplateException($"unexpected {keyword}");
+                                throw new GoTemplateException("empty action");
                             }
 
-                            return (nodes, keyword, tokens);
-                        }
+                            var keyword = KeywordOf(tokens);
+                            if (keyword is "else" or "end")
+                            {
+                                if (Array.IndexOf(stops, keyword) < 0)
+                                {
+                                    throw new GoTemplateException($"unexpected {keyword}");
+                                }
 
-                        _index++;
-                        nodes.Add(ParseStatement(keyword, tokens));
-                        continue;
-                    }
+                                return (nodes, keyword, tokens);
+                            }
+
+                            _index++;
+                            nodes.Add(ParseStatement(keyword, tokens));
+                            continue;
+                        }
                 }
             }
 
@@ -1335,12 +1414,12 @@ internal static class GoTextTemplate
                     throw new GoTemplateException($"unsupported action {keyword}");
 
                 default:
-                {
-                    var cursor = new TemplateTokenCursor(tokens, 0);
-                    var pipeline = ParsePipeline(cursor, allowDeclarations: true, allowTwoDeclarations: false);
-                    cursor.ExpectEnd();
-                    return new TemplateActionNode(pipeline);
-                }
+                    {
+                        var cursor = new TemplateTokenCursor(tokens, 0);
+                        var pipeline = ParsePipeline(cursor, allowDeclarations: true, allowTwoDeclarations: false);
+                        cursor.ExpectEnd();
+                        return new TemplateActionNode(pipeline);
+                    }
             }
         }
 
@@ -1493,7 +1572,7 @@ internal static class GoTextTemplate
             throw new GoTemplateException("unexpected else");
         }
 
-        private static TemplatePipeline ParseControlPipeline(
+        private TemplatePipeline ParseControlPipeline(
             List<TemplateToken> tokens,
             int start,
             bool allowTwoDeclarations)
@@ -1504,7 +1583,7 @@ internal static class GoTextTemplate
             return pipeline;
         }
 
-        private static TemplatePipeline ParsePipeline(
+        private TemplatePipeline ParsePipeline(
             TemplateTokenCursor cursor,
             bool allowDeclarations,
             bool allowTwoDeclarations)
@@ -1542,7 +1621,7 @@ internal static class GoTextTemplate
             return new TemplatePipeline(commands, declared, isAssignment);
         }
 
-        private static TemplateCommand ParseCommand(TemplateTokenCursor cursor)
+        private TemplateCommand ParseCommand(TemplateTokenCursor cursor)
         {
             var first = ParseOperand(cursor);
             var arguments = new List<TemplateExpression>();
@@ -1555,7 +1634,7 @@ internal static class GoTextTemplate
             return new TemplateCommand(first, arguments);
         }
 
-        private static TemplateExpression ParseOperand(TemplateTokenCursor cursor)
+        private TemplateExpression ParseOperand(TemplateTokenCursor cursor)
         {
             var term = ParseTerm(cursor);
             while (cursor.Peek() is { Kind: TemplateTokenKind.Field } field
@@ -1591,23 +1670,23 @@ internal static class GoTextTemplate
             return segments;
         }
 
-        private static TemplateExpression ParseTerm(TemplateTokenCursor cursor)
+        private TemplateExpression ParseTerm(TemplateTokenCursor cursor)
         {
             var token = cursor.Peek() ?? throw new GoTemplateException("unexpected end of action");
             switch (token.Kind)
             {
                 case TemplateTokenKind.LeftParen:
-                {
-                    cursor.Advance(1);
-                    var pipeline = ParsePipeline(cursor, allowDeclarations: false, allowTwoDeclarations: false);
-                    if (cursor.Peek() is not { Kind: TemplateTokenKind.RightParen })
                     {
-                        throw new GoTemplateException("unclosed parenthesis");
-                    }
+                        cursor.Advance(1);
+                        var pipeline = ParsePipeline(cursor, allowDeclarations: false, allowTwoDeclarations: false);
+                        if (cursor.Peek() is not { Kind: TemplateTokenKind.RightParen })
+                        {
+                            throw new GoTemplateException("unclosed parenthesis");
+                        }
 
-                    cursor.Advance(1);
-                    return new TemplateParenExpression(pipeline);
-                }
+                        cursor.Advance(1);
+                        return new TemplateParenExpression(pipeline);
+                    }
 
                 case TemplateTokenKind.Dot:
                     cursor.Advance(1);
@@ -1634,7 +1713,7 @@ internal static class GoTextTemplate
                         "true" => new TemplateLiteralExpression(true),
                         "false" => new TemplateLiteralExpression(false),
                         "nil" => new TemplateNilExpression(),
-                        _ when FunctionNames.Contains(token.Text) => new TemplateFunctionExpression(token.Text),
+                        _ when IsFunctionName(token.Text, functions) => new TemplateFunctionExpression(token.Text),
                         _ => throw new GoTemplateException($"function {token.Text} not defined"),
                     };
 
@@ -1962,40 +2041,40 @@ internal static class GoTextTemplate
                     throw new GoTemplateException("index of untyped nil");
 
                 case string text:
-                {
-                    var position = RequireInteger(arguments[index]);
-                    var bytes = Encoding.UTF8.GetBytes(text);
-                    if (position < 0 || position >= bytes.Length)
                     {
-                        throw new GoTemplateException("index out of range");
-                    }
+                        var position = RequireInteger(arguments[index]);
+                        var bytes = Encoding.UTF8.GetBytes(text);
+                        if (position < 0 || position >= bytes.Length)
+                        {
+                            throw new GoTemplateException("index out of range");
+                        }
 
-                    item = (long)bytes[(int)position];
-                    break;
-                }
+                        item = (long)bytes[(int)position];
+                        break;
+                    }
 
                 case List<object?> list:
-                {
-                    var position = RequireInteger(arguments[index]);
-                    if (position < 0 || position >= list.Count)
                     {
-                        throw new GoTemplateException("index out of range");
-                    }
+                        var position = RequireInteger(arguments[index]);
+                        if (position < 0 || position >= list.Count)
+                        {
+                            throw new GoTemplateException("index out of range");
+                        }
 
-                    item = list[(int)position];
-                    break;
-                }
+                        item = list[(int)position];
+                        break;
+                    }
 
                 case TemplateMap map:
-                {
-                    if (arguments[index] is not string key)
                     {
-                        throw new GoTemplateException("map index must be a string");
-                    }
+                        if (arguments[index] is not string key)
+                        {
+                            throw new GoTemplateException("map index must be a string");
+                        }
 
-                    item = map.TryGetValue(key, out var found) ? found : string.Empty;
-                    break;
-                }
+                        item = map.TryGetValue(key, out var found) ? found : string.Empty;
+                        break;
+                    }
 
                 default:
                     throw new GoTemplateException("can't index item");
@@ -2033,6 +2112,27 @@ internal static class GoTextTemplate
             FormatV(context.RequestHeader),
             context.PromptCacheKey,
             context.ReasoningEffort) + "}",
+        WebhookRenderContext webhook => "{" + string.Join(
+            " ",
+            webhook.Event,
+            webhook.Severity,
+            webhook.OccurredAt,
+            FormatV(webhook.Channel),
+            FormatV(webhook.Trigger)) + "}",
+        WebhookChannelContext channel => "{" + string.Join(
+            " ",
+            channel.Id.ToString(CultureInfo.InvariantCulture),
+            channel.Name,
+            channel.Provider,
+            channel.BaseUrl,
+            channel.Status) + "}",
+        WebhookTriggerContext trigger => "{" + string.Join(
+            " ",
+            trigger.Type,
+            trigger.StatusCode.ToString(CultureInfo.InvariantCulture),
+            trigger.Threshold.ToString(CultureInfo.InvariantCulture),
+            trigger.ActualCount.ToString(CultureInfo.InvariantCulture),
+            trigger.Reason) + "}",
         _ => throw new GoTemplateException("cannot format value"),
     };
 
@@ -2340,16 +2440,16 @@ internal static class GoTextTemplate
         switch (verb)
         {
             case 'v':
-            {
-                var text = FormatV(argument);
-                if (precision >= 0 && argument is string)
                 {
-                    text = Truncate(text, precision);
-                }
+                    var text = FormatV(argument);
+                    if (precision >= 0 && argument is string)
+                    {
+                        text = Truncate(text, precision);
+                    }
 
-                builder.Append(Pad(text, flags, width));
-                return;
-            }
+                    builder.Append(Pad(text, flags, width));
+                    return;
+                }
 
             case 's':
                 if (argument is string value)
@@ -2434,37 +2534,37 @@ internal static class GoTextTemplate
 
             case 'x':
             case 'X':
-            {
-                var upper = verb == 'X';
-                if (argument is long integer)
                 {
-                    var digits = Convert.ToString(integer, 16);
-                    digits = upper ? digits.ToUpperInvariant() : digits;
-                    if (flags.Contains('#'))
+                    var upper = verb == 'X';
+                    if (argument is long integer)
                     {
-                        digits = (upper ? "0X" : "0x") + digits;
+                        var digits = Convert.ToString(integer, 16);
+                        digits = upper ? digits.ToUpperInvariant() : digits;
+                        if (flags.Contains('#'))
+                        {
+                            digits = (upper ? "0X" : "0x") + digits;
+                        }
+
+                        builder.Append(ApplyNumericPadding(digits, flags, width));
+                        return;
                     }
 
-                    builder.Append(ApplyNumericPadding(digits, flags, width));
-                    return;
-                }
-
-                if (argument is string text)
-                {
-                    var bytes = Encoding.UTF8.GetBytes(text);
-                    var digits = Convert.ToHexString(bytes);
-                    if (!upper)
+                    if (argument is string text)
                     {
-                        digits = digits.ToLowerInvariant();
+                        var bytes = Encoding.UTF8.GetBytes(text);
+                        var digits = Convert.ToHexString(bytes);
+                        if (!upper)
+                        {
+                            digits = digits.ToLowerInvariant();
+                        }
+
+                        builder.Append(Pad(digits, flags, width));
+                        return;
                     }
 
-                    builder.Append(Pad(digits, flags, width));
+                    builder.Append(BadVerb(verb, argument));
                     return;
                 }
-
-                builder.Append(BadVerb(verb, argument));
-                return;
-            }
 
             case 'o':
                 if (argument is long octal)

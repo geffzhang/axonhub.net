@@ -13,11 +13,14 @@ internal sealed class RecordingEnabledChannelsRefresher : IEnabledChannelsCacheR
 
     public int ReloadCount { get; private set; }
 
+    /// <summary>Scripts a synchronous reload failure (auto-disable C236 tests).</summary>
+    public Exception? ReloadFailure { get; set; }
+
     public void RequestRefresh() => RequestCount++;
 
     public Task ReloadAsync()
     {
         ReloadCount++;
-        return Task.CompletedTask;
+        return ReloadFailure is null ? Task.CompletedTask : Task.FromException(ReloadFailure);
     }
 }

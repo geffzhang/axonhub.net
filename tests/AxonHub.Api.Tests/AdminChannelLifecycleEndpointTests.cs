@@ -623,9 +623,42 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
             throw GetForUpdateFailure;
         }
 
-        return Task.FromResult(
-            _rows.SingleOrDefault(row => row.Id == id && row.DeletedAt == 0));
+        // ChannelWriteStore loads the pre-update identity with AsNoTracking, so
+        // the caller's snapshot is detached from the rows UpdateAsync mutates.
+        // Handing out the live row here would erase the identity comparison in
+        // ChannelLifecycleService.UpdateAsync before it runs.
+        var row = _rows.SingleOrDefault(candidate =>
+            candidate.Id == id && candidate.DeletedAt == 0);
+        return Task.FromResult(row is null ? null : Detach(row));
     }
+
+    private static ChannelRecord Detach(ChannelRecord row) => new()
+    {
+        Id = row.Id,
+        CreatedAt = row.CreatedAt,
+        UpdatedAt = row.UpdatedAt,
+        DeletedAt = row.DeletedAt,
+        Type = row.Type,
+        BaseUrl = row.BaseUrl,
+        Name = row.Name,
+        Status = row.Status,
+        Credentials = row.Credentials,
+        DisabledApiKeys = row.DisabledApiKeys,
+        SupportedModels = row.SupportedModels,
+        ManualModels = row.ManualModels,
+        AutoSyncSupportedModels = row.AutoSyncSupportedModels,
+        AutoSyncModelPattern = row.AutoSyncModelPattern,
+        Tags = row.Tags,
+        DefaultTestModel = row.DefaultTestModel,
+        Policies = row.Policies,
+        Settings = row.Settings,
+        OrderingWeight = row.OrderingWeight,
+        ErrorMessage = row.ErrorMessage,
+        AutoDisabledAt = row.AutoDisabledAt,
+        AutoDisableExpiresAt = row.AutoDisableExpiresAt,
+        Remark = row.Remark,
+        Endpoints = row.Endpoints,
+    };
 
     public Task<ChannelRecord?> GetAsync(
         long id,
@@ -821,6 +854,38 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
             row.AutoDisableExpiresAt = null;
         }
 
+        row.UpdatedAt = DateTime.UtcNow;
+        return Task.FromResult(true);
+    }
+
+    public List<(long Id, string Reason, DateTime AutoDisabledAt, DateTime? ExpiresAt)> ChannelAutoDisableCalls { get; } = [];
+
+    public Exception? AutoDisableFailure { get; set; }
+
+    public Task<bool> AutoDisableAsync(
+        long id,
+        string reason,
+        DateTime autoDisabledAt,
+        DateTime? expiresAt,
+        CancellationToken cancellationToken = default)
+    {
+        if (AutoDisableFailure is not null)
+        {
+            throw AutoDisableFailure;
+        }
+
+        var row = _rows.SingleOrDefault(candidate =>
+            candidate.Id == id && candidate.Status == "enabled" && candidate.DeletedAt == 0);
+        if (row is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        ChannelAutoDisableCalls.Add((id, reason, autoDisabledAt, expiresAt));
+        row.Status = "disabled";
+        row.ErrorMessage = reason;
+        row.AutoDisabledAt = autoDisabledAt;
+        row.AutoDisableExpiresAt = expiresAt;
         row.UpdatedAt = DateTime.UtcNow;
         return Task.FromResult(true);
     }

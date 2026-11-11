@@ -25,7 +25,8 @@ public sealed class ChannelLifecycleService(
     IProviderQuotaInvalidator? quotaInvalidator = null,
     IEnabledChannelsCacheRefresher? enabledChannelsRefresher = null,
     ILogger<ChannelLifecycleService>? logger = null,
-    ChannelApiKeySelectionRegistry? apiKeySelection = null)
+    ChannelApiKeySelectionRegistry? apiKeySelection = null,
+    IWebhookNotificationSink? webhookSink = null) : IChannelCredentialMutations
 {
     /// <summary>
     /// Port of ChannelService.apiKeyOpsLock: the reference serializes every
@@ -1567,8 +1568,8 @@ public sealed class ChannelLifecycleService(
     /// whole channel when no enabled credential remains. When the channel is
     /// disabled the enabled-channel cache is reloaded synchronously so the
     /// channel stops being selected immediately, then the usual async reload
-    /// notification is sent. The reference's auto-disable event bus has no
-    /// counterpart in the port (C149).
+    /// notification is sent. The webhook notification is published through
+    /// <see cref="IWebhookNotificationSink"/> (C236).
     /// </summary>
     public async Task DisableApiKeyAsync(
         long channelId,
@@ -1652,6 +1653,20 @@ public sealed class ChannelLifecycleService(
 
             if (channelDisabled)
             {
+                // channel_apikey.go:115-125: the event carries the pre-update
+                // channel snapshot; the status is the disabled literal.
+                webhookSink?.PublishChannelAutoDisabled(new ChannelAutoDisabledEvent
+                {
+                    ChannelId = snapshot.Id,
+                    ChannelName = snapshot.Name,
+                    ChannelProvider = snapshot.Type,
+                    ChannelBaseUrl = snapshot.BaseUrl ?? string.Empty,
+                    ChannelStatus = "disabled",
+                    StatusCode = errorCode,
+                    Reason = state.ErrorMessage ?? string.Empty,
+                    OccurredAt = new DateTimeOffset(now, TimeSpan.Zero),
+                });
+
                 // channel_apikey.go:129-139: synchronous reload, detached with
                 // a ten second budget, so selection stops using the channel.
                 await ReloadEnabledChannelsAfterApiKeyExhaustionAsync(channelId)

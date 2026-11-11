@@ -204,6 +204,22 @@ public interface IChannelWriteStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of the conditional update in markChannelUnavailable
+    /// (channel_auto_disable.go:57-70): only a live, still-enabled channel is
+    /// disabled, and the expires column is overwritten (a null clears it).
+    /// Returns false when no row matched (ent affected == 0).
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The update failed; the caller logs the reference's message.
+    /// </exception>
+    Task<bool> AutoDisableAsync(
+        long id,
+        string reason,
+        DateTime autoDisabledAt,
+        DateTime? expiresAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of the create half of ChannelService.CreateChannel: checks the live
     /// name (soft-delete predicate), then inserts the row. Returns null when a
     /// live channel already owns the name (the caller raises the coded
@@ -713,6 +729,41 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
         {
             // The caller wraps this with the operation-specific reference
             // prefix ("failed to disable api key: ...").
+            throw new StoreFailureException(ex.Message, ex);
+        }
+
+        return affected > 0;
+    }
+
+    public async Task<bool> AutoDisableAsync(
+        long id,
+        string reason,
+        DateTime autoDisabledAt,
+        DateTime? expiresAt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(reason);
+
+        int affected;
+        try
+        {
+            // ent.Channel.Update().Where(ID, StatusEQ(enabled)): the status
+            // predicate is part of the WHERE so a concurrently disabled or
+            // deleted channel is left untouched.
+            affected = await db.Channels
+                .Where(row => row.Id == id && row.Status == "enabled" && row.DeletedAt == 0)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(row => row.Status, "disabled")
+                        .SetProperty(row => row.ErrorMessage, reason)
+                        .SetProperty(row => row.AutoDisabledAt, autoDisabledAt)
+                        .SetProperty(row => row.AutoDisableExpiresAt, expiresAt)
+                        .SetProperty(row => row.UpdatedAt, DateTime.UtcNow),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
             throw new StoreFailureException(ex.Message, ex);
         }
 
