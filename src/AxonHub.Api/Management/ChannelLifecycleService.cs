@@ -16,11 +16,22 @@ namespace AxonHub.Api.Management;
 /// status changes, delete and the bulk status/delete/tag helpers
 /// (channel.go:525-1290, channel_bulk.go:163-462). The GraphQL mutation
 /// permission guard runs at the resolver entry (ChannelPrivacy, C014); this
-/// service keeps the persistence behaviour and reference error strings. The
-/// reference's internal reads (name checks, endpoint loads, bulk status/count
-/// queries) run under the ent query policy; the port does not re-evaluate it
-/// here (recorded as a C014 residual).
+/// service keeps the persistence behaviour and reference error strings.
 /// </summary>
+/// <remarks>
+/// Ent evaluates the Channel query policy inside every internal read, so the
+/// port re-evaluates it through <see cref="ChannelPrivacy.EvaluateQueryAsync"/>
+/// at the same points: the create/duplicate name checks, the update xai / name /
+/// stale-quota / credential reads, the bulk status, tag and auto-disable
+/// queries, the endpoint save load and the credential bookkeeping loads. The
+/// reads the reference wraps in <c>authz.RunWithScopeDecision(write_channels)</c>
+/// (provider identity, settings for protocol sync and endpoint validation) are
+/// served from the single snapshot loaded at the update entry, so they need no
+/// second decision: the resolver's write_channels gate already admitted the
+/// caller. The background auto-disable engine drives the credential mutations
+/// through <see cref="SystemChannelCredentialMutations"/>, matching the
+/// reference's <c>authz.WithSystemBypass</c> (channel_internal.go:16-21).
+/// </remarks>
 public sealed class ChannelLifecycleService(
     IChannelWriteStore channels,
     ChannelLimiterManager limiters,
@@ -29,7 +40,8 @@ public sealed class ChannelLifecycleService(
     IEnabledChannelsCacheRefresher? enabledChannelsRefresher = null,
     ILogger<ChannelLifecycleService>? logger = null,
     ChannelApiKeySelectionRegistry? apiKeySelection = null,
-    IWebhookNotificationSink? webhookSink = null) : IChannelCredentialMutations
+    IWebhookNotificationSink? webhookSink = null,
+    ChannelPrivacy? privacy = null) : IChannelCredentialMutations
 {
     /// <summary>
     /// Port of ChannelService.apiKeyOpsLock: the reference serializes every
@@ -67,6 +79,12 @@ public sealed class ChannelLifecycleService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
+
+        // The name lookup is the first thing CreateChannel does
+        // (channel.go:665-676), before any validation; ent evaluates the
+        // Channel query policy on that read.
+        await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+            .ConfigureAwait(false);
 
         var record = PrepareCreate(command);
 
@@ -262,6 +280,12 @@ public sealed class ChannelLifecycleService(
     {
         ArgumentNullException.ThrowIfNull(command);
 
+        // The source load is the first statement inside DuplicateChannel's
+        // transaction (channel_duplicate.go:23-26); ent evaluates the Channel
+        // query policy before any copy or validation runs.
+        await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+            .ConfigureAwait(false);
+
         ChannelRecord? duplicated;
         try
         {
@@ -397,6 +421,11 @@ public sealed class ChannelLifecycleService(
                     + "channel: invalid enum value for type field: "
                     + GoCast.GoQuote(input.Type));
         }
+
+        // The name snapshot is the first read after the three validations
+        // (channel_bulk.go:82-86); ent evaluates the Channel query policy there.
+        await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+            .ConfigureAwait(false);
 
         IReadOnlyList<string> liveNames;
         try
@@ -691,11 +720,20 @@ public sealed class ChannelLifecycleService(
             command.BaseUrl = ChannelValidation.XaiSubscriptionBaseUrl;
             command.Endpoints = [];
         }
-        else if (command.Type is null && (command.BaseUrl is not null || command.Endpoints is not null)
-            && snapshot.Type == "xai_subscription")
+        else if (command.Type is null && (command.BaseUrl is not null || command.Endpoints is not null))
         {
-            command.BaseUrl = ChannelValidation.XaiSubscriptionBaseUrl;
-            command.Endpoints = [];
+            // The reference's Exist query runs for every type-less base URL or
+            // endpoint update, before it knows whether the row is an xai
+            // channel (channel.go:958-967); ent evaluates the Channel query
+            // policy on that read.
+            await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (snapshot.Type == "xai_subscription")
+            {
+                command.BaseUrl = ChannelValidation.XaiSubscriptionBaseUrl;
+                command.Endpoints = [];
+            }
         }
 
         var effectiveBaseUrl = command.BaseUrl ?? snapshot.BaseUrl;
@@ -710,6 +748,11 @@ public sealed class ChannelLifecycleService(
 
         if (command.Name is { } name)
         {
+            // ent evaluates the Channel query policy on the name lookup before
+            // the existence result is known (channel.go:979-993).
+            await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+                .ConfigureAwait(false);
+
             bool exists;
             try
             {
@@ -893,6 +936,12 @@ public sealed class ChannelLifecycleService(
         }
         else if (clearStaleQuotaSettings)
         {
+            // The reference reads the stored settings inside the write
+            // transaction under the caller's context (channel.go:1135-1141);
+            // ent evaluates the Channel query policy on that read.
+            await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+                .ConfigureAwait(false);
+
             var staleSettings = StoredSettings("failed to load channel settings: ");
             if (staleSettings is not null)
             {
@@ -912,6 +961,12 @@ public sealed class ChannelLifecycleService(
         string? credentialsJson = null;
         if (command.Credentials is { } credentials)
         {
+            // The reference reads the stored credentials inside the write
+            // transaction under the caller's context (channel.go:1151-1157);
+            // ent evaluates the Channel query policy on that read.
+            await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+                .ConfigureAwait(false);
+
             ChannelCredentialsDraft storedCredentials;
             try
             {
@@ -1349,6 +1404,12 @@ public sealed class ChannelLifecycleService(
             return;
         }
 
+        // The reference loads the tagged rows inside the transaction
+        // (channel_bulk.go:379-386); ent evaluates the Channel query policy on
+        // that read.
+        await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+            .ConfigureAwait(false);
+
         try
         {
             await channels.ManageTagsAsync(channelIds, newTags, tagsToRemove, cancellationToken)
@@ -1457,6 +1518,12 @@ public sealed class ChannelLifecycleService(
                     "unsupported auto-disable action " + GoCast.GoQuote(command.Action));
         }
 
+        // The reference loads the target rows inside the transaction after the
+        // action validation (channel_bulk.go:272-284); ent evaluates the
+        // Channel query policy on that read.
+        await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+            .ConfigureAwait(false);
+
         try
         {
             var updated = await channels.BulkUpdateAutoDisableAsync(
@@ -1493,6 +1560,11 @@ public sealed class ChannelLifecycleService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
+
+        // SaveChannelEndpoints starts with a plain Channel.Get
+        // (channel.go:1288-1292); ent evaluates the Channel query policy there.
+        await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+            .ConfigureAwait(false);
 
         ChannelRecord snapshot;
         try
@@ -1574,13 +1646,52 @@ public sealed class ChannelLifecycleService(
     /// notification is sent. The webhook notification is published through
     /// <see cref="IWebhookNotificationSink"/> (C236).
     /// </summary>
-    public async Task DisableApiKeyAsync(
+    public Task DisableApiKeyAsync(
         long channelId,
         string key,
         int errorCode,
         string reason,
         DateTime? expiresAt = null,
         CancellationToken cancellationToken = default)
+        => DisableApiKeyCoreAsync(
+            channelId,
+            key,
+            errorCode,
+            reason,
+            expiresAt,
+            systemBypass: false,
+            cancellationToken);
+
+    /// <summary>
+    /// The same mutation under the reference's system bypass
+    /// (<c>authz.WithSystemBypass</c>, channel_internal.go:16-21), used by the
+    /// background auto-disable engine.
+    /// </summary>
+    public Task DisableApiKeyAsync(
+        long channelId,
+        string key,
+        int errorCode,
+        string reason,
+        DateTime? expiresAt,
+        bool systemBypass,
+        CancellationToken cancellationToken = default)
+        => DisableApiKeyCoreAsync(
+            channelId,
+            key,
+            errorCode,
+            reason,
+            expiresAt,
+            systemBypass,
+            cancellationToken);
+
+    private async Task DisableApiKeyCoreAsync(
+        long channelId,
+        string key,
+        int errorCode,
+        string reason,
+        DateTime? expiresAt,
+        bool systemBypass,
+        CancellationToken cancellationToken)
     {
         if (key.Length == 0)
         {
@@ -1591,6 +1702,12 @@ public sealed class ChannelLifecycleService(
         await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
+            // The reference loads the channel after taking the lock
+            // (channel_apikey.go:35-42); ent evaluates the Channel query policy
+            // on that read unless the caller runs under a system bypass.
+            await EnsureChannelQueryAllowedAsync(systemBypass, cancellationToken)
+                .ConfigureAwait(false);
+
             var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
                 .ConfigureAwait(false);
             var disabledKeys = ParseDisabledKeys(snapshot);
@@ -1699,6 +1816,12 @@ public sealed class ChannelLifecycleService(
         await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
+            // The reference loads the channel after taking the lock
+            // (channel_apikey.go:151-155); ent evaluates the Channel query
+            // policy on that read.
+            await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+                .ConfigureAwait(false);
+
             var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
                 .ConfigureAwait(false);
             var disabledKeys = ParseDisabledKeys(snapshot);
@@ -1753,6 +1876,12 @@ public sealed class ChannelLifecycleService(
         await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
+            // The reference loads the channel after taking the lock
+            // (channel_apikey.go:199-203); ent evaluates the Channel query
+            // policy on that read.
+            await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+                .ConfigureAwait(false);
+
             var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
                 .ConfigureAwait(false);
             var disabledKeys = ParseDisabledKeys(snapshot);
@@ -1796,6 +1925,12 @@ public sealed class ChannelLifecycleService(
         await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
+            // The reference loads the channel after taking the lock
+            // (channel_apikey.go:234-240); ent evaluates the Channel query
+            // policy on that read.
+            await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+                .ConfigureAwait(false);
+
             var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
                 .ConfigureAwait(false);
             var disabledKeys = ParseDisabledKeys(snapshot);
@@ -1840,10 +1975,33 @@ public sealed class ChannelLifecycleService(
     /// refuses OAuth channels, and restores one submitted key when deletion
     /// would leave the channel without any credential.
     /// </summary>
-    public async Task<DeleteDisabledApiKeysResult> DeleteDisabledApiKeysAsync(
+    public Task<DeleteDisabledApiKeysResult> DeleteDisabledApiKeysAsync(
         long channelId,
         IReadOnlyList<string> keys,
         CancellationToken cancellationToken = default)
+        => DeleteDisabledApiKeysCoreAsync(
+            channelId,
+            keys,
+            systemBypass: false,
+            cancellationToken);
+
+    /// <summary>
+    /// The same mutation under the reference's system bypass
+    /// (<c>authz.WithSystemBypass</c>, channel_internal.go:16-21), used by the
+    /// background auto-disable engine.
+    /// </summary>
+    public Task<DeleteDisabledApiKeysResult> DeleteDisabledApiKeysAsync(
+        long channelId,
+        IReadOnlyList<string> keys,
+        bool systemBypass,
+        CancellationToken cancellationToken = default)
+        => DeleteDisabledApiKeysCoreAsync(channelId, keys, systemBypass, cancellationToken);
+
+    private async Task<DeleteDisabledApiKeysResult> DeleteDisabledApiKeysCoreAsync(
+        long channelId,
+        IReadOnlyList<string> keys,
+        bool systemBypass,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(keys);
         if (keys.Count == 0)
@@ -1855,6 +2013,12 @@ public sealed class ChannelLifecycleService(
         await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
+            // The reference loads the channel after taking the lock
+            // (channel_apikey.go:293-299); ent evaluates the Channel query
+            // policy on that read unless the caller runs under a system bypass.
+            await EnsureChannelQueryAllowedAsync(systemBypass, cancellationToken)
+                .ConfigureAwait(false);
+
             var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
                 .ConfigureAwait(false);
             var disabledKeys = ParseDisabledKeys(snapshot);
@@ -2040,6 +2204,12 @@ public sealed class ChannelLifecycleService(
             return;
         }
 
+        // The reference counts the matching live rows before the batch update
+        // (channel_bulk.go:170-176); ent evaluates the Channel query policy on
+        // that count.
+        await EnsureChannelQueryAllowedAsync(systemBypass: false, cancellationToken)
+            .ConfigureAwait(false);
+
         try
         {
             await channels.BulkUpdateStatusAsync(
@@ -2083,4 +2253,61 @@ public sealed class ChannelLifecycleService(
 
         return result;
     }
+
+    /// <summary>
+    /// Re-evaluates the Channel query policy before an internal read the
+    /// reference performs inside the calling context. A background caller under
+    /// <c>authz.WithSystemBypass</c> skips the evaluation, and a host without
+    /// the privacy seam (a direct service construction) keeps the store's own
+    /// behavior.
+    /// </summary>
+    private async Task EnsureChannelQueryAllowedAsync(
+        bool systemBypass,
+        CancellationToken cancellationToken)
+    {
+        if (systemBypass || privacy is null)
+        {
+            return;
+        }
+
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+}
+
+/// <summary>
+/// The <see cref="IChannelCredentialMutations"/> view of
+/// <see cref="ChannelLifecycleService"/> used by the auto-disable engine. The
+/// reference's performance goroutine attaches <c>authz.WithSystemBypass</c>
+/// (channel_internal.go:16-21) because those credential mutations run without a
+/// user context; the adapter passes that bypass through so the internal channel
+/// reads are not subject to the Channel query policy.
+/// </summary>
+public sealed class SystemChannelCredentialMutations(ChannelLifecycleService lifecycle)
+    : IChannelCredentialMutations
+{
+    public Task DisableApiKeyAsync(
+        long channelId,
+        string key,
+        int errorCode,
+        string reason,
+        DateTime? expiresAt = null,
+        CancellationToken cancellationToken = default)
+        => lifecycle.DisableApiKeyAsync(
+            channelId,
+            key,
+            errorCode,
+            reason,
+            expiresAt,
+            systemBypass: true,
+            cancellationToken);
+
+    public Task<DeleteDisabledApiKeysResult> DeleteDisabledApiKeysAsync(
+        long channelId,
+        IReadOnlyList<string> keys,
+        CancellationToken cancellationToken = default)
+        => lifecycle.DeleteDisabledApiKeysAsync(
+            channelId,
+            keys,
+            systemBypass: true,
+            cancellationToken);
 }

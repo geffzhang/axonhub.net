@@ -566,6 +566,174 @@ public sealed class AdminChannelLifecycleEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task WriteOnlyMembersAreDeniedByTheInternalChannelReads()
+    {
+        var channel = SeedChannel();
+        var member = await SeedMemberAsync(
+            "write-only@example.com",
+            scopes: """["write_channels"]""");
+        var token = _gate.IssueJwt(member);
+
+        // Every write below passes the resolver's write_channels mutation gate;
+        // the deny comes from the Channel query policy that ent evaluates on the
+        // service's internal reads (C014): the name/duplicate lookups, the xai
+        // Exist query, the credential/settings reloads in update, and the bulk
+        // and API-key reads.
+        var create = await QueryErrorsAsync(
+            """
+            mutation Create($input: CreateChannelInput!) {
+              createChannel(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    type = "openai",
+                    name = "Write-only create",
+                    credentials = new { apiKey = "sk-wo" },
+                    supportedModels = Array.Empty<string>(),
+                    defaultTestModel = string.Empty,
+                },
+            },
+            token);
+        Assert.Equal("permission denied", create[0].GetProperty("message").GetString());
+
+        var updateChannel = """
+            mutation UpdateChannel($id: ID!, $input: UpdateChannelInput!) {
+              updateChannel(id: $id, input: $input) { id }
+            }
+            """;
+
+        var nameUpdate = await QueryErrorsAsync(
+            updateChannel,
+            new { id = Gid(channel.Id), input = new { name = "Renamed" } },
+            token);
+        Assert.Equal("permission denied", nameUpdate[0].GetProperty("message").GetString());
+
+        var baseUrlUpdate = await QueryErrorsAsync(
+            updateChannel,
+            new { id = Gid(channel.Id), input = new { baseURL = "https://example.test/v1" } },
+            token);
+        Assert.Equal("permission denied", baseUrlUpdate[0].GetProperty("message").GetString());
+
+        var credentialUpdate = await QueryErrorsAsync(
+            updateChannel,
+            new { id = Gid(channel.Id), input = new { credentials = new { apiKey = "sk-new" } } },
+            token);
+        Assert.Equal(
+            "permission denied",
+            credentialUpdate[0].GetProperty("message").GetString());
+
+        var bulkStatus = await QueryErrorsAsync(
+            "mutation Archive($ids: [ID!]!) { bulkArchiveChannels(ids: $ids) }",
+            new { ids = new[] { Gid(channel.Id) } },
+            token);
+        Assert.Equal("permission denied", bulkStatus[0].GetProperty("message").GetString());
+
+        var tags = await QueryErrorsAsync(
+            """
+            mutation Tags($ids: [ID!]!, $tags: [String!]!) {
+              bulkAddChannelTags(ids: $ids, tags: $tags)
+            }
+            """,
+            new { ids = new[] { Gid(channel.Id) }, tags = SingleTagA },
+            token);
+        Assert.Equal("permission denied", tags[0].GetProperty("message").GetString());
+
+        var autoDisable = await QueryErrorsAsync(
+            """
+            mutation AutoDisable($input: BulkUpdateChannelAutoDisableInput!) {
+              bulkUpdateChannelAutoDisable(input: $input) { success }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    channelIDs = new[] { Gid(channel.Id) },
+                    action = "off",
+                },
+            },
+            token);
+        Assert.Equal("permission denied", autoDisable[0].GetProperty("message").GetString());
+
+        var endpoints = await QueryErrorsAsync(
+            """
+            mutation Save($input: SaveChannelEndpointsInput!) {
+              saveChannelEndpoints(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    channelID = Gid(channel.Id),
+                    endpoints = Array.Empty<object>(),
+                },
+            },
+            token);
+        Assert.Equal("permission denied", endpoints[0].GetProperty("message").GetString());
+
+        var disableKey = await QueryErrorsAsync(
+            """
+            mutation Disable($channelID: ID!, $key: String!) {
+              disableChannelAPIKey(channelID: $channelID, key: $key)
+            }
+            """,
+            new { channelID = Gid(channel.Id), key = "sk-1" },
+            token);
+        Assert.Equal("permission denied", disableKey[0].GetProperty("message").GetString());
+
+        // The internal reads are denied before any store write runs.
+        Assert.Empty(_channels.CreatedChannels);
+        Assert.Empty(_channels.NameChecks);
+        Assert.Empty(_channels.UpdateCalls);
+        Assert.Empty(_channels.BulkStatusUpdates);
+        Assert.Empty(_channels.TagCalls);
+        Assert.Empty(_channels.AutoDisableCalls);
+        Assert.Empty(_channels.SaveEndpointsCalls);
+        Assert.Empty(_channels.ApiKeyStateCalls);
+
+        // The reads the reference wraps in authz.RunWithScopeDecision
+        // (write_channels) are served from the entry snapshot, so a write-only
+        // member still updates remark and the supported models.
+        var remarkUpdate = await QueryDataAsync(
+            """
+            mutation UpdateChannel($id: ID!, $input: UpdateChannelInput!) {
+              updateChannel(id: $id, input: $input) { id remark }
+            }
+            """,
+            new { id = Gid(channel.Id), input = new { remark = "write-only note" } },
+            token);
+        Assert.Equal(
+            "write-only note",
+            remarkUpdate.GetProperty("updateChannel").GetProperty("remark").GetString());
+
+        var modelsUpdate = await QueryDataAsync(
+            """
+            mutation UpdateChannel($id: ID!, $input: UpdateChannelInput!) {
+              updateChannel(id: $id, input: $input) { id supportedModels }
+            }
+            """,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new { supportedModels = new[] { "gpt-4o", "gpt-4o-mini" } },
+            },
+            token);
+        Assert.Equal(
+            new[] { "gpt-4o", "gpt-4o-mini" },
+            modelsUpdate
+                .GetProperty("updateChannel")
+                .GetProperty("supportedModels")
+                .EnumerateArray()
+                .Select(static model => model.GetString())
+                .ToArray());
+        Assert.Equal(2, _channels.UpdateCalls.Count);
+    }
+
+    [Fact]
     public async Task ChannelMutationsAreRejectedForApiKeysBeforeThePolicy()
     {
         var channel = SeedChannel();

@@ -989,6 +989,52 @@ credentials / disabledAPIKeys / providerQuota 的 write_channels 字段门禁）
 台账：C014 保持 gap（what / decision / test 三段改写为 §175 的实现与残余），269 条不变
 （196 accepted / 7 gap / 66 resolved），lint 通过，`02-differences.md` 已重新生成。
 
+§176（2026-11-11）闭合 §175 记录的 C014 残余：写服务内部读的查询策略求值。
+`ChannelLifecycleService` 在参照以普通 ctx 触发 ent 查询的读点前调用
+`EnsureChannelQueryAllowedAsync`（`ChannelPrivacy.EvaluateQueryAsync`）：
+createChannel 名称查重（channel.go:665-676）、duplicateChannel 源读取
+（channel_duplicate.go:23-26）、bulkCreateChannels 的 ListLiveNames
+（channel_bulk.go:82-86）、updateChannel 的 xai Exist / 名称查重 / clearStaleQuota
+settings 重读 / credentials 重读（channel.go:958-967、979-993、1135-1141、1151-1157）、
+bulkUpdateChannelStatus 计数（channel_bulk.go:170-176）、bulkManageChannelTags 与
+bulkUpdateChannelAutoDisable 查询（channel_bulk.go:272-284、379-386）、
+saveChannelEndpoints 的 Channel.Get（channel.go:1288-1292）、五个 API key 操作的
+Channel.Get（channel_apikey.go:39/152/200/237/296）、syncChannelModels 的
+Channel.Get（channel_model_sync.go:203-208）与 saveChannelModelPrices 的现有价格查询
+（channel_price.go:562-567）。
+
+参照以 `authz.RunWithScopeDecision(write_channels)` 包裹的读（updateChannel 的
+provider identity / settings for model protocol sync / endpoint validation、
+updateChannelSettings 的 merge 读、定价内部读）由更新入口的单次快照服务，不再求值——
+与 Allow 决策跳过全部 ent 规则的语义一致。后台自动禁用的 API key 记账经
+`SystemChannelCredentialMutations` 适配器传递系统绕过（channel_internal.go:16-21 的
+`authz.WithSystemBypass`），手动 resolver 路径不绕过；`SyncAllAsync` 与
+`runSyncChannelModelsPeriodically` 同样不设门禁。`QuotaRoutingMigrationService` 只提交
+settings，不触发任何新增门禁。
+
+测试：新增 3 例。`AdminChannelLifecycleEndpointTests` 的
+WriteOnlyMembersAreDeniedByTheInternalChannelReads：仅持 write_channels 的成员在
+createChannel、updateChannel（name / baseURL / credentials）、bulkArchiveChannels、
+bulkAddChannelTags、bulkUpdateChannelAutoDisable、saveChannelEndpoints、
+disableChannelAPIKey 上得到 permission denied，且 store 无任何写入；remark 与
+supportedModels 更新照常成功（后者证明 RunWithScopeDecision 绕过读无差异）。
+`AdminChannelModelPriceEndpointTests` 的
+SaveChannelModelPricesIsDeniedByThePriceReadForWriteOnlyMembers 与
+`AdminChannelModelSyncEndpointTests` 的
+SyncChannelModelsIsDeniedByTheChannelReadForWriteOnlyMembers 各锁定 write-only 拒绝且
+无价格计划 / 同步调用。
+
+本轮实测：`AxonHub.Api.Tests` 6131 通过 / 0 失败 / 0 跳过（32m21s，全量重建运行，
+日志 `.agent/summary/_api_full.log`，6131 = §175 的 6128 + 新增 3）；定向
+`AdminChannelLifecycleEndpointTests`、`AdminChannelModelPriceEndpointTests` 与
+`AdminChannelModelSyncEndpointTests` 41 例通过。Persistence / Grains / Llm 本轮未改动，
+沿用 §175 / §174 / §173 / §172 的实测 376 / 175 / 3110，四项目合计 9792。
+
+台账：C014 保持 gap（条目仍覆盖请求链路 settings 剩余生效面与通道 key 测试流程等
+未拆分残余；本条登记的内部读差异已闭合，what / decision / test 三段追加 §176），
+269 条不变（196 accepted / 7 gap / 66 resolved），lint 通过，`02-differences.md`
+已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

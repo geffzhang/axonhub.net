@@ -19,7 +19,15 @@ public sealed record SaveChannelModelPricesCommand(
 /// reference refreshes its in-memory price cache after commit; the port reads
 /// prices live per request (C029-style), so only the persisted effects remain.
 /// </summary>
-public sealed class ChannelModelPriceService(IChannelModelPriceStore prices)
+/// <remarks>
+/// The existing-price query runs inside the caller's context
+/// (channel_price.go:562-567), so ent evaluates the ChannelModelPrice query
+/// policy there; the port re-evaluates it through
+/// <see cref="ChannelPrivacy.EvaluateQueryAsync"/> before the store read.
+/// </remarks>
+public sealed class ChannelModelPriceService(
+    IChannelModelPriceStore prices,
+    ChannelPrivacy? privacy = null)
 {
     /// <summary>
     /// Mirrors the reference's ordered action plan: inputs first (create for
@@ -52,6 +60,14 @@ public sealed class ChannelModelPriceService(IChannelModelPriceStore prices)
                     $"invalid model price: model_id={input.ModelId}: {ex.Message}",
                     ex);
             }
+        }
+
+        // The reference's first statement after the input validation is the
+        // plain ChannelModelPrice query (channel_price.go:562-567); ent
+        // evaluates the query policy on that read.
+        if (privacy is not null)
+        {
+            await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         IReadOnlyList<ChannelModelPriceRecord> existing;

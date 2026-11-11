@@ -166,6 +166,56 @@ public sealed class AdminChannelModelSyncEndpointTests : IAsyncLifetime
             errors[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task SyncChannelModelsIsDeniedByTheChannelReadForWriteOnlyMembers()
+    {
+        SeedChannel(supportedModels: """["existing-model"]""", manualModels: "[]");
+
+        var member = await SeedMemberAsync(
+            "write-only@example.com",
+            scopes: """["write_channels"]""");
+        var token = _gate.IssueJwt(member);
+
+        // The resolver's write_channels gate passes; the deny comes from the
+        // plain Channel.Get ent evaluates in the caller's context
+        // (channel_model_sync.go:203-208, C014).
+        var errors = await QueryErrorsAsync(
+            SyncChannelModelsMutation,
+            new { channelID = Gid(1), pattern = (string?)null },
+            token);
+
+        Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
+        Assert.Empty(_channels.SyncCalls);
+    }
+
+    /// <summary>
+    /// Seeds a non-owner management user (id 77) in both the JWT store and the
+    /// scopes store the privacy resolver reads.
+    /// </summary>
+    private async Task<UserRecord> SeedMemberAsync(string email, string? scopes)
+    {
+        var member = _gate.Users.Add(user =>
+        {
+            user.Id = 77;
+            user.Email = email;
+            user.Status = "activated";
+            user.IsOwner = false;
+        });
+
+        await _gate.UserAdmins.CreateAsync(
+            new UserRecord
+            {
+                Id = member.Id,
+                Email = email,
+                Status = "activated",
+                IsOwner = false,
+                Scopes = scopes,
+            },
+            roleIds: null);
+
+        return member;
+    }
+
     private void SeedChannel(
         string supportedModels,
         string? manualModels,
@@ -186,26 +236,43 @@ public sealed class AdminChannelModelSyncEndpointTests : IAsyncLifetime
 
     private static string Gid(long id) => "gid://axonhub/Channel/" + id;
 
-    private async Task<JsonElement> QueryDataAsync(string query, object? variables)
+    private async Task<JsonElement> QueryDataAsync(
+        string query,
+        object? variables,
+        string? token = null)
     {
-        var root = await ExecuteAsync(query, variables);
+        var root = await ExecuteAsync(query, variables, token);
         Assert.False(root.TryGetProperty("errors", out var errors), errors.ToString());
         return root.GetProperty("data");
     }
 
-    private async Task<JsonElement[]> QueryErrorsAsync(string query, object? variables)
+    private async Task<JsonElement[]> QueryErrorsAsync(
+        string query,
+        object? variables,
+        string? token = null)
     {
-        var root = await ExecuteAsync(query, variables);
+        var root = await ExecuteAsync(query, variables, token);
         Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
         return errors.EnumerateArray().Select(static error => error.Clone()).ToArray();
     }
 
-    private async Task<JsonElement> ExecuteAsync(string query, object? variables)
+    private async Task<JsonElement> ExecuteAsync(
+        string query,
+        object? variables,
+        string? token = null)
     {
         var payload = JsonSerializer.Serialize(new { query, variables });
-        using var response = await _client.PostAsync(
-            "/admin/graphql",
-            new StringContent(payload, Encoding.UTF8, "application/json"));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+        };
+        if (token is not null)
+        {
+            request.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        }
+
+        using var response = await _client.SendAsync(request);
 
         var body = await response.Content.ReadAsStringAsync();
         Assert.True(response.StatusCode == HttpStatusCode.OK, body);

@@ -81,7 +81,10 @@ public sealed record ChannelModelSyncResult(
 /// NewModelFetcher call inside syncChannelModelsForChannel. Per-channel proxy
 /// settings are not ported (C158); the cron registration lives in
 /// <see cref="ChannelModelSyncScheduler"/> and the execution window in the
-/// singleton grain (§148).
+/// singleton grain (§148). The single-channel load runs in the caller's
+/// context, so ent evaluates the Channel query policy there; the periodic pass
+/// runs under <c>authz.WithSystemBypass</c> (channel_internal.go:24-32) and is
+/// not gated.
 /// </remarks>
 public sealed class ChannelModelSyncService(
     IChannelModelSyncStore store,
@@ -90,7 +93,8 @@ public sealed class ChannelModelSyncService(
     TimeProvider time,
     IChannelAutoSyncFrequencyProvider frequency,
     IChannelModelSyncReloadHook reloadHook,
-    IChannelModelSyncGuard? modelSyncGuard = null)
+    IChannelModelSyncGuard? modelSyncGuard = null,
+    ChannelPrivacy? privacy = null)
 {
     private readonly object _modelSyncGate = new();
     private readonly IChannelModelSyncGuard? _modelSyncGuard = modelSyncGuard;
@@ -105,6 +109,14 @@ public sealed class ChannelModelSyncService(
         string? patternOverride,
         CancellationToken cancellationToken = default)
     {
+        // SyncChannelModels starts with a plain Channel.Get in the caller's
+        // context (channel_model_sync.go:203-208); ent evaluates the Channel
+        // query policy on that read.
+        if (privacy is not null)
+        {
+            await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         ChannelRecord? channel;
         try
         {

@@ -356,11 +356,12 @@ builder.Services.AddScoped<ChannelLifecycleService>();
 // the counter maps live for the process lifetime like the reference's
 // ChannelService fields, the engine evaluates one failure at a time through the
 // same singleton queue the metrics middleware feeds, and the lifecycle service
-// is the credential mutation seam. The webhook notifier consumes the events
-// published when a channel is auto-disabled.
+// is the credential mutation seam. The reference's performance goroutine runs
+// under authz.WithSystemBypass (channel_internal.go:16-21); the adapter carries
+// that bypass into the credential reads. The webhook notifier consumes the
+// events published when a channel is auto-disabled.
 builder.Services.AddSingleton<AutoDisableCounters>();
-builder.Services.AddScoped<IChannelCredentialMutations>(
-    static services => services.GetRequiredService<ChannelLifecycleService>());
+builder.Services.AddScoped<IChannelCredentialMutations, SystemChannelCredentialMutations>();
 builder.Services.AddScoped<ChannelAutoDisableService>();
 builder.Services.AddSingleton<ChannelAutoDisableEvaluationQueue>();
 builder.Services.AddSingleton<IChannelAutoDisableEvaluationQueue>(
