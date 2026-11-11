@@ -146,6 +146,10 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         Assert.Equal(
             [archived.Id, enabled.Id, disabled.Id],
             includingArchived.Select(static row => row.Id).ToArray());
+
+        // The project branch's system-bypass query is enabled-only.
+        var enabledOnly = await store.ListEnabledSummariesAsync();
+        Assert.Equal([enabled.Id], enabledOnly.Select(static row => row.Id).ToArray());
     }
 
     [Fact]
@@ -163,11 +167,11 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         await SeedChannelAsync(context, "openai", "Deleted", "enabled", tags: """["gone"]""", deletedAt: 9);
 
         // jsonb storage normalizes whitespace inside the array text.
-        var tags = await store.ListTagRowsAsync();
-        Assert.Equal(3, tags.Count);
-        Assert.Equal("""["prod", "eu"]""", tags[0]);
-        Assert.Equal("""["dev"]""", tags[1]);
-        Assert.Null(tags[2]);
+        var tagRows = await store.ListTagSourcesAsync();
+        Assert.Equal(3, tagRows.Count);
+        Assert.Equal("""["prod", "eu"]""", tagRows[0].Tags);
+        Assert.Equal("""["dev"]""", tagRows[1].Tags);
+        Assert.Null(tagRows[2].Tags);
 
         var allLive = await store.CountByTypeAsync(statusIn: null);
         Assert.Equal(

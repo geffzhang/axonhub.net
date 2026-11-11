@@ -111,10 +111,18 @@ public interface IChannelAdminStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Tags of every channel whose status is not archived, one row per channel
-    /// in id order (the reference selects the tags column of each row).
+    /// Port of the system-bypass branch of AllChannelSummarys: every enabled
+    /// channel, ordered by ordering_weight desc.
     /// </summary>
-    Task<IReadOnlyList<string?>> ListTagRowsAsync(
+    Task<IReadOnlyList<ChannelRecord>> ListEnabledSummariesAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every channel whose status is not archived, one row per channel in id
+    /// order (the reference selects the tags column of each row; the port
+    /// loads the full row so the project profile can also filter on ids).
+    /// </summary>
+    Task<IReadOnlyList<ChannelRecord>> ListTagSourcesAsync(
         CancellationToken cancellationToken = default);
 
     /// <summary>Port of queryResolver.CountChannelsByType's GroupBy(type).Aggregate(Count()).</summary>
@@ -305,14 +313,32 @@ public sealed class ChannelAdminStore(AxonHubDbContext db) : IChannelAdminStore
         return rows.AsList();
     }
 
-    public async Task<IReadOnlyList<string?>> ListTagRowsAsync(
+    public async Task<IReadOnlyList<ChannelRecord>> ListEnabledSummariesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // authz.RunWithSystemBypass branch of AllChannelSummarys:
+        // StatusEQ(enabled) + Order(ent.Desc(FieldOrderingWeight)).
+        var sql = "SELECT " + Columns
+            + " FROM \"channels\" WHERE \"deleted_at\" = 0 AND \"status\" = 'enabled'"
+            + " ORDER BY \"ordering_weight\" DESC, \"id\" ASC;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<ChannelRecord>(
+            new CommandDefinition(
+                sql,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.AsList();
+    }
+
+    public async Task<IReadOnlyList<ChannelRecord>> ListTagSourcesAsync(
         CancellationToken cancellationToken = default)
     {
         // Query().Select(channel.FieldTags).Where(status != archived).All().
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
-        var rows = await connection.QueryAsync<string?>(
+        var rows = await connection.QueryAsync<ChannelRecord>(
             new CommandDefinition(
-                "SELECT \"tags\" FROM \"channels\""
+                "SELECT " + Columns + " FROM \"channels\""
                     + " WHERE \"deleted_at\" = 0 AND \"status\" <> 'archived'"
                     + " ORDER BY \"id\";",
                 transaction: db.CurrentDbTransaction,

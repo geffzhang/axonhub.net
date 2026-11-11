@@ -1389,8 +1389,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(IdType))] string id,
         ChannelStatusValue status,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(id);
 
         var channel = await channels.UpdateStatusAsync(
@@ -1410,8 +1413,11 @@ public sealed class AdminMutation
     public async Task<bool> DeleteChannelAsync(
         [GraphQLType(typeof(IdType))] string id,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(id);
         await channels.DeleteAsync(gid.Id, cancellationToken).ConfigureAwait(false);
         return true;
@@ -1422,8 +1428,11 @@ public sealed class AdminMutation
     public async Task<bool> BulkArchiveChannelsAsync(
         [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         await channels.BulkArchiveAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
         return true;
     }
@@ -1433,8 +1442,11 @@ public sealed class AdminMutation
     public async Task<bool> BulkDisableChannelsAsync(
         [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         await channels.BulkDisableAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
         return true;
     }
@@ -1444,8 +1456,11 @@ public sealed class AdminMutation
     public async Task<bool> BulkEnableChannelsAsync(
         [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         await channels.BulkEnableAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
         return true;
     }
@@ -1455,8 +1470,11 @@ public sealed class AdminMutation
     public async Task<bool> BulkRecoverChannelsAsync(
         [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         await channels.BulkRecoverAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
         return true;
     }
@@ -1466,8 +1484,11 @@ public sealed class AdminMutation
     public async Task<bool> BulkDeleteChannelsAsync(
         [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         await channels.BulkDeleteAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
         return true;
     }
@@ -1478,8 +1499,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
         [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> tags,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         await channels.BulkAddTagsAsync(ParseGids(ids), tags, cancellationToken)
             .ConfigureAwait(false);
         return true;
@@ -1491,8 +1515,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
         [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> tags,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         await channels.BulkRemoveTagsAsync(ParseGids(ids), tags, cancellationToken)
             .ConfigureAwait(false);
         return true;
@@ -1505,8 +1532,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> addTags,
         [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> removeTags,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         await channels.BulkManageTagsAsync(
                 ParseGids(ids),
                 addTags,
@@ -1525,8 +1555,11 @@ public sealed class AdminMutation
     public async Task<BulkUpdateChannelOrderingResult> BulkUpdateChannelOrderingAsync(
         BulkUpdateChannelOrderingInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var items = ChannelInputMapping.ToCommand(input);
 
         IReadOnlyList<ChannelRecord> updated;
@@ -1560,8 +1593,11 @@ public sealed class AdminMutation
     public async Task<BulkUpdateChannelAutoDisablePayload> BulkUpdateChannelAutoDisableAsync(
         BulkUpdateChannelAutoDisableInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var updated = await channels.BulkUpdateAutoDisableAsync(
                 ChannelInputMapping.ToCommand(input),
                 cancellationToken)
@@ -1584,8 +1620,11 @@ public sealed class AdminMutation
     public async Task<ChannelType> SaveChannelEndpointsAsync(
         SaveChannelEndpointsInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var channel = await channels.SaveEndpointsAsync(
                 ChannelInputMapping.ToCommand(input),
                 cancellationToken)
@@ -1605,8 +1644,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(NonNullType<IdType>))] string channelId,
         IReadOnlyList<SaveChannelModelPriceInput> input,
         [Service] ChannelModelPriceService prices,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(channelId);
 
         var saved = await prices.SaveAsync(
@@ -1659,8 +1701,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(IdType))] string channelID,
         string key,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(channelID);
 
         try
@@ -1690,8 +1735,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(IdType))] string channelID,
         string key,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(channelID);
 
         try
@@ -1717,8 +1765,11 @@ public sealed class AdminMutation
     public async Task<bool> EnableAllChannelApiKeysAsync(
         [GraphQLType(typeof(IdType))] string channelID,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(channelID);
 
         try
@@ -1747,8 +1798,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(IdType))] string channelID,
         [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> keys,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(channelID);
 
         try
@@ -1778,8 +1832,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(IdType))] string channelID,
         [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> keys,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(channelID);
 
         DeleteDisabledApiKeysResult result;
@@ -1940,8 +1997,11 @@ public sealed class AdminMutation
     public async Task<ChannelType> CreateChannelAsync(
         CreateChannelInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var channel = await channels.CreateAsync(
                 ChannelInputMapping.ToCommand(input),
                 cancellationToken)
@@ -1959,8 +2019,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(IdType))] string sourceID,
         CreateChannelInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(sourceID);
 
         var channel = await channels.DuplicateAsync(
@@ -1983,8 +2046,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(NonNullType<IdType>))] string channelID,
         string? pattern,
         [Service] ChannelModelSyncService modelSync,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(channelID);
 
         ChannelModelSyncResult result;
@@ -2017,8 +2083,11 @@ public sealed class AdminMutation
     public async Task<IReadOnlyList<ChannelType>> BulkCreateChannelsAsync(
         BulkCreateChannelsInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var created = await channels.BulkCreateChannelsAsync(
                 ChannelInputMapping.ToCommand(input),
                 cancellationToken)
@@ -2036,8 +2105,11 @@ public sealed class AdminMutation
     public async Task<BulkImportChannelsResultType> BulkImportChannelsAsync(
         BulkImportChannelsInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var result = await channels.BulkImportChannelsAsync(
                 ChannelInputMapping.ToItems(input),
                 cancellationToken)
@@ -2062,8 +2134,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(IdType))] string id,
         UpdateChannelInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(id);
 
         var channel = await channels.UpdateAsync(
@@ -2084,8 +2159,11 @@ public sealed class AdminMutation
         [GraphQLType(typeof(IdType))] string id,
         UpdateChannelSettingsInput input,
         [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
         CancellationToken cancellationToken)
     {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         var gid = GidValue.Parse(id);
 
         var channel = await channels.UpdateSettingsAsync(

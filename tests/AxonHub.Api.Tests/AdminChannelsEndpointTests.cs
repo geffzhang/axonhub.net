@@ -1702,6 +1702,344 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
             data.GetProperty("node").GetProperty("id").GetString());
     }
 
+    [Fact]
+    public async Task ChannelRootQueriesDenyUsersWithoutReadChannels()
+    {
+        SeedChannel(type: "openai", name: "Alpha", supportedModels: """["gpt-4o"]""");
+        var member = await SeedMemberAsync("member@example.com", scopes: null);
+        var token = _gate.IssueJwt(member);
+
+        // The connection roots run the Channel query policy, whose default is
+        // deny once a user exists but has no scope.
+        var channels = await QueryErrorsAsync(
+            "{ channels(first: 10) { edges { node { id } } } }",
+            token: token);
+        Assert.Equal("permission denied", channels[0].GetProperty("message").GetString());
+
+        var queryChannels = await QueryErrorsAsync(
+            """
+            query QueryChannels($input: QueryChannelInput!) {
+              queryChannels(input: $input) { edges { node { id } } }
+            }
+            """,
+            new { input = new { model = "gpt-4o" } },
+            token);
+        Assert.Equal("permission denied", queryChannels[0].GetProperty("message").GetString());
+
+        var tags = await QueryErrorsAsync("{ allChannelTags }", token: token);
+        Assert.Equal("permission denied", tags[0].GetProperty("message").GetString());
+
+        var counts = await QueryErrorsAsync(
+            """
+            query Count($input: CountChannelsByTypeInput!) {
+              countChannelsByType(input: $input) { type count }
+            }
+            """,
+            new { input = new { } },
+            token);
+        Assert.Equal("permission denied", counts[0].GetProperty("message").GetString());
+
+        // allChannelSummarys checks authz.HasScope first and returns the
+        // RequireScope error unwrapped instead of the privacy sentinel.
+        var summaries = await QueryErrorsAsync("{ allChannelSummarys { id } }", token: token);
+        Assert.Equal(
+            "authz: principal user:77 does not have required scope read_channels",
+            summaries[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelRootQueriesAllowUsersWithReadChannels()
+    {
+        var alpha = SeedChannel(
+            type: "openai",
+            name: "Alpha",
+            supportedModels: """["gpt-4o"]""",
+            tags: """["prod"]""");
+        SeedChannel(type: "anthropic", name: "Beta", status: "disabled");
+        var member = await SeedMemberAsync(
+            "reader@example.com",
+            scopes: """["read_channels"]""");
+        var token = _gate.IssueJwt(member);
+
+        var channels = await QueryDataAsync(
+            "{ channels(first: 10) { edges { node { id } } } }",
+            token: token);
+        Assert.Equal(
+            2,
+            channels.GetProperty("channels").GetProperty("edges").GetArrayLength());
+
+        var queryChannels = await QueryDataAsync(
+            """
+            query QueryChannels($input: QueryChannelInput!) {
+              queryChannels(input: $input) { edges { node { id } } }
+            }
+            """,
+            new { input = new { model = "gpt-4o" } },
+            token);
+        Assert.Equal(
+            "gid://axonhub/Channel/" + alpha.Id,
+            Assert.Single(
+                queryChannels.GetProperty("queryChannels").GetProperty("edges")
+                    .EnumerateArray())
+                .GetProperty("node").GetProperty("id").GetString());
+
+        var tags = await QueryDataAsync("{ allChannelTags }", token: token);
+        Assert.Equal(
+            ["prod"],
+            tags.GetProperty("allChannelTags").EnumerateArray()
+                .Select(static tag => tag.GetString()!)
+                .ToArray());
+
+        var counts = await QueryDataAsync(
+            """
+            query Count($input: CountChannelsByTypeInput!) {
+              countChannelsByType(input: $input) { type count }
+            }
+            """,
+            new { input = new { } },
+            token);
+        var byType = counts.GetProperty("countChannelsByType").EnumerateArray()
+            .ToDictionary(
+                static row => row.GetProperty("type").GetString()!,
+                static row => row.GetProperty("count").GetInt32());
+        Assert.Equal(1, byType["openai"]);
+        Assert.Equal(1, byType["anthropic"]);
+
+        var summaries = await QueryDataAsync("{ allChannelSummarys { id } }", token: token);
+        Assert.Equal(2, summaries.GetProperty("allChannelSummarys").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task AllChannelSummarysUsesTheEnabledOnlyBypassForAvailableChannelKeys()
+    {
+        SeedChannel(type: "openai", name: "Enabled", status: "enabled");
+        SeedChannel(type: "openai", name: "Disabled", status: "disabled");
+        SeedChannel(type: "openai", name: "Archived", status: "archived");
+
+        // Without read_channels the project branch only needs write_requests /
+        // write_api_keys and then queries under a system bypass.
+        _gate.AddServiceAccountKey(configure: key => key.Scopes = """["write_requests"]""");
+
+        var data = await QueryDataAsync(
+            "{ allChannelSummarys(includeArchived: true) { name status } }",
+            token: "sk-service-account");
+
+        var rows = data.GetProperty("allChannelSummarys").EnumerateArray().ToArray();
+        var row = Assert.Single(rows);
+        Assert.Equal("Enabled", row.GetProperty("name").GetString());
+        Assert.Equal("enabled", row.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task AllChannelSummarysRequiresAnAvailableChannelScopeInTheProjectBranch()
+    {
+        SeedChannel(type: "openai", name: "Alpha");
+        _gate.AddServiceAccountKey(configure: key => key.Scopes = """["read_models"]""");
+
+        var errors = await QueryErrorsAsync(
+            "{ allChannelSummarys { id } }",
+            token: "sk-service-account");
+
+        Assert.Equal(
+            "authz: principal apikey:1 does not have required scope write_requests",
+            errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task AllChannelSummarysFiltersByTheActiveProjectProfile()
+    {
+        var alpha = SeedChannel(type: "openai", name: "Alpha", tags: """["prod"]""");
+        SeedChannel(type: "anthropic", name: "Beta", tags: """["dev"]""", status: "disabled");
+        _gate.Projects.Add(project =>
+        {
+            project.Id = 1;
+            project.Profiles =
+                """{"activeProfile":"prod","profiles":[{"name":"prod","channelIDs":["""
+                + alpha.Id
+                + """],"channelTags":["prod"],"channelTagsMatchMode":"any"}]}""";
+        });
+        _gate.AddServiceAccountKey(configure: key => key.Scopes = """["read_channels"]""");
+
+        var data = await QueryDataAsync(
+            "{ allChannelSummarys { name } }",
+            token: "sk-service-account");
+
+        var row = Assert.Single(data.GetProperty("allChannelSummarys").EnumerateArray());
+        Assert.Equal("Alpha", row.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task AllChannelTagsRequiresReadProjectsForTheProjectLookup()
+    {
+        SeedChannel(type: "openai", name: "Alpha", tags: """["prod"]""");
+        _gate.Projects.Add(project => project.Id = 5);
+        var reader = await SeedMemberAsync(
+            "reader@example.com",
+            scopes: """["read_channels"]""");
+
+        // The channel query passes, but Project.Get runs with the normal
+        // context and its query policy denies a user without read_projects.
+        var errors = await QueryErrorsAsync(
+            "{ allChannelTags }",
+            token: _gate.IssueJwt(reader),
+            projectId: "gid://axonhub/Project/5");
+
+        Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task AllChannelTagsAppliesTheProjectProfile()
+    {
+        var alpha = SeedChannel(type: "openai", name: "Alpha", tags: """["prod","eu"]""");
+        SeedChannel(type: "anthropic", name: "Beta", tags: """["dev"]""");
+        SeedChannel(type: "openai", name: "Archived", status: "archived", tags: """["gone"]""");
+        _gate.Projects.Add(project =>
+        {
+            project.Id = 5;
+            project.Profiles =
+                """{"activeProfile":"eu-only","profiles":[{"name":"eu-only","channelIDs":["""
+                + alpha.Id
+                + """]}]}""";
+        });
+        var member = await SeedMemberAsync(
+            "scoped@example.com",
+            scopes: """["read_channels","read_projects"]""");
+
+        var data = await QueryDataAsync(
+            "{ allChannelTags }",
+            token: _gate.IssueJwt(member),
+            projectId: "gid://axonhub/Project/5");
+
+        // Archived rows are excluded before the profile filter; the surviving
+        // row's tags flatten with first-occurrence dedupe.
+        Assert.Equal(
+            ["prod", "eu"],
+            data.GetProperty("allChannelTags").EnumerateArray()
+                .Select(static tag => tag.GetString()!)
+                .ToArray());
+    }
+
+    [Fact]
+    public async Task AllChannelTagsProjectLookupDeniesApiKeysWithoutAUser()
+    {
+        SeedChannel(type: "openai", name: "Alpha", tags: """["prod"]""");
+        _gate.Projects.Add(project => project.Id = 1);
+        _gate.AddServiceAccountKey();
+
+        // API keys always carry a project id, so the tag root enters the
+        // project branch; the un-bypassed Project.Get has no user to allow it.
+        var errors = await QueryErrorsAsync(
+            "{ allChannelTags }",
+            token: "sk-service-account");
+
+        Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ChannelSensitiveFieldsAreHiddenWithoutWriteChannels()
+    {
+        SeedChannel(
+            type: "openai",
+            name: "Alpha",
+            credentials: """{"apiKey":"secret"}""",
+            disabledApiKeys: """[{"key":"dead-key"}]""",
+            settings: """{"providerQuota":{"ollama":{"authCookie":"token"}}}""");
+        var reader = await SeedMemberAsync(
+            "reader@example.com",
+            scopes: """["read_channels"]""");
+
+        var data = await QueryDataAsync(
+            """
+            {
+              channels(first: 10) {
+                edges {
+                  node {
+                    credentials { apiKey apiKeys }
+                    disabledAPIKeys { key }
+                    settings { providerQuota { ollama { authCookie } } }
+                  }
+                }
+              }
+            }
+            """,
+            token: _gate.IssueJwt(reader));
+
+        var node = Assert.Single(
+                data.GetProperty("channels").GetProperty("edges").EnumerateArray())
+            .GetProperty("node");
+        Assert.Equal(JsonValueKind.Null, node.GetProperty("credentials").ValueKind);
+        Assert.Equal(JsonValueKind.Null, node.GetProperty("disabledAPIKeys").ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            node.GetProperty("settings").GetProperty("providerQuota").ValueKind);
+    }
+
+    [Fact]
+    public async Task ChannelSensitiveFieldsRequireAUserHoldingWriteChannels()
+    {
+        SeedChannel(
+            type: "openai",
+            name: "Alpha",
+            credentials: """{"apiKey":"secret"}""",
+            disabledApiKeys: """[{"key":"dead-key"}]""",
+            settings: """{"providerQuota":{"ollama":{"authCookie":"token"}}}""");
+        var writer = await SeedMemberAsync(
+            "writer@example.com",
+            scopes: """["read_channels","write_channels"]""");
+
+        var data = await QueryDataAsync(
+            """
+            {
+              channels(first: 10) {
+                edges {
+                  node {
+                    credentials { apiKey apiKeys }
+                    disabledAPIKeys { key }
+                    settings { providerQuota { ollama { authCookie } } }
+                  }
+                }
+              }
+            }
+            """,
+            token: _gate.IssueJwt(writer));
+
+        var node = Assert.Single(
+                data.GetProperty("channels").GetProperty("edges").EnumerateArray())
+            .GetProperty("node");
+        var credentials = node.GetProperty("credentials");
+        Assert.Equal(string.Empty, credentials.GetProperty("apiKey").GetString());
+        Assert.Equal(
+            "secret",
+            Assert.Single(credentials.GetProperty("apiKeys").EnumerateArray()).GetString());
+        Assert.Equal(
+            "dead-key",
+            Assert.Single(node.GetProperty("disabledAPIKeys").EnumerateArray())
+                .GetProperty("key").GetString());
+        Assert.Equal(
+            "token",
+            node.GetProperty("settings").GetProperty("providerQuota")
+                .GetProperty("ollama").GetProperty("authCookie").GetString());
+
+        // scopes.UserHasScope only consults a management user: an API key with
+        // write_channels still sees nothing.
+        _gate.AddServiceAccountKey(
+            configure: key => key.Scopes = """["read_channels","write_channels"]""");
+        var keyData = await QueryDataAsync(
+            """
+            {
+              channels(first: 10) {
+                edges { node { credentials { apiKey } disabledAPIKeys { key } } }
+              }
+            }
+            """,
+            token: "sk-service-account");
+        var keyNode = Assert.Single(
+                keyData.GetProperty("channels").GetProperty("edges").EnumerateArray())
+            .GetProperty("node");
+        Assert.Equal(JsonValueKind.Null, keyNode.GetProperty("credentials").ValueKind);
+        Assert.Equal(JsonValueKind.Null, keyNode.GetProperty("disabledAPIKeys").ValueKind);
+    }
+
     private async Task<UserRecord> SeedMemberAsync(string email, string? scopes)
     {
         var member = _gate.Users.Add(user =>
@@ -1769,9 +2107,10 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
     private async Task<JsonElement> QueryDataAsync(
         string query,
         object? variables = null,
-        string? token = null)
+        string? token = null,
+        string? projectId = null)
     {
-        var root = await ExecuteAsync(query, variables, token);
+        var root = await ExecuteAsync(query, variables, token, projectId);
         Assert.False(root.TryGetProperty("errors", out var errors), errors.ToString());
         return root.GetProperty("data");
     }
@@ -1779,9 +2118,10 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
     private async Task<JsonElement[]> QueryErrorsAsync(
         string query,
         object? variables = null,
-        string? token = null)
+        string? token = null,
+        string? projectId = null)
     {
-        var root = await ExecuteAsync(query, variables, token);
+        var root = await ExecuteAsync(query, variables, token, projectId);
         Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
         return errors.EnumerateArray().Select(static error => error.Clone()).ToArray();
     }
@@ -1789,7 +2129,8 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
     private async Task<JsonElement> ExecuteAsync(
         string query,
         object? variables,
-        string? token)
+        string? token,
+        string? projectId)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql")
         {
@@ -1802,6 +2143,10 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
             new System.Net.Http.Headers.AuthenticationHeaderValue(
                 "Bearer",
                 token ?? _gate.Jwt);
+        if (projectId is not null)
+        {
+            request.Headers.TryAddWithoutValidation("X-Project-ID", projectId);
+        }
 
         using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -1931,7 +2276,22 @@ internal sealed class FakeChannelAdminStore : IChannelAdminStore
                 .ToList());
     }
 
-    public Task<IReadOnlyList<string?>> ListTagRowsAsync(
+    public Task<IReadOnlyList<ChannelRecord>> ListEnabledSummariesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (SummaryFailure is not null)
+        {
+            throw SummaryFailure;
+        }
+
+        return Task.FromResult<IReadOnlyList<ChannelRecord>>(
+            _rows.Where(row => row.DeletedAt == 0 && row.Status == "enabled")
+                .OrderByDescending(static row => row.OrderingWeight)
+                .ThenBy(static row => row.Id)
+                .ToList());
+    }
+
+    public Task<IReadOnlyList<ChannelRecord>> ListTagSourcesAsync(
         CancellationToken cancellationToken = default)
     {
         if (TagsFailure is not null)
@@ -1939,10 +2299,9 @@ internal sealed class FakeChannelAdminStore : IChannelAdminStore
             throw TagsFailure;
         }
 
-        return Task.FromResult<IReadOnlyList<string?>>(
+        return Task.FromResult<IReadOnlyList<ChannelRecord>>(
             _rows.Where(row => row.DeletedAt == 0 && row.Status != "archived")
                 .OrderBy(static row => row.Id)
-                .Select(static row => row.Tags)
                 .ToList());
     }
 

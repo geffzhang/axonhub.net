@@ -27,6 +27,14 @@ internal sealed class AdminGraphqlGateServices
 
     public FakeUserStore Users { get; } = new();
 
+    /// <summary>
+    /// Scoped-permission rows for the privacy resolvers (ChannelPrivacy /
+    /// AuthorizationScope). Seeded with the gate user so owner checks work in
+    /// fixtures that do not register their own IUserAdminStore; a fixture's
+    /// later registration replaces it entirely.
+    /// </summary>
+    public FakeUserAdminStore UserAdmins { get; } = new();
+
     public FakeSystemStore Systems { get; } = new();
 
     public FakeApiKeyStore ApiKeys { get; } = new();
@@ -57,6 +65,20 @@ internal sealed class AdminGraphqlGateServices
         });
         Systems.Add(ManagementAuthService.SecretKeyKey, Secret);
         Jwt = IssueJwt(Owner);
+
+        // The same row backs the permission lookups; FakeUserAdminStore returns
+        // null for unknown ids, so an unseeded gate user would look scope-less.
+        UserAdmins.CreateAsync(
+                new UserRecord
+                {
+                    Id = UserId,
+                    Email = Owner.Email,
+                    Status = "activated",
+                    IsOwner = isOwner,
+                },
+                roleIds: null)
+            .GetAwaiter()
+            .GetResult();
     }
 
     /// <summary>Issues a token with this fixture's stores.</summary>
@@ -85,6 +107,7 @@ internal sealed class AdminGraphqlGateServices
     public void Register(IServiceCollection services)
     {
         services.AddSingleton<IUserStore>(Users);
+        services.AddSingleton<IUserAdminStore>(UserAdmins);
         services.AddSingleton<ISystemStore>(Systems);
         services.AddSingleton<IApiKeyStore>(ApiKeys);
         services.AddSingleton<IProjectStore>(Projects);
@@ -97,6 +120,11 @@ internal sealed class AdminGraphqlGateServices
         services.AddScoped<ManagementAuthService>();
         services.AddHttpContextAccessor();
         services.AddScoped<IManagementIdentity, HttpContextManagementIdentity>();
+
+        // Shared privacy seams: channel field gates and the summary/tag roots
+        // resolve them in every fixture (C014).
+        services.AddScoped<ChannelPrivacy>();
+        services.AddScoped<AuthorizationScope>();
     }
 
     /// <summary>Adds an enabled service-account key on an active project.</summary>

@@ -368,7 +368,10 @@ public static class ChannelMapping
         };
     }
 
-    /// <summary>Port of channelResolver.DisabledAPIKeys (scope gate omitted, C014).</summary>
+    /// <summary>
+    /// Port of channelResolver.DisabledAPIKeys; the write_channels gate lives
+    /// in <see cref="ChannelType.GetDisabledApiKeysAsync"/> (C014).
+    /// </summary>
     public static IReadOnlyList<DisabledApiKeyType> ToDisabledApiKeys(string? raw)
     {
         var items = ParseDisabledApiKeys(raw);

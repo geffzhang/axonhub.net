@@ -339,8 +339,9 @@ builder.Services.AddScoped<ProjectManagementService>();
 
 // Channel management reads (entgql channels / queryChannels / aggregates).
 // ChannelPrivacy evaluates the Channel / ChannelModelPrice /
-// ChannelModelPriceVersion query policies for node(Channel) and the price read
-// edges (§136); the channel mutation policy stays with the C014 scope cut.
+// ChannelModelPriceVersion query policies for node(Channel), the roots and the
+// price read edges (§136); the channel mutation policy is evaluated by the
+// same seam at the entry of every channel write resolver (C014).
 builder.Services.AddScoped<IChannelAdminStore, ChannelAdminStore>();
 builder.Services.AddScoped<ChannelPrivacy>();
 builder.Services.AddScoped<ChannelQueryService>();

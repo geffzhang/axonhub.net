@@ -14,9 +14,12 @@ namespace AxonHub.Api.Management;
 /// <summary>
 /// Port of the channel lifecycle mutations of biz.ChannelService: create, update,
 /// status changes, delete and the bulk status/delete/tag helpers
-/// (channel.go:525-1290, channel_bulk.go:163-462). The GraphQL permission guard
-/// is not ported yet (C014), so only the persistence behaviour and reference
-/// error strings remain.
+/// (channel.go:525-1290, channel_bulk.go:163-462). The GraphQL mutation
+/// permission guard runs at the resolver entry (ChannelPrivacy, C014); this
+/// service keeps the persistence behaviour and reference error strings. The
+/// reference's internal reads (name checks, endpoint loads, bulk status/count
+/// queries) run under the ent query policy; the port does not re-evaluate it
+/// here (recorded as a C014 residual).
 /// </summary>
 public sealed class ChannelLifecycleService(
     IChannelWriteStore channels,
@@ -1056,8 +1059,8 @@ public sealed class ChannelLifecycleService(
             {
                 // channel_settings.go:165-170: the internal read is scoped to
                 // write_channels, so a caller without read_channels can still
-                // merge. The port's GraphQL gate has no per-field scope
-                // decision here yet (C014).
+                // merge. The GraphQL mutation gate enforces the same scope at
+                // the resolver entry (C014), so the read needs no decision here.
                 existing = await channels.GetSettingsVersionAsync(id, cancellationToken)
                     .ConfigureAwait(false);
             }

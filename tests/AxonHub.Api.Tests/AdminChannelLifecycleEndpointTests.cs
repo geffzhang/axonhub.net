@@ -441,6 +441,156 @@ public sealed class AdminChannelLifecycleEndpointTests : IAsyncLifetime
         Assert.Equal("ChannelStatus", status.GetProperty("type").GetProperty("ofType").GetProperty("name").GetString());
     }
 
+    [Fact]
+    public async Task ChannelMutationsDenyMembersWithoutWriteChannels()
+    {
+        var channel = SeedChannel();
+        var member = await SeedMemberAsync(
+            "reader@example.com",
+            scopes: """["read_channels"]""");
+        var token = _gate.IssueJwt(member);
+
+        var update = await QueryErrorsAsync(
+            """
+            mutation Update($id: ID!) {
+              updateChannelStatus(id: $id, status: archived) { id status }
+            }
+            """,
+            new { id = Gid(channel.Id) },
+            token);
+        Assert.Equal("permission denied", update[0].GetProperty("message").GetString());
+
+        var delete = await QueryErrorsAsync(
+            "mutation Delete($id: ID!) { deleteChannel(id: $id) }",
+            new { id = Gid(channel.Id) },
+            token);
+        Assert.Equal("permission denied", delete[0].GetProperty("message").GetString());
+
+        var archive = await QueryErrorsAsync(
+            "mutation Archive($ids: [ID!]!) { bulkArchiveChannels(ids: $ids) }",
+            new { ids = new[] { Gid(channel.Id) } },
+            token);
+        Assert.Equal("permission denied", archive[0].GetProperty("message").GetString());
+
+        var tags = await QueryErrorsAsync(
+            """
+            mutation Tags($ids: [ID!]!, $tags: [String!]!) {
+              bulkAddChannelTags(ids: $ids, tags: $tags)
+            }
+            """,
+            new { ids = new[] { Gid(channel.Id) }, tags = SingleTagA },
+            token);
+        Assert.Equal("permission denied", tags[0].GetProperty("message").GetString());
+
+        var endpoints = await QueryErrorsAsync(
+            """
+            mutation Save($input: SaveChannelEndpointsInput!) {
+              saveChannelEndpoints(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    channelID = Gid(channel.Id),
+                    endpoints = Array.Empty<object>(),
+                },
+            },
+            token);
+        Assert.Equal("permission denied", endpoints[0].GetProperty("message").GetString());
+
+        var updateChannel = await QueryErrorsAsync(
+            """
+            mutation UpdateChannel($id: ID!, $input: UpdateChannelInput!) {
+              updateChannel(id: $id, input: $input) { id }
+            }
+            """,
+            new { id = Gid(channel.Id), input = new { name = "Renamed" } },
+            token);
+        Assert.Equal(
+            "permission denied",
+            updateChannel[0].GetProperty("message").GetString());
+
+        var create = await QueryErrorsAsync(
+            """
+            mutation Create($input: CreateChannelInput!) {
+              createChannel(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    type = "openai",
+                    name = "Unauthorized",
+                    credentials = new { apiKey = "sk-na" },
+                    supportedModels = Array.Empty<string>(),
+                    defaultTestModel = string.Empty,
+                },
+            },
+            token);
+        Assert.Equal("permission denied", create[0].GetProperty("message").GetString());
+
+        // The gate runs before every service call, so nothing was written.
+        Assert.Equal("disabled", channel.Status);
+        Assert.Equal(0, channel.DeletedAt);
+        Assert.Empty(_channels.StatusUpdates);
+        Assert.Empty(_channels.BulkStatusUpdates);
+        Assert.Empty(_channels.TagCalls);
+        Assert.Empty(_channels.SaveEndpointsCalls);
+        Assert.Empty(_channels.UpdateCalls);
+        Assert.Empty(_channels.CreatedChannels);
+    }
+
+    [Fact]
+    public async Task ChannelMutationsAllowMembersHoldingWriteChannels()
+    {
+        var channel = SeedChannel();
+        var member = await SeedMemberAsync(
+            "writer@example.com",
+            scopes: """["read_channels","write_channels"]""");
+
+        var data = await QueryDataAsync(
+            """
+            mutation Update($id: ID!) {
+              updateChannelStatus(id: $id, status: enabled) { id status }
+            }
+            """,
+            new { id = Gid(channel.Id) },
+            token: _gate.IssueJwt(member));
+
+        Assert.Equal(
+            "enabled",
+            data.GetProperty("updateChannelStatus").GetProperty("status").GetString());
+        Assert.Equal((channel.Id, "enabled"), Assert.Single(_channels.StatusUpdates));
+    }
+
+    [Fact]
+    public async Task ChannelMutationsAreRejectedForApiKeysBeforeThePolicy()
+    {
+        var channel = SeedChannel();
+        _gate.AddServiceAccountKey(
+            configure: key => key.Scopes = """["read_channels","write_channels"]""");
+
+        // The admin surface's apiKeyReadOnly middleware rejects every mutation
+        // for service-account keys, so the mutation policy's "no user in
+        // context" deny is unreachable from /admin/graphql (C014).
+        var errors = await QueryErrorsAsync(
+            """
+            mutation Update($id: ID!) {
+              updateChannelStatus(id: $id, status: enabled) { id }
+            }
+            """,
+            new { id = Gid(channel.Id) },
+            token: "sk-service-account");
+
+        Assert.Equal(
+            "service account API keys are read-only",
+            errors[0].GetProperty("message").GetString());
+        Assert.Empty(_channels.StatusUpdates);
+        Assert.Equal("disabled", channel.Status);
+    }
+
     private static string Gid(long id) => "gid://axonhub/Channel/" + id;
 
     private ChannelRecord SeedChannel(
@@ -471,32 +621,78 @@ public sealed class AdminChannelLifecycleEndpointTests : IAsyncLifetime
         return record;
     }
 
-    private async Task<JsonElement> QueryDataAsync(string query, object? variables = null)
+    private async Task<JsonElement> QueryDataAsync(
+        string query,
+        object? variables = null,
+        string? token = null)
     {
-        var root = await ExecuteAsync(query, variables);
+        var root = await ExecuteAsync(query, variables, token);
         Assert.False(root.TryGetProperty("errors", out _), root.ToString());
         return root.GetProperty("data");
     }
 
-    private async Task<JsonElement[]> QueryErrorsAsync(string query, object? variables = null)
+    private async Task<JsonElement[]> QueryErrorsAsync(
+        string query,
+        object? variables = null,
+        string? token = null)
     {
-        var root = await ExecuteAsync(query, variables);
+        var root = await ExecuteAsync(query, variables, token);
         Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
         return errors.EnumerateArray().Select(static error => error.Clone()).ToArray();
     }
 
-    private async Task<JsonElement> ExecuteAsync(string query, object? variables)
+    private async Task<JsonElement> ExecuteAsync(
+        string query,
+        object? variables,
+        string? token)
     {
-        var payload = JsonSerializer.Serialize(new { query, variables });
-        using var response = await _client.PostAsync(
-            "/admin/graphql",
-            new StringContent(payload, Encoding.UTF8, "application/json"));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql")
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new { query, variables }),
+                Encoding.UTF8,
+                "application/json"),
+        };
+        if (token is not null)
+        {
+            request.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        }
 
+        using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
         Assert.True(response.StatusCode == HttpStatusCode.OK, body);
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Seeds a non-owner management user (id 77) in both the JWT store and the
+    /// scopes store the privacy resolver reads.
+    /// </summary>
+    private async Task<UserRecord> SeedMemberAsync(string email, string? scopes)
+    {
+        var member = _gate.Users.Add(user =>
+        {
+            user.Id = 77;
+            user.Email = email;
+            user.Status = "activated";
+            user.IsOwner = false;
+        });
+
+        await _gate.UserAdmins.CreateAsync(
+            new UserRecord
+            {
+                Id = member.Id,
+                Email = email,
+                Status = "activated",
+                IsOwner = false,
+                Scopes = scopes,
+            },
+            roleIds: null);
+
+        return member;
     }
 }
 

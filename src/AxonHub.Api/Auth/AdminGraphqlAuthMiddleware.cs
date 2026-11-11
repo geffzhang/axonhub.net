@@ -14,9 +14,10 @@ namespace AxonHub.Api.Auth;
 /// decision tree ahead of MapGraphQL.
 /// </summary>
 /// <remarks>
-/// The session scope and authz principal the reference also attaches to the
-/// context have no ported consumers yet (C014); the port only records the
-/// caller identity and project for the resolvers.
+/// The reference also attaches a session scope and an authz principal to the
+/// context. The port records the caller identity/project and rebuilds the
+/// principal on demand in <see cref="AxonHub.Api.Management.AuthorizationScope"/> (C014);
+/// the session scope still has no ported consumer.
 /// </remarks>
 public sealed class AdminGraphqlAuthMiddleware(
     RequestDelegate next,

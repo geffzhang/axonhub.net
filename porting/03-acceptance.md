@@ -936,6 +936,59 @@ C196 中「dataStorages 不要求 first / last 互斥」的措辞是对照 resol
 更正为两层校验的描述，C177 / C196 的测试计数同步更新；269 条不变（196 accepted / 7 gap /
 66 resolved），lint 通过，`02-differences.md` 已重新生成。
 
+§175（2026-11-11）推进 C014 的通道根查询隐私与写入门禁。查询侧：
+`ChannelQueryService` 的 `channels` / `queryChannels` 在进入 store 前显式求值 Channel
+查询策略（`APIKeyScopeQueryRule(read_channels)` → `OwnerRule` →
+`UserReadScopeRule(read_channels)` → default deny）。`allChannelSummarys` 按参照的两条
+分支实现：无 project 上下文时先 `authz.HasScope(read_channels)`，不足则返回未包裹的
+RequireScope 错误；有 project 上下文时允许 read_channels 全状态查询，否则要求
+write_requests / write_api_keys 并走 `RunWithSystemBypass("project-available-channels")`
+的 enabled-only 查询；随后恒以 system bypass 读取 Project 并应用 active profile
+（channelIDs 与 channelTags，tag 模式按 any/all/none）。`allChannelTags` 先按查询策略
+读取非 archived 行，project 分支的 `Project.Get` 走普通上下文，因此受 Project 查询策略
+（`UserProjectScopeReadRule(read_projects)` → `OwnerRule` →
+`UserReadScopeRule(read_projects)`）约束；tags 按行序 flatten + 首现去重。
+`countChannelsByType` 同样先求值查询策略。错误包装保持参照的
+`failed to query channels: ` / `failed to query project channels: ` /
+`failed to get project: ` / `failed to query channel type counts: ` 前缀；privacy deny
+经错误过滤器折叠为 permission denied / FORBIDDEN。字段侧：credentials、
+disabledAPIKeys、settings.providerQuota 在 `scopes.UserHasScope(write_channels)` 为
+false 时返回 null（只看 management user，API key 永不满足）。写入侧：26 个通道写
+resolver（通道生命周期、批量、端点保存、API key 记账、create / update / settings、
+定价、模型同步、duplicate / bulk create / bulk import）在入口求值 mutation 策略
+（`OwnerRule` → `UserWriteScopeRule(write_channels)` → default deny）；
+testChannel* 与 detectChannelEndpoints 保持原样。
+
+关键实测结论：`/admin/graphql` 的 service-account API key 在进入解析器前先被
+apiKeyReadOnly 中间件拒绝（`service account API keys are read-only`），因此 mutation
+策略的 no-user deny 分支在该面不可达；API key 的查询面则按自身 scopes 走
+APIKeyScopeQueryRule，但 Project.Get 的普通查询策略没有 API key 规则，项目分支下的
+allChannelTags 对 API key 表现为 permission denied（与参照一致）。
+
+残余（已写入 C014 decision）：写服务内部的读未重新求值查询策略——create 名称查重、
+bulkCreate 名称查询、saveChannelEndpoints 与禁用 / 启用 API key 的 `Channel.Get`、bulk
+状态计数、批量标签 / 批量自动禁用查询、模型同步的 `Channel.Get` 等在参照走普通 ctx
+（需要 read_channels），端口放行仅持 write_channels 的用户；update / updateSettings /
+定价写入的内部读在参照以 `RunWithScopeDecision(write_channels)` 绕过查询策略，端口无差异；
+updateChannelStatus / deleteChannel 没有内部读，同样无差异。
+
+测试：新增 13 例。`AdminChannelsEndpointTests` 10 例（无 read_channels 拒绝五个根查询 /
+有 read_channels 放行、项目分支的 enabled-only 系统绕过与 write_requests 要求、项目
+profile 过滤、allChannelTags 的 read_projects 项目策略与 API key no-user 拒绝、
+credentials / disabledAPIKeys / providerQuota 的 write_channels 字段门禁）；
+`AdminChannelLifecycleEndpointTests` 3 例（无 write_channels 的 8 个写变更拒绝且零副作用、
+有 write_channels 放行、API key 在 mutation 前的只读拒绝）。另以 `AdminChannel` 前缀的
+257 例做通道面回归，全部通过。
+
+本轮实测：`AxonHub.Api.Tests` 6128 通过 / 0 失败 / 0 跳过（29m44s，先重建测试程序集，
+`--no-build` 运行，日志 `.agent/summary/_api_full.log`，6128 = §174 的 6115 + 新增 13）；
+`AxonHub.Persistence.Tests` 定向 `ChannelAdminStoreTests` 4 通过 / 0 失败；Persistence
+其余与 Grains / Llm 本轮未改动，沿用 §174 / §173 / §172 的实测 376 / 175 / 3110，
+四项目合计 9789。
+
+台账：C014 保持 gap（what / decision / test 三段改写为 §175 的实现与残余），269 条不变
+（196 accepted / 7 gap / 66 resolved），lint 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

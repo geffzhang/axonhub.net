@@ -641,9 +641,29 @@ public sealed class ChannelSettingsType
 
     public int? ApiKeyRoundRobinSwitchAfter { get; init; }
 
+    /// <summary>
+    /// Set by ChannelMapping.ToSettings; the live resolver behind it gates the
+    /// value on write_channels (<see cref="GetProviderQuotaAsync"/>).
+    /// </summary>
+    [GraphQLIgnore]
     public ChannelProviderQuotaSettingsType? ProviderQuota { get; init; }
 
     public ChannelQuotaRoutingModeValue? QuotaRoutingMode { get; init; }
+
+    /// <summary>
+    /// Port of channelSettingsResolver.ProviderQuota
+    /// (axonhub.resolvers.go:162-171): quota-only credentials (e.g. the Command
+    /// Code session cookie) are only exposed to channel writers.
+    /// </summary>
+    [GraphQLName("providerQuota")]
+    public async Task<ChannelProviderQuotaSettingsType?> GetProviderQuotaAsync(
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+        => await scope
+            .HasUserScopeAsync(AuthorizationScope.WriteChannels, cancellationToken)
+            .ConfigureAwait(false)
+            ? ProviderQuota
+            : null;
 }
 
 /// <summary>Port of <c>ChannelEndpoint</c> (axonhub.graphql:72-77).</summary>
@@ -1030,15 +1050,32 @@ public sealed class ChannelType : INode
     public IReadOnlyList<ChannelModelEntryType> GetAllModelEntries()
         => ChannelMapping.AllModelEntries(this);
 
-    /// <summary>Port of the live channelResolver.Credentials.</summary>
+    /// <summary>
+    /// Port of the live channelResolver.Credentials
+    /// (axonhub.resolvers.go:57-77): secrets are only exposed to callers
+    /// holding write_channels, checked with <c>scopes.UserHasScope</c> — an
+    /// API-key principal never qualifies.
+    /// </summary>
     [GraphQLName("credentials")]
-    public ChannelCredentialsType? GetCredentials()
-        => ChannelMapping.ToCredentials(CredentialsJson, RawType);
+    public async Task<ChannelCredentialsType?> GetCredentialsAsync(
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+        => await scope
+            .HasUserScopeAsync(AuthorizationScope.WriteChannels, cancellationToken)
+            .ConfigureAwait(false)
+            ? ChannelMapping.ToCredentials(CredentialsJson, RawType)
+            : null;
 
-    /// <summary>Port of channelResolver.DisabledAPIKeys.</summary>
+    /// <summary>Port of channelResolver.DisabledAPIKeys (axonhub.resolvers.go:81-92).</summary>
     [GraphQLName("disabledAPIKeys")]
-    public IReadOnlyList<DisabledApiKeyType>? GetDisabledApiKeys()
-        => ChannelMapping.ToDisabledApiKeys(DisabledApiKeysJson);
+    public async Task<IReadOnlyList<DisabledApiKeyType>?> GetDisabledApiKeysAsync(
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+        => await scope
+            .HasUserScopeAsync(AuthorizationScope.WriteChannels, cancellationToken)
+            .ConfigureAwait(false)
+            ? ChannelMapping.ToDisabledApiKeys(DisabledApiKeysJson)
+            : null;
 
     /// <summary>
     /// Port of the generated edge accessor (gql_edge.go:131-141):

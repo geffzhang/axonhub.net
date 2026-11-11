@@ -1274,7 +1274,7 @@ public sealed class AdminQuery
         return result;
     }
 
-    /// <summary>Port of queryResolver.AllChannelSummarys (non-project branch).</summary>
+    /// <summary>Port of queryResolver.AllChannelSummarys.</summary>
     [GraphQLName("allChannelSummarys")]
     public Task<IReadOnlyList<ChannelType>> AllChannelSummarysAsync(
         bool? includeArchived,
