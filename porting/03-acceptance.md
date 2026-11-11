@@ -513,9 +513,8 @@ claudeCodeSafeguards schema），按 `f272549f` 接入 Claude Code safeguards �
 `ClaudeCodeSafeguardsSettings` 输出类型；默认值（timeout 30s / maxTokens 4096 /
 transcriptCharBudget 24000 / DefaultPolicy）、零值修补、`"null"` 重置、直接读、Go 字段序
 JSON（空 fallback 为 `[]`）、`time.Duration` 纳秒截断与 15 条校验文案均按参照锁定，
-读取 / 写入分别要求 `read_settings` / `write_settings`。评审运行时（evaluator / response /
-anthropic 入站接线）未移植，登记为 C243 gap；默认 `classifierModel` 为空时评审关闭，
-默认部署的 /v1 行为不受影响。
+读取 / 写入分别要求 `read_settings` / `write_settings`。评审运行时随后在 §169 移植；默认
+`classifierModel` 为空时评审关闭，默认部署的 /v1 行为不受影响。
 
 §160 追加 43 个用例（`AxonHub.Api.Tests` 37：`CodexCompatibilitySettingsServiceTests` 22、
 `AdminCodexCompatibilityEndpointTests` 15；`AxonHub.Llm.Tests` 6：`HttpRedirectTests` 的
@@ -531,7 +530,8 @@ Codex 兼容性管理面与目录服务：`codexCompatibilitySettings` / `codexC
 复刻 singleflight（键 `%d:%s`、30s 分离预算、调用方取消 502）、启用快照优先与快照代理
 executor、实时行类型检查、凭据构建、wss/ws 改写、`client_version` 查询串回写、same-origin
 重定向钩子、上游 HTTP / 传输错误折叠、严格目录解析与 `testCodexCatalog` 的结果折叠
-（message 覆盖与仅非零 upstreamStatus）。`/codex/*` 运行时路由未移植，登记为 C244 gap；
+（message 覆盖与仅非零 upstreamStatus）。`/codex/*` 运行时路由随后在 §165 移植，C244 由 gap
+更新为 resolved；
 same-origin 比较的 URI 规范化差异登记为 C245（accepted）；零启用 key 的参照 panic 经
 singleflight 崩溃进程，端口折叠为有界 502 凭据错误，登记为 C246（accepted）；多 key
 `apiKeyStrategy` 分派未移植，登记为 C247（gap），端口保持基线 sticky / random。
@@ -564,9 +564,8 @@ C176 item (6) 的 apiKeyQuotaUsages 缺口随之关闭。
 在读取设置前返回空列表，ent 查询错误原样冒泡；输入 GUID 只取 id 不校验 type，输出
 `channelID` 恒为 `gid://axonhub/Channel/<id>`，GraphQL Int 按 C190 截断。新增
 `channel_probes` 的 DDL、EF 模型与 Dapper 读取 seam（表基线更新为 24 表 / 52 索引）。
-探针 writer / 每分钟调度器 / GC `cleanupChannelProbes` / dashboard probes 分支未移植，
-登记为 C249（gap），端口自身不产生 probe 行；scope 近似与系统设置缓存缺席（C029）的影响
-同条目登记。
+探针 writer / 每分钟调度器 / GC `cleanupChannelProbes` / dashboard probes 分支当时未移植，
+登记为 C249（§170 已 resolved）；scope 近似与系统设置缓存缺席（C029）的影响同条目登记。
 
 §163 追加 25 个用例（`AxonHub.Api.Tests` 24：`ChannelSettingsMergeTests` 8、
 `AdminChannelSettingsEndpointTests` 16；`AxonHub.Persistence.Tests` 1：
@@ -600,6 +599,33 @@ post-baseline 漂移（冻结基线 `b8bb3421` 只有 trace-sticky 规则），�
 provider，`VideoService` 按参照「状态查询不读 key」不接 registry。`isServing` 用代际内容
 等价替代参照的指针相等，登记为 C251（accepted）；C247 由 gap 更新为 resolved。
 
+§165 追加 19 个用例（`AxonHub.Api.Tests` 19：`ResponsesWebSocketEndpointTests` 11、
+`CodexEndpointTests` 8）。本轮按用户要求运行了构建与过滤测试：`dotnet build
+tests/AxonHub.Api.Tests` 为 0 警告 0 错误，`dotnet test --filter
+"FullyQualifiedName~ResponsesWebSocketEndpointTests|FullyQualifiedName~CodexEndpointTests"`
+为 19/19 通过；§165 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests`
+5920、`AxonHub.Llm.Tests` 1512、`AxonHub.Persistence.Tests` 363，四项目合计 9541，
+下一次全量运行应以该数字复核。该切片为 post-baseline 漂移（冻结基线 `b8bb3421` 没有
+`codex_routes.go` / `codex_compatibility.go` / `responses_websocket.go`），按 `f272549f`
+接入 `/codex` 运行时：中间件链 IP 黑名单 → Enabled 门（读取失败 500、禁用 404，
+均带 no-store）→ strict API key（无 key / 哨兵 / 无效 → 401、IP 禁止 → 403、验证失败 →
+500）→ thread / trace；whoami 与 accounts-check 的固定身份（`axonhub-key-%d`、promax、
+NO_CONSTRAINT、personal、Go map / 结构体字段序、`Cache-Control: no-store`）；`/codex/models`
+的可见模型读取（privacy deny → 403、其余 500）、系统旁路的目录源选择（读设置失败 → 500、
+ChannelID 为空 → 503）、`client_version` 透传与 `CodexCatalog.Intersect` 输出（`application/json`；
+C190 的 Int 截断沿用）；images 与 responses（HTTP / WS）复用既有处理器。
+Responses WebSocket 端点按 f272549f 复刻：128 MiB 帧上限、每个 `stream_id` 一条 lane 串行
+（无 `stream_id` 共用空 lane）、最多 32 条命名 lane 与无 stream_id 回显的校验错误、16 个并发
+活动事件、64 个 pending 与 128 MiB 队列预算（429 `websocket_queue_limit_reached`）、64 MiB
+retained/warmup 预算（400 `websocket_context_limit_reached`）、`generate=false` 的
+response.created / in_progress / completed 三事件与本地 continuation 合并、`{error,status,type}`
+错误信封与 stream_id 回显、协议 / 处理器错误不关闭连接、非升级 GET 400
+`websocket upgrade required`。参照的 2.5 分钟协议 ping / 5 分钟 read deadline 由 ASP.NET
+keep-alive 代替（C252），per-event `LLMRequestTimeout` 缺席（C253，C115），
+`shared.ResponsesLane` continuation lease 未移植（C254），`writeStreamDelivery` 交付边界未移植
+（C255），均登记为 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
+实现按 gorilla `SetReadLimit` 语义以 CloseMessageTooBig 关闭。
+
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
 不依赖 Docker；grain 键按请求模型/通道 ID 隔离，用例之间无共享状态。API 测试的传输层用脚本化
 `IExecutor` 替代，不发起真实上游请求；SSE 写帧与请求读取用 `DefaultHttpContext` + `MemoryStream` 逐字节断言。
@@ -607,6 +633,190 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 跳过项说明：无。C038 已闭合——`LlmRequest.Compact` 随 Responses 切片移植后，
 `PromptCacheKeyFallsBackToTheCompactRequest` 取消 `Skip`，按参照的「顶层键优先、否则回退
 `Compact.PromptCacheKey`」分支断言并通过。
+
+§166 追加 5 个用例（`AxonHub.Llm.Tests` 5：`ResponsesWebSocketExecutorTests` 5），收口
+C072 的跨请求连接复用。参照的池活在按通道缓存的 transformer 里，而端口每次尝试构建
+transformer 且在尝试结束调用 `Stop`，因此连接从不跨请求存活。本轮新增进程级
+`WebSocketExecutorCache`（键为 inner `IExecutor` + `ChannelID`），Responses / Codex 出站经
+缓存取共享执行器，pool key 增加 `ChannelID` 保持按通道分离，两个 `Stop()` 改为 no-op；
+连接由空闲 TTL 50m、最大寿命 50m、池上限 128 与后台清理退役。该生命周期差异登记为
+C256（accepted）。同时补齐参照的 retention 语义：`MaxRetainedInput` 16 MiB（原 1 MiB）、
+每执行器共享 64 MiB retained 预算、`rememberTurn` 的五条分支（空 id、closed、先写
+`lastResponseID`、超限或预算失败时释放预算并清空 input 但保留 id）、lease 的 native /
+空 input / 拼接三路、`response.completed` 的 native / 超限清空 `nextFullInput` 分支，以及
+prepare payload 仅在 owner 为空或未超限时缓存 `nextFullInput`。本轮按用户要求运行了构建与
+测试：`dotnet build AxonHub.slnx` 为 0 警告 0 错误；`dotnet test tests/AxonHub.Llm.Tests`
+为 3110/3110 通过；`dotnet test tests/AxonHub.Api.Tests --filter` 的七个 Responses / Codex
+相关测试类为 59/59 通过（期间修复了 `ResponsesEndpointDispatchTests` 夹具把端点格式写成
+`openai/alpha/search` 的笔误——参照常量为 `openai/alpha_search`，该用例此前一直失败）。
+§166 落地后的静态计数为 `AxonHub.Grains.Tests` 1746、`AxonHub.Api.Tests` 5920、
+`AxonHub.Llm.Tests` 1517、`AxonHub.Persistence.Tests` 363，四项目合计 9546，下一次全量
+运行应以该数字复核。
+
+§167 追加 34 个用例（`AxonHub.Grains.Tests` 8：`VideoStorageGrainTests`；`AxonHub.Api.Tests`
+24：`VideoStorageWorkerTests` 21、`GrainScheduledTaskTests` 3；`AxonHub.Persistence.Tests` 2：
+`RequestStoreTests`），收口 C234 的视频存储扫描 worker。参照的
+`video_storage.Worker.RegisterScheduledTasks/Reschedule/scanAndSave/processOne`
+（internal/server/video_storage/worker.go，f272549f）由单例 `IVideoStorageGrain` 的 Orleans
+reminder 承载：注册只装填不运行，fire 先按当前间隔重排下一次再运行，过期 tick 只重排不重复
+扫描，Reschedule 从调用时刻重排，扫描失败只记录 "Video storage worker failed" 且不丢调度；
+间隔读取 `system_video_storage_settings`，非正数下限 1 分钟。`VideoStorageWorker` 复刻全部
+可观察行为：启用闸门、`data_storage_id` 必填、存储存在性与「非 database / 非 primary」校验、
+行查询（processing/completed、openai/video 与 seedance/video、content_saved=false、id ASC、
+limit 非正数回落 50）、ResponseBody 的 `video_url` 优先与视频任务 `succeeded` 回退、5 分钟
+下载超时、仅 http/https、非 200 失败、512 MiB 静默截断（`io.LimitReader` 语义）、
+Content-Disposition 文件名与 URL 去 query 的 basename 回退、时间戳文件名、
+`/{project_id}/requests/{request_id}/video/{basename}` key、内容列与 updated_at 写入、
+行查询失败前缀 "failed to query video requests: "、逐行失败记录后继续。请求存储新增 Dapper 读
+`ListUnsavedVideoRequestsAsync` 与 EF 写
+`MarkContentSavedAsync`；生产接线为 `GrainVideoStorageScheduleSource` /
+`GrainVideoStorageScanRunner` / `GrainVideoStorageRescheduleSignal`，启动激活器装填
+`video-storage` 单例。调度机制差异登记为 C257（accepted）。本轮按用户要求运行了构建与测试：
+`dotnet build AxonHub.slnx` 为 0 警告 0 错误；`dotnet test tests/AxonHub.Grains.Tests` 为
+169/169 通过；`dotnet test tests/AxonHub.Api.Tests --filter
+"VideoStorageWorkerTests|GrainSchedulerBridgeTests"` 为 22/22、
+`--filter "GrainScheduledTaskTests"` 为 6/6（本切片 Api 定向共 28/28）；
+`dotnet test tests/AxonHub.Persistence.Tests --filter "RequestStoreTests"` 为 14/14。宽过滤
+运行另命中 3 个与本切片无关的既有失败（`updateQuotaRoutingSettings` 等报
+`AuthorizationScope` 未注册），未在本轮处理。§167 落地后的静态计数为
+`AxonHub.Grains.Tests` 1754、`AxonHub.Api.Tests` 5944、`AxonHub.Llm.Tests` 1517、
+`AxonHub.Persistence.Tests` 365，四项目合计 9580，下一次全量运行应以该数字复核。
+
+§168 追加 59 个用例（`AxonHub.Api.Tests` 59：`ChannelAutoDisableTests` 48、`WebhookNotifierTests` 11），
+收口 C236 的自动禁用运行时与 Webhook 通知器（§154）。参照 `f272549f` 的
+`internal/server/biz/channel_auto_disable.go`、`webhook_notifier.go`、`channel_metrics.go`、
+`performance.go`、`internal/server/orchestrator/orchestrator.go`：
+
+- `ChannelAutoDisableService` 复刻计数器协议：键为 `identity:scope:rule:<index>:<statusCodes>:<keywordPatterns>:<times>:<action>:<duration>`，
+  达到阈值时认领并扣减、`actionInFlight` 防并发、动作失败回补连续失败、成功清零；
+  identity 对 keyless 记录使用 `channel:<id>`；取消与未完成记录不计入。
+- 策略模式：`off` 跳过两层规则、`custom` 只读渠道规则、`inherit` 只读全局规则、缺 mode 视为
+  `custom`；全局策略禁用与读取失败回退默认策略均与参照一致。
+- 动作：`temporary_disable`（到期时刻 + 分钟文案）、`until_cron`（时区解析、严格晚于、
+  RFC3339 文案）、`permanent_disable`、`permanent_delete`（先禁用再删除，`ONE_KEY_PRESERVED`
+  时仍先禁用）；OAuth 与 keyless 渠道的 `permanent_delete` 按参照降级为 permanent。
+- `markChannelUnavailable`：条件更新只命中 enabled；未命中时只强制重载；命中后读取更新后的
+  通道快照（快照缺失只跳过事件但仍重载）、发布 `ChannelAutoDisabledEvent`（更新前字段 +
+  `OccurredAt` = 自动禁用时刻）、同步强制重载、最后请求防抖刷新；存储失败只记日志。
+- `WebhookNotifier`：首个事件精确匹配的订阅、按 targetNames 顺序、跳过未启用 / 空 URL、
+  重名重复发送；每个目标先 body 再 headers，模板失败只跳过该目标（body / header 任一失败）；
+  headers 空 key 跳过、默认 `Content-Type: application/json`、默认 3000ms 超时、支持代理；
+  配置读取失败回退空配置（error 日志）；发送失败只记日志。`OccurredAt` 按系统时区
+  格式化为 RFC3339（零偏移写 `Z`）。`BackgroundWebhookNotificationSink` 在独立 DI 作用域
+  投递，与参照的异步通知解耦一致。
+- 生产接线：`ChannelMetricsMiddleware` 的失败路径构造 `ChannelPerformanceRecord` 后经
+  `ChannelAutoDisableEvaluationQueue`（BackgroundService，单读者，每条记录新建作用域）串行
+  评估；`ChatCompletionOrchestrator` 在请求失败且存在执行记录时先落库失败再评估，评估异常
+  不替换原请求错误（C263）。
+- 管理面已有的 `webhookNotifierConfig` / `updateWebhookNotifierConfig` 读写与校验（3 例）
+  复用，行为不变。
+
+本轮按用户要求运行了构建与测试：`dotnet build tests/AxonHub.Api.Tests` 为 0 警告 0 错误；
+`dotnet test --filter "FullyQualifiedName~ChannelAutoDisableTests|FullyQualifiedName~WebhookNotifierTests"`
+为 59/59 通过；随后 `dotnet test --no-build` 全量运行：5878 通过 / 122 失败 / 6000 总计，
+31m11s。失败均为既有的环境 / DB 依赖基线（上一次基线 123 例），本切片无新增失败。
+§168 落地后的静态计数为 `AxonHub.Grains.Tests` 1754、`AxonHub.Api.Tests` 6003、
+`AxonHub.Llm.Tests` 1517、`AxonHub.Persistence.Tests` 365，四项目合计 9639，下一次全量
+运行应以该数字复核。
+
+台账：C236 由 gap 更新为 resolved；C149 修订（删除「冻结版本没有自动禁用事件总线」的错误
+描述，残余仅剩 live 的 Vertex key 分支）；C017 的残余说明更新（自动禁用与异步评估 worker 已
+由 C236 移植）。新增 C258–C263（accepted）：RE2 与 .NET Regex 的引擎差异、进程级计数器与
+后台队列、5 字段 cron 语法、时区解析依赖、8 KiB 错误体的 UTF-8 截断解码、评估异常不影响
+原请求错误。`porting/02-differences.md` 重新生成（263 条：193 accepted / 9 gap / 61 resolved），
+lint 通过。
+
+§169 追加 81 个用例（`AxonHub.Api.Tests` 81：`SafeguardsEvaluatorTests` 30、
+`SafeguardsFallbackTests` 20、`SafeguardsEndpointTests` 16、`SafeguardsClassifierTests` 9、
+`AnthropicTerminalStreamTests` 6），收口 C243 的 Claude Code safeguards 评审运行时（§159
+只含设置面）。参照 `f272549f` 的 `internal/server/safeguards/{evaluator,classifier,stream,
+response}.go`、`internal/server/api/{safeguards,anthropic,chat}.go` 与
+`internal/server/orchestrator/anthropic_terminal_stream.go`：
+
+- 请求准备：`HasDangerousToolUse` 复刻 gjson 的
+  `safeguards.#(type=="dangerous_tool_use")` 探针（严格解析的宽容度差异登记为 C265），命中
+  时才重读运行时设置；`Prepare` 只剥离本地处理的 `dangerous_tool_use`、保留其他 safeguard，
+  删除过期的 `Content-Length`，其余字段按 Go 的 `map[string]json.RawMessage` 语义重编码；
+  解码失败映射 400（文案差异登记为 C266）。
+- 评审器：`DefaultPolicy` 与空/空白 policy 回退、context 键子集与 `git_state` 裁剪、
+  transcript 的默认 24000 字节预算与 UTF-8 安全裁剪、截断/无效工具永不提交、模型名 trim +
+  去重、MaxTokens 默认 4096、context 16000 / tool 64000 / verdict 64000 上限；逐模型尝试与
+  整体/单次预算，预算到期归因为 timeout、其他失败归因为 error；verdict 拒绝重复键、每工具
+  只接受首个有效判定、解释裁剪 2000 字节；`EscalateOnDenial` 只对首个模型的拒绝做二次意见，
+  回退只重审未决工具，耗尽时保留已评估的 verdict。
+- 分类器：Fork 语义（新 request id、保留项目/追踪/API key/来源、
+  `/v1/chat/completions`、非流式单 choice、stop 与非拒答校验），身份与 session 经
+  `ClassifierFactory` 接缝传入（C062）。
+- 流式评审：终端 `message_delta` 先 drain 上游（最多 256 事件 / 1 MiB，只允许 `ping`，且必须
+  以 `message_stop` 结束），再评审并回放；reviewer 错误优先于源错误；annotation 生成
+  `safeguard_results` 并更新 `Size`；1s `abortUpstream` 上限。
+- 传输收口：`ChatCompletionOrchestrator` 在 raw-stream 中间件末尾注册
+  `AnthropicTerminalStreamMiddleware`，仅包装 `anthropic/messages` 的 provider 流，转发一次
+  `message_stop`（深拷贝事件与 Data）、随后关闭 provider 传输且 `Err` 恒为 null，
+  `message_stop` 之前的错误原样保留；这是 passthrough 评审看到干净 EOF、不会因传输未关闭而
+  误判取消的前提。
+- 接线：`/v1/chat/completions`、`/v1/messages` 与 `/anthropic/v1/messages` 共用
+  `ChatCompletionEndpoint`；设置读取失败返回 500
+  `Unable to load Claude Code safeguards settings`，`classifierModel` 为空时评审关闭。
+
+本轮按用户要求运行了构建与测试：`dotnet test --filter
+"FullyQualifiedName~Safeguards|FullyQualifiedName~AnthropicTerminalStream"`（含重编译）为
+105/105 通过；`SafeguardsFallbackTests` 连续 4 轮 20/20。评审测试对需要成功的尝试改用宽裕
+预算（仅显式 timeout 场景保留 10ms），避免 Windows 线程调度抖动把 10ms 尝试预算误判为超时。
+§169 落地后的静态计数为 `AxonHub.Grains.Tests` 1754、`AxonHub.Api.Tests` 6084、
+`AxonHub.Llm.Tests` 1517、`AxonHub.Persistence.Tests` 365，四项目合计 9720，下一次全量
+运行应以该数字复核。
+
+台账：C243 由 gap 更新为 resolved；新增 C264–C267（accepted）：评审日志与 operation name、
+gjson 探针宽容度、解码错误文案、Timer 精度与上限。`porting/02-differences.md` 重新生成
+（267 条：197 accepted / 8 gap / 62 resolved），lint 通过。
+
+§170 追加 30 个用例（`AxonHub.Grains.Tests` 6：`ChannelProbeGrainTests`；`AxonHub.Api.Tests`
+17：`ChannelProbeServiceTests` +12、`GcWorkerTests` +3、`AdminDashboardEndpointTests` +2；
+`AxonHub.Persistence.Tests` 7：`ChannelProbeStoreTests` +4、`DashboardProbeStatsStoreTests` 2、
+`GcStoreTests` +1），收口 C249 的探针 writer / 分钟调度 / GC 清理（§162 只含读取面）。参照
+`f272549f` 的 `internal/server/biz/channel_probe.go`、`channel_probe_internal.go`、
+`internal/server/gql/qb/throughput.go`、`internal/server/gc/gc.go`、
+`internal/server/gql/channel_performance_helpers.go` 与 `dashboard.resolvers.go`：
+
+- writer：`RunProbeAsync` 先读 `system_channel_settings` 的 probe 设置（任何读取 / 解码错误
+  回退 `defaultChannelSetting`，默认 `enabled=true`、`frequency=5m`），禁用则跳过；频率映射
+  1m / 5m / 30m / 1h、未知 1m；`aligned = UTC now` 截断到 interval，**在 DB 工作前**占用
+  去重槽（同区间重入 / 并发跳过，失败也占用）；`StatusEQ(enabled)` 取通道 id；窗口
+  `[aligned-interval, aligned)` 执行 `qb.BuildProbeStatsQuery` 的 PostgreSQL 形态：attempt 级
+  `completed` / `failed`，`usage_logs` 子查询按 `created_at >= start` 聚合完成 tokens，
+  streaming 有效延迟扣 TTFT 且 `TTFT >= latency` 归零，`request_count = COUNT(DISTINCT
+  request_id)`，`streaming_request_count` 仅 completed + stream + 有 TTFT；TPS =
+  `total_tokens / (effective_latency_ms / 1000)`、TTFT =
+  `total_first_token_latency / streaming_request_count`（仅当分母 > 0）；`CREATE_BULK`；
+  `effective_latency_ms` 为 NULL 时中止整次 pass（等价 `database/sql` 把 NULL 扫进 int64
+  失败）；所有错误只记日志、从不抛出。
+- 调度：`ChannelProbeGrain` 以 Orleans reminder（60s tick）承载参照的 `* * * * *` cron；
+  `EnsureScheduledAsync` 只在没有 future pending 时 arm，`FireScheduledAsync` 先 arm 下一
+  分钟边界再运行，pending 晚于 now 的 tick 视为 stale；启动由 `GrainSchedulerActivator`
+  touch。
+- GC：`cleanupChannelProbes` 在每次策略循环后固定执行（manual 参数不改变窗口）：
+  `timestamp < now-3d` 的 Unix 秒、id 升序、500 分批删除；失败只记日志并继续 VACUUM。
+- dashboard：`channelPerformanceStats` 先查 `channel_probes`（本地日期 + channel 分组、
+  `timestamp >= start.Unix()`、`avg_tokens_per_second <= 2000`，按 `total_request_count`
+  加权吞吐 / TTFT）；probes 查询错误包裹后**不回退**，只有空结果才回退 executions 聚合。
+
+附带修正（既有缺陷，非新差异）：`GcStore` 的两处 payload 查询把 `AND` 与 `NOT EXISTS`
+用不带空格的 StringBuilder 拼接，生成 `ANDNOT`（PostgreSQL 语法错误）；`IN @ids` 改为
+`= ANY(@ids)`——Dapper 在 Npgsql 上把数组参数按原生数组传递，不会展开 `IN` 列表。另按参照
+的 `schematype.SkipSoftDelete` 上下文拆分 `GetPrimaryAsync`（live）与
+`GetPrimaryIncludingDeletedAsync`（GC 使用），消除同一条测试互相矛盾的两种期望。
+
+本轮按用户要求运行了构建与测试：`dotnet build AxonHub.slnx` 为 0 警告 0 错误；定向
+`dotnet test` 为 Grains 6/6、Api 50/50、Persistence 28/28（含既有的
+`DataStorageStoreTests` 软删语义）。§170 落地后的静态计数为 `AxonHub.Grains.Tests`
+1760、`AxonHub.Api.Tests` 6101、`AxonHub.Llm.Tests` 1517、`AxonHub.Persistence.Tests`
+372，四项目合计 9750，下一次全量运行应以该数字复核。（既有 3 个 `AuthorizationScope`
+未注册失败见 §167，本切片未触碰。）
+
+台账：C249 由 gap 更新为 resolved；C195 与 C203 中「probes 分支 / 清理缺席」的措辞按
+§170 更新。`porting/02-differences.md` 重新生成（267 条：197 accepted / 7 gap / 63
+resolved），lint 通过。
 
 ## 公开 API 审计
 
@@ -909,7 +1119,7 @@ Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEna
 | C088：模型列表的 `models` 表与 API Key profile | 已解决：§89 接入 ListEnabledModels 的 configured-model 合并、QueryAllChannelModels 两分支、项目 / API Key profile（ChannelIDs / ChannelTags / ModelIDs）过滤、ModelBlacklistRegex、HideUnroutableModelsInList 抑制、OpenAI include 扩展字段（列表取系统默认、检索硬编码 false）以及 OpenAI / Anthropic / Gemini 的 403 信封；45 例 Api 锁定。残余运行时结构差异登记为 C178（实时读通道、无 outbound 构建跳过、通道派生稳定排序、畸形 profile JSON 失败关闭） | 已关闭（C178 残余） |
 | C089：请求 ID 与 trace ID 中间件 | 已解决：`RequestTracingMiddleware` 的 `ar-<uuid>` 请求 ID、`AH-Request-Id` 响应头与错误体 `request_id` 回显（7 例）；`TraceMiddleware` 按参照实现请求头 → extra headers → OpenCode → Claude Code `metadata.user_id` → Codex 头 / turn metadata → body 字段的提取链、非消息端点跳过、`GetOrCreateTrace` 的 `(trace_id, project_id)` 语义与唯一约束重试、响应的 `AH-Trace-Id` 头与 `AH-Session-Id` 上下文；trace id 经 `RequestIdentity` 落到 `requests.trace_id`，并以 session id 传给通道出站（42 例 Api + 6 例 Persistence + 12 例 Llm） | 已关闭；残余差异见 C095 |
 | C095：trace 子系统的残余差异 | 已解决：thread 中间件与 `threads` 表已按参照移植（`AH-Thread-Id` 首值、按项目 get-or-create、fail-open、`traces.thread_id` 落库，7 + 5 例），trace 粘性 API key 已接入（C013，7 + 1 例），claudecode / opencode 出站与 user id / 会话头生成由第 33 节关闭（C096），trace 查询 / 归档 / GraphQL 由 §101 闭合（23 + 15 例），GC / 保留策略由 §113 闭合（54 + 9 例）；已接受：无 slog 日志与 operation name、gjson 数字归一化（`1.50` → `1.5`、`1e3` → `1000`）与路径语法差异、约束错误按 SQLSTATE 23 分类（参照按 Ent 约束名）、`EnableBuffering` 回绕与参照 `io.ReadAll` + 新 reader 的资源差异 | 已关闭（C203 登记 GC 侧的调度 / cron / 计数实现差异） |
-| C203：GC / 存储策略切片的实现差异 | 调度器结构（§149 起由 `GcGrain` 的 reminder 承载 `gc.cron`，替代共享 scheduler）、cron 为五字段 Vixie 子集（不支持库扩展）、channel_probes 清理为 no-op（§162 已建表，但 writer / 调度未移植，C249）、预览计数 32 位、数据存储进程缓存缺席、手写 Dapper SQL；清理结果、键序、错误包装与 GraphQL 线形由 63 例锁定 | 已接受；channel_probes 清理仍为 no-op（随 C249 的探针采集 / 调度切片补齐），其余不改变清理结果 |
+| C203：GC / 存储策略切片的实现差异 | 调度器结构（§149 起由 `GcGrain` 的 reminder 承载 `gc.cron`，替代共享 scheduler）、cron 为五字段 Vixie 子集（不支持库扩展）、channel_probes 清理已接线（§170：固定 3 天窗口、`timestamp < cutoff` 的 Unix 秒、id 升序、500 分批、失败隔离）、预览计数 32 位、数据存储进程缓存缺席、手写 Dapper SQL；清理结果、键序、错误包装与 GraphQL 线形由 67 例锁定 | 已接受；channel_probes 清理已由 §170 补齐，其余不改变清理结果 |
 | C096：ClaudeCode / DeepSeek / OpenCode 出站与通道接线 | 已接受 + 真实缺口：claudecode 的 Bearer 认证、默认 base URL 与 `beta` 查询、13 个头与入站透传覆盖、系统消息注入、伪造 user_id、官方工具前缀与响应 / 流 / 聚合去前缀、思考开关，DeepSeek 的 URL 归一、completion 分派、`json_schema` 降级、`thinking` 与 `reasoning_content`，OpenCode 的模型路由、会话头优先级、响应 / 流分派与 `WithSessionHeader` 的能力保留，两条通道的 OAuth / API key 凭据构造与 `IsOfficial` 差异均已锁定（Llm 143 例、Api 11 例）；真实缺口：opencode 用户端点未包裹会话头（端点表，C094）、claudecode 多 key 通道的执行 key 审计列为空、OAuth provider 每次尝试新建（C094）（计费系统消息移除已由 §98 接线、`sessionHeaderCustomizedOutbound.Stop` 转发与编排调用已由 §141 接线）；已接受：会话值走 `RawRequest.SessionId`（C062）、流式行去前缀经 `JsonNode` 重序列化（键序保留、空白可能不同）、OAuth 凭据文案统一为 `failed to parse claudecode oauth credentials` | 主链路 154 例锁定；剩余缺口在端点表切片补齐；计费消息移除与 Stop 转发已接线 |
 | C097：Ollama 原生出站与 NDJSON 流 | 已接受 + 真实缺口：OllamaChat 的 `/api/chat` 线格式、`stream` 恒显式、`options`、`images` 的 data-URL 剥离、工具与 `tool_calls` 的 Go map 排序往返、`thinking` → `reasoning_content`、finish reason 优先级、`ollama_error` 与聚合、NDJSON 解码与 Content-Type 路由、`ollama` / `ollama_anthropic` 接线（无启用 key 时不发送认证）、流式模型名分派均已锁定（Llm 52 例、Api 11 例）；真实缺口：apiKeyOverride（C013 残留，参照 5 个接线用例中的 1 例未移植）、能力/端点表未建模（C080/C086 同族）、modelname 的其余 format 分支（Anthropic `message_start` / Responses 生命周期 / Gemini `modelVersion`）、其余 provider 通道类型未接线；已接受：NDJSON 取消以 `OperationCanceledException` 进入 `Err`（参照返回 `ctx.Err`）、工具参数数字字面量保真（参照经 float64 重编码）、非对象 `arguments` 的宽容度与 STJ 解码文案、`TransformError(null)` 以 `null!` 承载非空接口 | 主链路由 63 例锁定；ollama_anthropic 的 Bearer 与 `/v1/messages` 归一、禁用 key 不发送与流式 `upstream_model_id` 均与参照一致；缺口在端点记录、通道 key 测试流程与后续 provider 切片补齐 |
 | C098：Fireworks / Moonshot OpenAI 兼容出站与通道接线 | 已接受：Fireworks 的默认 `https://api.fireworks.ai/inference/v1`、`strings.TrimSuffix` 单斜杠裁剪、`ReasoningFieldContent` 与普通 OpenAI 出站，Moonshot 的内嵌 OpenAI 出站、chat-only 请求路径、messages 必填、`json_schema` → `json_object` 与 schema 清除、`NormalizeBaseURL(raw, "v1")` + `/chat/completions`、Bearer，以及 `fireworks` / `moonshot` 通道分支均由 19 例 Llm + 6 例 Api 锁定；已接受差异：Moonshot nil 配置由 Go nil 指针 panic 改为 `InvalidOperationException`、嵌套构造错误保留 .NET `ArgumentException` 的 `(Parameter 'config')` 后缀（测试只钉 Go 前缀）、`openai.ReasoningFieldNone` 注释与 Fireworks 实际使用的 `Content` 冲突时以代码为准；真实缺口：能力/端点表未建模（C080/C086 同族），但两个类型各只有一个 OpenAI chat 端点，按入站 ApiFormat 分派与参照一致 | 主链路由 25 例锁定；异常文案参数后缀与端点表缺口随全局错误文案策略与端点记录切片补齐 |
