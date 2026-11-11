@@ -457,11 +457,11 @@ public static class ApiKeyProfileTemplateMapping
     /// </summary>
     public static ApiKeyProfileTemplateSortField ToSortField(
         ApiKeyProfileTemplateOrder? orderBy) => orderBy?.Field switch
-    {
-        ApiKeyProfileTemplateOrderFieldValue.UpdatedAt =>
-            ApiKeyProfileTemplateSortField.UpdatedAt,
-        _ => ApiKeyProfileTemplateSortField.Id,
-    };
+        {
+            ApiKeyProfileTemplateOrderFieldValue.UpdatedAt =>
+                ApiKeyProfileTemplateSortField.UpdatedAt,
+            _ => ApiKeyProfileTemplateSortField.Id,
+        };
 
     public static SortDirection ToSortDirection(ApiKeyProfileTemplateOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc
@@ -502,25 +502,25 @@ public static class ApiKeyProfileTemplateMapping
 
     private static ApiKeyProfileTemplateProjectFilter ToProjectFilter(
         ProjectWhereInput where) => new()
-    {
-        Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
-        IdIn = where.IdIn?
+        {
+            Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdIn = where.IdIn?
             .Select(static id => GidValue.Parse(id).Id)
             .ToList(),
-        Name = where.Name,
-        NameContainsFold = where.NameContainsFold,
-        Status = where.Status is null
+            Name = where.Name,
+            NameContainsFold = where.NameContainsFold,
+            Status = where.Status is null
             ? null
             : ProjectMapping.ToWireStatus(where.Status.Value),
-        StatusIn = where.StatusIn?
+            StatusIn = where.StatusIn?
             .Select(ProjectMapping.ToWireStatus)
             .ToList(),
-        Not = where.Not is null ? null : ToProjectFilter(where.Not),
-        And = where.And?
+            Not = where.Not is null ? null : ToProjectFilter(where.Not),
+            And = where.And?
             .Select(ToProjectFilter)
             .ToList(),
-        Or = where.Or?
+            Or = where.Or?
             .Select(ToProjectFilter)
             .ToList(),
-    };
+        };
 }

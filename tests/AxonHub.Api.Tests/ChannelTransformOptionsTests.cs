@@ -645,16 +645,16 @@ public sealed class ChannelTransformOptionsTests
         string? settings = null,
         string? policies = null,
         string apiFormat = ApiFormats.OpenAIChatCompletion) => new()
-    {
-        ChannelId = 101,
-        ChannelName = "channel-101",
-        ActualModel = "upstream-model",
-        Type = "openai",
-        ApiFormat = apiFormat,
-        Settings = settings,
-        Policies = policies,
-        Credentials = """{"api_key":"test-key"}""",
-    };
+        {
+            ChannelId = 101,
+            ChannelName = "channel-101",
+            ActualModel = "upstream-model",
+            Type = "openai",
+            ApiFormat = apiFormat,
+            Settings = settings,
+            Policies = policies,
+            Credentials = """{"api_key":"test-key"}""",
+        };
 
     private static ChannelSettingsDraft Settings(TransformOptionsDraft options)
         => new() { TransformOptions = options };

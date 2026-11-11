@@ -328,5 +328,5 @@ public sealed class ChannelLimiterTests
         var (inFlight, waiting) = limiter.Stats();
         Assert.Equal(0, inFlight);
         Assert.Equal(0, waiting);
-     }
+    }
 }

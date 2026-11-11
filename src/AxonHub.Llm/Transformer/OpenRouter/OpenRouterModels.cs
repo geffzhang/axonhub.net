@@ -318,7 +318,7 @@ public sealed class OpenRouterMessage
             else
             {
                 parts = Content?.MultipleContent is { } multiple
-                    ? [..multiple]
+                    ? [.. multiple]
                     : [];
             }
 

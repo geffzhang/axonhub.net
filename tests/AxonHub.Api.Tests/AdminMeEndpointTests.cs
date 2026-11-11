@@ -412,13 +412,13 @@ public sealed class AdminMeEndpointTests : IAsyncLifetime
         long? projectId,
         string level,
         string scopes) => new()
-    {
-        Id = id,
-        CreatedAt = CreatedAt,
-        UpdatedAt = UpdatedAt,
-        Name = name,
-        Level = level,
-        Scopes = scopes,
-        ProjectId = projectId,
-    };
+        {
+            Id = id,
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            Name = name,
+            Level = level,
+            Scopes = scopes,
+            ProjectId = projectId,
+        };
 }

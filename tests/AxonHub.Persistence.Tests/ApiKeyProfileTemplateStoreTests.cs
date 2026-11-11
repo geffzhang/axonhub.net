@@ -291,12 +291,12 @@ public sealed class ApiKeyProfileTemplateStoreTests(PostgresFixture fixture)
         string name,
         long projectId,
         DateTime? updatedAt = null) => new()
-    {
-        CreatedAt = CreatedAt,
-        UpdatedAt = updatedAt ?? UpdatedAt,
-        Name = name,
-        Description = "desc",
-        Profile = """{"name":"p"}""",
-        ProjectId = projectId,
-    };
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = updatedAt ?? UpdatedAt,
+            Name = name,
+            Description = "desc",
+            Profile = """{"name":"p"}""",
+            ProjectId = projectId,
+        };
 }

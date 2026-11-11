@@ -212,16 +212,16 @@ public sealed class ProviderQuotaStatusStoreTests(PostgresFixture fixture)
     private static ProviderQuotaStatusRecord NewStatus(
         long channelId,
         string accountKey = "") => new()
-    {
-        ChannelId = channelId,
-        ProviderType = "codex",
-        Status = "warning",
-        QuotaData = """{"_limits":[]}""",
-        NextResetAt = NextResetAt,
-        Ready = true,
-        NextCheckAt = NextCheckAt,
-        AccountKey = accountKey,
-    };
+        {
+            ChannelId = channelId,
+            ProviderType = "codex",
+            Status = "warning",
+            QuotaData = """{"_limits":[]}""",
+            NextResetAt = NextResetAt,
+            Ready = true,
+            NextCheckAt = NextCheckAt,
+            AccountKey = accountKey,
+        };
 
     private static async Task SoftDeleteAsync(TestDatabase db, long channelId)
     {

@@ -616,26 +616,26 @@ public static class TraceJson
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-            {
-                var members = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-                foreach (var property in element.EnumerateObject())
                 {
-                    members[property.Name] = property.Value;
-                }
-
-                writer.WriteStartObject();
-                foreach (var name in members.Keys.OrderBy(static key => key, StringComparer.Ordinal))
-                {
-                    writer.WritePropertyName(name);
-                    if (!TryWriteGoAny(writer, members[name]))
+                    var members = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+                    foreach (var property in element.EnumerateObject())
                     {
-                        return false;
+                        members[property.Name] = property.Value;
                     }
-                }
 
-                writer.WriteEndObject();
-                return true;
-            }
+                    writer.WriteStartObject();
+                    foreach (var name in members.Keys.OrderBy(static key => key, StringComparer.Ordinal))
+                    {
+                        writer.WritePropertyName(name);
+                        if (!TryWriteGoAny(writer, members[name]))
+                        {
+                            return false;
+                        }
+                    }
+
+                    writer.WriteEndObject();
+                    return true;
+                }
 
             case JsonValueKind.Array:
                 writer.WriteStartArray();
@@ -655,22 +655,22 @@ public static class TraceJson
                 return true;
 
             case JsonValueKind.Number:
-            {
-                var raw = element.GetRawText();
-                if (!double.TryParse(
-                        raw,
-                        NumberStyles.Float,
-                        CultureInfo.InvariantCulture,
-                        out var number)
-                    || !double.IsFinite(number))
                 {
-                    // Go's Unmarshal into any fails for float64 overflow.
-                    return false;
-                }
+                    var raw = element.GetRawText();
+                    if (!double.TryParse(
+                            raw,
+                            NumberStyles.Float,
+                            CultureInfo.InvariantCulture,
+                            out var number)
+                        || !double.IsFinite(number))
+                    {
+                        // Go's Unmarshal into any fails for float64 overflow.
+                        return false;
+                    }
 
-                writer.WriteRawValue(GoJsonFloat.Format(number), skipInputValidation: true);
-                return true;
-            }
+                    writer.WriteRawValue(GoJsonFloat.Format(number), skipInputValidation: true);
+                    return true;
+                }
 
             case JsonValueKind.True:
                 writer.WriteBooleanValue(true);

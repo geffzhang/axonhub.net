@@ -404,11 +404,11 @@ public static class ChannelOverrideTemplateMapping
     /// </summary>
     public static ChannelOverrideTemplateSortField ToSortField(
         ChannelOverrideTemplateOrder? orderBy) => orderBy?.Field switch
-    {
-        ChannelOverrideTemplateOrderFieldValue.UpdatedAt =>
-            ChannelOverrideTemplateSortField.UpdatedAt,
-        _ => ChannelOverrideTemplateSortField.Id,
-    };
+        {
+            ChannelOverrideTemplateOrderFieldValue.UpdatedAt =>
+                ChannelOverrideTemplateSortField.UpdatedAt,
+            _ => ChannelOverrideTemplateSortField.Id,
+        };
 
     public static SortDirection ToSortDirection(ChannelOverrideTemplateOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc

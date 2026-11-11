@@ -341,7 +341,7 @@ internal static class RawJsonGjson
             }
         }
 
-done:
+    done:
         return buffer.Length;
     }
 }

@@ -139,62 +139,62 @@ public static class OidcGlob
             switch (current)
             {
                 case '[':
-                {
-                    var matched = false;
-                    chunkIndex++;
-                    var negated = chunkIndex < chunk.Length && chunk[chunkIndex] == '^';
-                    if (negated)
                     {
+                        var matched = false;
                         chunkIndex++;
-                    }
-
-                    var sample = failed ? '\0' : name[nameIndex];
-                    var ranges = 0;
-                    while (true)
-                    {
-                        if (chunkIndex < chunk.Length && chunk[chunkIndex] == ']' && ranges > 0)
+                        var negated = chunkIndex < chunk.Length && chunk[chunkIndex] == '^';
+                        if (negated)
                         {
                             chunkIndex++;
-                            break;
                         }
 
-                        if (!GetEsc(chunk, ref chunkIndex, out var low, out badPattern))
+                        var sample = failed ? '\0' : name[nameIndex];
+                        var ranges = 0;
+                        while (true)
                         {
-                            ok = false;
-                            return string.Empty;
-                        }
+                            if (chunkIndex < chunk.Length && chunk[chunkIndex] == ']' && ranges > 0)
+                            {
+                                chunkIndex++;
+                                break;
+                            }
 
-                        var high = low;
-                        if (chunkIndex < chunk.Length && chunk[chunkIndex] == '-')
-                        {
-                            chunkIndex++;
-                            if (!GetEsc(chunk, ref chunkIndex, out high, out badPattern))
+                            if (!GetEsc(chunk, ref chunkIndex, out var low, out badPattern))
                             {
                                 ok = false;
                                 return string.Empty;
                             }
+
+                            var high = low;
+                            if (chunkIndex < chunk.Length && chunk[chunkIndex] == '-')
+                            {
+                                chunkIndex++;
+                                if (!GetEsc(chunk, ref chunkIndex, out high, out badPattern))
+                                {
+                                    ok = false;
+                                    return string.Empty;
+                                }
+                            }
+
+                            if (!failed && low <= sample && sample <= high)
+                            {
+                                matched = true;
+                            }
+
+                            ranges++;
                         }
 
-                        if (!failed && low <= sample && sample <= high)
+                        if (!failed)
                         {
-                            matched = true;
+                            nameIndex++;
                         }
 
-                        ranges++;
-                    }
+                        if (matched == negated)
+                        {
+                            failed = true;
+                        }
 
-                    if (!failed)
-                    {
-                        nameIndex++;
+                        break;
                     }
-
-                    if (matched == negated)
-                    {
-                        failed = true;
-                    }
-
-                    break;
-                }
 
                 case '?':
                     if (!failed)

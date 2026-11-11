@@ -251,11 +251,11 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         builder.Property(identity => identity.UserId).HasColumnName("user_id").IsRequired();
 
         builder.HasIndex(identity => new
-            {
-                identity.Issuer,
-                identity.Subject,
-                identity.DeletedAt,
-            })
+        {
+            identity.Issuer,
+            identity.Subject,
+            identity.DeletedAt,
+        })
             .HasDatabaseName("oidc_identities_by_issuer_subject_deleted_at")
             .IsUnique();
         builder.HasIndex(identity => identity.UserId)
@@ -930,12 +930,12 @@ public sealed class AxonHubDbContext(DbContextOptions<AxonHubDbContext> options)
         builder.HasIndex(request => new { request.TraceId, request.CreatedAt })
             .HasDatabaseName("requests_by_trace_id_created_at");
         builder.HasIndex(request => new
-            {
-                request.ExternalId,
-                request.ApiKeyId,
-                request.Status,
-                request.CreatedAt,
-            })
+        {
+            request.ExternalId,
+            request.ApiKeyId,
+            request.Status,
+            request.CreatedAt,
+        })
             .HasDatabaseName("requests_by_external_id_api_key_id_status_created_at");
         builder.HasIndex(request => request.CreatedAt)
             .HasDatabaseName("requests_by_created_at");

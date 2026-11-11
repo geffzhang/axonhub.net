@@ -359,18 +359,18 @@ public sealed class BackupStoreTests(PostgresFixture fixture)
         long? channelId,
         long? apiKeyId,
         string modelId) => new()
-    {
-        CreatedAt = CreatedAt,
-        UpdatedAt = UpdatedAt,
-        ProjectId = projectId,
-        ChannelId = channelId,
-        ApiKeyId = apiKeyId,
-        Source = "api",
-        ModelId = modelId,
-        Format = "openai/chat_completions",
-        Status = "completed",
-        ClientIp = "127.0.0.1",
-    };
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            ProjectId = projectId,
+            ChannelId = channelId,
+            ApiKeyId = apiKeyId,
+            Source = "api",
+            ModelId = modelId,
+            Format = "openai/chat_completions",
+            Status = "completed",
+            ClientIp = "127.0.0.1",
+        };
 
     private static UsageLogRecord NewLog(long projectId, long? channelId) => new()
     {

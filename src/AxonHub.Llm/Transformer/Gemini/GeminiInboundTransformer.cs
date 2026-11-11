@@ -156,8 +156,8 @@ public sealed class GeminiInboundTransformer : IInboundTransformer
 
         // Handle validation errors
         if (GoErrors.As<TransformerException>(error) is
-            { Kind: TransformerErrorKind.InvalidRequest } or
-            { Kind: TransformerErrorKind.InvalidModel })
+        { Kind: TransformerErrorKind.InvalidRequest } or
+        { Kind: TransformerErrorKind.InvalidModel })
         {
             return GeminiErrorResponse(400, error.Message, MapHttpStatusToGeminiStatus(400));
         }

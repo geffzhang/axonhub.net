@@ -269,87 +269,87 @@ public static class ApiKeyQuotaWindows
                 return new QuotaWindow(null, nowUtc, EndInclusive: true);
 
             case "past_duration":
-            {
-                var past = period.PastDuration
-                    ?? throw new InvalidOperationException("pastDuration is required");
-
-                if (past.Value <= 0)
                 {
-                    throw new InvalidOperationException("pastDuration.value must be positive");
-                }
+                    var past = period.PastDuration
+                        ?? throw new InvalidOperationException("pastDuration is required");
 
-                // Go computes the duration in int64 nanoseconds and wraps on
-                // overflow; mirror that so an extreme value cannot crash the
-                // process where Go silently produces a far-off window.
-                long nanoseconds;
-                switch (past.Unit)
-                {
-                    case "minute":
-                        nanoseconds = unchecked(past.Value * 60_000_000_000L);
-                        break;
-                    case "hour":
-                        nanoseconds = unchecked(past.Value * 3_600_000_000_000L);
-                        break;
-                    case "day":
-                        nanoseconds = unchecked(past.Value * 24L * 3_600_000_000_000L);
-                        break;
-                    default:
-                        throw new InvalidOperationException(
-                            "unknown pastDuration.unit: " + past.Unit);
-                }
+                    if (past.Value <= 0)
+                    {
+                        throw new InvalidOperationException("pastDuration.value must be positive");
+                    }
 
-                var start = nowUtc.AddTicks(-(nanoseconds / 100));
-                return new QuotaWindow(start, nowUtc, EndInclusive: true);
-            }
+                    // Go computes the duration in int64 nanoseconds and wraps on
+                    // overflow; mirror that so an extreme value cannot crash the
+                    // process where Go silently produces a far-off window.
+                    long nanoseconds;
+                    switch (past.Unit)
+                    {
+                        case "minute":
+                            nanoseconds = unchecked(past.Value * 60_000_000_000L);
+                            break;
+                        case "hour":
+                            nanoseconds = unchecked(past.Value * 3_600_000_000_000L);
+                            break;
+                        case "day":
+                            nanoseconds = unchecked(past.Value * 24L * 3_600_000_000_000L);
+                            break;
+                        default:
+                            throw new InvalidOperationException(
+                                "unknown pastDuration.unit: " + past.Unit);
+                    }
+
+                    var start = nowUtc.AddTicks(-(nanoseconds / 100));
+                    return new QuotaWindow(start, nowUtc, EndInclusive: true);
+                }
 
             case "calendar_duration":
-            {
-                var calendar = period.CalendarDuration
-                    ?? throw new InvalidOperationException("calendarDuration is required");
-
-                var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, location);
-
-                switch (calendar.Unit)
                 {
-                    case "day":
-                    {
-                        var startLocal = new DateTime(
-                            localNow.Year,
-                            localNow.Month,
-                            localNow.Day,
-                            0,
-                            0,
-                            0,
-                            DateTimeKind.Unspecified);
-                        var endLocal = startLocal.AddDays(1);
-                        return new QuotaWindow(
-                            LocalToUtc(startLocal, location),
-                            LocalToUtc(endLocal, location),
-                            EndInclusive: false);
-                    }
+                    var calendar = period.CalendarDuration
+                        ?? throw new InvalidOperationException("calendarDuration is required");
 
-                    case "month":
-                    {
-                        var startLocal = new DateTime(
-                            localNow.Year,
-                            localNow.Month,
-                            1,
-                            0,
-                            0,
-                            0,
-                            DateTimeKind.Unspecified);
-                        var endLocal = startLocal.AddMonths(1);
-                        return new QuotaWindow(
-                            LocalToUtc(startLocal, location),
-                            LocalToUtc(endLocal, location),
-                            EndInclusive: false);
-                    }
+                    var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, location);
 
-                    default:
-                        throw new InvalidOperationException(
-                            "unknown calendarDuration.unit: " + calendar.Unit);
+                    switch (calendar.Unit)
+                    {
+                        case "day":
+                            {
+                                var startLocal = new DateTime(
+                                    localNow.Year,
+                                    localNow.Month,
+                                    localNow.Day,
+                                    0,
+                                    0,
+                                    0,
+                                    DateTimeKind.Unspecified);
+                                var endLocal = startLocal.AddDays(1);
+                                return new QuotaWindow(
+                                    LocalToUtc(startLocal, location),
+                                    LocalToUtc(endLocal, location),
+                                    EndInclusive: false);
+                            }
+
+                        case "month":
+                            {
+                                var startLocal = new DateTime(
+                                    localNow.Year,
+                                    localNow.Month,
+                                    1,
+                                    0,
+                                    0,
+                                    0,
+                                    DateTimeKind.Unspecified);
+                                var endLocal = startLocal.AddMonths(1);
+                                return new QuotaWindow(
+                                    LocalToUtc(startLocal, location),
+                                    LocalToUtc(endLocal, location),
+                                    EndInclusive: false);
+                            }
+
+                        default:
+                            throw new InvalidOperationException(
+                                "unknown calendarDuration.unit: " + calendar.Unit);
+                    }
                 }
-            }
 
             default:
                 throw new InvalidOperationException("unknown period.type: " + period.Type);

@@ -141,9 +141,9 @@ public static class RetryPolicyCodec
             TraceStickyMode = stickyMode,
             AutoDisableChannel = (policy.AutoDisableChannel ?? new AutoDisableChannel(false, []))
                 with
-                {
-                    Rules = policy.AutoDisableChannel?.Rules ?? [],
-                },
+            {
+                Rules = policy.AutoDisableChannel?.Rules ?? [],
+            },
             UpstreamErrorPolicy = new UpstreamErrorPolicy(mode, message),
         };
     }

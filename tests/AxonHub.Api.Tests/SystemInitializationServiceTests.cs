@@ -53,14 +53,14 @@ public sealed class SystemInitializationServiceTests
     private static InitializeSystemParameters Parameters(
         string preferLanguage = "",
         string password = "secret1") => new()
-    {
-        OwnerEmail = "owner@example.com",
-        OwnerPassword = password,
-        OwnerFirstName = "First",
-        OwnerLastName = "Last",
-        BrandName = "AxonHub",
-        PreferLanguage = preferLanguage,
-    };
+        {
+            OwnerEmail = "owner@example.com",
+            OwnerPassword = password,
+            OwnerFirstName = "First",
+            OwnerLastName = "Last",
+            BrandName = "AxonHub",
+            PreferLanguage = preferLanguage,
+        };
 
     [Fact]
     public async Task InitializeCreatesTheFirstRunState()

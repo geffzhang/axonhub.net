@@ -212,36 +212,36 @@ public sealed class ChannelOverrideTests
         switch (expected.ValueKind)
         {
             case JsonValueKind.Object:
-            {
-                var expectedMembers = expected.EnumerateObject()
-                    .ToDictionary(static member => member.Name, static member => member.Value, StringComparer.Ordinal);
-                var actualMembers = actual.EnumerateObject()
-                    .ToDictionary(static member => member.Name, static member => member.Value, StringComparer.Ordinal);
-
-                Assert.Equal(
-                    expectedMembers.Keys.Order(StringComparer.Ordinal),
-                    actualMembers.Keys.Order(StringComparer.Ordinal));
-
-                foreach (var (name, value) in expectedMembers)
                 {
-                    AssertElementEqual(value, actualMembers[name]);
-                }
+                    var expectedMembers = expected.EnumerateObject()
+                        .ToDictionary(static member => member.Name, static member => member.Value, StringComparer.Ordinal);
+                    var actualMembers = actual.EnumerateObject()
+                        .ToDictionary(static member => member.Name, static member => member.Value, StringComparer.Ordinal);
 
-                return;
-            }
+                    Assert.Equal(
+                        expectedMembers.Keys.Order(StringComparer.Ordinal),
+                        actualMembers.Keys.Order(StringComparer.Ordinal));
+
+                    foreach (var (name, value) in expectedMembers)
+                    {
+                        AssertElementEqual(value, actualMembers[name]);
+                    }
+
+                    return;
+                }
 
             case JsonValueKind.Array:
-            {
-                var expectedItems = expected.EnumerateArray().ToArray();
-                var actualItems = actual.EnumerateArray().ToArray();
-                Assert.Equal(expectedItems.Length, actualItems.Length);
-                for (var index = 0; index < expectedItems.Length; index++)
                 {
-                    AssertElementEqual(expectedItems[index], actualItems[index]);
-                }
+                    var expectedItems = expected.EnumerateArray().ToArray();
+                    var actualItems = actual.EnumerateArray().ToArray();
+                    Assert.Equal(expectedItems.Length, actualItems.Length);
+                    for (var index = 0; index < expectedItems.Length; index++)
+                    {
+                        AssertElementEqual(expectedItems[index], actualItems[index]);
+                    }
 
-                return;
-            }
+                    return;
+                }
 
             case JsonValueKind.Number:
                 Assert.Equal(expected.GetDouble(), actual.GetDouble());

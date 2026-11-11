@@ -298,10 +298,10 @@ public static class ProjectMapping
         List<CursorValue> cursors,
         bool hasNextPage,
         bool hasPreviousPage) => new()
-    {
-        HasNextPage = hasNextPage,
-        HasPreviousPage = hasPreviousPage,
-        StartCursor = cursors.Count > 0 ? cursors[0] : null,
-        EndCursor = cursors.Count > 0 ? cursors[^1] : null,
-    };
+        {
+            HasNextPage = hasNextPage,
+            HasPreviousPage = hasPreviousPage,
+            StartCursor = cursors.Count > 0 ? cursors[0] : null,
+            EndCursor = cursors.Count > 0 ? cursors[^1] : null,
+        };
 }

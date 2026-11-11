@@ -142,21 +142,21 @@ internal static class ChannelOverrideApplier
                     break;
 
                 case ChannelOverrideOps.Rename:
-                {
-                    var values = HeaderValues(headers, from);
-                    if (values.Count == 0)
                     {
-                        continue;
-                    }
+                        var values = HeaderValues(headers, from);
+                        if (values.Count == 0)
+                        {
+                            continue;
+                        }
 
-                    HttpClientUtils.HeaderDel(headers, from);
-                    foreach (var headerValue in values)
-                    {
-                        HttpClientUtils.HeaderAdd(headers, to, headerValue);
-                    }
+                        HttpClientUtils.HeaderDel(headers, from);
+                        foreach (var headerValue in values)
+                        {
+                            HttpClientUtils.HeaderAdd(headers, to, headerValue);
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case ChannelOverrideOps.Copy:
                     foreach (var headerValue in HeaderValues(headers, from))
@@ -548,38 +548,38 @@ internal static class ChannelOverrideApplier
         switch (operation.Op)
         {
             case ChannelOverrideOps.Set:
-            {
-                var renderedValue = GoTextTemplate.Render(operation.Value, context);
-                if (string.Equals(renderedValue, ChannelOverrideOps.ClearDirective, StringComparison.Ordinal))
                 {
-                    HttpClientUtils.HeaderDel(headers, operation.Path);
+                    var renderedValue = GoTextTemplate.Render(operation.Value, context);
+                    if (string.Equals(renderedValue, ChannelOverrideOps.ClearDirective, StringComparison.Ordinal))
+                    {
+                        HttpClientUtils.HeaderDel(headers, operation.Path);
+                        return;
+                    }
+
+                    HttpClientUtils.HeaderSet(headers, operation.Path, renderedValue);
                     return;
                 }
-
-                HttpClientUtils.HeaderSet(headers, operation.Path, renderedValue);
-                return;
-            }
 
             case ChannelOverrideOps.Delete:
                 HttpClientUtils.HeaderDel(headers, operation.Path);
                 return;
 
             case ChannelOverrideOps.Rename:
-            {
-                var values = HeaderValues(headers, operation.From);
-                if (values.Count == 0)
                 {
+                    var values = HeaderValues(headers, operation.From);
+                    if (values.Count == 0)
+                    {
+                        return;
+                    }
+
+                    HttpClientUtils.HeaderDel(headers, operation.From);
+                    foreach (var value in values)
+                    {
+                        HttpClientUtils.HeaderAdd(headers, operation.To, value);
+                    }
+
                     return;
                 }
-
-                HttpClientUtils.HeaderDel(headers, operation.From);
-                foreach (var value in values)
-                {
-                    HttpClientUtils.HeaderAdd(headers, operation.To, value);
-                }
-
-                return;
-            }
 
             case ChannelOverrideOps.Copy:
                 foreach (var value in HeaderValues(headers, operation.From))

@@ -382,16 +382,16 @@ public sealed class InvitationStoreTests(PostgresFixture fixture)
         long? roleId,
         DateTime? expiresAt = null,
         long maxUses = 1) => new()
-    {
-        CreatedAt = CreatedAt,
-        UpdatedAt = UpdatedAt,
-        TokenHash = "hash-" + Guid.NewGuid().ToString("N"),
-        ProjectId = projectId,
-        RoleId = roleId,
-        ExpiresAt = expiresAt,
-        MaxUses = maxUses,
-        UsedCount = 0,
-    };
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            TokenHash = "hash-" + Guid.NewGuid().ToString("N"),
+            ProjectId = projectId,
+            RoleId = roleId,
+            ExpiresAt = expiresAt,
+            MaxUses = maxUses,
+            UsedCount = 0,
+        };
 
     private static Task<long> SeedProjectAsync(AxonHubDbContext context, string name)
         => new ProjectStore(context).CreateAsync(new ProjectRecord

@@ -155,51 +155,51 @@ public static class ResponsesOutboundConvert
                     break;
 
                 case "assistant":
-                {
-                    var assistantItems = ConvertAssistantMessage(msg);
-                    foreach (var item in assistantItems)
                     {
-                        AddItem(item);
-                    }
-
-                    // Record tool call types for later tool result encoding.
-                    foreach (var item in assistantItems)
-                    {
-                        switch (item.Type)
+                        var assistantItems = ConvertAssistantMessage(msg);
+                        foreach (var item in assistantItems)
                         {
-                            case "function_call":
-                                if (!string.IsNullOrEmpty(item.CallId))
-                                {
-                                    toolResultItemTypeByCallId[item.CallId] = "function_call_output";
-                                }
-
-                                break;
-                            case "custom_tool_call":
-                                if (!string.IsNullOrEmpty(item.CallId))
-                                {
-                                    toolResultItemTypeByCallId[item.CallId] = "custom_tool_call_output";
-                                }
-
-                                break;
+                            AddItem(item);
                         }
-                    }
 
-                    break;
-                }
+                        // Record tool call types for later tool result encoding.
+                        foreach (var item in assistantItems)
+                        {
+                            switch (item.Type)
+                            {
+                                case "function_call":
+                                    if (!string.IsNullOrEmpty(item.CallId))
+                                    {
+                                        toolResultItemTypeByCallId[item.CallId] = "function_call_output";
+                                    }
+
+                                    break;
+                                case "custom_tool_call":
+                                    if (!string.IsNullOrEmpty(item.CallId))
+                                    {
+                                        toolResultItemTypeByCallId[item.CallId] = "custom_tool_call_output";
+                                    }
+
+                                    break;
+                            }
+                        }
+
+                        break;
+                    }
 
                 case "tool":
-                {
-                    var itemType = "function_call_output";
-
-                    if (msg.ToolCallId is { } toolCallId
-                        && toolResultItemTypeByCallId.TryGetValue(toolCallId, out var mapped))
                     {
-                        itemType = mapped;
-                    }
+                        var itemType = "function_call_output";
 
-                    AddItem(ConvertToolMessageWithType(msg, itemType));
-                    break;
-                }
+                        if (msg.ToolCallId is { } toolCallId
+                            && toolResultItemTypeByCallId.TryGetValue(toolCallId, out var mapped))
+                        {
+                            itemType = mapped;
+                        }
+
+                        AddItem(ConvertToolMessageWithType(msg, itemType));
+                        break;
+                    }
             }
         }
 
@@ -1036,74 +1036,74 @@ public static class ResponsesOutboundConvert
                     break;
 
                 case "reasoning":
-                {
-                    var itemReasoning = new StringBuilder();
-                    if (outputItem.Summary is { } summary)
                     {
-                        foreach (var entry in summary)
+                        var itemReasoning = new StringBuilder();
+                        if (outputItem.Summary is { } summary)
                         {
-                            reasoningContent.Append(entry.Text);
-                            itemReasoning.Append(entry.Text);
+                            foreach (var entry in summary)
+                            {
+                                reasoningContent.Append(entry.Text);
+                                itemReasoning.Append(entry.Text);
+                            }
                         }
-                    }
 
-                    var itemSignature = string.Empty;
-                    if (!string.IsNullOrEmpty(outputItem.EncryptedContent))
-                    {
-                        reasoningSignature = OpenAiSignatures.EncodeOpenAIEncryptedContent(
-                            outputItem.EncryptedContent);
-                        itemSignature = reasoningSignature ?? string.Empty;
-                    }
-
-                    if (itemReasoning.Length > 0 || itemSignature.Length > 0)
-                    {
-                        reasoningItems ??= [];
-                        reasoningItems.Add(new ReasoningItem
+                        var itemSignature = string.Empty;
+                        if (!string.IsNullOrEmpty(outputItem.EncryptedContent))
                         {
-                            Id = ResponsesConvertUtil.NullIfEmpty(outputItem.Id),
-                            Content = ResponsesConvertUtil.NullIfEmpty(itemReasoning.ToString()),
-                            Signature = ResponsesConvertUtil.NullIfEmpty(itemSignature),
-                        });
-                    }
+                            reasoningSignature = OpenAiSignatures.EncodeOpenAIEncryptedContent(
+                                outputItem.EncryptedContent);
+                            itemSignature = reasoningSignature ?? string.Empty;
+                        }
 
-                    break;
-                }
+                        if (itemReasoning.Length > 0 || itemSignature.Length > 0)
+                        {
+                            reasoningItems ??= [];
+                            reasoningItems.Add(new ReasoningItem
+                            {
+                                Id = ResponsesConvertUtil.NullIfEmpty(outputItem.Id),
+                                Content = ResponsesConvertUtil.NullIfEmpty(itemReasoning.ToString()),
+                                Signature = ResponsesConvertUtil.NullIfEmpty(itemSignature),
+                            });
+                        }
+
+                        break;
+                    }
 
                 case "image_generation_call":
-                {
-                    FlushText();
-
-                    var imageOutputFormat = "png";
-
-                    if (ResponsesMetadata.GetStringPtr(transformerMetadata, "image_output_format")
-                        is { Length: > 0 } configuredFormat)
                     {
-                        imageOutputFormat = configuredFormat;
-                    }
+                        FlushText();
 
-                    if (!string.IsNullOrEmpty(outputItem.Result))
-                    {
-                        contentParts ??= [];
-                        contentParts.Add(new MessageContentPart
+                        var imageOutputFormat = "png";
+
+                        if (ResponsesMetadata.GetStringPtr(transformerMetadata, "image_output_format")
+                            is { Length: > 0 } configuredFormat)
                         {
-                            Type = "image_url",
-                            ImageUrl = new ImageUrl
-                            {
-                                Url = "data:image/" + imageOutputFormat + ";base64," + outputItem.Result,
-                            },
-                            TransformerMetadata = new Dictionary<string, JsonElement>(
-                                StringComparer.Ordinal)
-                            {
-                                ["background"] = ResponsesConvertUtil.ToElement(outputItem.Background),
-                                ["output_format"] = ResponsesConvertUtil.ToElement(outputItem.OutputFormat),
-                                ["quality"] = ResponsesConvertUtil.ToElement(outputItem.Quality),
-                                ["size"] = ResponsesConvertUtil.ToElement(outputItem.Size),
-                            },
-                        });
-                    }
+                            imageOutputFormat = configuredFormat;
+                        }
 
-                    break;
-                }
+                        if (!string.IsNullOrEmpty(outputItem.Result))
+                        {
+                            contentParts ??= [];
+                            contentParts.Add(new MessageContentPart
+                            {
+                                Type = "image_url",
+                                ImageUrl = new ImageUrl
+                                {
+                                    Url = "data:image/" + imageOutputFormat + ";base64," + outputItem.Result,
+                                },
+                                TransformerMetadata = new Dictionary<string, JsonElement>(
+                                    StringComparer.Ordinal)
+                                {
+                                    ["background"] = ResponsesConvertUtil.ToElement(outputItem.Background),
+                                    ["output_format"] = ResponsesConvertUtil.ToElement(outputItem.OutputFormat),
+                                    ["quality"] = ResponsesConvertUtil.ToElement(outputItem.Quality),
+                                    ["size"] = ResponsesConvertUtil.ToElement(outputItem.Size),
+                                },
+                            });
+                        }
+
+                        break;
+                    }
 
                 case "web_search_call":
                     AppendResponseWebSearchCallMetadata(transformerMetadata, outputItem);
@@ -1111,40 +1111,40 @@ public static class ResponsesOutboundConvert
 
                 case "compaction":
                 case "compaction_summary":
-                {
-                    FlushText();
-
-                    contentParts ??= [];
-                    contentParts.Add(new MessageContentPart
                     {
-                        Type = outputItem.Type,
-                        Compact = new CompactContent
-                        {
-                            Id = ResponsesConvertUtil.NullIfEmpty(outputItem.Id),
-                            EncryptedContent = ResponsesConvertUtil.NullIfEmpty(
-                                outputItem.EncryptedContent),
-                            CreatedBy = outputItem.CreatedBy,
-                        },
-                    });
-                    break;
-                }
+                        FlushText();
 
-                case "input_image":
-                {
-                    FlushText();
-
-                    if (!string.IsNullOrEmpty(outputItem.ImageUrl))
-                    {
                         contentParts ??= [];
                         contentParts.Add(new MessageContentPart
                         {
-                            Type = "image_url",
-                            ImageUrl = new ImageUrl { Url = outputItem.ImageUrl },
+                            Type = outputItem.Type,
+                            Compact = new CompactContent
+                            {
+                                Id = ResponsesConvertUtil.NullIfEmpty(outputItem.Id),
+                                EncryptedContent = ResponsesConvertUtil.NullIfEmpty(
+                                    outputItem.EncryptedContent),
+                                CreatedBy = outputItem.CreatedBy,
+                            },
                         });
+                        break;
                     }
 
-                    break;
-                }
+                case "input_image":
+                    {
+                        FlushText();
+
+                        if (!string.IsNullOrEmpty(outputItem.ImageUrl))
+                        {
+                            contentParts ??= [];
+                            contentParts.Add(new MessageContentPart
+                            {
+                                Type = "image_url",
+                                ImageUrl = new ImageUrl { Url = outputItem.ImageUrl },
+                            });
+                        }
+
+                        break;
+                    }
             }
         }
 

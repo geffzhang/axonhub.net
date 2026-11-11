@@ -625,20 +625,20 @@ public sealed class CommandCodeQuotaChecker : IQuotaChecker
             case double number:
                 return ResetFromEpoch(number);
             case string text:
-            {
-                var trimmed = GoStrings.TrimSpace(text);
-                if (trimmed.Length == 0)
                 {
-                    return null;
-                }
+                    var trimmed = GoStrings.TrimSpace(text);
+                    if (trimmed.Length == 0)
+                    {
+                        return null;
+                    }
 
-                if (GoCast.TryParseFloat(trimmed, out var epoch))
-                {
-                    return ResetFromEpoch(epoch);
-                }
+                    if (GoCast.TryParseFloat(trimmed, out var epoch))
+                    {
+                        return ResetFromEpoch(epoch);
+                    }
 
-                return GoTimeParsing.TryParseRfc3339(trimmed);
-            }
+                    return GoTimeParsing.TryParseRfc3339(trimmed);
+                }
             default:
                 return null;
         }

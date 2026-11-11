@@ -608,91 +608,91 @@ public sealed class CopilotOutboundTransformer : IOutboundTransformer
         switch (eventType)
         {
             case "response.output_item.added":
-            {
-                var callId = GJsonString(TryGetPath(root, "item.call_id"));
-                if (callId.Length == 0)
                 {
-                    return data;
+                    var callId = GJsonString(TryGetPath(root, "item.call_id"));
+                    if (callId.Length == 0)
+                    {
+                        return data;
+                    }
+
+                    // Capture the original item id before overriding it, then track
+                    // both identifiers so later deltas can be remapped.
+                    var originalId = GJsonString(TryGetPath(root, "item.id"));
+                    state.ItemIdToCallId[callId] = callId;
+                    if (originalId.Length > 0 && originalId != callId)
+                    {
+                        state.ItemIdToCallId[originalId] = callId;
+                    }
+
+                    state.MostRecentCallId = callId;
+
+                    // The aggregator creates items by item.id; forcing it to the
+                    // call id makes the second Copilot item merge into the first.
+                    var eventObject = ToGoObject(root);
+                    if (!TryGetItem(eventObject, out var item))
+                    {
+                        return data;
+                    }
+
+                    item["id"] = callId;
+                    if (!(item.TryGetValue("name", out var nameValue)
+                        && nameValue is string name
+                        && name.Length > 0))
+                    {
+                        item["name"] = "function";
+                    }
+
+                    return TryMarshalEvent(eventObject, data);
                 }
-
-                // Capture the original item id before overriding it, then track
-                // both identifiers so later deltas can be remapped.
-                var originalId = GJsonString(TryGetPath(root, "item.id"));
-                state.ItemIdToCallId[callId] = callId;
-                if (originalId.Length > 0 && originalId != callId)
-                {
-                    state.ItemIdToCallId[originalId] = callId;
-                }
-
-                state.MostRecentCallId = callId;
-
-                // The aggregator creates items by item.id; forcing it to the
-                // call id makes the second Copilot item merge into the first.
-                var eventObject = ToGoObject(root);
-                if (!TryGetItem(eventObject, out var item))
-                {
-                    return data;
-                }
-
-                item["id"] = callId;
-                if (!(item.TryGetValue("name", out var nameValue)
-                    && nameValue is string name
-                    && name.Length > 0))
-                {
-                    item["name"] = "function";
-                }
-
-                return TryMarshalEvent(eventObject, data);
-            }
 
             case "response.function_call_arguments.delta":
             case "response.function_call_arguments.done":
-            {
-                // Copilot uses random hashes for item_id; override it with the
-                // call id captured above, falling back to the most recent one.
-                var itemId = GJsonString(TryGetPath(root, "item_id"));
-                var callId = itemId.Length > 0
-                    ? state.ItemIdToCallId.GetValueOrDefault(itemId) ?? string.Empty
-                    : string.Empty;
-                if (callId.Length == 0)
                 {
-                    callId = state.MostRecentCallId ?? string.Empty;
+                    // Copilot uses random hashes for item_id; override it with the
+                    // call id captured above, falling back to the most recent one.
+                    var itemId = GJsonString(TryGetPath(root, "item_id"));
+                    var callId = itemId.Length > 0
+                        ? state.ItemIdToCallId.GetValueOrDefault(itemId) ?? string.Empty
+                        : string.Empty;
+                    if (callId.Length == 0)
+                    {
+                        callId = state.MostRecentCallId ?? string.Empty;
+                    }
+
+                    if (callId.Length == 0)
+                    {
+                        return data;
+                    }
+
+                    var eventObject = ToGoObject(root);
+                    eventObject["item_id"] = callId;
+
+                    if (eventType == "response.function_call_arguments.done")
+                    {
+                        eventObject["call_id"] = callId;
+                    }
+
+                    return TryMarshalEvent(eventObject, data);
                 }
-
-                if (callId.Length == 0)
-                {
-                    return data;
-                }
-
-                var eventObject = ToGoObject(root);
-                eventObject["item_id"] = callId;
-
-                if (eventType == "response.function_call_arguments.done")
-                {
-                    eventObject["call_id"] = callId;
-                }
-
-                return TryMarshalEvent(eventObject, data);
-            }
 
             case "response.output_item.done":
-            {
-                // A random hash in item.id would update the wrong item.
-                var callId = GJsonString(TryGetPath(root, "item.call_id"));
-                if (callId.Length == 0)
                 {
-                    return data;
-                }
+                    // A random hash in item.id would update the wrong item.
+                    var callId = GJsonString(TryGetPath(root, "item.call_id"));
+                    if (callId.Length == 0)
+                    {
+                        return data;
+                    }
 
-                var eventObject = ToGoObject(root);
-                if (!TryGetItem(eventObject, out var item))
-                {
-                    return data;
-                }
+                    var eventObject = ToGoObject(root);
+                    if (!TryGetItem(eventObject, out var item))
+                    {
+                        return data;
+                    }
 
-                item["id"] = callId;
-                return TryMarshalEvent(eventObject, data);
-            }
+                    item["id"] = callId;
+                    return TryMarshalEvent(eventObject, data);
+                }
 
             default:
                 return data;

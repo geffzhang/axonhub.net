@@ -659,19 +659,19 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
         string overrideHeaders = "[]",
         string overrideParameters = "{}",
         string? description = null) => new()
-    {
-        Id = id,
-        CreatedAt = CreatedAt,
-        UpdatedAt = updatedAt ?? CreatedAt,
-        DeletedAt = 0,
-        Name = name,
-        Description = description,
-        OverrideParameters = overrideParameters,
-        OverrideHeaders = overrideHeaders,
-        HeaderOverrideOperations = headerOverrideOperations,
-        BodyOverrideOperations = bodyOverrideOperations,
-        UserId = 9,
-    };
+        {
+            Id = id,
+            CreatedAt = CreatedAt,
+            UpdatedAt = updatedAt ?? CreatedAt,
+            DeletedAt = 0,
+            Name = name,
+            Description = description,
+            OverrideParameters = overrideParameters,
+            OverrideHeaders = overrideHeaders,
+            HeaderOverrideOperations = headerOverrideOperations,
+            BodyOverrideOperations = bodyOverrideOperations,
+            UserId = 9,
+        };
 
     private static ChannelRecord Channel(long id, string name, string settings) => new()
     {

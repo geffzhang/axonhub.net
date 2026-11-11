@@ -421,12 +421,12 @@ public sealed class AdminCodexCompatibilityEndpointTests : IAsyncLifetime
         string name,
         string type,
         string status) => new()
-    {
-        Id = id,
-        Name = name,
-        Type = type,
-        Status = status,
-    };
+        {
+            Id = id,
+            Name = name,
+            Type = type,
+            Status = status,
+        };
 
     private async Task<JsonElement> QueryAsync(string query)
     {

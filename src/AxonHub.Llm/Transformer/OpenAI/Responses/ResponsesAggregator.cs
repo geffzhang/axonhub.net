@@ -182,108 +182,108 @@ internal sealed class ResponsesStreamAggregator
                 break;
 
             case ResponsesStreamEventTypes.OutputItemAdded:
-            {
-                ResponsesAggregatedItem? item = null;
-                if (ev.Item is { Id.Length: > 0 } added && _outputItemsById.TryGetValue(added.Id, out var existing))
                 {
-                    item = existing;
-                }
-
-                if (item is null)
-                {
-                    item = new ResponsesAggregatedItem { Status = "in_progress" };
-                    GetOrCreateOutputList(ev.OutputIndex).Add(item);
-                }
-
-                if (ev.Item is { } itemData)
-                {
-                    item.Id = itemData.Id;
-                    item.Type = itemData.Type;
-                    item.Role = itemData.Role;
-                    item.CallId = itemData.CallId;
-                    item.Name = itemData.Name;
-                    item.Namespace = itemData.Namespace;
-                    item.Arguments.Append(itemData.Arguments);
-                    item.EncryptedContent = itemData.EncryptedContent;
-                    item.Input = itemData.Input;
-
-                    if (itemData.Summary is { Count: > 0 } summary)
+                    ResponsesAggregatedItem? item = null;
+                    if (ev.Item is { Id.Length: > 0 } added && _outputItemsById.TryGetValue(added.Id, out var existing))
                     {
-                        for (var idx = 0; idx < summary.Count; idx++)
+                        item = existing;
+                    }
+
+                    if (item is null)
+                    {
+                        item = new ResponsesAggregatedItem { Status = "in_progress" };
+                        GetOrCreateOutputList(ev.OutputIndex).Add(item);
+                    }
+
+                    if (ev.Item is { } itemData)
+                    {
+                        item.Id = itemData.Id;
+                        item.Type = itemData.Type;
+                        item.Role = itemData.Role;
+                        item.CallId = itemData.CallId;
+                        item.Name = itemData.Name;
+                        item.Namespace = itemData.Namespace;
+                        item.Arguments.Append(itemData.Arguments);
+                        item.EncryptedContent = itemData.EncryptedContent;
+                        item.Input = itemData.Input;
+
+                        if (itemData.Summary is { Count: > 0 } summary)
                         {
-                            var s = summary[idx];
-                            var part = EnsureSummaryPart(item, idx)!;
-                            part.Type = s.Type;
-                            ApplyDoneText(part.Text, s.Text);
-                            part.Final = true;
+                            for (var idx = 0; idx < summary.Count; idx++)
+                            {
+                                var s = summary[idx];
+                                var part = EnsureSummaryPart(item, idx)!;
+                                part.Type = s.Type;
+                                ApplyDoneText(part.Text, s.Text);
+                                part.Final = true;
+                            }
                         }
                     }
-                }
 
-                if (item.Id.Length > 0)
-                {
-                    _outputItemsById[item.Id] = item;
-                }
+                    if (item.Id.Length > 0)
+                    {
+                        _outputItemsById[item.Id] = item;
+                    }
 
-                break;
-            }
+                    break;
+                }
 
             case ResponsesStreamEventTypes.ContentPartAdded:
-            {
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId);
-                if (item is not null)
                 {
-                    var contentPart = new ResponsesAggregatedContentPart();
-
-                    if (ev.Part is { } part)
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId);
+                    if (item is not null)
                     {
-                        contentPart.Type = part.Type;
-                        if (part.Text.Length > 0)
+                        var contentPart = new ResponsesAggregatedContentPart();
+
+                        if (ev.Part is { } part)
                         {
-                            contentPart.Text.Append(part.Text);
+                            contentPart.Type = part.Type;
+                            if (part.Text.Length > 0)
+                            {
+                                contentPart.Text.Append(part.Text);
+                            }
+
+                            if (part.Annotations is { Count: > 0 })
+                            {
+                                contentPart.Annotations.AddRange(part.Annotations);
+                            }
                         }
 
-                        if (part.Annotations is { Count: > 0 })
-                        {
-                            contentPart.Annotations.AddRange(part.Annotations);
-                        }
+                        item.Content.Add(contentPart);
                     }
 
-                    item.Content.Add(contentPart);
+                    break;
                 }
-
-                break;
-            }
 
             case ResponsesStreamEventTypes.OutputTextDelta:
-            {
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId);
-                if (item is not null)
                 {
-                    // The reference indexes item.Content[-1] and panics; this
-                    // port treats a negative index as absent (difference C068).
-                    if (ev.ContentIndex is { } ci && ci >= 0 && ci < item.Content.Count)
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId);
+                    if (item is not null)
                     {
-                        item.Content[ci].Text.Append(ev.Delta);
+                        // The reference indexes item.Content[-1] and panics; this
+                        // port treats a negative index as absent (difference C068).
+                        if (ev.ContentIndex is { } ci && ci >= 0 && ci < item.Content.Count)
+                        {
+                            item.Content[ci].Text.Append(ev.Delta);
+                        }
                     }
-                }
 
-                break;
-            }
+                    break;
+                }
 
             case ResponsesStreamEventTypes.OutputTextDone:
-            {
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId);
-                if (item is not null)
                 {
-                    if (ev.ContentIndex is { } ci && ci >= 0 && ci < item.Content.Count && !string.IsNullOrEmpty(ev.Text))
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId);
+                    if (item is not null)
                     {
-                        ApplyDoneText(item.Content[ci].Text, ev.Text);
+                        if (ev.ContentIndex is { } ci && ci >= 0 && ci < item.Content.Count && !string.IsNullOrEmpty(ev.Text))
+                        {
+                            ApplyDoneText(item.Content[ci].Text, ev.Text);
+                        }
                     }
-                }
 
-                break;
-            }
+                    break;
+                }
 
             case ResponsesStreamEventTypes.FunctionCallArgumentsDelta:
                 if (ev.ItemId is not null)
@@ -348,197 +348,197 @@ internal sealed class ResponsesStreamAggregator
                 break;
 
             case ResponsesStreamEventTypes.ReasoningSummaryPartAdded:
-            {
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
-                    ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
-
-                var part = EnsureSummaryPart(item, ev.SummaryIndex ?? 0)!;
-
-                if (ev.Part is { } addedPart)
                 {
-                    if (!string.IsNullOrEmpty(addedPart.Type))
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
+                        ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
+
+                    var part = EnsureSummaryPart(item, ev.SummaryIndex ?? 0)!;
+
+                    if (ev.Part is { } addedPart)
                     {
-                        part.Type = addedPart.Type;
+                        if (!string.IsNullOrEmpty(addedPart.Type))
+                        {
+                            part.Type = addedPart.Type;
+                        }
+
+                        if (addedPart.Text.Length > 0)
+                        {
+                            part.Text.Append(addedPart.Text);
+                        }
                     }
 
-                    if (addedPart.Text.Length > 0)
-                    {
-                        part.Text.Append(addedPart.Text);
-                    }
+                    break;
                 }
-
-                break;
-            }
 
             case ResponsesStreamEventTypes.ReasoningSummaryPartDone:
-            {
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
-                    ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
-
-                var part = EnsureSummaryPart(item, ev.SummaryIndex ?? 0)!;
-
-                if (ev.Part is { } donePart)
                 {
-                    if (!string.IsNullOrEmpty(donePart.Type))
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
+                        ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
+
+                    var part = EnsureSummaryPart(item, ev.SummaryIndex ?? 0)!;
+
+                    if (ev.Part is { } donePart)
                     {
-                        part.Type = donePart.Type;
+                        if (!string.IsNullOrEmpty(donePart.Type))
+                        {
+                            part.Type = donePart.Type;
+                        }
+
+                        ApplyDoneText(part.Text, donePart.Text);
                     }
 
-                    ApplyDoneText(part.Text, donePart.Text);
+                    part.Final = true;
+                    break;
                 }
-
-                part.Final = true;
-                break;
-            }
 
             case ResponsesStreamEventTypes.ReasoningSummaryTextDelta:
-            {
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
-                    ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
+                {
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
+                        ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
 
-                var part = EnsureSummaryPart(item, ev.SummaryIndex ?? 0)!;
-                part.Text.Append(ev.Delta);
-                break;
-            }
+                    var part = EnsureSummaryPart(item, ev.SummaryIndex ?? 0)!;
+                    part.Text.Append(ev.Delta);
+                    break;
+                }
 
             case ResponsesStreamEventTypes.ReasoningSummaryTextDone:
-            {
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
-                    ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
+                {
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
+                        ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
 
-                var part = EnsureSummaryPart(item, ev.SummaryIndex ?? 0)!;
-                ApplyDoneText(part.Text, ev.Text);
-                part.Final = true;
-                break;
-            }
+                    var part = EnsureSummaryPart(item, ev.SummaryIndex ?? 0)!;
+                    ApplyDoneText(part.Text, ev.Text);
+                    part.Final = true;
+                    break;
+                }
 
             case ResponsesStreamEventTypes.ReasoningTextDelta:
-            {
-                var contentIndex = ev.ContentIndex ?? 0;
-                if (!ValidAggregatedContentIndex(contentIndex))
                 {
-                    return;
+                    var contentIndex = ev.ContentIndex ?? 0;
+                    if (!ValidAggregatedContentIndex(contentIndex))
+                    {
+                        return;
+                    }
+
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
+                        ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
+
+                    var part = EnsureContentPart(item, contentIndex);
+                    if (part is null)
+                    {
+                        return;
+                    }
+
+                    part.Type = "reasoning_text";
+                    part.Text.Append(ev.Delta);
+                    break;
                 }
-
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
-                    ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
-
-                var part = EnsureContentPart(item, contentIndex);
-                if (part is null)
-                {
-                    return;
-                }
-
-                part.Type = "reasoning_text";
-                part.Text.Append(ev.Delta);
-                break;
-            }
 
             case ResponsesStreamEventTypes.ReasoningTextDone:
-            {
-                var contentIndex = ev.ContentIndex ?? 0;
-                if (!ValidAggregatedContentIndex(contentIndex))
                 {
-                    return;
+                    var contentIndex = ev.ContentIndex ?? 0;
+                    if (!ValidAggregatedContentIndex(contentIndex))
+                    {
+                        return;
+                    }
+
+                    var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
+                        ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
+
+                    var part = EnsureContentPart(item, contentIndex);
+                    if (part is null)
+                    {
+                        return;
+                    }
+
+                    part.Type = "reasoning_text";
+                    ApplyDoneText(part.Text, ev.Text);
+                    break;
                 }
-
-                var item = GetItemForEvent(ev.OutputIndex, ev.ItemId)
-                    ?? CreateReasoningPlaceholder(ev.OutputIndex, ev.ItemId);
-
-                var part = EnsureContentPart(item, contentIndex);
-                if (part is null)
-                {
-                    return;
-                }
-
-                part.Type = "reasoning_text";
-                ApplyDoneText(part.Text, ev.Text);
-                break;
-            }
 
             case ResponsesStreamEventTypes.OutputItemDone:
-            {
-                // Mark the item as completed and update it with final data.
-                if (ev.Item is { } doneItem)
                 {
-                    var item = _outputItemsById.TryGetValue(doneItem.Id, out var byId)
-                        ? byId
-                        : LastItemByOutputIndex(ev.OutputIndex);
-
-                    if (item is not null)
+                    // Mark the item as completed and update it with final data.
+                    if (ev.Item is { } doneItem)
                     {
-                        if (doneItem.Status is { } status)
-                        {
-                            item.Status = status;
-                        }
+                        var item = _outputItemsById.TryGetValue(doneItem.Id, out var byId)
+                            ? byId
+                            : LastItemByOutputIndex(ev.OutputIndex);
 
-                        if (item.Status.Length == 0)
+                        if (item is not null)
                         {
-                            item.Status = "completed";
-                        }
-
-                        // Update with final data if provided.
-                        if (!string.IsNullOrEmpty(doneItem.Arguments))
-                        {
-                            item.Arguments.Clear();
-                            item.Arguments.Append(doneItem.Arguments);
-                        }
-
-                        if (doneItem.Content?.Items is { } contentItems)
-                        {
-                            for (var idx = 0; idx < contentItems.Count; idx++)
+                            if (doneItem.Status is { } status)
                             {
-                                var contentItem = contentItems[idx];
-                                var part = EnsureContentPart(item, idx);
-                                if (part is null)
-                                {
-                                    continue;
-                                }
+                                item.Status = status;
+                            }
 
-                                if (!string.IsNullOrEmpty(contentItem.Type))
-                                {
-                                    part.Type = contentItem.Type;
-                                }
+                            if (item.Status.Length == 0)
+                            {
+                                item.Status = "completed";
+                            }
 
-                                if (contentItem.Text is not null)
-                                {
-                                    ApplyDoneText(part.Text, contentItem.Text);
-                                }
+                            // Update with final data if provided.
+                            if (!string.IsNullOrEmpty(doneItem.Arguments))
+                            {
+                                item.Arguments.Clear();
+                                item.Arguments.Append(doneItem.Arguments);
+                            }
 
-                                if (contentItem.Annotations is not null)
+                            if (doneItem.Content?.Items is { } contentItems)
+                            {
+                                for (var idx = 0; idx < contentItems.Count; idx++)
                                 {
-                                    part.Annotations.Clear();
-                                    part.Annotations.AddRange(contentItem.Annotations);
+                                    var contentItem = contentItems[idx];
+                                    var part = EnsureContentPart(item, idx);
+                                    if (part is null)
+                                    {
+                                        continue;
+                                    }
+
+                                    if (!string.IsNullOrEmpty(contentItem.Type))
+                                    {
+                                        part.Type = contentItem.Type;
+                                    }
+
+                                    if (contentItem.Text is not null)
+                                    {
+                                        ApplyDoneText(part.Text, contentItem.Text);
+                                    }
+
+                                    if (contentItem.Annotations is not null)
+                                    {
+                                        part.Annotations.Clear();
+                                        part.Annotations.AddRange(contentItem.Annotations);
+                                    }
                                 }
                             }
-                        }
 
-                        if (doneItem.Summary is { Count: > 0 } summary)
-                        {
-                            for (var idx = 0; idx < summary.Count; idx++)
+                            if (doneItem.Summary is { Count: > 0 } summary)
                             {
-                                var s = summary[idx];
-                                var part = EnsureSummaryPart(item, idx)!;
-                                part.Type = s.Type;
-                                ApplyDoneText(part.Text, s.Text);
-                                part.Final = true;
+                                for (var idx = 0; idx < summary.Count; idx++)
+                                {
+                                    var s = summary[idx];
+                                    var part = EnsureSummaryPart(item, idx)!;
+                                    part.Type = s.Type;
+                                    ApplyDoneText(part.Text, s.Text);
+                                    part.Final = true;
+                                }
                             }
-                        }
 
-                        if (doneItem.EncryptedContent is not null)
-                        {
-                            item.EncryptedContent = doneItem.EncryptedContent;
-                        }
+                            if (doneItem.EncryptedContent is not null)
+                            {
+                                item.EncryptedContent = doneItem.EncryptedContent;
+                            }
 
-                        if (doneItem.Result is not null)
-                        {
-                            item.Result = doneItem.Result;
+                            if (doneItem.Result is not null)
+                            {
+                                item.Result = doneItem.Result;
+                            }
                         }
                     }
-                }
 
-                break;
-            }
+                    break;
+                }
 
             case ResponsesStreamEventTypes.ResponseCompleted:
                 ApplyResponseSnapshot(ev.Response);
@@ -661,28 +661,28 @@ internal sealed class ResponsesStreamAggregator
                 switch (item.Type)
                 {
                     case "message":
-                    {
-                        var contentItems = new List<ResponsesItem>(item.Content.Count);
-                        foreach (var cp in item.Content)
                         {
-                            contentItems.Add(new ResponsesItem
+                            var contentItems = new List<ResponsesItem>(item.Content.Count);
+                            foreach (var cp in item.Content)
                             {
-                                Type = cp.Type,
-                                Text = cp.Text.ToString(),
-                                Annotations = cp.Annotations.Count > 0 ? [.. cp.Annotations] : null,
-                            });
-                        }
+                                contentItems.Add(new ResponsesItem
+                                {
+                                    Type = cp.Type,
+                                    Text = cp.Text.ToString(),
+                                    Annotations = cp.Annotations.Count > 0 ? [.. cp.Annotations] : null,
+                                });
+                            }
 
-                        output.Add(new ResponsesItem
-                        {
-                            Id = item.Id,
-                            Type = item.Type,
-                            Role = item.Role,
-                            Status = item.Status,
-                            Content = new ResponsesInput { Items = contentItems },
-                        });
-                        break;
-                    }
+                            output.Add(new ResponsesItem
+                            {
+                                Id = item.Id,
+                                Type = item.Type,
+                                Role = item.Role,
+                                Status = item.Status,
+                                Content = new ResponsesInput { Items = contentItems },
+                            });
+                            break;
+                        }
 
                     case "function_call":
                         output.Add(new ResponsesItem
@@ -710,70 +710,70 @@ internal sealed class ResponsesStreamAggregator
                         break;
 
                     case "reasoning":
-                    {
-                        List<ResponsesReasoningSummary>? summary = null;
-                        ResponsesInput? content = null;
-
-                        if (item.SummaryParts.Count > 0)
                         {
-                            var maxSummaryIndex = -1;
-                            foreach (var idx in item.SummaryParts.Keys)
-                            {
-                                if (idx > maxSummaryIndex)
-                                {
-                                    maxSummaryIndex = idx;
-                                }
-                            }
+                            List<ResponsesReasoningSummary>? summary = null;
+                            ResponsesInput? content = null;
 
-                            summary = new List<ResponsesReasoningSummary>(maxSummaryIndex + 1);
-                            for (var idx = 0; idx <= maxSummaryIndex; idx++)
+                            if (item.SummaryParts.Count > 0)
                             {
-                                if (!item.SummaryParts.TryGetValue(idx, out var sp))
+                                var maxSummaryIndex = -1;
+                                foreach (var idx in item.SummaryParts.Keys)
                                 {
+                                    if (idx > maxSummaryIndex)
+                                    {
+                                        maxSummaryIndex = idx;
+                                    }
+                                }
+
+                                summary = new List<ResponsesReasoningSummary>(maxSummaryIndex + 1);
+                                for (var idx = 0; idx <= maxSummaryIndex; idx++)
+                                {
+                                    if (!item.SummaryParts.TryGetValue(idx, out var sp))
+                                    {
+                                        summary.Add(new ResponsesReasoningSummary
+                                        {
+                                            Type = "summary_text",
+                                            Text = string.Empty,
+                                        });
+                                        continue;
+                                    }
+
+                                    var summaryType = string.IsNullOrEmpty(sp.Type) ? "summary_text" : sp.Type;
                                     summary.Add(new ResponsesReasoningSummary
                                     {
-                                        Type = "summary_text",
-                                        Text = string.Empty,
+                                        Type = summaryType,
+                                        Text = sp.Text.ToString(),
                                     });
-                                    continue;
+                                }
+                            }
+
+                            if (item.Content.Count > 0)
+                            {
+                                var contentItems = new List<ResponsesItem>(item.Content.Count);
+                                foreach (var part in item.Content)
+                                {
+                                    var contentType = string.IsNullOrEmpty(part.Type) ? "reasoning_text" : part.Type;
+                                    contentItems.Add(new ResponsesItem
+                                    {
+                                        Type = contentType,
+                                        Text = part.Text.ToString(),
+                                    });
                                 }
 
-                                var summaryType = string.IsNullOrEmpty(sp.Type) ? "summary_text" : sp.Type;
-                                summary.Add(new ResponsesReasoningSummary
-                                {
-                                    Type = summaryType,
-                                    Text = sp.Text.ToString(),
-                                });
+                                content = new ResponsesInput { Items = contentItems };
                             }
-                        }
 
-                        if (item.Content.Count > 0)
-                        {
-                            var contentItems = new List<ResponsesItem>(item.Content.Count);
-                            foreach (var part in item.Content)
+                            output.Add(new ResponsesItem
                             {
-                                var contentType = string.IsNullOrEmpty(part.Type) ? "reasoning_text" : part.Type;
-                                contentItems.Add(new ResponsesItem
-                                {
-                                    Type = contentType,
-                                    Text = part.Text.ToString(),
-                                });
-                            }
-
-                            content = new ResponsesInput { Items = contentItems };
+                                Id = item.Id,
+                                Type = item.Type,
+                                Status = item.Status,
+                                Summary = summary,
+                                Content = content,
+                                EncryptedContent = item.EncryptedContent,
+                            });
+                            break;
                         }
-
-                        output.Add(new ResponsesItem
-                        {
-                            Id = item.Id,
-                            Type = item.Type,
-                            Status = item.Status,
-                            Summary = summary,
-                            Content = content,
-                            EncryptedContent = item.EncryptedContent,
-                        });
-                        break;
-                    }
 
                     case "image_generation_call":
                         output.Add(new ResponsesItem

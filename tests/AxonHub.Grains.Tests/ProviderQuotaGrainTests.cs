@@ -36,12 +36,12 @@ public sealed class ProviderQuotaGrainTests(GrainClusterFixture fixture)
         long channelId,
         string status,
         bool ready) => new()
-    {
-        ChannelId = channelId,
-        ProviderType = "claudecode",
-        Status = status,
-        Ready = ready,
-        Limits =
+        {
+            ChannelId = channelId,
+            ProviderType = "claudecode",
+            Status = status,
+            Ready = ready,
+            Limits =
         [
             new ProviderQuotaLimitSnapshot
             {
@@ -52,7 +52,7 @@ public sealed class ProviderQuotaGrainTests(GrainClusterFixture fixture)
                 Window = "5h",
             },
         ],
-    };
+        };
 
     private static ProviderQuotaGroupCheckResult Result(
         params (long ChannelId, ProviderQuotaStatusSnapshot? Status)[] members)

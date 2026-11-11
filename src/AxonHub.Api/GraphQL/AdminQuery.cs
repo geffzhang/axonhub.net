@@ -1370,107 +1370,107 @@ public sealed class AdminQuery
         switch (gid.Type)
         {
             case "Project":
-            {
-                var project = await projects.GetByIdAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return project is null
-                    ? throw new InvalidOperationException("ent: project not found")
-                    : UserProfileMapping.ToGraphQL(project);
-            }
+                {
+                    var project = await projects.GetByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return project is null
+                        ? throw new InvalidOperationException("ent: project not found")
+                        : UserProfileMapping.ToGraphQL(project);
+                }
 
             case "User":
-            {
-                var user = await users.GetByIdAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return user is null
-                    ? throw new InvalidOperationException("ent: user not found")
-                    : ManagementMapping.ToGraphQL(user);
-            }
+                {
+                    var user = await users.GetByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return user is null
+                        ? throw new InvalidOperationException("ent: user not found")
+                        : ManagementMapping.ToGraphQL(user);
+                }
 
             case "APIKey":
-            {
-                // Resolved lazily so node(Project|User) and unknown-type
-                // reporting do not require the API key slice's services; the
-                // production host always registers them.
-                var apiKeys = services.GetRequiredService<ApiKeyManagementService>();
-                var apiKey = await apiKeys.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return ApiKeyMapping.ToGraphQL(apiKey);
-            }
+                {
+                    // Resolved lazily so node(Project|User) and unknown-type
+                    // reporting do not require the API key slice's services; the
+                    // production host always registers them.
+                    var apiKeys = services.GetRequiredService<ApiKeyManagementService>();
+                    var apiKey = await apiKeys.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ApiKeyMapping.ToGraphQL(apiKey);
+                }
 
             case "APIKeyProfileTemplate":
-            {
-                var templates = services.GetRequiredService<ApiKeyProfileTemplateService>();
-                var template = await templates.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return ApiKeyProfileTemplateMapping.ToGraphQL(template);
-            }
+                {
+                    var templates = services.GetRequiredService<ApiKeyProfileTemplateService>();
+                    var template = await templates.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ApiKeyProfileTemplateMapping.ToGraphQL(template);
+                }
 
             case "Model":
-            {
-                var models = services.GetRequiredService<ModelManagementService>();
-                var model = await models.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return ModelMapping.ToGraphQL(model);
-            }
+                {
+                    var models = services.GetRequiredService<ModelManagementService>();
+                    var model = await models.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ModelMapping.ToGraphQL(model);
+                }
 
             case "Prompt":
-            {
-                var prompts = services.GetRequiredService<PromptManagementService>();
-                var prompt = await prompts.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return PromptMapping.ToGraphQL(prompt);
-            }
+                {
+                    var prompts = services.GetRequiredService<PromptManagementService>();
+                    var prompt = await prompts.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return PromptMapping.ToGraphQL(prompt);
+                }
 
             // PromptProtectionRule implements Node in the SDL, but the
             // reference's guidTypeToNodeType map (graphql.go:206-226) does not
             // register it, so node() reports it as an unknown type.
             case "DataStorage":
-            {
-                var storages = services.GetRequiredService<DataStorageManagementService>();
-                var storage = await storages.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return DataStorageMapping.ToGraphQL(storage);
-            }
+                {
+                    var storages = services.GetRequiredService<DataStorageManagementService>();
+                    var storage = await storages.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return DataStorageMapping.ToGraphQL(storage);
+                }
 
             case "Channel":
-            {
-                var channels = services.GetRequiredService<ChannelQueryService>();
-                return await channels.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+                {
+                    var channels = services.GetRequiredService<ChannelQueryService>();
+                    return await channels.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                }
 
             case "Trace":
-            {
-                var traces = services.GetRequiredService<TraceManagementService>();
-                var trace = await traces.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return TraceMapping.ToGraphQL(trace);
-            }
+                {
+                    var traces = services.GetRequiredService<TraceManagementService>();
+                    var trace = await traces.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return TraceMapping.ToGraphQL(trace);
+                }
 
             case "Thread":
-            {
-                var threads = services.GetRequiredService<ThreadManagementService>();
-                var thread = await threads.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return TraceMapping.ToGraphQL(thread);
-            }
+                {
+                    var threads = services.GetRequiredService<ThreadManagementService>();
+                    var thread = await threads.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return TraceMapping.ToGraphQL(thread);
+                }
 
             case "Request":
-            {
-                var requests = services.GetRequiredService<RequestQueryService>();
-                var request = await requests.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return TraceMapping.ToGraphQL(request);
-            }
+                {
+                    var requests = services.GetRequiredService<RequestQueryService>();
+                    var request = await requests.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return TraceMapping.ToGraphQL(request);
+                }
 
             case "UsageLog":
-            {
-                var usageLogs = services.GetRequiredService<UsageLogManagementService>();
-                var usageLog = await usageLogs.GetNodeAsync(gid.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                return RequestMapping.ToGraphQL(usageLog);
-            }
+                {
+                    var usageLogs = services.GetRequiredService<UsageLogManagementService>();
+                    var usageLog = await usageLogs.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return RequestMapping.ToGraphQL(usageLog);
+                }
 
             default:
                 throw new InvalidOperationException("unknown node type: " + gid.Type);

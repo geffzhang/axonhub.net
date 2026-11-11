@@ -489,14 +489,14 @@ public sealed class ApiKeyQuotaTests
         DateTimeOffset createdAt,
         long totalTokens,
         double totalCost) => new()
-    {
-        ApiKeyId = apiKeyId,
-        CreatedAt = createdAt.UtcDateTime,
-        UpdatedAt = createdAt.UtcDateTime,
-        ModelId = "test-model",
-        TotalTokens = totalTokens,
-        TotalCost = totalCost,
-    };
+        {
+            ApiKeyId = apiKeyId,
+            CreatedAt = createdAt.UtcDateTime,
+            UpdatedAt = createdAt.UtcDateTime,
+            ModelId = "test-model",
+            TotalTokens = totalTokens,
+            TotalCost = totalCost,
+        };
 }
 
 /// <summary>In-memory usage_logs read model with the store's window predicate.</summary>

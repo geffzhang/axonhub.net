@@ -439,29 +439,29 @@ public static class ResponsesInboundConvert
             case "message":
             case "input_text":
             case "":
-            {
-                var msg = new Message
                 {
-                    Id = ResponsesConvertUtil.NullIfEmpty(item.Id),
-                    Role = ResponsesConvertUtil.NullIfEmpty(item.Role),
-                };
+                    var msg = new Message
+                    {
+                        Id = ResponsesConvertUtil.NullIfEmpty(item.Id),
+                        Role = ResponsesConvertUtil.NullIfEmpty(item.Role),
+                    };
 
-                // Handle content - check Content.Items first (output message format from JSON).
-                if (item.Content is { Items.Count: > 0 } && item.IsOutputMessageContent())
-                {
-                    msg.Content = ConvertContentItemsToMessageContent(item.GetContentItems()!);
-                }
-                else if (item.Content is { } content)
-                {
-                    msg.Content = ConvertToMessageContent(content);
-                }
-                else if (item.Text is { } text)
-                {
-                    msg.Content = new MessageContent { Content = text };
-                }
+                    // Handle content - check Content.Items first (output message format from JSON).
+                    if (item.Content is { Items.Count: > 0 } && item.IsOutputMessageContent())
+                    {
+                        msg.Content = ConvertContentItemsToMessageContent(item.GetContentItems()!);
+                    }
+                    else if (item.Content is { } content)
+                    {
+                        msg.Content = ConvertToMessageContent(content);
+                    }
+                    else if (item.Text is { } text)
+                    {
+                        msg.Content = new MessageContent { Content = text };
+                    }
 
-                return msg;
-            }
+                    return msg;
+                }
 
             case "input_image":
                 // Input image as a standalone item.
@@ -692,15 +692,15 @@ public static class ResponsesInboundConvert
                 return null;
 
             case "input_file":
-            {
-                var message = ResponseInputFileMessage(item);
-                if (message?.Content?.MultipleContent is not { Count: > 0 } parts)
                 {
-                    return null;
-                }
+                    var message = ResponseInputFileMessage(item);
+                    if (message?.Content?.MultipleContent is not { Count: > 0 } parts)
+                    {
+                        return null;
+                    }
 
-                return parts[0];
-            }
+                    return parts[0];
+                }
 
             case "compaction":
             case "compaction_summary":
@@ -799,64 +799,64 @@ public static class ResponsesInboundConvert
                     break;
 
                 case "web_search":
-                {
-                    var webSearch = new WebSearch();
-                    // Go: append(nil, empty...) stays nil.
-                    if (tool.Filters?.AllowedDomains is { Count: > 0 } allowedDomains)
                     {
-                        webSearch.AllowedDomains = [.. allowedDomains];
-                    }
-
-                    if (tool.UserLocation is { } location)
-                    {
-                        var locationType = location.Type;
-                        if (string.IsNullOrEmpty(locationType))
+                        var webSearch = new WebSearch();
+                        // Go: append(nil, empty...) stays nil.
+                        if (tool.Filters?.AllowedDomains is { Count: > 0 } allowedDomains)
                         {
-                            locationType = "approximate";
+                            webSearch.AllowedDomains = [.. allowedDomains];
                         }
 
-                        webSearch.UserLocation = new WebSearchToolUserLocation
+                        if (tool.UserLocation is { } location)
                         {
-                            Type = locationType,
-                            City = ResponsesConvertUtil.NullIfEmpty(location.City),
-                            Country = ResponsesConvertUtil.NullIfEmpty(location.Country),
-                            Region = ResponsesConvertUtil.NullIfEmpty(location.Region),
-                            Timezone = ResponsesConvertUtil.NullIfEmpty(location.Timezone),
-                        };
-                    }
+                            var locationType = location.Type;
+                            if (string.IsNullOrEmpty(locationType))
+                            {
+                                locationType = "approximate";
+                            }
 
-                    result.Add(new Tool
-                    {
-                        Type = ToolTypes.WebSearch,
-                        WebSearch = webSearch,
-                    });
-                    break;
-                }
+                            webSearch.UserLocation = new WebSearchToolUserLocation
+                            {
+                                Type = locationType,
+                                City = ResponsesConvertUtil.NullIfEmpty(location.City),
+                                Country = ResponsesConvertUtil.NullIfEmpty(location.Country),
+                                Region = ResponsesConvertUtil.NullIfEmpty(location.Region),
+                                Timezone = ResponsesConvertUtil.NullIfEmpty(location.Timezone),
+                            };
+                        }
+
+                        result.Add(new Tool
+                        {
+                            Type = ToolTypes.WebSearch,
+                            WebSearch = webSearch,
+                        });
+                        break;
+                    }
 
                 case "custom":
-                {
-                    var customTool = new ResponseCustomTool
                     {
-                        Name = tool.Name ?? string.Empty,
-                        Description = ResponsesConvertUtil.NullIfEmpty(tool.Description),
-                    };
-                    if (tool.Format is { } format)
-                    {
-                        customTool.Format = new ResponseCustomToolFormat
+                        var customTool = new ResponseCustomTool
                         {
-                            Type = format.Type,
-                            Syntax = ResponsesConvertUtil.NullIfEmpty(format.Syntax),
-                            Definition = ResponsesConvertUtil.NullIfEmpty(format.Definition),
+                            Name = tool.Name ?? string.Empty,
+                            Description = ResponsesConvertUtil.NullIfEmpty(tool.Description),
                         };
-                    }
+                        if (tool.Format is { } format)
+                        {
+                            customTool.Format = new ResponseCustomToolFormat
+                            {
+                                Type = format.Type,
+                                Syntax = ResponsesConvertUtil.NullIfEmpty(format.Syntax),
+                                Definition = ResponsesConvertUtil.NullIfEmpty(format.Definition),
+                            };
+                        }
 
-                    result.Add(new Tool
-                    {
-                        Type = ToolTypes.ResponsesCustomTool,
-                        ResponseCustomTool = customTool,
-                    });
-                    break;
-                }
+                        result.Add(new Tool
+                        {
+                            Type = ToolTypes.ResponsesCustomTool,
+                            ResponseCustomTool = customTool,
+                        });
+                        break;
+                    }
 
                 case "namespace":
                     if (tool.Tools is { } subTools)

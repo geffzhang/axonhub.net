@@ -1182,14 +1182,14 @@ public sealed class ProviderQuotaServiceTests
         long channelId,
         DateTimeOffset createdAt,
         double totalCost) => new()
-    {
-        ChannelId = channelId,
-        ApiKeyId = 1,
-        CreatedAt = createdAt.UtcDateTime,
-        UpdatedAt = createdAt.UtcDateTime,
-        ModelId = "test-model",
-        TotalCost = totalCost,
-    };
+        {
+            ChannelId = channelId,
+            ApiKeyId = 1,
+            CreatedAt = createdAt.UtcDateTime,
+            UpdatedAt = createdAt.UtcDateTime,
+            ModelId = "test-model",
+            TotalCost = totalCost,
+        };
 
     private static JsonElement FindLimit(JsonElement limits, string window)
     {

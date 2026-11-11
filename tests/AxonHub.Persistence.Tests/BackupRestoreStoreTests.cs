@@ -675,18 +675,18 @@ public sealed class BackupRestoreStoreTests(PostgresFixture fixture)
         long projectId,
         long? channelId,
         long? apiKeyId) => new()
-    {
-        CreatedAt = OldStamp,
-        UpdatedAt = OldStamp,
-        ProjectId = projectId,
-        ChannelId = channelId,
-        ApiKeyId = apiKeyId,
-        Source = "api",
-        ModelId = "gpt-4o",
-        Format = "openai/chat_completions",
-        Status = "completed",
-        ClientIp = "127.0.0.1",
-    };
+        {
+            CreatedAt = OldStamp,
+            UpdatedAt = OldStamp,
+            ProjectId = projectId,
+            ChannelId = channelId,
+            ApiKeyId = apiKeyId,
+            Source = "api",
+            ModelId = "gpt-4o",
+            Format = "openai/chat_completions",
+            Status = "completed",
+            ClientIp = "127.0.0.1",
+        };
 
     private static UsageLogRecord NewLog(long requestId) => new()
     {

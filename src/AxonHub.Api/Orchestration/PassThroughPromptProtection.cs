@@ -186,67 +186,67 @@ internal static class PassThroughPromptProtection
         switch (node)
         {
             case OverrideJsonScalar { Kind: OverrideJsonKind.String } scalar:
-            {
-                var replacement = ReplacePassThroughPromptText(
-                    scalar.StringValue,
-                    role,
-                    rules,
-                    out var matched);
-                if (matched)
                 {
-                    changed = true;
-                }
+                    var replacement = ReplacePassThroughPromptText(
+                        scalar.StringValue,
+                        role,
+                        rules,
+                        out var matched);
+                    if (matched)
+                    {
+                        changed = true;
+                    }
 
-                return GoJson.Quote(replacement);
-            }
+                    return GoJson.Quote(replacement);
+                }
 
             case OverrideJsonArray array:
-            {
-                var builder = new StringBuilder();
-                builder.Append('[');
-                for (var index = 0; index < array.Items.Count; index++)
                 {
-                    if (index > 0)
+                    var builder = new StringBuilder();
+                    builder.Append('[');
+                    for (var index = 0; index < array.Items.Count; index++)
                     {
-                        builder.Append(',');
+                        if (index > 0)
+                        {
+                            builder.Append(',');
+                        }
+
+                        builder.Append(MaskJsonStrings(array.Items[index], role, rules, ref changed));
                     }
 
-                    builder.Append(MaskJsonStrings(array.Items[index], role, rules, ref changed));
+                    builder.Append(']');
+                    return builder.ToString();
                 }
-
-                builder.Append(']');
-                return builder.ToString();
-            }
 
             case OverrideJsonObject obj:
-            {
-                // json.Unmarshal into map[string]any: the last duplicate key wins.
-                var members = new Dictionary<string, OverrideJsonNode>(StringComparer.Ordinal);
-                foreach (var member in obj.Members)
                 {
-                    members[member.Key] = member.Value;
-                }
-
-                // encoding/json sorts map keys.
-                var keys = members.Keys.ToList();
-                keys.Sort(StringComparer.Ordinal);
-
-                var builder = new StringBuilder();
-                builder.Append('{');
-                for (var index = 0; index < keys.Count; index++)
-                {
-                    if (index > 0)
+                    // json.Unmarshal into map[string]any: the last duplicate key wins.
+                    var members = new Dictionary<string, OverrideJsonNode>(StringComparer.Ordinal);
+                    foreach (var member in obj.Members)
                     {
-                        builder.Append(',');
+                        members[member.Key] = member.Value;
                     }
 
-                    builder.Append(GoJson.Quote(keys[index])).Append(':');
-                    builder.Append(MaskJsonStrings(members[keys[index]], role, rules, ref changed));
-                }
+                    // encoding/json sorts map keys.
+                    var keys = members.Keys.ToList();
+                    keys.Sort(StringComparer.Ordinal);
 
-                builder.Append('}');
-                return builder.ToString();
-            }
+                    var builder = new StringBuilder();
+                    builder.Append('{');
+                    for (var index = 0; index < keys.Count; index++)
+                    {
+                        if (index > 0)
+                        {
+                            builder.Append(',');
+                        }
+
+                        builder.Append(GoJson.Quote(keys[index])).Append(':');
+                        builder.Append(MaskJsonStrings(members[keys[index]], role, rules, ref changed));
+                    }
+
+                    builder.Append('}');
+                    return builder.ToString();
+                }
 
             default:
                 // json.Number keeps its exact token; true/false/null are literals.

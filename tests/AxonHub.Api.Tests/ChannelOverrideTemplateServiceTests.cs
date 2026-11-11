@@ -832,40 +832,40 @@ public sealed class ChannelOverrideTemplateServiceTests
         string name = "Template",
         string? headerOverrideOperations = "null",
         string? bodyOverrideOperations = "null") => new()
-    {
-        Id = id,
-        CreatedAt = CreatedAt,
-        UpdatedAt = CreatedAt.AddMinutes(1),
-        DeletedAt = 0,
-        Name = name,
-        Description = null,
-        OverrideParameters = "{}",
-        OverrideHeaders = "[]",
-        HeaderOverrideOperations = headerOverrideOperations,
-        BodyOverrideOperations = bodyOverrideOperations,
-        UserId = userId,
-    };
+        {
+            Id = id,
+            CreatedAt = CreatedAt,
+            UpdatedAt = CreatedAt.AddMinutes(1),
+            DeletedAt = 0,
+            Name = name,
+            Description = null,
+            OverrideParameters = "{}",
+            OverrideHeaders = "[]",
+            HeaderOverrideOperations = headerOverrideOperations,
+            BodyOverrideOperations = bodyOverrideOperations,
+            UserId = userId,
+        };
 
     private static ChannelRecord Channel(
         long id,
         string name,
         string? settings = """{"modelMappings":[]}""") => new()
-    {
-        Id = id,
-        CreatedAt = CreatedAt,
-        UpdatedAt = CreatedAt,
-        DeletedAt = 0,
-        Type = "openai",
-        Name = name,
-        Status = "enabled",
-        Credentials = "{}",
-        DisabledApiKeys = "[]",
-        SupportedModels = "null",
-        Tags = "[]",
-        Policies = """{"stream":"unlimited"}""",
-        Settings = settings,
-        Endpoints = "[]",
-    };
+        {
+            Id = id,
+            CreatedAt = CreatedAt,
+            UpdatedAt = CreatedAt,
+            DeletedAt = 0,
+            Type = "openai",
+            Name = name,
+            Status = "enabled",
+            Credentials = "{}",
+            DisabledApiKeys = "[]",
+            SupportedModels = "null",
+            Tags = "[]",
+            Policies = """{"stream":"unlimited"}""",
+            Settings = settings,
+            Endpoints = "[]",
+        };
 }
 
 /// <summary>In-memory store with the ent predicates the service relies on.</summary>

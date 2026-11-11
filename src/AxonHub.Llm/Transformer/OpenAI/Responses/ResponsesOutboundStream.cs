@@ -271,28 +271,28 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                         return;
 
                     case "function_call":
-                    {
-                        // Initialize tool call tracking.
-                        var toolCallIdx = _toolCalls.Count;
-                        _toolCalls[addedItem.CallId] = new ToolCall
                         {
-                            Id = addedItem.CallId,
-                            Type = ToolTypes.Function,
-                            Function = new FunctionCall
+                            // Initialize tool call tracking.
+                            var toolCallIdx = _toolCalls.Count;
+                            _toolCalls[addedItem.CallId] = new ToolCall
                             {
-                                Name = addedItem.Name,
-                                Namespace = ResponsesConvertUtil.NullIfEmpty(addedItem.Namespace),
-                                Arguments = string.Empty,
-                            },
-                        };
+                                Id = addedItem.CallId,
+                                Type = ToolTypes.Function,
+                                Function = new FunctionCall
+                                {
+                                    Name = addedItem.Name,
+                                    Namespace = ResponsesConvertUtil.NullIfEmpty(addedItem.Namespace),
+                                    Arguments = string.Empty,
+                                },
+                            };
 
-                        // Map item.id to call_id for later lookup.
-                        _itemToCallId[addedItem.Id] = addedItem.CallId;
-                        _toolCallIndex[addedItem.CallId] = toolCallIdx;
+                            // Map item.id to call_id for later lookup.
+                            _itemToCallId[addedItem.Id] = addedItem.CallId;
+                            _toolCallIndex[addedItem.CallId] = toolCallIdx;
 
-                        resp.Choices =
-                        [
-                            new Choice
+                            resp.Choices =
+                            [
+                                new Choice
                             {
                                 Index = 0,
                                 Delta = new Message
@@ -315,31 +315,31 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                                 },
                             },
                         ];
-                        break;
-                    }
+                            break;
+                        }
 
                     case "custom_tool_call":
-                    {
-                        // Custom tool call - initialize tracking; the input will
-                        // be streamed via delta events.
-                        var toolCallIdx = _toolCalls.Count;
-                        _toolCalls[addedItem.CallId] = new ToolCall
                         {
-                            Id = addedItem.CallId,
-                            Type = ToolTypes.ResponsesCustomTool,
-                            ResponseCustomToolCall = new ResponseCustomToolCall
+                            // Custom tool call - initialize tracking; the input will
+                            // be streamed via delta events.
+                            var toolCallIdx = _toolCalls.Count;
+                            _toolCalls[addedItem.CallId] = new ToolCall
                             {
-                                CallId = addedItem.CallId,
-                                Name = addedItem.Name,
-                                Input = string.Empty,
-                            },
-                        };
-                        _itemToCallId[addedItem.Id] = addedItem.CallId;
-                        _toolCallIndex[addedItem.CallId] = toolCallIdx;
+                                Id = addedItem.CallId,
+                                Type = ToolTypes.ResponsesCustomTool,
+                                ResponseCustomToolCall = new ResponseCustomToolCall
+                                {
+                                    CallId = addedItem.CallId,
+                                    Name = addedItem.Name,
+                                    Input = string.Empty,
+                                },
+                            };
+                            _itemToCallId[addedItem.Id] = addedItem.CallId;
+                            _toolCallIndex[addedItem.CallId] = toolCallIdx;
 
-                        resp.Choices =
-                        [
-                            new Choice
+                            resp.Choices =
+                            [
+                                new Choice
                             {
                                 Index = 0,
                                 Delta = new Message
@@ -361,8 +361,8 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                                 },
                             },
                         ];
-                        break;
-                    }
+                            break;
+                        }
 
                     default:
                         // For other item types (e.g., message), skip - no
@@ -410,86 +410,86 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                 break;
 
             case ResponsesStreamEventTypes.FunctionCallArgumentsDone:
-            {
-                var callId = ev.CallId ?? string.Empty;
-                if (callId.Length == 0 && ev.ItemId is { } doneItemId)
                 {
-                    _itemToCallId.TryGetValue(doneItemId, out var mappedCallId);
-                    callId = mappedCallId ?? string.Empty;
-                    if (callId.Length == 0)
+                    var callId = ev.CallId ?? string.Empty;
+                    if (callId.Length == 0 && ev.ItemId is { } doneItemId)
                     {
-                        // Fallback: item_id might be the call_id itself.
-                        callId = doneItemId;
+                        _itemToCallId.TryGetValue(doneItemId, out var mappedCallId);
+                        callId = mappedCallId ?? string.Empty;
+                        if (callId.Length == 0)
+                        {
+                            // Fallback: item_id might be the call_id itself.
+                            callId = doneItemId;
+                        }
                     }
-                }
 
-                if (!_toolCalls.TryGetValue(callId, out var tc))
-                {
-                    return; // Intentionally skip an unknown tool call.
-                }
-
-                var identityChanged = false;
-                if (!string.IsNullOrEmpty(ev.Name) && ev.Name != tc.Function.Name)
-                {
-                    tc.Function.Name = ev.Name;
-                    identityChanged = true;
-                }
-
-                if (!string.IsNullOrEmpty(ev.Namespace) && ev.Namespace != tc.Function.Namespace)
-                {
-                    tc.Function.Namespace = ev.Namespace;
-                    identityChanged = true;
-                }
-
-                // Some upstreams provide the complete JSON arguments only in the
-                // done event. Preserve arguments already emitted through delta
-                // events and forward only the missing suffix so downstream
-                // Responses streams receive the full value once.
-                var finalArgs = ev.Arguments ?? string.Empty;
-                var missingArgs = string.Empty;
-                if (finalArgs.Length == 0)
-                {
-                    if (!identityChanged)
+                    if (!_toolCalls.TryGetValue(callId, out var tc))
                     {
-                        return; // An empty done event must not overwrite accumulated deltas.
+                        return; // Intentionally skip an unknown tool call.
                     }
-                }
-                else
-                {
-                    var forwardedArgs = tc.Function.Arguments;
-                    if (forwardedArgs.Length == 0)
+
+                    var identityChanged = false;
+                    if (!string.IsNullOrEmpty(ev.Name) && ev.Name != tc.Function.Name)
                     {
-                        missingArgs = finalArgs;
+                        tc.Function.Name = ev.Name;
+                        identityChanged = true;
                     }
-                    else if (finalArgs.StartsWith(forwardedArgs, StringComparison.Ordinal))
+
+                    if (!string.IsNullOrEmpty(ev.Namespace) && ev.Namespace != tc.Function.Namespace)
                     {
-                        missingArgs = finalArgs[forwardedArgs.Length..];
+                        tc.Function.Namespace = ev.Namespace;
+                        identityChanged = true;
                     }
-                    else if (EqualJsonValues(forwardedArgs, finalArgs))
+
+                    // Some upstreams provide the complete JSON arguments only in the
+                    // done event. Preserve arguments already emitted through delta
+                    // events and forward only the missing suffix so downstream
+                    // Responses streams receive the full value once.
+                    var finalArgs = ev.Arguments ?? string.Empty;
+                    var missingArgs = string.Empty;
+                    if (finalArgs.Length == 0)
                     {
-                        // The final payload may be reformatted without changing
-                        // its meaning. The complete arguments were already
-                        // forwarded, so do not emit a duplicate.
-                        missingArgs = string.Empty;
+                        if (!identityChanged)
+                        {
+                            return; // An empty done event must not overwrite accumulated deltas.
+                        }
                     }
                     else
                     {
-                        throw new InvalidOperationException(
-                            "function call arguments mismatch for call_id "
-                            + ResponsesCreatedAt.GoQuote(callId));
+                        var forwardedArgs = tc.Function.Arguments;
+                        if (forwardedArgs.Length == 0)
+                        {
+                            missingArgs = finalArgs;
+                        }
+                        else if (finalArgs.StartsWith(forwardedArgs, StringComparison.Ordinal))
+                        {
+                            missingArgs = finalArgs[forwardedArgs.Length..];
+                        }
+                        else if (EqualJsonValues(forwardedArgs, finalArgs))
+                        {
+                            // The final payload may be reformatted without changing
+                            // its meaning. The complete arguments were already
+                            // forwarded, so do not emit a duplicate.
+                            missingArgs = string.Empty;
+                        }
+                        else
+                        {
+                            throw new InvalidOperationException(
+                                "function call arguments mismatch for call_id "
+                                + ResponsesCreatedAt.GoQuote(callId));
+                        }
+
+                        tc.Function.Arguments = finalArgs;
+                        if (missingArgs.Length == 0 && !identityChanged)
+                        {
+                            return;
+                        }
                     }
 
-                    tc.Function.Arguments = finalArgs;
-                    if (missingArgs.Length == 0 && !identityChanged)
-                    {
-                        return;
-                    }
-                }
-
-                var toolCallIdx = _toolCallIndex[callId];
-                resp.Choices =
-                [
-                    new Choice
+                    var toolCallIdx = _toolCallIndex[callId];
+                    resp.Choices =
+                    [
+                        new Choice
                     {
                         Index = 0,
                         Delta = new Message
@@ -512,8 +512,8 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                         },
                     },
                 ];
-                break;
-            }
+                    break;
+                }
 
             case ResponsesStreamEventTypes.CustomToolCallInputDelta:
                 if (ev.ItemId is { } inputDeltaItemId)
@@ -580,42 +580,42 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                 return; // Intentionally skip this event.
 
             case ResponsesStreamEventTypes.OutputTextDelta:
-            {
-                var delta = ev.Delta ?? string.Empty;
-                _textContent.Append(delta);
+                {
+                    var delta = ev.Delta ?? string.Empty;
+                    _textContent.Append(delta);
 
-                resp.Choices =
-                [
-                    new Choice
+                    resp.Choices =
+                    [
+                        new Choice
                     {
                         Index = 0,
                         Delta = new Message { Content = MessageContent.FromText(delta) },
                     },
                 ];
-                break;
-            }
+                    break;
+                }
 
             case ResponsesStreamEventTypes.ReasoningSummaryTextDelta:
             case ResponsesStreamEventTypes.ReasoningTextDelta:
-            {
-                var delta = ev.Delta ?? string.Empty;
-                _reasoningContent.Append(delta);
-
-                var itemId = ev.ItemId ?? string.Empty;
-                if (itemId.Length == 0)
                 {
-                    return; // Intentionally skip an unassociated reasoning delta.
-                }
+                    var delta = ev.Delta ?? string.Empty;
+                    _reasoningContent.Append(delta);
 
-                resp.TransformerMetadata = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
-                {
-                    [ResponsesKeys.ReasoningItemTransformerMetadataKey] =
-                        ResponsesStreamMetadata.EncodeReasoningItemMetadata(itemId),
-                };
+                    var itemId = ev.ItemId ?? string.Empty;
+                    if (itemId.Length == 0)
+                    {
+                        return; // Intentionally skip an unassociated reasoning delta.
+                    }
 
-                resp.Choices =
-                [
-                    new Choice
+                    resp.TransformerMetadata = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+                    {
+                        [ResponsesKeys.ReasoningItemTransformerMetadataKey] =
+                            ResponsesStreamMetadata.EncodeReasoningItemMetadata(itemId),
+                    };
+
+                    resp.Choices =
+                    [
+                        new Choice
                     {
                         Index = 0,
                         Delta = new Message
@@ -625,8 +625,8 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                         },
                     },
                 ];
-                break;
-            }
+                    break;
+                }
 
             case ResponsesStreamEventTypes.OutputTextDone:
                 // The content was already streamed via deltas.
@@ -768,69 +768,69 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                 return;
 
             case ResponsesStreamEventTypes.ResponseCompleted:
-            {
-                if (_responseCompleted)
                 {
-                    return;
-                }
-
-                // Response completed - emit two events: one with finish_reason,
-                // one with usage.
-                _responseCompleted = true;
-                if (ev.Response is { } completed)
-                {
-                    _previousResponseId = completed.PreviousResponseId;
-                    resp.PreviousResponseId = _previousResponseId;
-                }
-
-                if (_transformerMetadata.Count > 0 && !_transformerMetadataEmitted)
-                {
-                    resp.TransformerMetadata = _transformerMetadata;
-                    _transformerMetadataEmitted = true;
-                }
-
-                // Some compatible providers report abnormal outcomes in
-                // response.completed instead of a separate terminal event.
-                // Preserve those statuses too.
-                var finishReason = string.Empty;
-                if (ev.Response is { Status: { } status })
-                {
-                    switch (status)
+                    if (_responseCompleted)
                     {
-                        case "incomplete":
-                            // Distinguish truncation from content-filter
-                            // rejection via the incomplete details the upstream
-                            // attached to the response.
-                            var reason = ev.Response.IncompleteDetails?.Reason ?? string.Empty;
-                            finishReason = reason == "content_filter" ? "content_filter" : "length";
-                            break;
-                        case "failed":
-                            finishReason = "error";
-                            break;
-                        case "cancelled":
-                        case "canceled":
-                            finishReason = "cancelled";
-                            break;
+                        return;
                     }
-                }
 
-                if (finishReason.Length == 0)
-                {
-                    finishReason = _toolCalls.Count > 0 ? "tool_calls" : "stop";
-                }
+                    // Response completed - emit two events: one with finish_reason,
+                    // one with usage.
+                    _responseCompleted = true;
+                    if (ev.Response is { } completed)
+                    {
+                        _previousResponseId = completed.PreviousResponseId;
+                        resp.PreviousResponseId = _previousResponseId;
+                    }
 
-                // First event: finish_reason with an empty delta.
-                resp.Choices =
-                [
-                    new Choice
+                    if (_transformerMetadata.Count > 0 && !_transformerMetadataEmitted)
+                    {
+                        resp.TransformerMetadata = _transformerMetadata;
+                        _transformerMetadataEmitted = true;
+                    }
+
+                    // Some compatible providers report abnormal outcomes in
+                    // response.completed instead of a separate terminal event.
+                    // Preserve those statuses too.
+                    var finishReason = string.Empty;
+                    if (ev.Response is { Status: { } status })
+                    {
+                        switch (status)
+                        {
+                            case "incomplete":
+                                // Distinguish truncation from content-filter
+                                // rejection via the incomplete details the upstream
+                                // attached to the response.
+                                var reason = ev.Response.IncompleteDetails?.Reason ?? string.Empty;
+                                finishReason = reason == "content_filter" ? "content_filter" : "length";
+                                break;
+                            case "failed":
+                                finishReason = "error";
+                                break;
+                            case "cancelled":
+                            case "canceled":
+                                finishReason = "cancelled";
+                                break;
+                        }
+                    }
+
+                    if (finishReason.Length == 0)
+                    {
+                        finishReason = _toolCalls.Count > 0 ? "tool_calls" : "stop";
+                    }
+
+                    // First event: finish_reason with an empty delta.
+                    resp.Choices =
+                    [
+                        new Choice
                     {
                         Index = 0,
                         Delta = new Message(),
                         FinishReason = finishReason,
                     },
                 ];
-                break;
-            }
+                    break;
+                }
 
             case ResponsesStreamEventTypes.ResponseFailed:
                 if (_responseCompleted)
@@ -890,44 +890,44 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                 break;
 
             case ResponsesStreamEventTypes.Error:
-            {
-                var detail = new ErrorDetail
                 {
-                    Code = ResponsesConvertUtil.NullIfEmpty(ev.Code),
-                    Message = ev.Message ?? string.Empty,
-                    Type = ev.Type,
-                    Param = ResponsesConvertUtil.NullIfEmpty(ev.Param),
-                };
-
-                if (ev.Error is { } streamError)
-                {
-                    if (streamError.Type is { Length: > 0 } errorType)
+                    var detail = new ErrorDetail
                     {
-                        detail.Type = errorType;
+                        Code = ResponsesConvertUtil.NullIfEmpty(ev.Code),
+                        Message = ev.Message ?? string.Empty,
+                        Type = ev.Type,
+                        Param = ResponsesConvertUtil.NullIfEmpty(ev.Param),
+                    };
+
+                    if (ev.Error is { } streamError)
+                    {
+                        if (streamError.Type is { Length: > 0 } errorType)
+                        {
+                            detail.Type = errorType;
+                        }
+
+                        if (streamError.Code is { Length: > 0 } errorCode)
+                        {
+                            detail.Code = errorCode;
+                        }
+
+                        if (streamError.Message.Length > 0)
+                        {
+                            detail.Message = streamError.Message;
+                        }
+
+                        if (streamError.Param is { Length: > 0 } errorParam)
+                        {
+                            detail.Param = errorParam;
+                        }
                     }
 
-                    if (streamError.Code is { Length: > 0 } errorCode)
+                    throw new ResponseError
                     {
-                        detail.Code = errorCode;
-                    }
-
-                    if (streamError.Message.Length > 0)
-                    {
-                        detail.Message = streamError.Message;
-                    }
-
-                    if (streamError.Param is { Length: > 0 } errorParam)
-                    {
-                        detail.Param = errorParam;
-                    }
+                        StatusCode = ev.Status,
+                        Detail = detail,
+                    };
                 }
-
-                throw new ResponseError
-                {
-                    StatusCode = ev.Status,
-                    Detail = detail,
-                };
-            }
 
             case ResponsesStreamEventTypes.ImageGenerationPartialImage:
             case ResponsesStreamEventTypes.ImageGenerationGenerating:
@@ -1114,46 +1114,46 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
         switch (left.ValueKind)
         {
             case JsonValueKind.Object:
-            {
-                // Go's decoder keeps the last duplicate key; JsonDocument keeps
-                // them all.
-                var leftMembers = LastWinsMembers(left);
-                var rightMembers = LastWinsMembers(right);
-                if (leftMembers.Count != rightMembers.Count)
                 {
-                    return false;
-                }
-
-                foreach (var (name, value) in leftMembers)
-                {
-                    if (!rightMembers.TryGetValue(name, out var other) || !JsonValueEquals(value, other))
+                    // Go's decoder keeps the last duplicate key; JsonDocument keeps
+                    // them all.
+                    var leftMembers = LastWinsMembers(left);
+                    var rightMembers = LastWinsMembers(right);
+                    if (leftMembers.Count != rightMembers.Count)
                     {
                         return false;
                     }
-                }
 
-                return true;
-            }
+                    foreach (var (name, value) in leftMembers)
+                    {
+                        if (!rightMembers.TryGetValue(name, out var other) || !JsonValueEquals(value, other))
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }
 
             case JsonValueKind.Array:
-            {
-                var leftItems = left.EnumerateArray().ToArray();
-                var rightItems = right.EnumerateArray().ToArray();
-                if (leftItems.Length != rightItems.Length)
                 {
-                    return false;
-                }
-
-                for (var i = 0; i < leftItems.Length; i++)
-                {
-                    if (!JsonValueEquals(leftItems[i], rightItems[i]))
+                    var leftItems = left.EnumerateArray().ToArray();
+                    var rightItems = right.EnumerateArray().ToArray();
+                    if (leftItems.Length != rightItems.Length)
                     {
                         return false;
                     }
-                }
 
-                return true;
-            }
+                    for (var i = 0; i < leftItems.Length; i++)
+                    {
+                        if (!JsonValueEquals(leftItems[i], rightItems[i]))
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }
 
             case JsonValueKind.Number:
                 // Go's UseNumber keeps the literal lexeme; 1 and 1.0 differ.

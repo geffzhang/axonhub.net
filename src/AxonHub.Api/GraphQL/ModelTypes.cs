@@ -799,10 +799,10 @@ public static class ModelMapping
 
     public static AxonHub.Api.Management.FetchModelsInput ToDomain(FetchModelsInputType input)
         => new()
-    {
-        ChannelType = input.ChannelType,
-        BaseUrl = input.BaseUrl,
-        ApiKey = input.ApiKey,
-        ChannelId = input.ChannelID is null ? null : GidValue.Parse(input.ChannelID).Id,
-    };
+        {
+            ChannelType = input.ChannelType,
+            BaseUrl = input.BaseUrl,
+            ApiKey = input.ApiKey,
+            ChannelId = input.ChannelID is null ? null : GidValue.Parse(input.ChannelID).Id,
+        };
 }

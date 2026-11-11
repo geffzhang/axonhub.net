@@ -1123,11 +1123,11 @@ public sealed class AnthropicInboundStreamTests
         string? type,
         string? name,
         string arguments) => new()
-    {
-        Id = "msg_read_pages_stream",
-        Object = "chat.completion.chunk",
-        Model = "claude-sonnet-4-6",
-        Choices =
+        {
+            Id = "msg_read_pages_stream",
+            Object = "chat.completion.chunk",
+            Model = "claude-sonnet-4-6",
+            Choices =
         [
             new Choice
             {
@@ -1147,7 +1147,7 @@ public sealed class AnthropicInboundStreamTests
                 },
             },
         ],
-    };
+        };
 
     private static string InputString(AnthropicMessageContentBlock block, string property)
     {

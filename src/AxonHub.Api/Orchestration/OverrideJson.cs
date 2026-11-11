@@ -218,51 +218,51 @@ internal static class OverrideJson
         switch (current)
         {
             case OverrideJsonObject obj:
-            {
-                var childValue = depth + 1 < parts.Count
-                    ? Build(parts, depth, value)
-                    : value;
-                obj.Members.Add(new OverrideJsonMember
                 {
-                    KeyRaw = GoJson.Quote(part.Part),
-                    Key = part.Part,
-                    Value = childValue,
-                });
-                updated = obj;
-                return true;
-            }
-
-            case OverrideJsonArray array:
-            {
-                if (!numeric && !(!part.Force && part.Part == "-1"))
-                {
-                    error = $"cannot set array element for non-numeric key '{part.Part}'";
-                    return false;
+                    var childValue = depth + 1 < parts.Count
+                        ? Build(parts, depth, value)
+                        : value;
+                    obj.Members.Add(new OverrideJsonMember
+                    {
+                        KeyRaw = GoJson.Quote(part.Part),
+                        Key = part.Part,
+                        Value = childValue,
+                    });
+                    updated = obj;
+                    return true;
                 }
 
-                if (numeric)
+            case OverrideJsonArray array:
                 {
-                    if (!TryParseArrayIndex(part.Part, out var target)
-                        || target < 0
-                        || target > int.MaxValue)
+                    if (!numeric && !(!part.Force && part.Part == "-1"))
                     {
-                        error = $"invalid array index '{part.Part}'";
+                        error = $"cannot set array element for non-numeric key '{part.Part}'";
                         return false;
                     }
 
-                    // sjson pads with nulls up to the requested index; when the
-                    // index is below the length (only reachable through a weird
-                    // lookup) the value is appended.
-                    while (array.Items.Count < target)
+                    if (numeric)
                     {
-                        array.Items.Add(OverrideJsonScalar.Null);
-                    }
-                }
+                        if (!TryParseArrayIndex(part.Part, out var target)
+                            || target < 0
+                            || target > int.MaxValue)
+                        {
+                            error = $"invalid array index '{part.Part}'";
+                            return false;
+                        }
 
-                array.Items.Add(depth + 1 < parts.Count ? Build(parts, depth, value) : value);
-                updated = array;
-                return true;
-            }
+                        // sjson pads with nulls up to the requested index; when the
+                        // index is below the length (only reachable through a weird
+                        // lookup) the value is appended.
+                        while (array.Items.Count < target)
+                        {
+                            array.Items.Add(OverrideJsonScalar.Null);
+                        }
+                    }
+
+                    array.Items.Add(depth + 1 < parts.Count ? Build(parts, depth, value) : value);
+                    updated = array;
+                    return true;
+                }
 
             default:
                 error = "json must be an object or array";

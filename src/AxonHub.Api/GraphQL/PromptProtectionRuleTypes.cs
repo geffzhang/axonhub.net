@@ -351,13 +351,13 @@ public static class PromptProtectionRuleMapping
     /// </summary>
     public static PromptProtectionSettingsType ToGraphQLSettings(
         PromptProtectionSettings? settings) => new()
-    {
-        Action = ToGraphQLAction(settings?.Action),
-        Replacement = settings?.Replacement ?? string.Empty,
-        Scopes = (settings?.Scopes ?? [])
+        {
+            Action = ToGraphQLAction(settings?.Action),
+            Replacement = settings?.Replacement ?? string.Empty,
+            Scopes = (settings?.Scopes ?? [])
             .Select(static scope => ToGraphQLScope(scope))
             .ToList(),
-    };
+        };
 
     public static PromptProtectionSettings ToDomain(PromptProtectionSettingsInput input) => new()
     {
@@ -427,22 +427,22 @@ public static class PromptProtectionRuleMapping
 
     public static CreatePromptProtectionRuleCommand ToCommand(
         CreatePromptProtectionRuleInput input) => new()
-    {
-        Name = input.Name,
-        Description = input.Description,
-        Pattern = input.Pattern,
-        Settings = ToDomain(input.Settings),
-    };
+        {
+            Name = input.Name,
+            Description = input.Description,
+            Pattern = input.Pattern,
+            Settings = ToDomain(input.Settings),
+        };
 
     public static UpdatePromptProtectionRuleCommand ToCommand(
         string id,
         UpdatePromptProtectionRuleInput input) => new()
-    {
-        Id = GidValue.Parse(id).Id,
-        Name = input.Name,
-        Description = input.Description,
-        Pattern = input.Pattern,
-        Status = input.Status is null ? null : ToWireStatus(input.Status.Value),
-        Settings = input.Settings is null ? null : ToDomain(input.Settings),
-    };
+        {
+            Id = GidValue.Parse(id).Id,
+            Name = input.Name,
+            Description = input.Description,
+            Pattern = input.Pattern,
+            Status = input.Status is null ? null : ToWireStatus(input.Status.Value),
+            Settings = input.Settings is null ? null : ToDomain(input.Settings),
+        };
 }

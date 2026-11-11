@@ -78,31 +78,31 @@ public class JsonRawMessageType : ScalarType<JsonElement>
                 resultValue.SetNullValue();
                 break;
             case JsonValueKind.Array:
-            {
-                resultValue.SetArrayValue(runtimeValue.GetArrayLength());
-                using var enumerator = runtimeValue.EnumerateArray().GetEnumerator();
-                foreach (var item in resultValue.EnumerateArray())
                 {
-                    enumerator.MoveNext();
-                    OnCoerceOutputValue(enumerator.Current, item);
-                }
+                    resultValue.SetArrayValue(runtimeValue.GetArrayLength());
+                    using var enumerator = runtimeValue.EnumerateArray().GetEnumerator();
+                    foreach (var item in resultValue.EnumerateArray())
+                    {
+                        enumerator.MoveNext();
+                        OnCoerceOutputValue(enumerator.Current, item);
+                    }
 
-                break;
-            }
+                    break;
+                }
 
             case JsonValueKind.Object:
-            {
-                resultValue.SetObjectValue(runtimeValue.GetPropertyCount());
-                using var enumerator = runtimeValue.EnumerateObject().GetEnumerator();
-                foreach (var property in resultValue.EnumerateObject())
                 {
-                    enumerator.MoveNext();
-                    property.Value.SetPropertyName(enumerator.Current.Name.AsSpan());
-                    OnCoerceOutputValue(enumerator.Current.Value, property.Value);
-                }
+                    resultValue.SetObjectValue(runtimeValue.GetPropertyCount());
+                    using var enumerator = runtimeValue.EnumerateObject().GetEnumerator();
+                    foreach (var property in resultValue.EnumerateObject())
+                    {
+                        enumerator.MoveNext();
+                        property.Value.SetPropertyName(enumerator.Current.Name.AsSpan());
+                        OnCoerceOutputValue(enumerator.Current.Value, property.Value);
+                    }
 
-                break;
-            }
+                    break;
+                }
 
             default:
                 throw new InvalidOperationException(
@@ -115,43 +115,43 @@ public class JsonRawMessageType : ScalarType<JsonElement>
         switch (runtimeValue.ValueKind)
         {
             case JsonValueKind.Object:
-            {
-                var fields = new List<ObjectFieldNode>();
-                foreach (var property in runtimeValue.EnumerateObject())
                 {
-                    fields.Add(new ObjectFieldNode(
-                        property.Name,
-                        OnValueToLiteral(property.Value)));
-                }
+                    var fields = new List<ObjectFieldNode>();
+                    foreach (var property in runtimeValue.EnumerateObject())
+                    {
+                        fields.Add(new ObjectFieldNode(
+                            property.Name,
+                            OnValueToLiteral(property.Value)));
+                    }
 
-                return new ObjectValueNode(fields);
-            }
+                    return new ObjectValueNode(fields);
+                }
 
             case JsonValueKind.Array:
-            {
-                var items = new List<IValueNode>();
-                foreach (var item in runtimeValue.EnumerateArray())
                 {
-                    items.Add(OnValueToLiteral(item));
-                }
+                    var items = new List<IValueNode>();
+                    foreach (var item in runtimeValue.EnumerateArray())
+                    {
+                        items.Add(OnValueToLiteral(item));
+                    }
 
-                return new ListValueNode(items);
-            }
+                    return new ListValueNode(items);
+                }
 
             case JsonValueKind.String:
                 return new StringValueNode(runtimeValue.GetString()!);
             case JsonValueKind.Number:
-            {
-                var raw = runtimeValue.GetRawText();
-                return long.TryParse(
-                        raw,
-                        NumberStyles.Integer,
-                        CultureInfo.InvariantCulture,
-                        out var integer)
-                    ? new IntValueNode(integer)
-                    : new FloatValueNode(
-                        double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture));
-            }
+                {
+                    var raw = runtimeValue.GetRawText();
+                    return long.TryParse(
+                            raw,
+                            NumberStyles.Integer,
+                            CultureInfo.InvariantCulture,
+                            out var integer)
+                        ? new IntValueNode(integer)
+                        : new FloatValueNode(
+                            double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture));
+                }
 
             case JsonValueKind.True:
                 return new BooleanValueNode(true);

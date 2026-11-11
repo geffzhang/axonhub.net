@@ -131,7 +131,7 @@ public sealed class AdminAuthEndpointTests : IAsyncLifetime
     [Fact]
     public async Task SignInRejectsAnInvalidBodyWithGinsBindingError()
     {
-        var (status, body, _) = await PostRawAsync("/admin/auth/signin", "{" );
+        var (status, body, _) = await PostRawAsync("/admin/auth/signin", "{");
 
         Assert.Equal(HttpStatusCode.BadRequest, status);
         Assert.Equal("Bad Request", body.GetProperty("error").GetProperty("type").GetString());

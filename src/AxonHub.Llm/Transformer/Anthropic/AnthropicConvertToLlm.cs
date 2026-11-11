@@ -166,19 +166,19 @@ public static class AnthropicConvertToLlm
                 switch (block.Type ?? string.Empty)
                 {
                     case "thinking":
-                    {
-                        var item = new ReasoningItem
                         {
-                            Content = EmptyToNull(block.Thinking),
-                            Signature = EmptyToNull(block.Signature),
-                        };
-                        if (item.Content is not null || item.Signature is not null)
-                        {
-                            reasoningItems.Add(item);
-                        }
+                            var item = new ReasoningItem
+                            {
+                                Content = EmptyToNull(block.Thinking),
+                                Signature = EmptyToNull(block.Signature),
+                            };
+                            if (item.Content is not null || item.Signature is not null)
+                            {
+                                reasoningItems.Add(item);
+                            }
 
-                        break;
-                    }
+                            break;
+                        }
 
                     case "redacted_thinking":
                         if (!string.IsNullOrEmpty(block.Data))
@@ -189,19 +189,19 @@ public static class AnthropicConvertToLlm
                         break;
 
                     case "text":
-                    {
-                        var part = new MessageContentPart
                         {
-                            Type = "text",
-                            Text = block.Text,
-                            CacheControl = ConvertCacheControl(block.CacheControl),
-                        };
-                        part.TransformerMetadata =
-                            AnthropicJson.SetBlockIndex(part.TransformerMetadata, blockIndex);
-                        contentParts.Add(part);
-                        hasContent = true;
-                        break;
-                    }
+                            var part = new MessageContentPart
+                            {
+                                Type = "text",
+                                Text = block.Text,
+                                CacheControl = ConvertCacheControl(block.CacheControl),
+                            };
+                            part.TransformerMetadata =
+                                AnthropicJson.SetBlockIndex(part.TransformerMetadata, blockIndex);
+                            contentParts.Add(part);
+                            hasContent = true;
+                            break;
+                        }
 
                     case "image":
                         if (ConvertImageSourceToLlmImageUrlPart(block.Source, block.CacheControl, out var imagePart))
@@ -222,24 +222,24 @@ public static class AnthropicConvertToLlm
                         break;
 
                     case "tool_use":
-                    {
-                        var toolCall = new ToolCall
                         {
-                            Id = block.Id,
-                            Type = "function",
-                            Function = new FunctionCall
+                            var toolCall = new ToolCall
                             {
-                                Name = block.Name ?? string.Empty,
-                                Arguments = RawText(block.Input),
-                            },
-                            CacheControl = ConvertCacheControl(block.CacheControl),
-                        };
-                        toolCall.TransformerMetadata =
-                            AnthropicJson.SetBlockIndex(toolCall.TransformerMetadata, blockIndex);
-                        (chatMessage.ToolCalls ??= []).Add(toolCall);
-                        hasContent = true;
-                        break;
-                    }
+                                Id = block.Id,
+                                Type = "function",
+                                Function = new FunctionCall
+                                {
+                                    Name = block.Name ?? string.Empty,
+                                    Arguments = RawText(block.Input),
+                                },
+                                CacheControl = ConvertCacheControl(block.CacheControl),
+                            };
+                            toolCall.TransformerMetadata =
+                                AnthropicJson.SetBlockIndex(toolCall.TransformerMetadata, blockIndex);
+                            (chatMessage.ToolCalls ??= []).Add(toolCall);
+                            hasContent = true;
+                            break;
+                        }
 
                     default:
                         hasContent |= ConvertSpecialBlock(
@@ -485,35 +485,35 @@ public static class AnthropicConvertToLlm
         {
             case "web_search_20250305":
             case "web_search":
-            {
-                var location = tool!.UserLocation ?? new AnthropicWebSearchToolUserLocation();
-                llmTool = new Tool
                 {
-                    Type = ToolTypes.WebSearch,
-                    CacheControl = ConvertCacheControl(tool.CacheControl),
-                    WebSearch = new WebSearch
+                    var location = tool!.UserLocation ?? new AnthropicWebSearchToolUserLocation();
+                    llmTool = new Tool
                     {
-                        MaxUses = tool.MaxUses,
-                        Strict = tool.Strict,
-                        // Go decodes a null element as ""; STJ keeps null.
-                        AllowedDomains = tool.AllowedDomains?
-                            .Select(static domain => domain ?? string.Empty)
-                            .ToList(),
-                        BlockedDomains = tool.BlockedDomains?
-                            .Select(static domain => domain ?? string.Empty)
-                            .ToList(),
-                        UserLocation = new WebSearchToolUserLocation
+                        Type = ToolTypes.WebSearch,
+                        CacheControl = ConvertCacheControl(tool.CacheControl),
+                        WebSearch = new WebSearch
                         {
-                            City = location.City,
-                            Country = location.Country,
-                            Region = location.Region,
-                            Timezone = location.Timezone,
-                            Type = location.Type ?? string.Empty,
+                            MaxUses = tool.MaxUses,
+                            Strict = tool.Strict,
+                            // Go decodes a null element as ""; STJ keeps null.
+                            AllowedDomains = tool.AllowedDomains?
+                                .Select(static domain => domain ?? string.Empty)
+                                .ToList(),
+                            BlockedDomains = tool.BlockedDomains?
+                                .Select(static domain => domain ?? string.Empty)
+                                .ToList(),
+                            UserLocation = new WebSearchToolUserLocation
+                            {
+                                City = location.City,
+                                Country = location.Country,
+                                Region = location.Region,
+                                Timezone = location.Timezone,
+                                Type = location.Type ?? string.Empty,
+                            },
                         },
-                    },
-                };
-                return true;
-            }
+                    };
+                    return true;
+                }
 
             case "":
             case "custom":

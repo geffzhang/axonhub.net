@@ -207,20 +207,20 @@ public sealed class ResponsesStreamEventStatusConverter : JsonConverter<int>
                 return 0;
 
             case JsonTokenType.Number:
-            {
-                var raw = reader.ValueSpan;
-                if (!long.TryParse(
-                        System.Text.Encoding.UTF8.GetString(raw),
-                        System.Globalization.NumberStyles.AllowLeadingSign,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out var value))
                 {
-                    throw new JsonException(
-                        "json: cannot unmarshal number " + System.Text.Encoding.UTF8.GetString(raw) + " into Go value of type int");
-                }
+                    var raw = reader.ValueSpan;
+                    if (!long.TryParse(
+                            System.Text.Encoding.UTF8.GetString(raw),
+                            System.Globalization.NumberStyles.AllowLeadingSign,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out var value))
+                    {
+                        throw new JsonException(
+                            "json: cannot unmarshal number " + System.Text.Encoding.UTF8.GetString(raw) + " into Go value of type int");
+                    }
 
-                return unchecked((int)value);
-            }
+                    return unchecked((int)value);
+                }
 
             case JsonTokenType.String:
                 // The reference decodes any string into a string and drops it.

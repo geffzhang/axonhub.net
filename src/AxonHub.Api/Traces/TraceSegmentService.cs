@@ -719,252 +719,252 @@ public sealed class TraceSegmentService(
                     break;
 
                 case "compaction_summary":
-                {
-                    var summary = string.Empty;
-                    if (part.Compact is { } compact)
                     {
-                        summary = CompactTextSummary(compact.EncryptedContent);
+                        var summary = string.Empty;
+                        if (part.Compact is { } compact)
+                        {
+                            summary = CompactTextSummary(compact.EncryptedContent);
+                            if (summary.Length == 0)
+                            {
+                                summary = CompactTextSummary(compact.Id);
+                            }
+                        }
+
+                        if (summary.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        spans.Add(new TraceSpan
+                        {
+                            Id = NextId("compaction_summary"),
+                            Type = "compaction_summary",
+                            StartTime = now,
+                            EndTime = now,
+                            Value = new TraceSpanValue
+                            {
+                                Text = new TraceSpanText { Text = summary },
+                                Compaction = new TraceSpanCompaction { Summary = summary },
+                            },
+                        });
+                        break;
+                    }
+
+                case "compaction":
+                    {
+                        if (part.Compact is not { } compact)
+                        {
+                            continue;
+                        }
+
+                        var summary = CompactTextSummary(compact.EncryptedContent);
                         if (summary.Length == 0)
                         {
                             summary = CompactTextSummary(compact.Id);
                         }
-                    }
 
-                    if (summary.Length == 0)
-                    {
-                        continue;
-                    }
-
-                    spans.Add(new TraceSpan
-                    {
-                        Id = NextId("compaction_summary"),
-                        Type = "compaction_summary",
-                        StartTime = now,
-                        EndTime = now,
-                        Value = new TraceSpanValue
+                        if (summary.Length == 0)
                         {
-                            Text = new TraceSpanText { Text = summary },
-                            Compaction = new TraceSpanCompaction { Summary = summary },
-                        },
-                    });
-                    break;
-                }
+                            summary = "Compaction item";
+                        }
 
-                case "compaction":
-                {
-                    if (part.Compact is not { } compact)
-                    {
-                        continue;
-                    }
-
-                    var summary = CompactTextSummary(compact.EncryptedContent);
-                    if (summary.Length == 0)
-                    {
-                        summary = CompactTextSummary(compact.Id);
-                    }
-
-                    if (summary.Length == 0)
-                    {
-                        summary = "Compaction item";
-                    }
-
-                    spans.Add(new TraceSpan
-                    {
-                        Id = NextId("compaction"),
-                        Type = "compaction",
-                        StartTime = now,
-                        EndTime = now,
-                        Value = new TraceSpanValue
+                        spans.Add(new TraceSpan
                         {
-                            Text = new TraceSpanText { Text = summary },
-                            Compaction = new TraceSpanCompaction { Summary = summary },
-                        },
-                    });
-                    break;
-                }
+                            Id = NextId("compaction"),
+                            Type = "compaction",
+                            StartTime = now,
+                            EndTime = now,
+                            Value = new TraceSpanValue
+                            {
+                                Text = new TraceSpanText { Text = summary },
+                                Compaction = new TraceSpanCompaction { Summary = summary },
+                            },
+                        });
+                        break;
+                    }
 
                 case "image_url":
-                {
-                    if (part.ImageUrl is not { } imageUrl)
                     {
-                        continue;
-                    }
+                        if (part.ImageUrl is not { } imageUrl)
+                        {
+                            continue;
+                        }
 
-                    switch (message.Role)
-                    {
-                        case "user":
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("image_url"),
-                                Type = "user_image_url",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                        switch (message.Role)
+                        {
+                            case "user":
+                                spans.Add(new TraceSpan
                                 {
-                                    UserImageURL = new TraceSpanUserImageUrl
+                                    Id = NextId("image_url"),
+                                    Type = "user_image_url",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
                                     {
-                                        URL = imageUrl.Url,
+                                        UserImageURL = new TraceSpanUserImageUrl
+                                        {
+                                            URL = imageUrl.Url,
+                                        },
                                     },
-                                },
-                            });
-                            break;
-                        case "tool":
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("image_url"),
-                                Type = "tool_result",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                                });
+                                break;
+                            case "tool":
+                                spans.Add(new TraceSpan
                                 {
-                                    ToolResult = new TraceSpanToolResult
+                                    Id = NextId("image_url"),
+                                    Type = "tool_result",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
                                     {
-                                        // Image URL in tool result - stored as output.
-                                        Text = imageUrl.Url,
+                                        ToolResult = new TraceSpanToolResult
+                                        {
+                                            // Image URL in tool result - stored as output.
+                                            Text = imageUrl.Url,
+                                        },
                                     },
-                                },
-                            });
-                            break;
-                        default:
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("image_url"),
-                                Type = "image_url",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                                });
+                                break;
+                            default:
+                                spans.Add(new TraceSpan
                                 {
-                                    ImageURL = new TraceSpanImageUrl { URL = imageUrl.Url },
-                                },
-                            });
-                            break;
-                    }
+                                    Id = NextId("image_url"),
+                                    Type = "image_url",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
+                                    {
+                                        ImageURL = new TraceSpanImageUrl { URL = imageUrl.Url },
+                                    },
+                                });
+                                break;
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "video_url":
-                {
-                    if (part.VideoUrl is not { } videoUrl)
                     {
-                        continue;
-                    }
+                        if (part.VideoUrl is not { } videoUrl)
+                        {
+                            continue;
+                        }
 
-                    switch (message.Role)
-                    {
-                        case "user":
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("video_url"),
-                                Type = "user_video_url",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                        switch (message.Role)
+                        {
+                            case "user":
+                                spans.Add(new TraceSpan
                                 {
-                                    UserVideoURL = new TraceSpanUserVideoUrl
+                                    Id = NextId("video_url"),
+                                    Type = "user_video_url",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
                                     {
-                                        URL = videoUrl.URL,
+                                        UserVideoURL = new TraceSpanUserVideoUrl
+                                        {
+                                            URL = videoUrl.URL,
+                                        },
                                     },
-                                },
-                            });
-                            break;
-                        case "tool":
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("video_url"),
-                                Type = "tool_result",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                                });
+                                break;
+                            case "tool":
+                                spans.Add(new TraceSpan
                                 {
-                                    ToolResult = new TraceSpanToolResult
+                                    Id = NextId("video_url"),
+                                    Type = "tool_result",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
                                     {
-                                        Text = videoUrl.URL,
+                                        ToolResult = new TraceSpanToolResult
+                                        {
+                                            Text = videoUrl.URL,
+                                        },
                                     },
-                                },
-                            });
-                            break;
-                        default:
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("video_url"),
-                                Type = "video_url",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                                });
+                                break;
+                            default:
+                                spans.Add(new TraceSpan
                                 {
-                                    VideoURL = new TraceSpanVideoUrl { URL = videoUrl.URL },
-                                },
-                            });
-                            break;
-                    }
+                                    Id = NextId("video_url"),
+                                    Type = "video_url",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
+                                    {
+                                        VideoURL = new TraceSpanVideoUrl { URL = videoUrl.URL },
+                                    },
+                                });
+                                break;
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "input_audio":
-                {
-                    if (part.InputAudio is not { } inputAudio)
                     {
-                        continue;
-                    }
+                        if (part.InputAudio is not { } inputAudio)
+                        {
+                            continue;
+                        }
 
-                    switch (message.Role)
-                    {
-                        case "user":
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("input_audio"),
-                                Type = "user_input_audio",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                        switch (message.Role)
+                        {
+                            case "user":
+                                spans.Add(new TraceSpan
                                 {
-                                    UserInputAudio = new TraceSpanUserInputAudio
+                                    Id = NextId("input_audio"),
+                                    Type = "user_input_audio",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
                                     {
-                                        Format = inputAudio.Format,
-                                        Data = inputAudio.Data,
+                                        UserInputAudio = new TraceSpanUserInputAudio
+                                        {
+                                            Format = inputAudio.Format,
+                                            Data = inputAudio.Data,
+                                        },
                                     },
-                                },
-                            });
-                            break;
-                        case "tool":
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("input_audio"),
-                                Type = "tool_result",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                                });
+                                break;
+                            case "tool":
+                                spans.Add(new TraceSpan
                                 {
-                                    ToolResult = new TraceSpanToolResult
+                                    Id = NextId("input_audio"),
+                                    Type = "tool_result",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
                                     {
-                                        Text = "[audio input: " + inputAudio.Format + "]",
+                                        ToolResult = new TraceSpanToolResult
+                                        {
+                                            Text = "[audio input: " + inputAudio.Format + "]",
+                                        },
                                     },
-                                },
-                            });
-                            break;
-                        default:
-                            spans.Add(new TraceSpan
-                            {
-                                Id = NextId("input_audio"),
-                                Type = "audio",
-                                StartTime = now,
-                                EndTime = now,
-                                Value = new TraceSpanValue
+                                });
+                                break;
+                            default:
+                                spans.Add(new TraceSpan
                                 {
-                                    Audio = new TraceSpanAudio
+                                    Id = NextId("input_audio"),
+                                    Type = "audio",
+                                    StartTime = now,
+                                    EndTime = now,
+                                    Value = new TraceSpanValue
                                     {
-                                        Format = inputAudio.Format,
-                                        Data = inputAudio.Data,
+                                        Audio = new TraceSpanAudio
+                                        {
+                                            Format = inputAudio.Format,
+                                            Data = inputAudio.Data,
+                                        },
                                     },
-                                },
-                            });
-                            break;
-                    }
+                                });
+                                break;
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 default:
                     // ignore for now.

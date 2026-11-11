@@ -434,16 +434,16 @@ public sealed class GcsDataStorageBackend : IDataStorageBackend
                 switch (type)
                 {
                     case "service_account":
-                    {
-                        // Cloud's CredentialsFromJSON parses the key eagerly, so
-                        // an unusable PEM fails construction, not the first request.
-                        var privateKey = Require(root, "private_key");
-                        ValidatePrivateKey(privateKey);
-                        return new ServiceAccountCredential(
-                            Require(root, "client_email"),
-                            privateKey,
-                            ReadString(root, "token_uri") ?? DefaultTokenUri);
-                    }
+                        {
+                            // Cloud's CredentialsFromJSON parses the key eagerly, so
+                            // an unusable PEM fails construction, not the first request.
+                            var privateKey = Require(root, "private_key");
+                            ValidatePrivateKey(privateKey);
+                            return new ServiceAccountCredential(
+                                Require(root, "client_email"),
+                                privateKey,
+                                ReadString(root, "token_uri") ?? DefaultTokenUri);
+                        }
 
                     case "authorized_user":
                         return new AuthorizedUserCredential(

@@ -579,13 +579,13 @@ public static class ProviderQuotaData
         string status,
         double usageRatio,
         DateTimeOffset? nextResetAt) => new()
-    {
-        Type = QuotaLimitTypes.Token,
-        Status = status,
-        UsageRatio = usageRatio,
-        Ready = ProviderQuotaStatuses.IsReadyStatus(status),
-        NextResetAt = nextResetAt,
-    };
+        {
+            Type = QuotaLimitTypes.Token,
+            Status = status,
+            UsageRatio = usageRatio,
+            Ready = ProviderQuotaStatuses.IsReadyStatus(status),
+            NextResetAt = nextResetAt,
+        };
 
     /// <summary>Port of provider_quota.CloneLimitStatus (provider_quota.go:136-151).</summary>
     public static QuotaLimitStatus CloneLimit(QuotaLimitStatus limit)

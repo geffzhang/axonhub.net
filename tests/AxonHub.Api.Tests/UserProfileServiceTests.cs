@@ -520,20 +520,20 @@ public sealed class UserProfileServiceTests
         string password = "stored-hash",
         string? scopes = null,
         string? avatar = "avatar.png") => new()
-    {
-        Id = 9,
-        CreatedAt = CreatedAt,
-        UpdatedAt = UpdatedAt,
-        Email = email,
-        Status = "activated",
-        PreferLanguage = "en",
-        Password = password,
-        FirstName = "John",
-        LastName = "Doe",
-        Avatar = avatar,
-        IsOwner = true,
-        Scopes = scopes ?? "[]",
-    };
+        {
+            Id = 9,
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            Email = email,
+            Status = "activated",
+            PreferLanguage = "en",
+            Password = password,
+            FirstName = "John",
+            LastName = "Doe",
+            Avatar = avatar,
+            IsOwner = true,
+            Scopes = scopes ?? "[]",
+        };
 
     private static RoleRecord NewRole(
         long id,
@@ -541,29 +541,29 @@ public sealed class UserProfileServiceTests
         long? projectId,
         string level = "system",
         string scopes = "[]") => new()
-    {
-        Id = id,
-        CreatedAt = CreatedAt,
-        UpdatedAt = UpdatedAt,
-        Name = name,
-        Level = level,
-        Scopes = scopes,
-        ProjectId = projectId,
-    };
+        {
+            Id = id,
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            Name = name,
+            Level = level,
+            Scopes = scopes,
+            ProjectId = projectId,
+        };
 
     private static UserProjectRecord NewUserProject(
         long id,
         long projectId,
         string scopes = "[]") => new()
-    {
-        Id = id,
-        CreatedAt = CreatedAt,
-        UpdatedAt = UpdatedAt,
-        IsOwner = false,
-        Scopes = scopes,
-        UserId = 9,
-        ProjectId = projectId,
-    };
+        {
+            Id = id,
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            IsOwner = false,
+            Scopes = scopes,
+            UserId = 9,
+            ProjectId = projectId,
+        };
 
     private static ProjectRecord NewProject(long id, string name) => new()
     {
