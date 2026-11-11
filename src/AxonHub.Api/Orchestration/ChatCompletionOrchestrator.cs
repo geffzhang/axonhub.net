@@ -630,10 +630,10 @@ public sealed class ChatCompletionOrchestrator
     {
         // channel_llm.go:122-130,700-774: the reference builds the channel's
         // transformer with the channel's proxy-aware client, and the same client
-        // serves the local OAuth token refreshers. The grain-backed refresh
-        // (ChannelTokenSource) is still a separate seam (C094); here the factory
-        // receives the per-channel executor so direct token providers follow the
-        // channel proxy like the reference.
+        // serves the OAuth token providers. Here the factory receives the
+        // per-channel executor for direct token providers; the grain-backed
+        // refresh (ChannelTokenSource) resolves the same cached client from the
+        // seed's settings snapshot (§178).
         IExecutor ChannelExecutorFor(ChannelCandidate candidate)
             => _channelProxyExecutors?.Resolve(candidate) ?? _executor;
 

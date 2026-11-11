@@ -1075,6 +1075,47 @@ global.json 固定的 SDK 10.0.401，日志 `.agent/summary/_api_full_177.log`�
 补记未建模的 disable_ssl_verify。269 条不变（195 accepted / 7 gap / 67 resolved），
 lint 通过，`02-differences.md` 已重新生成。
 
+§178（2026-11-11）关闭 C094 (5)：grain 令牌刷新跟随通道级 `settings.proxy`，与推理
+共用同一个按通道 HTTP client（参照 channel_llm.go:113-130、707 把 `getHttpClient(c.Settings)`
+同时交给 codex / xai_subscription / claudecode 的 TokenProvider）。
+
+实现：`ChannelTokenSeed` 与 `ChannelTokenRefreshRequest` 各自追加
+`[Id(5)] / [Id(6)] Settings`（原始 `channels.settings` jsonb 文本，追加字段保持 Orleans
+序列化兼容）；`CreateTokenSeed`（ChannelOutboundFactory）与 codex 目录的
+`CreateTokenProvider`（缓存与 live 两个分支）都把候选行的 settings 填入 seed。
+`ChannelTokenGrain` 以 `updated_at` 为版本采纳快照：更旧 seed 完全忽略；**相等版本只更新
+settings、不回滚已采纳凭据**——grain 自身刷新写回会推进 updated_at，缓存重建读到的同
+版本 seed 仍须交付并发修改过的 proxy（channel.go:291-306）。`ChannelTokenSource` 改为
+注入 `ChannelProxyExecutors`，按 `request.Settings` 经新增的
+`Resolve(long channelId, string? settingsJson)` 取 executor；它与候选路径共用
+`ResolveChannel` 的 channelId + 指纹缓存，无 proxy 时移除缓存并回退共享 executor，
+`type: disabled` 仍建独立 client 以抑制环境代理。畸形 settings 沿用
+`ChannelTransformOptions.SettingsOfRaw` 的宽容解析（C013 / C157）。
+
+残余（台账已注明）：C094 的端点表与 fenno / copilot / antigravity 生命周期等其余项
+不变；C104（ModelScope 异步轮询 / 图片下载）、C105（视频任务 API）、C158（ModelFetcher）
+仍按各自条目为残余。
+
+测试：新增 6 例，Api 4 + Grains 2。`ChannelTokenSourceTests` 8 例（原 6 + 按通道 proxy
+刷新、无 proxy 回退共享）；`ChannelProxyExecutorsTests` 10 例（原 8 + 原始 settings 与
+候选路径共享缓存 client、无 proxy 回退共享）；`ChannelTokenGrainTests` 10 例（原 8 +
+seed settings 透传到刷新请求、同版本 seed 更新 settings 而不回滚凭据）。
+
+本轮实测：`AxonHub.Api.Tests` 6145 通过 / 0 失败 / 0 跳过（30m4s，仓库 global.json
+固定的 SDK 10.0.401，日志 `.agent/summary/_api_full_178.log`，6145 = §177 的 6141 +
+新增 4）；定向 `ChannelTokenSourceTests`、`ChannelProxyExecutorsTests` 与 codex 目录
+相关测试 23 例通过；`AxonHub.Grains.Tests` 全量 177 通过 / 0 失败 / 0 跳过（175 + 新增
+2）。Persistence / Llm 本轮未改动，沿用 §176 引用的实测 376 / 3110，四项目合计 9808。
+前两次 Api 全量尝试分别在一次 SafeguardsEndpointTests 的 10ms attempt-timeout 用例
+失败（单跑该类 21 例全通过，判定为全量并行负载下的时序抖动）与一次纯 testhost 随机
+崩溃（4123 例、0 断言失败，§103 记录的同类抖动）后中止，日志
+`.agent/summary/_api_full_178a-crash.log` / `_api_full_178b-crash.log`。
+
+台账：C094 (5) 关闭；C227 记录 seed settings 与三个测试文件的计数；C154 的
+ChannelProxyExecutorsTests 计数 8→10；台账卫生把已闭合的 C091 改为 accepted 并订正
+C014 / C158 的过期残余描述。269 条（196 accepted / 6 gap / 67 resolved），lint 通过，
+`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

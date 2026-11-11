@@ -37,7 +37,8 @@ public sealed class ChannelTokenGrainTests(GrainClusterFixture fixture)
         string accessToken = "access-1",
         DateTimeOffset? expiresAt = null,
         string refreshToken = "refresh-1",
-        string credentialsJson = """{"apiKey":"legacy","managementApiKey":"mgmt"}""")
+        string credentialsJson = """{"apiKey":"legacy","managementApiKey":"mgmt"}""",
+        string? settings = null)
         => new()
         {
             ChannelId = channelId,
@@ -45,6 +46,7 @@ public sealed class ChannelTokenGrainTests(GrainClusterFixture fixture)
             Credentials = Token(accessToken, expiresAt, refreshToken),
             CredentialsJson = credentialsJson,
             UpdatedAt = updatedAt,
+            Settings = settings,
         };
 
     [Fact]
@@ -90,6 +92,94 @@ public sealed class ChannelTokenGrainTests(GrainClusterFixture fixture)
         // lag a refresh).
         var again = await grain.GetAccessTokenAsync(expired);
         Assert.Equal("access-2", again.AccessToken);
+        Assert.Single(fixture.TokenSource.Requests);
+    }
+
+    [Fact]
+    public async Task TheSeedSettingsReachTheRefreshRequest()
+    {
+        fixture.TokenSource.Reset();
+        const string Settings = """{"proxy":{"type":"url","url":"http://channel.proxy:8080"}}""";
+        fixture.TokenSource.OnRefresh = request =>
+        {
+            // The source resolves the channel's proxy-aware client from this
+            // snapshot (channel_llm.go:707, §178).
+            Assert.Equal(Settings, request.Settings);
+
+            return new ChannelTokenRefreshResult
+            {
+                Credentials = Token("access-proxied"),
+                CredentialsJson = """{"apiKey":"rotated"}""",
+                UpdatedAt = Start.AddMinutes(1),
+            };
+        };
+
+        var grain = Grain(9010);
+        var token = await grain.GetAccessTokenAsync(
+            Seed(
+                9010,
+                Start,
+                expiresAt: DateTimeOffset.UtcNow.AddMinutes(-1),
+                settings: Settings));
+
+        Assert.Equal("access-proxied", token.AccessToken);
+        Assert.Single(fixture.TokenSource.Requests);
+    }
+
+    [Fact]
+    public async Task SameVersionSeedUpdatesSettingsWithoutRollingBackCredentials()
+    {
+        fixture.TokenSource.Reset();
+        const string OldSettings = """{"proxy":{"type":"url","url":"http://old.proxy:8080"}}""";
+        const string NewSettings = """{"proxy":{"type":"url","url":"http://new.proxy:8080"}}""";
+
+        fixture.TokenSource.OnRefresh = _ => new ChannelTokenRefreshResult
+        {
+            // Inside the five-minute EnsureFresh window afterwards.
+            Credentials = Token("access-refreshed", DateTimeOffset.UtcNow.AddMinutes(4)),
+            CredentialsJson = """{"apiKey":"rotated"}""",
+            UpdatedAt = Start.AddMinutes(1),
+        };
+
+        var grain = Grain(9011);
+        _ = await grain.GetAccessTokenAsync(
+            Seed(
+                9011,
+                Start,
+                expiresAt: DateTimeOffset.UtcNow.AddMinutes(-1),
+                settings: OldSettings));
+        Assert.Single(fixture.TokenSource.Requests);
+
+        // The cache rebuild after the refresh write reads the row at exactly
+        // the grain's adopted timestamp; it carries a proxy changed before the
+        // refresh. Credentials stay as adopted (no stale rollback), settings
+        // move to the row version's document.
+        fixture.TokenSource.Reset();
+        fixture.TokenSource.OnRefresh = request =>
+        {
+            Assert.Equal(NewSettings, request.Settings);
+
+            return new ChannelTokenRefreshResult
+            {
+                Credentials = Token("access-fresh"),
+                CredentialsJson = """{"apiKey":"fresh"}""",
+                UpdatedAt = Start.AddMinutes(2),
+            };
+        };
+
+        var sameVersion = await grain.GetAccessTokenAsync(
+            Seed(
+                9011,
+                Start.AddMinutes(1),
+                accessToken: "access-stale",
+                settings: NewSettings));
+        Assert.Equal("access-refreshed", sameVersion.AccessToken);
+
+        await grain.EnsureFreshAsync();
+
+        var refreshed = await grain.GetAccessTokenAsync(
+            Seed(9011, Start.AddMinutes(1), accessToken: "access-stale", settings: NewSettings));
+        Assert.Equal("access-fresh", refreshed.AccessToken);
         Assert.Single(fixture.TokenSource.Requests);
     }
 

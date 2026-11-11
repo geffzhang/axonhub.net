@@ -57,6 +57,7 @@ public sealed class ChannelTokenGrain(
     private string _credentialsJson = "{}";
     private DateTime _updatedAt;
     private string _channelType = string.Empty;
+    private string? _settings;
     private bool _seeded;
     private bool _stopped;
 
@@ -172,6 +173,7 @@ public sealed class ChannelTokenGrain(
                     CredentialsJson = _credentialsJson,
                     UpdatedAt = _updatedAt,
                     EnsureFresh = ensureFresh,
+                    Settings = _settings,
                 },
                 cancellationToken)
             .ConfigureAwait(true);
@@ -196,22 +198,41 @@ public sealed class ChannelTokenGrain(
     /// credentials, matching the reference provider's snapshot identity; an
     /// older cached candidate (the enabled-channel cache can lag a refresh)
     /// never rolls a rotated token back.
+    /// <para>
+    /// The settings document is versioned by the same <c>updated_at</c>, but a
+    /// refresh this grain persisted advances that version itself. The enabled
+    /// cache rebuild that follows reads the row at the same timestamp, so its
+    /// seed must still deliver settings a concurrent channel edit changed —
+    /// the reference rebuilds every channel's HTTP client on each cache swap
+    /// (channel.go:291-298, §178). Equal timestamps therefore refresh the
+    /// settings snapshot while keeping the adopted credentials.
+    /// </para>
     /// </summary>
     private void AdoptSeed(ChannelTokenSeed seed)
     {
         var incoming = Normalize(seed.UpdatedAt);
 
-        if (_seeded && incoming <= _updatedAt)
+        if (!_seeded || incoming > _updatedAt)
         {
+            AdoptSnapshot(seed, incoming);
             return;
         }
 
+        if (incoming == _updatedAt)
+        {
+            _settings = seed.Settings;
+        }
+    }
+
+    private void AdoptSnapshot(ChannelTokenSeed seed, DateTime updatedAt)
+    {
         _seeded = true;
         _stopped = false;
         _channelType = seed.ChannelType;
         _credentials = seed.Credentials;
         _credentialsJson = seed.CredentialsJson;
-        _updatedAt = incoming;
+        _updatedAt = updatedAt;
+        _settings = seed.Settings;
     }
 
     private static bool IsExpired(ChannelOAuthToken credentials, DateTimeOffset now)

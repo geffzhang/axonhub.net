@@ -112,6 +112,37 @@ public sealed class ChannelProxyExecutorsTests
     }
 
     [Fact]
+    public void RawSettingsShareTheCachedChannelClient()
+    {
+        // The token grain's refresh only carries the raw settings document; it
+        // must resolve to the same client the channel's inference uses.
+        var proxyExecutor = new ScriptedExecutor();
+        var factory = new ScriptedProxyExecutorFactory { Executor = proxyExecutor };
+        var service = new ChannelProxyExecutors(new ScriptedExecutor(), factory);
+        const string Settings = """{"proxy":{"type":"url","url":"http://channel.proxy:8080"}}""";
+
+        var fromRefresh = service.Resolve(708, Settings);
+        var fromInference = service.Resolve(Candidate(708, Settings));
+
+        Assert.Same(proxyExecutor, fromRefresh);
+        Assert.Same(fromRefresh, fromInference);
+        Assert.Single(factory.Requests);
+    }
+
+    [Fact]
+    public void RawSettingsWithoutAProxyKeepTheSharedExecutor()
+    {
+        var shared = new ScriptedExecutor();
+        var factory = new ScriptedProxyExecutorFactory();
+        var service = new ChannelProxyExecutors(shared, factory);
+
+        var resolved = service.Resolve(709, """{"transformOptions":{}}""");
+
+        Assert.Same(shared, resolved);
+        Assert.Empty(factory.Requests);
+    }
+
+    [Fact]
     public void OverridesAlwaysBuildAFreshClient()
     {
         var factory = new ScriptedProxyExecutorFactory { Executor = new ScriptedExecutor() };

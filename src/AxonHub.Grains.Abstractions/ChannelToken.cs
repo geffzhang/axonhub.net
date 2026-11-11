@@ -72,6 +72,15 @@ public sealed class ChannelTokenSeed
     /// <summary>Ent <c>updated_at</c> of the row behind the seed.</summary>
     [Id(4)]
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>
+    /// Raw <c>channels.settings</c> jsonb text behind the seed. The reference
+    /// builds the channel's HTTP client from this snapshot
+    /// (channel_llm.go:113-130, 707) and hands that client to the token
+    /// provider, so a refresh follows the same proxy as inference (§178).
+    /// </summary>
+    [Id(5)]
+    public string? Settings { get; set; }
 }
 
 /// <summary>
@@ -106,6 +115,13 @@ public sealed class ChannelTokenRefreshRequest
     /// </summary>
     [Id(5)]
     public bool EnsureFresh { get; set; }
+
+    /// <summary>
+    /// Raw <c>channels.settings</c> jsonb text of the same snapshot; the source
+    /// resolves the channel's proxy-aware HTTP client from it (§178).
+    /// </summary>
+    [Id(6)]
+    public string? Settings { get; set; }
 }
 
 /// <summary>The outcome of one refresh attempt (channel_llm.go:1638-1702).</summary>

@@ -23,6 +23,11 @@ namespace AxonHub.Api.Orchestration;
 /// the environment proxy rather than fall back to the shared client.
 /// </para>
 /// <para>
+/// The per-channel token grain's refresh resolves through the same cache, so a
+/// channel's refresh and its inference share one client — the reference passes
+/// the channel's <c>HTTPClient</c> to the token provider (§178).
+/// </para>
+/// <para>
 /// The tester's per-request override (axonhub.resolvers.go:344 →
 /// <c>processor.proxy</c> → <c>state.Proxy</c>) always builds a fresh client,
 /// exactly like the reference's <c>channel.HTTPClient.WithProxy(state.Proxy)</c>.
@@ -55,14 +60,26 @@ public sealed class ChannelProxyExecutors
     {
         ArgumentNullException.ThrowIfNull(candidate);
 
-        var proxy = ChannelTransformOptions.SettingsOf(candidate)?.Proxy;
+        return ResolveChannel(candidate.ChannelId, ChannelTransformOptions.SettingsOf(candidate)?.Proxy);
+    }
+
+    /// <summary>
+    /// Same selection from a raw <c>channels.settings</c> snapshot. The token
+    /// grain's refresh path only carries the raw document, and the reference
+    /// hands it the very client built for the channel (§178).
+    /// </summary>
+    public IExecutor Resolve(long channelId, string? settingsJson)
+        => ResolveChannel(channelId, ChannelTransformOptions.SettingsOfRaw(settingsJson)?.Proxy);
+
+    private IExecutor ResolveChannel(long channelId, ProxyConfigDraft? proxy)
+    {
         if (proxy is null)
         {
             // The channel no longer configures a proxy (or never did): drop the
             // cached client so a later reconfiguration starts from a fresh one.
             lock (_gate)
             {
-                _channels.Remove(candidate.ChannelId);
+                _channels.Remove(channelId);
             }
 
             return _fallback;
@@ -71,7 +88,7 @@ public sealed class ChannelProxyExecutors
         var fingerprint = ChannelProxySettings.Fingerprint(proxy);
         lock (_gate)
         {
-            if (_channels.TryGetValue(candidate.ChannelId, out var entry)
+            if (_channels.TryGetValue(channelId, out var entry)
                 && entry.Fingerprint == fingerprint)
             {
                 return entry.Executor;
@@ -80,7 +97,7 @@ public sealed class ChannelProxyExecutors
             // The reference rebuilds the client with the channel record, so a
             // changed settings snapshot replaces the cached executor.
             var built = _factory.Create(ChannelProxySettings.ToProxyConfig(proxy)!);
-            _channels[candidate.ChannelId] = new Entry(fingerprint, built);
+            _channels[channelId] = new Entry(fingerprint, built);
             return built;
         }
     }

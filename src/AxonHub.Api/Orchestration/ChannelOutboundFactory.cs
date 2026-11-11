@@ -528,9 +528,9 @@ public static class ChannelOutboundFactory
                 candidate.ChannelId),
             // channel_llm.go:867-884: xai_subscription wraps the Responses
             // outbound with a refreshing OAuth token provider pinned to the
-            // Grok CLI endpoints. The reference also registers the provider's
-            // auto-refresh and an OnRefreshed persistence callback; the port's
-            // channel grains run neither yet (C094/C127).
+            // Grok CLI endpoints. The grain-backed provider runs the refresh
+            // loop and the OnRefreshed persistence callback (§146); the local
+            // fallback used without a grain factory has neither.
             XaiSubscriptionChannelType => CreateXaiSubscriptionOutbound(
                 candidate,
                 tokenRefreshExecutor,
@@ -1493,8 +1493,8 @@ public static class ChannelOutboundFactory
     /// (channel_llm.go:1218-1276). The typed <c>oauth</c> object is re-marshalled
     /// without <c>id_token</c>, parsed, and wrapped in the device-flow token
     /// provider that mints Copilot tokens. The reference also registers the
-    /// provider's auto-refresh (channel_llm.go:1270-1275); the port's channel
-    /// grains do not run refresh loops yet (C094).
+    /// provider's auto-refresh (channel_llm.go:1270-1275); copilot still uses a
+    /// local provider, so the port has no auto-refresh for it yet (C094).
     /// </summary>
     private static CopilotOutboundTransformer CreateGithubCopilotOutbound(
         ChannelCandidate candidate,
@@ -1594,9 +1594,9 @@ public static class ChannelOutboundFactory
     /// Port of the xai_subscription branch of <c>buildChannelWithTransformer</c>
     /// (channel_llm.go:867-884): resolve the OAuth credentials, build the
     /// refreshing token provider over the xAI endpoints, and wrap the Responses
-    /// outbound. The reference also registers the provider's auto-refresh and
-    /// the <c>OnRefreshed</c> persistence callback; the port's channel grains
-    /// run neither yet (C094/C127).
+    /// outbound. The grain-backed provider runs the refresh loop and the
+    /// <c>OnRefreshed</c> persistence callback (§146); the local fallback used
+    /// without a grain factory has neither.
     /// </summary>
     private static SubscriptionOutboundTransformer CreateXaiSubscriptionOutbound(
         ChannelCandidate candidate,
@@ -1775,8 +1775,9 @@ public static class ChannelOutboundFactory
 
     /// <summary>
     /// The snapshot handed to the per-channel token grain: the credentials the
-    /// outbound resolved, the raw credentials document they came from, and the
-    /// row timestamp the refresh's optimistic write is based on (§146).
+    /// outbound resolved, the raw credentials document they came from, the row
+    /// timestamp the refresh's optimistic write is based on (§146), and the raw
+    /// settings the refresh resolves its proxy-aware HTTP client from (§178).
     /// </summary>
     private static ChannelTokenSeed CreateTokenSeed(
         ChannelCandidate candidate,
@@ -1788,6 +1789,7 @@ public static class ChannelOutboundFactory
             Credentials = ChannelOAuthTokenMapping.ToToken(credentials),
             CredentialsJson = candidate.Credentials,
             UpdatedAt = candidate.UpdatedAt,
+            Settings = candidate.Settings,
         };
 
     /// <summary>

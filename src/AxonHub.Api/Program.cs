@@ -95,8 +95,9 @@ builder.Services.AddSingleton(static _ => new HttpExecutor(new HttpClient(new So
 }));
 builder.Services.AddSingleton<IExecutor>(static services => services.GetRequiredService<HttpExecutor>());
 
-// The refresh HTTP goes through the shared executor: the reference uses the
-// channel's proxy-aware client, which is not ported (C094).
+// The refresh HTTP uses the channel's own client, resolved from the seed's
+// settings snapshot through ChannelProxyExecutors — the reference hands the
+// provider channel.HTTPClient (channel_llm.go:707, 872, 951; §178).
 builder.Services.AddSingleton<IChannelTokenSource, ChannelTokenSource>();
 
 builder.Services.AddSingleton<IInboundTransformer, OpenAiInboundTransformer>();

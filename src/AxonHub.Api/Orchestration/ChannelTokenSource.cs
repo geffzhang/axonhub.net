@@ -32,10 +32,17 @@ namespace AxonHub.Api.Orchestration;
 /// Antigravity and the model-fetcher/endpoint-detect refresh paths keep their
 /// own providers (C094, C158).
 /// </para>
+/// <para>
+/// The refresh HTTP uses the channel's own client, resolved from the seed's
+/// settings snapshot through <see cref="ChannelProxyExecutors"/>: the
+/// reference passes the proxy-aware <c>channel.HTTPClient</c> to the token
+/// provider (channel_llm.go:707, 872, 951), so a proxied channel refreshes
+/// through the same proxy as its inference (§178).
+/// </para>
 /// </remarks>
 public sealed class ChannelTokenSource(
     IChannelTokenStore store,
-    IExecutor executor,
+    ChannelProxyExecutors proxyExecutors,
     TimeProvider timeProvider,
     ILogger<ChannelTokenSource> logger) : IChannelTokenSource
 {
@@ -60,7 +67,11 @@ public sealed class ChannelTokenSource(
         var credentials = ChannelOAuthTokenMapping.ToCredentials(request.Credentials);
         var state = new RefreshState(request.CredentialsJson, request.UpdatedAt);
         var onRefreshed = CreateOnRefreshed(request, state);
-        var provider = CreateProvider(request.ChannelType, credentials, onRefreshed);
+        var provider = CreateProvider(
+            request.ChannelType,
+            credentials,
+            onRefreshed,
+            ResolveExecutor(request));
 
         try
         {
@@ -98,7 +109,8 @@ public sealed class ChannelTokenSource(
     private TokenProvider CreateProvider(
         string channelType,
         OAuthCredentials credentials,
-        Func<CancellationToken, OAuthCredentials, Exception?> onRefreshed)
+        Func<CancellationToken, OAuthCredentials, Exception?> onRefreshed,
+        IExecutor executor)
         => channelType switch
         {
             ChannelOutboundFactory.CodexChannelType => CodexToken.CreateTokenProvider(
@@ -125,6 +137,15 @@ public sealed class ChannelTokenSource(
             _ => throw new InvalidOperationException(
                 "token refresh is not supported for channel type " + GoCast.GoQuote(channelType)),
         };
+
+    /// <summary>
+    /// channel_llm.go:113-130 / 707: the provider gets the channel's client —
+    /// the shared one when the snapshot configures no proxy, otherwise the
+    /// channel's dedicated client (cached by <see cref="ChannelProxyExecutors"/>
+    /// exactly like the enabled-cache entry's <c>HTTPClient</c>).
+    /// </summary>
+    private IExecutor ResolveExecutor(ChannelTokenRefreshRequest request)
+        => proxyExecutors.Resolve(request.ChannelId, request.Settings);
 
     /// <summary>
     /// Port of <c>refreshOAuthTokenWithClient</c> as the provider's persistence

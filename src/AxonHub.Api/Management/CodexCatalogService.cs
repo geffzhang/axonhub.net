@@ -413,7 +413,8 @@ public sealed class CodexCatalogService(
             source.Type,
             source.Credentials,
             source.DisabledApiKeys,
-            source.UpdatedAt);
+            source.UpdatedAt,
+            source.Settings);
     }
 
     /// <summary>
@@ -426,14 +427,16 @@ public sealed class CodexCatalogService(
             entity.Type,
             entity.Credentials,
             entity.DisabledApiKeys,
-            entity.UpdatedAt);
+            entity.UpdatedAt,
+            entity.Settings);
 
     private ITokenGetter CreateTokenProvider(
         long channelId,
         string channelType,
         string? credentialsJson,
         string? disabledApiKeysJson,
-        DateTime updatedAt)
+        DateTime updatedAt,
+        string? settingsRaw)
     {
         if (!ChannelCredentials.IsOAuth(credentialsJson))
         {
@@ -466,6 +469,7 @@ public sealed class CodexCatalogService(
                 Credentials = ChannelOAuthTokenMapping.ToToken(credentials),
                 CredentialsJson = credentialsJson ?? "{}",
                 UpdatedAt = updatedAt,
+                Settings = settingsRaw,
             });
     }
 

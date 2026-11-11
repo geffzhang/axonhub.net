@@ -13,7 +13,9 @@ namespace AxonHub.Api.Tests;
 /// (§146): the reference's optimistic credentials write
 /// (<c>refreshOAuthTokenWithClient</c>, channel_llm.go:1642-1702), including the
 /// metadata-only retry, the conflict winner, the retirement of a non-OAuth row,
-/// and the keep-in-memory behavior when persistence fails.
+/// and the keep-in-memory behavior when persistence fails. Also locks the
+/// refresh transport: the channel's proxy-aware client when the seed's
+/// settings configure one, the shared client otherwise (§178).
 /// </summary>
 public sealed class ChannelTokenSourceTests
 {
@@ -58,8 +60,13 @@ public sealed class ChannelTokenSourceTests
 
     private static ChannelTokenSource NewSource(
         FakeChannelTokenStore store,
-        ScriptedExecutor executor)
-        => new(store, executor, TimeProvider.System, NullLogger<ChannelTokenSource>.Instance);
+        ScriptedExecutor executor,
+        ScriptedProxyExecutorFactory? proxyFactory = null)
+        => new(
+            store,
+            new ChannelProxyExecutors(executor, proxyFactory ?? new ScriptedProxyExecutorFactory()),
+            TimeProvider.System,
+            NullLogger<ChannelTokenSource>.Instance);
 
     [Fact]
     public async Task RefreshPersistsTheRotatedCredentialsAndReturnsTheNewSnapshot()
@@ -211,6 +218,43 @@ public sealed class ChannelTokenSourceTests
         Assert.Equal("access-old", result.Credentials!.AccessToken);
         Assert.Empty(store.Updates);
         Assert.Equal(0, executor.Calls);
+    }
+
+    [Fact]
+    public async Task RefreshUsesTheChannelSettingsProxy()
+    {
+        // channel_llm.go:707: the token provider receives the channel's own
+        // proxy-aware client, so a proxied channel refreshes through it.
+        var store = new FakeChannelTokenStore();
+        var shared = new ScriptedExecutor();
+        var proxied = TokenExecutor();
+        var factory = new ScriptedProxyExecutorFactory { Executor = proxied };
+        var source = NewSource(store, shared, factory);
+
+        var request = Request();
+        request.Settings = """{"proxy":{"type":"url","url":"http://channel.proxy:8080"}}""";
+
+        var result = await source.RefreshAsync(request);
+
+        Assert.Equal("access-refreshed", result.Credentials!.AccessToken);
+        Assert.Single(proxied.Requests);
+        Assert.Empty(shared.Requests);
+        Assert.Equal("http://channel.proxy:8080", Assert.Single(factory.Requests).Url);
+    }
+
+    [Fact]
+    public async Task AChannelWithoutProxyRefreshesThroughTheSharedExecutor()
+    {
+        var store = new FakeChannelTokenStore();
+        var shared = TokenExecutor();
+        var factory = new ScriptedProxyExecutorFactory();
+        var source = NewSource(store, shared, factory);
+
+        var result = await source.RefreshAsync(Request());
+
+        Assert.Equal("access-refreshed", result.Credentials!.AccessToken);
+        Assert.Single(shared.Requests);
+        Assert.Empty(factory.Requests);
     }
 }
 
