@@ -1879,7 +1879,11 @@ public sealed class AdminMutation
         try
         {
             result = await tester
-                .TestChannelAsync(gid.Id, input.ModelID, cancellationToken)
+                .TestChannelAsync(
+                    gid.Id,
+                    input.ModelID,
+                    cancellationToken,
+                    ChannelInputMapping.ToProxyConfig(input.Proxy))
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

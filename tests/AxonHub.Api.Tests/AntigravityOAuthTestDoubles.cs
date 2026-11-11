@@ -35,12 +35,19 @@ internal sealed class ScriptedProxyExecutorFactory : IProxyExecutorFactory
 
     public IExecutor? Executor { get; set; }
 
+    /// <summary>
+    /// Builds a distinct executor per configuration when set; tests that need
+    /// to tell two proxy clients apart install this instead of <see cref="Executor"/>.
+    /// </summary>
+    public Func<ProxyConfig, IExecutor>? ExecutorFactory { get; set; }
+
     public IExecutor Create(ProxyConfig proxyConfig)
     {
         ArgumentNullException.ThrowIfNull(proxyConfig);
 
         Requests.Add(proxyConfig);
-        return Executor
+        return ExecutorFactory?.Invoke(proxyConfig)
+            ?? Executor
             ?? throw new InvalidOperationException("proxy executor is not configured");
     }
 }

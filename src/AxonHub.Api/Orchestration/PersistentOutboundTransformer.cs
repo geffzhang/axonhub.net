@@ -30,6 +30,8 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     private readonly TimeProvider _timeProvider;
     private readonly IChannelMetricsRecorder _metrics;
     private readonly Func<ChannelCandidate, LlmRequest, DateTimeOffset, IOutboundTransformer> _factory;
+    private readonly ChannelProxyExecutors? _proxyExecutors;
+    private readonly ProxyConfig? _proxyOverride;
 
     private int _candidateIndex;
     private int _modelIndex;
@@ -37,11 +39,22 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     private bool _originalModelCaptured;
     private bool _originalStreamCaptured;
 
+    /// <param name="proxyExecutors">
+    /// Per-channel proxy executor cache (the reference's
+    /// <c>channel.HTTPClient</c>). Null in direct constructions that have no
+    /// proxy seam; production always passes it.
+    /// </param>
+    /// <param name="proxyOverride">
+    /// The tester's per-request proxy (the reference's <c>state.Proxy</c>); it
+    /// wins over the channel's persisted proxy setting.
+    /// </param>
     public PersistentOutboundTransformer(
         ChannelCandidate[] candidates,
         TimeProvider timeProvider,
         IChannelMetricsRecorder metrics,
-        Func<ChannelCandidate, LlmRequest, DateTimeOffset, IOutboundTransformer>? factory = null)
+        Func<ChannelCandidate, LlmRequest, DateTimeOffset, IOutboundTransformer>? factory = null,
+        ChannelProxyExecutors? proxyExecutors = null,
+        ProxyConfig? proxyOverride = null)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -52,6 +65,8 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         _metrics = metrics;
         _factory = factory ?? ((candidate, request, now) =>
             ChannelOutboundFactory.Create(candidate, request, now));
+        _proxyExecutors = proxyExecutors;
+        _proxyOverride = proxyOverride;
     }
 
     /// <summary>The channel serving the current attempt, or 0 before the first transform.</summary>
@@ -442,27 +457,45 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             && supports.SupportsCodexResponseHeaders();
 
     /// <summary>
-    /// Port of p.getCustomizedExecutor's final step (outbound.go:900-909):
-    /// the per-attempt provider transformer may replace the transport.
+    /// Port of p.CustomizeExecutor (outbound.go:1164-1196): proxy selection,
+    /// then the Command Code redirect policy, then the per-attempt provider
+    /// transformer's own transport customization.
     /// </summary>
     public IExecutor CustomizeExecutor(IExecutor executor)
     {
+        var customized = executor;
+
+        // outbound.go:1173-1186, step 1: the tester's per-request proxy wins
+        // over the channel's persisted settings.proxy; without an override the
+        // channel's own client is used (the shared client when it configures
+        // no proxy).
+        if (_proxyExecutors is not null)
+        {
+            if (_proxyOverride is not null)
+            {
+                customized = _proxyExecutors.CreateOverride(_proxyOverride);
+            }
+            else if (CurrentCandidate is { } candidate)
+            {
+                customized = _proxyExecutors.Resolve(candidate);
+            }
+        }
+
         // channel_llm.go:757-763: both Command Code channel types are built
         // with a client that refuses HTTPS-to-HTTP redirects, so a
         // Bearer-bearing inference request can never be replayed in cleartext.
-        // The reference applies this when constructing the channel; the port
-        // has no per-channel client seam, so the per-attempt customization is
-        // the equivalent point.
+        // Applying it after proxy selection reproduces WithProxy's option
+        // preservation, including for the tester's override client.
         if (CurrentCandidate?.Type is ChannelOutboundFactory.CommandcodeChannelType
             or ChannelOutboundFactory.CommandcodeAnthropicChannelType)
         {
-            executor = executor.WithRejectHttpsDowngrade();
+            customized = customized.WithRejectHttpsDowngrade();
         }
 
         var current = _current;
         return current is IChannelCustomizedExecutor custom
-            ? custom.CustomizeExecutor(executor)
-            : executor;
+            ? custom.CustomizeExecutor(customized)
+            : customized;
     }
 
     /// <summary>

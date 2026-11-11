@@ -85,6 +85,8 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
     private readonly FakeChannelWriteStore _channels = new();
     private readonly FakeSystemStore _systems = new();
     private readonly ScriptedExecutor _executor = new();
+    private readonly ScriptedExecutor _proxyExecutor = new();
+    private readonly ScriptedProxyExecutorFactory _proxyFactory = new();
     private readonly AdminGraphqlGateServices _gate = new();
 
     private WebApplication _app = null!;
@@ -99,6 +101,9 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
         builder.Services.AddSingleton<ISystemStore>(_systems);
         builder.Services.AddSingleton<IExecutor>(_executor);
+        _proxyFactory.Executor = _proxyExecutor;
+        builder.Services.AddSingleton<IProxyExecutorFactory>(_proxyFactory);
+        builder.Services.AddSingleton<ChannelProxyExecutors>();
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<IGrainFactory>(fixture.Cluster.GrainFactory);
         builder.Services.AddSingleton<IInboundTransformer>(new OpenAiInboundTransformer());
@@ -173,6 +178,72 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
 
         using var body = JsonDocument.Parse(Assert.Single(_executor.Requests).Body!);
         Assert.Equal("other-model", body.RootElement.GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public async Task TestChannelUsesTheChannelSettingsProxy()
+    {
+        SeedPrompts();
+        var channel = SeedChannel(
+            settings: """{"proxy":{"type":"url","url":"http://channel.proxy:8080"}}""");
+        _proxyExecutor.OnDo = (_, _, _) => TestChannels.Completion("test-model", "proxied");
+
+        var data = await QueryDataAsync(
+            TestChannelMutation,
+            new { input = new { channelID = Gid(channel.Id), modelID = (string?)null } });
+
+        var payload = data.GetProperty("testChannel");
+        Assert.True(payload.GetProperty("success").GetBoolean(), payload.ToString());
+        Assert.Equal("proxied", payload.GetProperty("message").GetString());
+
+        // The channel's settings.proxy becomes a dedicated client and the
+        // request never reaches the shared executor.
+        var config = Assert.Single(_proxyFactory.Requests);
+        Assert.Equal("url", config.Type);
+        Assert.Equal("http://channel.proxy:8080", config.Url);
+        Assert.Single(_proxyExecutor.Requests);
+        Assert.Empty(_executor.Requests);
+    }
+
+    [Fact]
+    public async Task TestChannelProxyOverrideWinsOverTheChannelSetting()
+    {
+        SeedPrompts();
+        var channel = SeedChannel(
+            settings: """{"proxy":{"type":"url","url":"http://channel.proxy:8080"}}""");
+        var channelExecutor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("test-model", "channel"),
+        };
+        _proxyFactory.ExecutorFactory = config => config.Url == "http://override.proxy:8080"
+            ? _proxyExecutor
+            : channelExecutor;
+        _proxyExecutor.OnDo = (_, _, _) => TestChannels.Completion("test-model", "override");
+
+        var data = await QueryDataAsync(
+            TestChannelMutation,
+            new
+            {
+                input = new
+                {
+                    channelID = Gid(channel.Id),
+                    modelID = (string?)null,
+                    proxy = new { type = "url", url = "http://override.proxy:8080" },
+                },
+            });
+
+        var payload = data.GetProperty("testChannel");
+        Assert.True(payload.GetProperty("success").GetBoolean(), payload.ToString());
+        Assert.Equal("override", payload.GetProperty("message").GetString());
+
+        // outbound.go:1173-1186: state.Proxy wins over the channel client. The
+        // channel client is still constructed eagerly, like the reference's
+        // buildChannelWithTransformer; the request itself uses the override.
+        Assert.Equal(2, _proxyFactory.Requests.Count);
+        Assert.Equal("http://channel.proxy:8080", _proxyFactory.Requests[0].Url);
+        Assert.Equal("http://override.proxy:8080", _proxyFactory.Requests[1].Url);
+        Assert.Single(_proxyExecutor.Requests);
+        Assert.Empty(channelExecutor.Requests);
     }
 
     [Fact]
@@ -365,7 +436,8 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
         string credentials = """{"apiKey":"test-key-1"}""",
         string supportedModels = """["test-model"]""",
         string defaultTestModel = "test-model",
-        string? disabledApiKeys = null)
+        string? disabledApiKeys = null,
+        string? settings = null)
     {
         var record = new ChannelRecord
         {
@@ -377,6 +449,7 @@ public sealed class AdminChannelTestEndpointTests(GrainClusterFixture fixture) :
             SupportedModels = supportedModels,
             DefaultTestModel = defaultTestModel,
             DisabledApiKeys = disabledApiKeys,
+            Settings = settings,
         };
 
         _channels.Seed(record);

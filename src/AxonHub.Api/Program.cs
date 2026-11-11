@@ -329,6 +329,11 @@ builder.Services.AddScoped<InvitationService>();
 // and project discovery reuse the shared executor, and the optional URL proxy
 // builds a per-request executor (C202).
 builder.Services.AddSingleton<IProxyExecutorFactory, HttpProxyExecutorFactory>();
+
+// Per-channel proxy-aware executors (channel_llm.go:113-130,700-774's
+// Channel.HTTPClient): a channel with settings.proxy gets a cached client; the
+// tester's per-request proxy builds a fresh override (§177).
+builder.Services.AddSingleton<ChannelProxyExecutors>();
 builder.Services.AddSingleton<IAntigravityOAuthStateCache, AntigravityOAuthStateCache>();
 builder.Services.AddScoped<AntigravityOAuthService>();
 

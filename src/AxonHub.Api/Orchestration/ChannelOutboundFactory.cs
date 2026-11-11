@@ -240,8 +240,10 @@ public static class ChannelOutboundFactory
 
     /// <param name="tokenRefreshExecutor">
     /// HTTP executor used by an OAuth codex channel's token refresher. The
-    /// reference passes the channel's proxy-aware client; the port's channels
-    /// have no proxy configuration yet, so the API's shared executor is used.
+    /// reference passes the channel's proxy-aware client; callers that hold the
+    /// per-channel executor (the orchestrator through
+    /// <see cref="ChannelProxyExecutors"/>) pass it here, while direct callers
+    /// fall back to their shared executor.
     /// </param>
     /// <param name="grainFactory">
     /// When present, the codex, claudecode and xai_subscription OAuth channels
@@ -870,9 +872,10 @@ public static class ChannelOutboundFactory
                 }),
             // channel_llm.go:1096-1108: chat plus the asynchronous image task
             // protocol (channel_endpoint.go:309-312). The reference passes the
-            // channel's proxy-aware HTTP client; the port has no per-channel
-            // proxy configuration yet, so the transformer's default client is
-            // used (C104).
+            // channel's proxy-aware HTTP client for task polling and image
+            // download; the port does not wire that transformer-internal client
+            // yet (C104). The inference request itself follows the channel
+            // proxy through the pipeline executor (ChannelProxyExecutors).
             ModelscopeChannelType => new ModelscopeOutboundTransformer(new ModelscopeOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
@@ -1268,8 +1271,10 @@ public static class ChannelOutboundFactory
     /// Port of the doubao/volcengine branch of <c>newProviderChatOutbound</c>
     /// (channel_llm.go:598-604). The default chat endpoint passes an empty
     /// endpoint path, so the transformer normalizes the base URL to the Ark v3
-    /// route. The reference hands the channel's proxy-aware HTTP client to the
-    /// transformer; the port has no per-channel proxy configuration yet (C105).
+    /// route. The reference's Doubao config carries no HTTP client: the request
+    /// runs through the channel's customized executor, which the port resolves
+    /// from <c>settings.proxy</c> (C105's proxy residual is closed through
+    /// <see cref="ChannelProxyExecutors"/>).
     /// </summary>
     private static DoubaoOutboundTransformer CreateDoubaoOutbound(
         ChannelCandidate candidate,

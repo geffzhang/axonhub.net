@@ -8,8 +8,8 @@ namespace AxonHub.Api.GraphQL;
 /// ID, modelID an optional override and proxy an optional per-test proxy.
 /// </summary>
 /// <remarks>
-/// The proxy has no port yet: the tester routes through the shared pipeline
-/// executor, which has no per-test client (C154).
+/// The proxy is the tester's per-request override (axonhub.resolvers.go:344):
+/// it wins over the channel's persisted <c>settings.proxy</c>.
 /// </remarks>
 public sealed class TestChannelInput
 {

@@ -56,6 +56,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly ChannelApiKeySelectionRegistry? _apiKeySelection;
     private readonly ChannelAutoDisableService? _autoDisable;
     private readonly IChannelAutoDisableEvaluationQueue? _autoDisableQueue;
+    private readonly ChannelProxyExecutors? _channelProxyExecutors;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -82,7 +83,8 @@ public sealed class ChatCompletionOrchestrator
         IChannelRateLimitRecorder? rateLimitRecorder = null,
         ChannelApiKeySelectionRegistry? apiKeySelection = null,
         ChannelAutoDisableService? autoDisable = null,
-        IChannelAutoDisableEvaluationQueue? autoDisableQueue = null)
+        IChannelAutoDisableEvaluationQueue? autoDisableQueue = null,
+        ChannelProxyExecutors? channelProxyExecutors = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -159,6 +161,11 @@ public sealed class ChatCompletionOrchestrator
         _autoDisable = autoDisable;
         _autoDisableQueue = autoDisableQueue;
 
+        // Production passes the per-channel proxy executor cache, which stands
+        // in for the reference's channel.HTTPClient; direct constructions leave
+        // it null and keep the historical shared-executor behavior.
+        _channelProxyExecutors = channelProxyExecutors;
+
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
         // is the same as no provider.
@@ -202,7 +209,8 @@ public sealed class ChatCompletionOrchestrator
             rateLimitRecorder: _rateLimitRecorder,
             apiKeySelection: _apiKeySelection,
             autoDisable: _autoDisable,
-            autoDisableQueue: _autoDisableQueue);
+            autoDisableQueue: _autoDisableQueue,
+            channelProxyExecutors: _channelProxyExecutors);
     }
 
     /// <summary>
@@ -429,12 +437,17 @@ public sealed class ChatCompletionOrchestrator
     /// because the tester's selector re-reads the channel from the store on
     /// every attempt (candidates.go:SpecifiedChannelSelector.Select).
     /// </remarks>
+    /// <param name="proxy">
+    /// The tester's per-request proxy (tester.go:372's <c>proxy: proxy</c>),
+    /// which overrides the channel's persisted <c>settings.proxy</c>.
+    /// </param>
     public async Task<ChatCompletionResult> ProcessSpecifiedAsync(
         IInboundTransformer inbound,
         HttpRequestData request,
         Func<LlmRequest, CancellationToken, Task<ChannelCandidate?>> candidateFactory,
         RequestIdentity identity,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ProxyConfig? proxy = null)
     {
         ArgumentNullException.ThrowIfNull(inbound);
         ArgumentNullException.ThrowIfNull(request);
@@ -533,7 +546,8 @@ public sealed class ChatCompletionOrchestrator
                 promptProvider: null,
                 includeRateLimits: false,
                 ensureUsage: true,
-                cancellationToken)
+                cancellationToken,
+                proxyOverride: proxy)
             .ConfigureAwait(false);
     }
 
@@ -611,11 +625,18 @@ public sealed class ChatCompletionOrchestrator
         IPromptProvider? promptProvider,
         bool includeRateLimits,
         bool ensureUsage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ProxyConfig? proxyOverride = null)
     {
-        // OAuth channels take their token from the per-channel token grain; the
-        // refresh HTTP goes through the shared executor because the reference's
-        // proxy-aware client is not ported (C094).
+        // channel_llm.go:122-130,700-774: the reference builds the channel's
+        // transformer with the channel's proxy-aware client, and the same client
+        // serves the local OAuth token refreshers. The grain-backed refresh
+        // (ChannelTokenSource) is still a separate seam (C094); here the factory
+        // receives the per-channel executor so direct token providers follow the
+        // channel proxy like the reference.
+        IExecutor ChannelExecutorFor(ChannelCandidate candidate)
+            => _channelProxyExecutors?.Resolve(candidate) ?? _executor;
+
         var outbound = new PersistentOutboundTransformer(
             candidates,
             _timeProvider,
@@ -624,9 +645,11 @@ public sealed class ChatCompletionOrchestrator
                 candidate,
                 request,
                 now,
-                _executor,
+                ChannelExecutorFor(candidate),
                 _grainFactory,
-                _apiKeySelection));
+                _apiKeySelection),
+            _channelProxyExecutors,
+            proxyOverride);
 
         // orchestrator.go mounts injectPrompts then protectPrompts as inbound
         // middlewares; the reference reads the enabled prompts and rules from

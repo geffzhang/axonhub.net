@@ -1035,6 +1035,46 @@ SyncChannelModelsIsDeniedByTheChannelReadForWriteOnlyMembers 各锁定 write-onl
 269 条不变（196 accepted / 7 gap / 66 resolved），lint 通过，`02-differences.md`
 已重新生成。
 
+§177（2026-11-11）把通道级 `settings.proxy` 接入请求链路，并接通
+`testChannel(TestChannelInput.proxy)` 的 per-request override（C154 → resolved）。
+
+实现：`ChannelProxySettings` 是 `ProxyConfigDraft`（ent 侧 objects.ProxyConfig）到
+传输层 `ProxyConfig` 的唯一转换接缝，`Fingerprint` 用序列化值作缓存身份并保留 Go
+omitempty 的 null-vs-false；`ChannelProxyExecutors`（单例）复刻 getHttpClient
+（channel_llm.go:113-130）——无 proxy 用共享 IExecutor，有 proxy 经
+IProxyExecutorFactory 建 client 并按 channelId + 指纹缓存（proxy 清空时移除），
+type=disabled 也建独立 client 以抑制环境代理；`PersistentOutboundTransformer.CustomizeExecutor`
+复刻 outbound.go:1164-1196——override（tester 的 state.Proxy）每次新建且优先于通道
+settings.proxy，随后应用 Command Code 的 HTTPS-downgrade（等价于 WithProxy 保留
+rejectHTTPSDowngrade），最后交给 provider transformer 的 CustomizeExecutor。
+`ChatCompletionOrchestrator.RunPipelineAsync` 让 ChannelOutboundFactory 的
+tokenRefreshExecutor 收到按通道 executor（本地 OAuth TokenProvider 路径；grain 刷新
+仍见 C094）；`ProcessSpecifiedAsync` 接受可选 proxy；`ChannelTestService.TestChannelAsync`
+与 GraphQL `testChannel(input.proxy)` 接线，`testChannelAPIKeys` / `testChannelAPIKey`
+按参照显式不带 override。
+
+残余（已在台账注明）：grain 令牌刷新（C094）、ModelScope transformer 内部异步轮询 /
+图片下载（C104）、视频任务 API 的 per-channel client（C105）、模型抓取（C158）、
+端点探测仍走共享 executor；`server.disable_ssl_verify` 未建模，补记在 C027。
+
+测试：新增 10 例。`ChannelProxyExecutorsTests` 8 例（无 proxy 回退共享、proxy 建
+client 的字段映射、同值复用、变更替换、disabled 仍建 client、override 每次新建、
+transformer 用通道 settings proxy、override 优先）；`AdminChannelTestEndpointTests`
+新增 TestChannelUsesTheChannelSettingsProxy 与 TestChannelProxyOverrideWinsOverTheChannelSetting
+（GraphQL → tester → pipeline 全链路，断言请求落在对应 executor）。
+
+本轮实测：`AxonHub.Api.Tests` 6141 通过 / 0 失败 / 0 跳过（27m10s，仓库
+global.json 固定的 SDK 10.0.401，日志 `.agent/summary/_api_full_177.log`，
+6141 = §176 的 6131 + 新增 10）；定向 `ChannelProxyExecutorsTests`、
+`AdminChannelTestEndpointTests` 与 `ChannelTestServiceTests` 68 例通过。前两次全量
+尝试分别在 6038 / 4832 例因 §103 记录的 Api testhost 随机崩溃中止（均为 0 断言
+失败），第三次通过。Persistence / Grains / Llm 本轮未改动，沿用 §176 引用的实测
+376 / 175 / 3110，四项目合计 9802。
+
+台账：C154 改为 resolved；C014 / C094 / C104 / C105 的残余与 decision 更新；C027
+补记未建模的 disable_ssl_verify。269 条不变（195 accepted / 7 gap / 67 resolved），
+lint 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

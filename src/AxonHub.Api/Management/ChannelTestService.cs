@@ -63,8 +63,11 @@ public sealed record TestChannelApiKeysResult(
 /// rate-limit admission/tracking pair the reference also leaves off for tests.
 /// </para>
 /// <para>
-/// The proxy argument of the reference (<c>TestChannelInput.proxy</c>) has no
-/// port: upstream requests go through the shared executor (difference C154).
+/// <see cref="TestChannelAsync"/> accepts the reference's per-request proxy
+/// (<c>TestChannelInput.proxy</c>) and forwards it to the orchestrator, where it
+/// overrides the channel's persisted <c>settings.proxy</c>. The key-test
+/// entrypoints pass no proxy, exactly like the reference (the resolvers pass
+/// nil for both API-key flows, axonhub.resolvers.go:333-372).
 /// </para>
 /// </remarks>
 public sealed class ChannelTestService(
@@ -91,10 +94,15 @@ public sealed class ChannelTestService(
     /// The channel cannot be loaded or the test input cannot be built; the
     /// caller wraps the message exactly like the reference resolver.
     /// </exception>
+    /// <param name="proxy">
+    /// The admin-supplied proxy override (tester.go:271-309's <c>proxy</c>
+    /// argument); null keeps the channel's persisted proxy setting.
+    /// </param>
     public async Task<TestChannelResult> TestChannelAsync(
         long channelId,
         string? modelId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ProxyConfig? proxy = null)
     {
         var channel = await LoadChannelAsync(channelId, cancellationToken).ConfigureAwait(false);
 
@@ -136,7 +144,8 @@ public sealed class ChannelTestService(
                         apiKeyOverride: null,
                         token),
                     TestIdentity,
-                    cancellationToken)
+                    cancellationToken,
+                    proxy)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

@@ -1,5 +1,6 @@
 using AxonHub.Api.Management;
 using AxonHub.Api.Orchestration;
+using AxonHub.Llm.Http;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.GraphQL;
@@ -409,6 +410,13 @@ public static class ChannelInputMapping
             Index = input.Index,
             Splat = input.Splat,
         };
+
+    /// <summary>
+    /// Maps <c>TestChannelInput.proxy</c> to the transport config the tester
+    /// passes as its per-request override (axonhub.resolvers.go:344).
+    /// </summary>
+    public static ProxyConfig? ToProxyConfig(ProxyConfigInput? input)
+        => ChannelProxySettings.ToProxyConfig(ToProxy(input));
 
     private static ProxyConfigDraft? ToProxy(ProxyConfigInput? input)
         => input is null
