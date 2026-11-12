@@ -7362,6 +7362,20 @@ C094 item (1) 与 C072 残余 (a) 收窄：运行时端点解析、传输与 Res
 BaseURL/Path 已按 live 语义接线；剩余为非 Responses 端点/供应商家族与通道级连接复用。
 C144/C148 的写入面冻结语义不变。
 
+2026-11-12 更新（§184）：C094 item (1) 关闭。`ChannelOutboundFactory.Create` 在选中用户端点时
+改走 `CreateUserEndpointOutbound`（`buildNonDefaultEndpointOutbound` 的完整移植）：用户端点按
+API format 覆盖该格式的默认出站，端点的 BaseURL 优先于通道 BaseURL（空则继承；ZenMux 空基址
+先套用 `buildChannelWithTransformer` 的默认值），transport 由继承后的基址/显式 transport 推断；
+zai/zhipu/xiaomi/doubao 家族 chat 仅在显式 path 或家族版本基址
+（`providerChatEndpointUsesFamilyVersion`）时保留家族 transformer，否则回退通用 OpenAI；
+Cline、MiniMax 图片、Gemini、Jina、TypeSafe、Anthropic Messages（Command Code 保持 Bearer、
+其余 Direct）、completion/decisions/embedding/音频/图片/视频/zenmux video 均带端点 path；
+codex/fenno 的 responses 家族与 codex alpha search 保留家族出站；opencode 的两个通道类型把
+用户端点再包 `WithSessionHeader`；websocket transport 仅允许 Responses 家族（否则按参照抛错），
+Command Code 端点基址仍校验 HTTPS。检测回退（`CreateNonDefaultEndpointOutbound`）改为调用同一
+分派，合成端点仅带 format、继承通道基址、path 为空。`ChannelEndpointDispatchTests.cs` 13 例锁定
+上述路径；定向 378 + 89 例通过。
+
 ## 144. 限流状态迁入 ChannelGrain（A1，14 例，2026-11-08）
 
 参照：`internal/server/orchestrator/channel_request_tracker.go`（自然分钟桶、RPM 准入、TPM
@@ -8742,7 +8756,7 @@ fixed / round_robin_success 的 cursor 规则）、`internal/server/biz/channel_
 | pipeline 重试、空响应检测、SSE 事件上限 | 已由 24 个端口测试锁定 | — | 完成（M2） |
 | TypeSafe SystemOne（`/v1/systemone`、`/typesafe/v1/systemone`、`typesafe` 通道） | 已由第 24 节的 65 例锁定（统一模型与 Answer Extra、双向变换、错误信封、两条路由、空响应探测）；通道能力表与字段级解码文案为 C087 登记的裁剪，pass-through body 的请求与提示词保护半程已由第 26、28 节闭合 | 低 | 完成（C087、C091、C092） |
 | pass-through 提示词保护 | 请求半程由第 26 节的 95 例锁定，响应/流半程（原始响应替换、双通道扇出、1024 事件/8 MiB 回放缓冲、取消后排干、上游错误传播）由第 27 节的 26 例锁定，提示词保护的统一应用、回放校验与原始 body 补丁由第 28 节的 71 例锁定；规则管理面与预览由第 151 节的 18 + 14 例锁定（C092 管理面闭合；where 子集与枚举严格度登记为 C231，规则 scopes 策略仍归 C014），codex 出站的 `AllowPassThroughBody` 策略由第 29 节的 61 例 codex 用例锁定（C091 缺口关闭，见 C094） | 低 | 管理面完成；C014 仅剩 scopes 策略 |
-| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点运行时解析已由 §143 按 live 语义接线（`NormalizeEndpoints` / `DefaultEndpoints` / `PrimaryEndpointTransport` / `FindUserEndpoint`；codex/fenno 的 responses 与 alpha 取端点 BaseURL/Path/Transport，openai 的 h/w/compact 等家族同样取端点值；C094 item 1 收窄），残余为非 Responses 端点的家族路由与供应商路径（fenno 图片门、codex/fenno 的 compact 端点存在性、zai/doubao 家族 chat 的 Path、minimax/gemini/jina/typesafe 的路径、xai_subscription 覆盖）、OAuth `TokenProvider` 已由 §146 的 `ChannelTokenGrain` 按通道持有（刷新写回、后台预刷新、冲突接管；C094 item 2/3/4 对 codex / claudecode / xai_subscription 关闭，fenno / github_copilot / antigravity / ModelFetcher / 端点探测仍每次新建）、无按通道代理 client、codex 响应头转发已由 §142 接线（C094 item 7 关闭）、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
+| Codex 出站与 OAuth 通道生命周期 | 出站变换、凭据解析、刷新单飞与通道接线由第 29 节的 61 例 codex + 50 例 OAuth + 20 例接线 + 4 例 `default_test_model` 锁定；端点运行时解析已由 §143 按 live 语义接线（`NormalizeEndpoints` / `DefaultEndpoints` / `PrimaryEndpointTransport` / `FindUserEndpoint`；codex/fenno 的 responses 与 alpha 取端点 BaseURL/Path/Transport，openai 的 h/w/compact 等家族同样取端点值；用户端点的完整分派由 §184 闭合，C094 item 1 关闭：zai/doubao 家族 chat 的 Path 与家族版本回退、minimax/gemini/jina/typesafe 的路径、xai_subscription 的端点覆盖均按 `buildNonDefaultEndpointOutbound` 分派）、OAuth `TokenProvider` 已由 §146 的 `ChannelTokenGrain` 按通道持有（刷新写回、后台预刷新、冲突接管；C094 item 2/3/4 对 codex / claudecode / xai_subscription 关闭，fenno / github_copilot / antigravity / ModelFetcher / 端点探测仍每次新建）、无按通道代理 client、codex 响应头转发已由 §142 接线（C094 item 7 关闭）、`DecodeAuthJson` 的消费方（模型拉取管理面）未移植（C094） | 中 | 随端点记录/管理面切片（C013/C014、C072） |
 | 首包超时、非流式超时 | 实现已对等（`FirstEventTimeoutGuard` / `NonStreamTimeoutScope`），参照侧无独立单测可移植；端口在 orchestrator 层补了 2 例集成测试（超时 → 跳过同通道重试 → 切通道，取消不计失败、首包超时计失败） | — | 完成（M3） |
 | 数据库接线的端到端启动 | 已用真实宿主冒烟与应用镜像冒烟（第 9 节）：Kestrel + Orleans silo + `postgres:17-alpine` 启动、幂等 DDL 建表、`/health` 200、422/502 失败链路与请求/执行落库均通过；多阶段 Dockerfile 构建的镜像在同一容器网络内复现同一结果 | 低 | 完成（M4） |
 | 非 chat 响应类型的空响应探测（video） | 已由第 16.1、17、18、19、20 节先后闭合图片、embedding / moderation、decisions / alpha-search、speech / transcription 与 rerank 分支；video Llm 分支（统一模型与变换器）由第 21 节闭合（57 例，C081）；video 端点接线（`POST /v1/videos`、`GET/DELETE /v1/videos/:id`、`VideoService` 与持久化接缝）由第 22 节闭合（36 例，C082–C085），非 chat 响应类型已全部闭合 | — | 完成 |

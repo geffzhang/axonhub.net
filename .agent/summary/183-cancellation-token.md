@@ -51,7 +51,7 @@ search / ClaudeCode / xai_subscription / antigravity 五处都以 `CancellationT
 - 定向 143 例通过（Api：ChannelTransformOptions / Codex 与 ClaudeCode / OpenCode /
   XaiSubscription 接线 / ResponsesEndpointDispatch / 端点探测 / PersistentOutbound）。
 - `AxonHub.Api.Tests` 未跑全量（本刀不触碰编排中间件与持久化落库），静态计数
-  6193 → 6202；四项目合计 9861 → 9870（Llm 3115 → 3122 / Persistence 376 /
+  6193 → 6195；四项目合计 9861 → 9870（Llm 3115 → 3122 / Persistence 376 /
   Grains 177 未重跑）。
 
 ## 台账

@@ -412,6 +412,28 @@ public static class ChannelOutboundFactory
             ? string.Empty
             : ChannelEndpoints.EndpointTransport(selectedEndpoint);
 
+        // channel_llm.go:236-251: user-configured endpoints are processed after
+        // the type defaults and replace the outbound registered for their API
+        // format, so a user endpoint always wins over the channel-type dispatch
+        // below and is built by buildNonDefaultEndpointOutbound (:431-616) — by
+        // format, not by channel type. Opencode wraps every user endpoint with
+        // its session header (:247-249). An empty stored format is skipped by
+        // the reference loop and keeps the type dispatch.
+        if (selectedEndpoint is { ApiFormat.Length: > 0 })
+        {
+            var endpointOutbound = CreateUserEndpointOutbound(
+                candidate,
+                request,
+                selectedEndpoint,
+                provider,
+                channelExecutor,
+                grainFactory);
+
+            return candidate.Type is OpenCodeGoChannelType or OpenCodeGoAnthropicChannelType
+                ? OpenCodeSessionHeader.WithSessionHeader(endpointOutbound)!
+                : endpointOutbound;
+        }
+
         return candidate.Type switch
         {
             // channel_llm.go:454/465/497: codex responses, alpha search and the
@@ -1117,82 +1139,292 @@ public static class ChannelOutboundFactory
                     allKeys)
                 : new ChannelApiKeyProvider(enabledKeys, allKeys);
 
-        switch (apiFormat)
+        // channel_llm.go:427-435: detection probes a synthetic endpoint that
+        // carries only the format, so it inherits the channel base URL and has
+        // no path; the transport comes from that resolved base URL's scheme,
+        // exactly like the reference's ep.BaseURL assignment before the switch.
+        return CreateUserEndpointOutbound(
+            candidate,
+            new LlmRequest { ApiFormat = apiFormat },
+            new ChannelEndpoint { ApiFormat = apiFormat, BaseUrl = baseUrl },
+            provider,
+            channelExecutor: null,
+            grainFactory: null);
+    }
+
+    /// <summary>
+    /// Port of <c>buildNonDefaultEndpointOutbound</c> (channel_llm.go:431-616):
+    /// every user-configured endpoint is built by API format, not by channel
+    /// type. Only the family formats re-enter the channel family (Codex/Fenno
+    /// responses and alpha search, Command Code messages, Minimax images,
+    /// ZenMux video), exactly like the reference switch.
+    /// </summary>
+    private static IOutboundTransformer CreateUserEndpointOutbound(
+        ChannelCandidate candidate,
+        LlmRequest request,
+        ChannelEndpoint endpoint,
+        ChannelApiKeyProvider apiKeyProvider,
+        IExecutor? channelExecutor,
+        IGrainFactory? grainFactory)
+    {
+        // channel_llm.go:438-444: an endpoint base URL wins over the channel's;
+        // an empty one inherits it before the transport is inferred, so a ws/wss
+        // channel base URL also sets the endpoint transport. buildChannelWithTransformer
+        // fills an empty ZenMux base URL (:695-705) before the endpoint loop
+        // runs, so that default is part of the inherited channel base too.
+        var channelBaseUrl = candidate.BaseUrl ?? string.Empty;
+        if (channelBaseUrl.Length == 0
+            && candidate.Type is ZenmuxChannelType or ZenmuxResponsesChannelType
+                or ZenmuxAnthropicChannelType or ZenmuxGeminiChannelType or ZenmuxVideoChannelType)
+        {
+            channelBaseUrl = ZenmuxBaseUrl(candidate);
+        }
+
+        var baseUrl = endpoint.BaseUrl.Length > 0
+            ? endpoint.BaseUrl
+            : channelBaseUrl;
+        var path = endpoint.Path;
+        var transport = ChannelEndpoints.EndpointTransport(endpoint with { BaseUrl = baseUrl });
+
+        // channel_llm.go:445-449: every non-default outbound of a Command Code
+        // channel validates the resolved base URL, endpoint override included.
+        if (candidate.Type is CommandcodeChannelType or CommandcodeAnthropicChannelType)
+        {
+            var parsed = Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out var commandCodeUri);
+            if (!parsed || commandCodeUri!.Scheme != Uri.UriSchemeHttps || commandCodeUri.Host.Length == 0)
+            {
+                throw new InvalidOperationException("Command Code base URL must use HTTPS");
+            }
+        }
+
+        // channel_llm.go:450-452: only the Responses family may use WebSocket.
+        if (transport == ChannelEndpointTransports.WebSocket
+            && !ChannelEndpoints.IsResponsesEndpoint(endpoint.ApiFormat))
+        {
+            throw new InvalidOperationException(
+                "websocket transport only supports api_format \"" + ApiFormats.OpenAIResponse + "\"");
+        }
+
+        switch (endpoint.ApiFormat)
         {
             case ApiFormats.OpenAIChatCompletion:
+                // channel_llm.go:453-459: Cline always keeps its envelope.
                 if (candidate.Type == ClineChannelType)
                 {
                     return new ClineOutboundTransformer(new ClineOutboundConfig
                     {
                         BaseUrl = baseUrl,
-                        ApiKeyProvider = provider,
-                        ChannelApiKeyIndex = provider.KeyIndex,
+                        EndpointPath = path,
+                        ApiKeyProvider = apiKeyProvider,
+                        ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
                     });
                 }
 
-                if (ProviderChatEndpointUsesFamilyVersion(candidate.Type, baseUrl))
+                // channel_llm.go:461-478: a custom endpoint with an explicit
+                // path (or a family base URL carrying its version) keeps the
+                // family transformer; an empty path on a plain base URL stays
+                // on the generic OpenAI route that appends /v1.
+                if (path.Length > 0 || ProviderChatEndpointUsesFamilyVersion(candidate.Type, baseUrl))
                 {
-                    return Create(
-                        candidate,
-                        new LlmRequest { ApiFormat = apiFormat },
-                        now,
-                        apiKeySelection: apiKeySelection);
+                    if (candidate.Type is ZaiChannelType or ZhipuChannelType
+                        or ZhipuAnthropicChannelType or ZaiAnthropicChannelType)
+                    {
+                        return CreateZaiOutbound(
+                            candidate,
+                            request,
+                            apiKeyProvider,
+                            "v4",
+                            baseUrl,
+                            path);
+                    }
+
+                    if (candidate.Type is XiaomiChannelType or XiaomiAnthropicChannelType)
+                    {
+                        return CreateZaiOutbound(
+                            candidate,
+                            request,
+                            apiKeyProvider,
+                            "v1",
+                            baseUrl,
+                            path);
+                    }
+
+                    if (candidate.Type is DoubaoChannelType or VolcengineChannelType
+                        or DoubaoAnthropicChannelType or VolcengineAnthropicChannelType)
+                    {
+                        return CreateDoubaoOutbound(candidate, apiKeyProvider, baseUrl, path);
+                    }
                 }
 
-                return OpenAiOutboundTransformer.Create(baseUrl, provider, provider.KeyIndex);
-            case ApiFormats.OpenAIResponse:
-                if (candidate.Type is CodexChannelType or FennoChannelType)
-                {
-                    return Create(
-                        candidate,
-                        new LlmRequest { ApiFormat = apiFormat },
-                        now,
-                        apiKeySelection: apiKeySelection);
-                }
-
-                return new ResponsesOutboundTransformer(new ResponsesOutboundConfig
+                return new OpenAiOutboundTransformer(new OpenAiOutboundConfig
                 {
                     BaseUrl = baseUrl,
-                    ApiKeyProvider = provider,
-                    ChannelApiKeyIndex = provider.KeyIndex,
-                    Transport = InferTransport(baseUrl),
-                    ChannelId = candidate.ChannelId,
+                    EndpointPath = path,
+                    ApiKeyProvider = apiKeyProvider,
+                    ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
                 });
-            case ApiFormats.AnthropicMessage:
-                if (candidate.Type == CommandcodeChannelType)
+            case ApiFormats.OpenAICompletion:
+                return new CompletionOutboundTransformer(new OpenAiOutboundConfig
                 {
-                    // channel_llm.go:526-534: a chat-format Command Code
-                    // channel opting into messages keeps the Command Code
-                    // platform (Bearer auth); Create would return its OpenAI
-                    // chat outbound because it dispatches on request format.
-                    return new AnthropicOutboundTransformer(new AnthropicOutboundConfig
+                    BaseUrl = baseUrl,
+                    EndpointPath = path,
+                    ApiKeyProvider = apiKeyProvider,
+                    ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+                });
+            case ApiFormats.OpenAIResponse:
+            case ApiFormats.OpenAIResponseWebSocket:
+            case ApiFormats.OpenAIResponseCompact:
+                // channel_llm.go:490-502: codex and fenno keep their family
+                // responses outbound (the port threads the endpoint path there
+                // too, matching the live tree's buildCodexOutbound).
+                if (candidate.Type is CodexChannelType or FennoChannelType
+                    && ChannelEndpoints.IsResponsesEndpoint(endpoint.ApiFormat))
+                {
+                    return CreateCodexOutbound(
+                        candidate,
+                        request,
+                        apiKeyProvider,
+                        channelExecutor,
+                        grainFactory,
+                        endpoint.ApiFormat,
+                        endpoint with { BaseUrl = baseUrl });
+                }
+
+                return CreateResponsesOutbound(
+                    request,
+                    baseUrl,
+                    apiKeyProvider,
+                    transport,
+                    path,
+                    candidate.ChannelId);
+            case ApiFormats.OpenAIAlphaSearch:
+                // channel_llm.go:504-514: only Codex owns alpha search.
+                if (candidate.Type == CodexChannelType)
+                {
+                    return CreateCodexOutbound(
+                        candidate,
+                        request,
+                        apiKeyProvider,
+                        channelExecutor,
+                        grainFactory,
+                        endpoint.ApiFormat,
+                        endpoint with { BaseUrl = baseUrl });
+                }
+
+                return new OpenAiOutboundTransformer(new OpenAiOutboundConfig
+                {
+                    BaseUrl = baseUrl,
+                    EndpointPath = path,
+                    ApiKeyProvider = apiKeyProvider,
+                    ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+                });
+            case ApiFormats.OpenAIDecisions:
+                return new DecisionsOutboundTransformer(new DecisionsOutboundConfig
+                {
+                    BaseUrl = baseUrl,
+                    EndpointPath = path,
+                    ApiKeyProvider = apiKeyProvider,
+                    ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+                });
+            case ApiFormats.OpenAIEmbedding:
+            case ApiFormats.OpenAIModeration:
+            case ApiFormats.OpenAIImageGeneration:
+            case ApiFormats.OpenAIImageEdit:
+            case ApiFormats.OpenAIImageVariation:
+            case ApiFormats.OpenAIVideo:
+            case ApiFormats.OpenAISpeech:
+            case ApiFormats.OpenAITranscription:
+            case ApiFormats.OpenAITranslation:
+                // channel_llm.go:516-543: MiniMax images use their own API;
+                // Codex/Fenno image endpoints keep the codex outbound; every
+                // other capability falls back to the generic OpenAI one.
+                if (candidate.Type == MinimaxChannelType
+                    && endpoint.ApiFormat == ApiFormats.OpenAIImageGeneration)
+                {
+                    return new MinimaxOutboundTransformer(new MinimaxOutboundConfig
                     {
-                        Type = AnthropicPlatformType.CommandCode,
                         BaseUrl = baseUrl,
-                        ApiKeyProvider = provider,
-                        ChannelApiKeyIndex = provider.KeyIndex,
+                        EndpointPath = path,
+                        ApiKeyProvider = apiKeyProvider,
+                        ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
                     });
                 }
 
-                if (candidate.Type == CommandcodeAnthropicChannelType)
+                if (candidate.Type is CodexChannelType or FennoChannelType
+                    && endpoint.ApiFormat is ApiFormats.OpenAIImageGeneration or ApiFormats.OpenAIImageEdit)
                 {
-                    return Create(
+                    return CreateCodexOutbound(
                         candidate,
-                        new LlmRequest { ApiFormat = apiFormat },
-                        now,
-                        apiKeySelection: apiKeySelection);
+                        request,
+                        apiKeyProvider,
+                        channelExecutor,
+                        grainFactory,
+                        endpoint.ApiFormat,
+                        endpoint with { BaseUrl = baseUrl });
                 }
 
+                return new OpenAiOutboundTransformer(new OpenAiOutboundConfig
+                {
+                    BaseUrl = baseUrl,
+                    EndpointPath = path,
+                    ApiKeyProvider = apiKeyProvider,
+                    ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+                });
+            case ApiFormats.ZenmuxVideo:
+                // channel_llm.go:544-553: the video surface only exists for
+                // the ZenMux channel family.
+                if (candidate.Type is not (ZenmuxChannelType or ZenmuxResponsesChannelType
+                    or ZenmuxAnthropicChannelType or ZenmuxGeminiChannelType or ZenmuxVideoChannelType))
+                {
+                    throw new InvalidOperationException(
+                        "api_format \"" + endpoint.ApiFormat + "\" is only supported by ZenMux channel types");
+                }
+
+                return CreateZenmuxOutbound(candidate, apiKeyProvider, baseUrl, path);
+            case ApiFormats.AnthropicMessage:
+                // channel_llm.go:554-573: Command Code accepts only Bearer auth,
+                // for both its channel types; every other channel keeps the
+                // direct X-API-Key platform.
                 return new AnthropicOutboundTransformer(new AnthropicOutboundConfig
                 {
-                    Type = AnthropicPlatformType.Direct,
+                    Type = candidate.Type is CommandcodeChannelType or CommandcodeAnthropicChannelType
+                        ? AnthropicPlatformType.CommandCode
+                        : AnthropicPlatformType.Direct,
                     BaseUrl = baseUrl,
-                    ApiKeyProvider = provider,
-                    ChannelApiKeyIndex = provider.KeyIndex,
+                    EndpointPath = path,
+                    ApiKeyProvider = apiKeyProvider,
+                    ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
                 });
+            case ApiFormats.GeminiContents:
+            case ApiFormats.GeminiEmbedding:
+                return new GeminiOutboundTransformer(new GeminiOutboundConfig
+                {
+                    BaseUrl = baseUrl,
+                    EndpointPath = path,
+                    PlatformType = candidate.Type == GeminiVertexChannelType
+                        ? GeminiConstants.PlatformVertex
+                        : null,
+                    ApiKeyProvider = apiKeyProvider,
+                    ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+                });
+            case ApiFormats.JinaRerank:
+            case ApiFormats.JinaEmbedding:
+                return new JinaOutboundTransformer(new JinaOutboundConfig
+                {
+                    BaseUrl = baseUrl,
+                    EndpointPath = path,
+                    ApiKeyProvider = apiKeyProvider,
+                    ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+                });
+            case ApiFormats.TypeSafeSystemOne:
+                return TypeSafeOutboundTransformer.Create(
+                    baseUrl,
+                    apiKeyProvider,
+                    apiKeyProvider.KeyIndex,
+                    path);
             default:
                 throw new InvalidOperationException(
-                    "unsupported api_format for endpoint detection: " + apiFormat);
+                    "unsupported api_format \"" + endpoint.ApiFormat + "\"");
         }
     }
 
@@ -1256,12 +1488,15 @@ public static class ChannelOutboundFactory
         ChannelCandidate candidate,
         LlmRequest request,
         ChannelApiKeyProvider apiKeyProvider,
-        string version)
+        string version,
+        string? baseUrl = null,
+        string endpointPath = "")
     {
         return new ZaiOutboundTransformer(new ZaiOutboundConfig
         {
-            BaseUrl = candidate.BaseUrl ?? string.Empty,
+            BaseUrl = baseUrl ?? candidate.BaseUrl ?? string.Empty,
             Version = version,
+            EndpointPath = endpointPath,
             ApiKeyProvider = apiKeyProvider,
             ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
             SessionIdProvider = () => request.RawRequest?.SessionId,
@@ -1279,10 +1514,13 @@ public static class ChannelOutboundFactory
     /// </summary>
     private static DoubaoOutboundTransformer CreateDoubaoOutbound(
         ChannelCandidate candidate,
-        ChannelApiKeyProvider apiKeyProvider)
+        ChannelApiKeyProvider apiKeyProvider,
+        string? baseUrl = null,
+        string endpointPath = "")
         => new(new DoubaoOutboundConfig
         {
-            BaseUrl = candidate.BaseUrl ?? string.Empty,
+            BaseUrl = baseUrl ?? candidate.BaseUrl ?? string.Empty,
+            EndpointPath = endpointPath,
             ApiKeyProvider = apiKeyProvider,
             ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
         });
@@ -1316,10 +1554,13 @@ public static class ChannelOutboundFactory
     /// </summary>
     private static ZenmuxOutboundTransformer CreateZenmuxOutbound(
         ChannelCandidate candidate,
-        ChannelApiKeyProvider apiKeyProvider)
+        ChannelApiKeyProvider apiKeyProvider,
+        string? baseUrl = null,
+        string endpointPath = "")
         => new(new ZenmuxOutboundConfig
         {
-            BaseUrl = ZenmuxBaseUrl(candidate),
+            BaseUrl = baseUrl ?? ZenmuxBaseUrl(candidate),
+            EndpointPath = endpointPath,
             ApiKeyProvider = apiKeyProvider,
             ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
         });
@@ -1831,13 +2072,4 @@ public static class ChannelOutboundFactory
             SessionIdProvider = () => request.RawRequest?.SessionId,
             SessionScopeProvider = () => request.RawRequest?.SessionScope,
         });
-
-    private static string InferTransport(string baseUrl)
-    {
-        var normalized = baseUrl.Trim().ToLowerInvariant();
-        return normalized.StartsWith("ws://", StringComparison.Ordinal)
-            || normalized.StartsWith("wss://", StringComparison.Ordinal)
-            ? ResponsesOutboundTransformer.TransportWebSocket
-            : string.Empty;
-    }
 }

@@ -1286,11 +1286,47 @@ xai_subscription / antigravity 的刷新收到请求令牌、令牌不进入 JSO
 Antigravity / ChannelEndpoints / PipelineRetry / OAuthTokenProvider）与 143 例（Api：
 ChannelTransformOptions / Codex 与 ClaudeCode / OpenCode / XaiSubscription 接线 /
 ResponsesEndpointDispatch / 端点探测 / PersistentOutbound）通过。`AxonHub.Api.Tests`
-未跑全量，静态计数 6193 → 6202；四项目合计 9861 → 9870（Llm 3115 → 3122 /
+未跑全量，静态计数 6193 → 6195；四项目合计 9861 → 9870（Llm 3115 → 3122 /
 Persistence 376 / Grains 177 未重跑）。
 
 台账：C094 (6) 关闭并补记 9 例；C094 保持 gap（端点表、fenno / github_copilot /
 antigravity 的 provider 复用、模型拉取管理等残余未变）。lint 通过，
+`02-differences.md` 已重新生成；269 条（196 accepted / 6 gap / 67 resolved）。
+
+§184（2026-11-12）关闭 C094 (1)：用户端点按 API format 分派出站。参照
+`buildChannelWithOutbounds` 先建类型默认出站，再对每个用户端点调用
+`buildNonDefaultEndpointOutbound` 并以 format 为键覆盖默认表；端口此前只在
+Responses 家族的若干分支消费端点的 BaseURL/Path/Transport，其余家族仍按通道类型与
+通道基址分派。
+
+实现：`ChannelOutboundFactory.Create` 在选中用户端点（格式非空）时改走新的
+`CreateUserEndpointOutbound`——`buildNonDefaultEndpointOutbound` 的完整移植。端点
+BaseURL 优先、空则继承通道 BaseURL（ZenMux 空基址先套用类型默认值），transport 由
+继承后的基址/显式 transport 推断；websocket 仅允许 Responses 家族，Command Code
+端点基址仍校验 HTTPS。chat 分派保持参照的家族规则：Cline 保信封；zai/zhipu/xiaomi/
+doubao 家族仅在显式 path 或 `providerChatEndpointUsesFamilyVersion` 时保留家族
+transformer，否则回退通用 OpenAI。responses/compact 的 codex/fenno 分支、alpha
+search 的 codex 分支、anthropic/messages 的 Command Code 与 Direct 平台、MiniMax
+图片、ZenMux video、Gemini/Jina/TypeSafe/completion/decisions/embedding/音频/图片/
+视频均带端点 path；opencode_go 与 opencode_go_anthropic 的用户端点再包
+`WithSessionHeader`。端点探测的 `CreateNonDefaultEndpointOutbound` 改为调用同一分派
+（合成端点仅带 format、继承通道基址、path 为空），并抛参照文案的
+`unsupported api_format "..."`。
+
+测试：新增 `tests/AxonHub.Api.Tests/ChannelEndpointDispatchTests.cs` 13 例（zai 家族
+chat 的显式 path / 空 path 通用回退 / v4 基址家族保留、doubao path、minimax 图片
+path、zai_anthropic 的 Direct 端点与 X-API-Key、Command Code Bearer、gemini/jina/
+typesafe path、xai_subscription responses 端点覆盖、opencode 会话头包裹、chat +
+websocket 拒绝）。
+
+本轮实测：新增 13 例通过；定向 378 例（Api：ResponsesEndpointDispatch / 24 个
+*WiringTests / ChannelTestService / PersistentOutboundRetry / ChannelTransformOptions）
+与 89 例（dispatch + zai/zenmux/detect）通过。`AxonHub.Api.Tests` 未跑全量，静态计数
+6195 → 6208；四项目合计 9870 → 9883（Llm 3122 / Persistence 376 / Grains 177 未重跑）。
+
+台账：C094 (1) 关闭并补记 13 例；C094 仍保留 (10) AllowPassThroughBody 严格 JSON
+探测、(11) DecodeAuthJson 消费方与 §146 已记录的 fenno / github_copilot /
+antigravity provider 复用。§183 的 Api 静态计数由 6202 更正为 6195。lint 通过，
 `02-differences.md` 已重新生成；269 条（196 accepted / 6 gap / 67 resolved）。
 
 ## 公开 API 审计
