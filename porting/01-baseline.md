@@ -1121,6 +1121,30 @@ finish-step / finish 与 reasoning、tool-input-* 状态机）、AggregateStream
 21 例与 `tests/AxonHub.Api.Tests/PlaygroundEndpointTests.cs` 40 例；跨语言
 细节差异登记为 C278（accepted），C272 变为 resolved。
 
+2026-11-12 更新（§192）：C192 的实时流预览缺口接通，C192 收窄为 GraphQL 输入子集与
+缺失边。参照 `internal/pkg/chunkbuffer/chunkbuffer.go`、
+`internal/server/biz/stream_preview.go`、`internal/server/orchestrator/live_streaming.go`
+（withLivePreview）与 `internal/server/api/request_live.go`：流式请求在
+`persistRequestExecution` 之后、并发准入之前为 request / execution 注册 buffer；
+`OnOutboundRawStream` / `OnInboundRawStream` 把 provider 与 client 两侧事件（binary
+音频先摘要）追加进对应 buffer；`OnOutboundRawError` 先 execution 后 request 关闭并
+注销；预览端点对 processing + stream 且 buffer 仍注册的行订阅 buffer（当前长度为
+replay 截止，`[DONE]` 跳过，关闭后发 `preview.completed`，3 分钟 idle 静默结束），
+其余走静态回退；`LoadResponseChunks` / `LoadRequestExecutionResponseChunks` 在
+processing + stream 时改读 registry。端口新增
+`src/AxonHub.Api/Persistence/ChunkBuffer.cs`（50000 上限、one-slot SemaphoreSlim 合并
+突发、SubscribeFromCurrent 原子 replay 截止、Close 广播）、`LiveStreamRegistry.cs`
+（两份 ConcurrentDictionary、preview marshal 复用 RequestChunkStorage、10 分钟 idle
+清理）、`LiveStreamRegistrySweeper.cs`（BackgroundService + PeriodicTimer 5 分钟）、
+`Orchestration/LivePreviewMiddleware.cs` 与 `IRequestChainState`（由
+`RequestChainPersistenceMiddleware` 实现）；`ChatCompletionOrchestrator` 在管线构建前
+读取一次存储策略（失败回退默认 false），`ProcessSpecifiedAsync` 传 livePreview=false；
+`RequestPreviewHandlers` 增加 live 分支与 `RequestPreviewStream`；
+`RequestPayloadStorage` 两个 loader 接通 registry；`Program.cs` 注册单例与 sweeper。
+新增 41 例（ChunkBuffer 10、Registry 10、Middleware 12、Orchestrator 4，预览端点 3、
+chunk loader 2）。实现差异（阻塞等待、策略快照、sweeper 宿主、nil 与空列表）登记为
+C279（accepted）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、
@@ -8896,6 +8920,6 @@ fixed / round_robin_success 的 cursor 规则）、`internal/server/biz/channel_
 | 项目提示词注入与 decisions 提示词拼接 | 已由 §99 闭合运行时链路：`prompts` 表（EF 写 / Dapper 读、软删与唯一索引）、设置 JSON 解码、条件匹配与 XRegexp 语义、稳定排序与前插 / 追加、ProtectPrompts 之前的 pipeline 接线、decisions 字符串与数组 input 的逐字节改写、项目门控与 fail-open（63 + 6 例）；每请求读取与参照每分钟缓存的差异登记为 C187（accepted）；管理面（GraphQL CRUD / 设置校验）由 §100 闭合，残余差异登记为 C188（accepted） | 中 | 完成（C187 / C188） |
 | 项目提示词管理面（GraphQL CRUD / 设置校验） | 已由 §100 闭合：Prompt 节点 / prompts 连接（过滤、排序、键集分页）、七个变更、ValidatePromptSettings、DUPLICATE_NAME、隐私策略（含无 API-key 规则）、软删与 aggregate 更新语义（37 + 7 例）；残余差异（where 子集、必填输入严格度、未知枚举输出、order 列宽、无缓存失效、Project.prompts 反向边）登记为 C188（accepted） | — | 完成（C188） |
 | 追踪与线程管理面（GraphQL） | 已由 §101 闭合：traces / threads 根查询、`node()` 的 Trace / Thread 分支、Trace / Thread 完整类型与边、八个 archive / unarchive / retain / unretain 变更、TracePrivacy 查询与变更策略、段构建（OpenAI / Anthropic / Gemini / 图片 / moderation / alpha search）、用量聚合与 thread 级联状态变更（23 + 15 例）；残余差异（隐私显式求值、Int 截断与零值 GID、顺序加载 / 无对象存储）登记为 C189–C191（accepted），GC / 保留策略仍见 C095 | — | 完成（C189–C191） |
-| 请求管理面（GraphQL） | 已由 §102 闭合：requests 根查询、`node()` 的 Request 分支、RequestExecution / UsageLog 完整类型与嵌套连接、正文与 chunk 加载规则、四个 order 输入、三个 where 输入、成本明细与隐私边（5 + 3 例）；残余差异（where 输入子集、缺失 dataStorage 边、stream + processing 实时预览）登记为 C192（accepted） | — | 完成（C192） |
+| 请求管理面（GraphQL） | 已由 §102 闭合：requests 根查询、`node()` 的 Request 分支、RequestExecution / UsageLog 完整类型与嵌套连接、正文与 chunk 加载规则、四个 order 输入、三个 where 输入、成本明细与隐私边（5 + 3 例）；残余差异（where 输入子集、缺失 dataStorage 边）登记为 C192（accepted）；stream + processing 实时预览已由 §192 接通，跨语言差异登记为 C279（accepted） | — | 完成（C192 / C279） |
 | 用量日志管理面（GraphQL） | 已由 §103 闭合：usageLogs 根查询、`node()` 的 UsageLog 分支、项目作用域与逐行可见性谓词、CREATED_AT→id 排序重写（8 + 1 例）；残余差异（显式隐私求值 / SQL 表达式、反向边、where 子集）登记为 C193（accepted，承接 C165 / C192） | — | 完成（C193） |
 | Analytics 页（GraphQL） | 已由 §104 闭合：四个根字段、过滤器解析与显式 / 用户 key 交集、read_dashboard 作用域与 FORBIDDEN 扩展、metadata 的 UsageLog 隐私链、本地日桶补零（缺省 30 天）、四个维度的 join 与名称合成、tokensPerSecond / ttftMs 与 10ms 下限（10 + 4 例）；残余差异（仅 analytics 切片局部跟进 2851a192、直接 Dapper SQL、Postgres-only 日期分支、时区名参数绑定、`::text` / `checked` 截断）登记为 C194（accepted） | — | 完成（C194） |

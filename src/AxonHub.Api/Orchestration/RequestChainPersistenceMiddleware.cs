@@ -27,7 +27,7 @@ namespace AxonHub.Api.Orchestration;
 /// InboundPersistentStream.Close and OutboundPersistentStream.Close. The recorder
 /// is synchronous by design; see C018.
 /// </remarks>
-public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
+public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IRequestChainState
 {
     private const string StatusProcessing = "processing";
     private const string StatusCompleted = "completed";
@@ -416,6 +416,18 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
     /// execution row exists (orchestrator.go:327-339).
     /// </summary>
     public bool HasRequestExecution => _attempt is { ExecutionId: not 0 };
+
+    /// <summary>
+    /// The request row created by the inbound hook (the reference's
+    /// <c>PersistenceState.Request.ID</c>), or 0 before the row exists.
+    /// </summary>
+    public long CurrentRequestId => _requestId;
+
+    /// <summary>
+    /// The execution row created for the current attempt (the reference's
+    /// <c>PersistenceState.RequestExec.ID</c>), or 0 before the row exists.
+    /// </summary>
+    public long CurrentExecutionId => _attempt?.ExecutionId ?? 0;
 
     /// <summary>
     /// Port of the orchestrator's post-Process failure handling: the last

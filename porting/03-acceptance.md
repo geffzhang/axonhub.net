@@ -1575,6 +1575,39 @@ PlaygroundEndpointTests.cs` 18 个方法 / 40 例（请求级 4、流式成功 1
 `AxonHub.Api.Tests` 未跑全量。台账：C272 resolved；新增 C278（accepted）；
 lint 通过；278 条（203 accepted / 5 gap / 70 resolved）。
 
+§192（2026-11-12）接通 C192 的实时流预览：request / execution chunk buffer 与 SSE preview。
+
+参照 internal/pkg/chunkbuffer/chunkbuffer.go、biz/stream_preview.go、
+orchestrator/live_streaming.go（withLivePreview）与 api/request_live.go。端口：
+
+- `src/AxonHub.Api/Persistence/ChunkBuffer.cs`：Append 拒绝 nil / closed / 超 50000，
+  Slice 快照，Read(index) 返回 chunk / nextIndex / closed，Close 广播，
+  SubscribeFromCurrent 原子给出 replay 截止与幂等退订（one-slot SemaphoreSlim 合并突发）。
+- `src/AxonHub.Api/Persistence/LiveStreamRegistry.cs` / `LiveStreamRegistrySweeper.cs`：
+  request / execution 两份 ConcurrentDictionary；preview marshal 复用 RequestChunkStorage
+  （跳过 [DONE] 与 binary.done、二进制摘要）；BackgroundService + PeriodicTimer 每 5 分钟
+  关闭并删除已关闭或闲置 >10 分钟的 buffer。
+- `src/AxonHub.Api/Orchestration/LivePreviewMiddleware.cs` 与 `IRequestChainState`：
+  persistRequestExecution 之后注册 buffer，两侧流事件镜像，错误与 Dispose 关闭 / 注销；
+  orchestrator 预读一次 StoragePolicy.LivePreview，ProcessSpecifiedAsync 传
+  livePreview=false（通道测试无 registry）。
+- `src/AxonHub.Api/Management/RequestPreviewHandlers.cs`：processing + stream 且有 buffer
+  时以 preview.replay / preview.chunk / preview.completed 输出 SSE（[DONE] 跳过、3 分钟
+  idle 静默结束、expectedChoices=0 使 writer 在 completed 后追加 ErrStreamIncomplete
+  错误，与参照一致）；其余保持静态回退。
+- `src/AxonHub.Api/Management/RequestPayloadStorage.cs`：两个 chunk loader 在
+  processing + stream 时返回 registry 的实时 chunks。
+- `Program.cs`：注册 LiveStreamRegistry 单例与 sweeper 宿主服务。
+
+测试：新增 `tests/AxonHub.Api.Tests/ChunkBufferTests.cs` 10 例、`LiveStreamRegistryTests.cs`
+10 例、`LivePreviewMiddlewareTests.cs` 12 例、`LivePreviewOrchestratorTests.cs` 4 例；
+扩展 `AdminRequestContentEndpointTests.cs` 3 例（replay→completed、订阅后增量 chunk、
+completed 忽略残留 buffer）与 `RequestPayloadStorageTests.cs` 2 例（request / execution
+loader 优先实时 registry）。实测组合过滤 124 通过 / 0 失败（2026-11-12，含 41 个新例），
+另 LivePreviewOrchestratorTests 单独 4 通过；`AxonHub.Api.Tests` 未跑全量。台账：C192
+收窄，新增 C279（accepted）；lint 通过；`02-differences.md` 已重新生成；279 条
+（204 accepted / 5 gap / 70 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Management;
+using AxonHub.Api.Persistence;
 using AxonHub.Api.Settings;
 using AxonHub.Api.Storage;
 using AxonHub.Persistence;
@@ -18,8 +19,9 @@ namespace AxonHub.Api.Tests;
 /// Locks the two request-detail REST routes of routes.go:145-152:
 /// GET /admin/requests/:request_id/content (api/request_content.go) and
 /// GET /admin/requests/:request_id/preview (api/request_live.go). Both sit on
-/// the admin JWT gate and require X-Project-ID; the preview route serves the
-/// static-fetch fallback because the live chunk registry is not ported (C192).
+/// the admin JWT gate and require X-Project-ID; the preview route tails a live
+/// buffer when one is registered and serves the static-fetch fallback
+/// otherwise.
 /// </summary>
 public sealed class AdminRequestContentEndpointTests : IAsyncLifetime, IDisposable
 {
@@ -37,6 +39,7 @@ public sealed class AdminRequestContentEndpointTests : IAsyncLifetime, IDisposab
     private readonly FakeRequestStore _requests = new();
     private readonly FakeDataStorageStore _dataStorages = new();
     private readonly FakeDataStorageBackends _backends = new();
+    private readonly LiveStreamRegistry _liveStreams = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -56,6 +59,7 @@ public sealed class AdminRequestContentEndpointTests : IAsyncLifetime, IDisposab
         builder.Services.AddSingleton<IRequestStore>(_requests);
         builder.Services.AddSingleton<IDataStorageStore>(_dataStorages);
         builder.Services.AddSingleton<IDataStorageBackendFactory>(_backends);
+        builder.Services.AddSingleton(_liveStreams);
         builder.Services.AddSingleton<ISystemSettingsAdminService>(
             new SystemSettingsAdminService(_systems));
         builder.Services.AddScoped<RequestPayloadStorage>();
@@ -557,6 +561,114 @@ public sealed class AdminRequestContentEndpointTests : IAsyncLifetime, IDisposab
 
     // ---------------- GET /admin/requests/:id/preview ----------------
 
+    /// <summary>
+    /// writeSSEStreamEnd's trailing event: requestPreviewStream does not
+    /// implement ExpectedStreamChoices, so the terminal tracker never sees the
+    /// preview.completed marker and the writer reports an incomplete stream
+    /// (chat.go:298, orchestrator.ErrStreamIncomplete).
+    /// </summary>
+    private const string IncompleteStreamErrorEvent =
+        "event:error\n"
+        + "data:{\"error\":{\"code\":\"upstream_stream_interrupted\","
+        + "\"message\":\"Upstream provider closed the connection before the response completed: "
+        + "stream ended without terminal event or completed response\","
+        + "\"type\":\"upstream_error\"},\"request_id\":\"\"}\n\n";
+
+    [Fact]
+    public async Task PreviewTailsAnActiveBufferAsReplayThenCompleted()
+    {
+        SeedRequest(row =>
+        {
+            row.Stream = true;
+            row.Status = "processing";
+        });
+        var buffer = _liveStreams.CreateBuffer();
+        buffer.Append(TestChannels.Data("{\"a\":1}", "data"));
+        buffer.Append(TestChannels.Data("[DONE]", "data"));
+        buffer.Append(TestChannels.Data("{\"b\":2}", "data"));
+        _liveStreams.RegisterRequest(RequestId, buffer);
+        buffer.Close();
+
+        using var response = await GetAsync("/admin/requests/42/preview");
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/event-stream", response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(
+            "event:preview.replay\ndata:{\"a\":1}\n\n"
+            + "event:preview.replay\ndata:{\"b\":2}\n\n"
+            + "event:preview.completed\ndata:{\"status\":\"completed\"}\n\n"
+            + IncompleteStreamErrorEvent,
+            text);
+
+        // The live branch never unregisters the buffer: the orchestrator's
+        // stream close owns that.
+        Assert.NotNull(_liveStreams.GetRequestBuffer(RequestId));
+    }
+
+    [Fact]
+    public async Task PreviewStreamsChunksAppendedAfterTheSubscription()
+    {
+        SeedRequest(row =>
+        {
+            row.Stream = true;
+            row.Status = "processing";
+        });
+        var buffer = _liveStreams.CreateBuffer();
+        buffer.Append(TestChannels.Data("{\"first\":1}", "data"));
+        _liveStreams.RegisterRequest(RequestId, buffer);
+
+        using var request = NewRequest("/admin/requests/42/preview");
+        using var response = await _client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/event-stream", response.Content.Headers.ContentType!.MediaType);
+
+        // The handler flushed the SSE headers only after RequestPreviewStream
+        // subscribed, so this append is incremental rather than replayed.
+        buffer.Append(TestChannels.Data("{\"second\":2}", "data"));
+        buffer.Close();
+
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.Contains(
+            "event:preview.replay\ndata:{\"first\":1}\n\n",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "event:preview.chunk\ndata:{\"second\":2}\n\n",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "event:preview.completed\ndata:{\"status\":\"completed\"}\n\n",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PreviewCompletedRequestsIgnoreALiveBuffer()
+    {
+        SeedRequest(row =>
+        {
+            row.Stream = true;
+            row.Status = "completed";
+            row.ResponseChunks = "[{\"persisted\":true}]";
+        });
+        var buffer = _liveStreams.CreateBuffer();
+        buffer.Append(TestChannels.Data("{\"live\":true}", "data"));
+        _liveStreams.RegisterRequest(RequestId, buffer);
+
+        using var response = await GetAsync("/admin/requests/42/preview");
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            "{\"mode\":\"static-fetch\",\"responseChunks\":[{\"persisted\":true}]}",
+            text);
+    }
+
     [Fact]
     public async Task PreviewServesPersistedChunksAsStaticFetch()
     {
@@ -680,7 +792,17 @@ public sealed class AdminRequestContentEndpointTests : IAsyncLifetime, IDisposab
         string? projectId = "gid://axonhub/Project/1",
         string? token = null)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        using var request = NewRequest(path, authenticated, projectId, token);
+        return await _client.SendAsync(request);
+    }
+
+    private HttpRequestMessage NewRequest(
+        string path,
+        bool authenticated = true,
+        string? projectId = "gid://axonhub/Project/1",
+        string? token = null)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, path);
         if (authenticated)
         {
             request.Headers.Authorization = new AuthenticationHeaderValue(
@@ -693,7 +815,7 @@ public sealed class AdminRequestContentEndpointTests : IAsyncLifetime, IDisposab
             request.Headers.Add("X-Project-ID", projectId);
         }
 
-        return await _client.SendAsync(request);
+        return request;
     }
 
     private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response)

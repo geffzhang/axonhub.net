@@ -1,6 +1,8 @@
 using System.Text;
 using AxonHub.Api.Management;
+using AxonHub.Api.Persistence;
 using AxonHub.Api.Settings;
+using AxonHub.Llm.Http;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.Tests;
@@ -19,9 +21,10 @@ public sealed class RequestPayloadStorageTests
     private readonly FakeSystemStore _systems = new();
     private readonly FakeDataStorageBackends _backends = new();
     private readonly FakeRequestStore _requests = new();
+    private readonly LiveStreamRegistry _liveStreams = new();
 
     private RequestPayloadStorage NewStorage()
-        => new(_dataStorages, new SystemSettingsAdminService(_systems), _backends);
+        => new(_dataStorages, new SystemSettingsAdminService(_systems), _backends, _liveStreams);
 
     private DataStorageRecord SeedStorage(long id, string type = "database", bool primary = false)
         => _dataStorages.Add(new DataStorageRecord { Id = id, Type = type, Primary = primary });
@@ -531,6 +534,27 @@ public sealed class RequestPayloadStorageTests
     }
 
     [Fact]
+    public async Task RequestChunksPreferTheLiveRegistryForActiveStreams()
+    {
+        var buffer = _liveStreams.CreateBuffer();
+        buffer.Append(new StreamEvent { Type = "data", Data = "{\"live\":true}"u8.ToArray() });
+        _liveStreams.RegisterRequest(42, buffer);
+        var row = new RequestRecord
+        {
+            Id = 42,
+            Stream = true,
+            Status = "processing",
+            ResponseChunks = "[{\"persisted\":true}]",
+        };
+
+        // request.go:1514-1518: an active stream returns the registry snapshot
+        // instead of the persisted column, even before anything is stored.
+        var chunks = await NewStorage().LoadResponseChunksAsync(row);
+        var chunk = Assert.Single(chunks);
+        Assert.Equal("{\"event\":\"data\",\"data\":{\"live\":true}}", chunk);
+    }
+
+    [Fact]
     public async Task RequestChunksComeFromTheColumnAndCollapseTheMarker()
     {
         SeedStorage(1, primary: true);
@@ -687,6 +711,25 @@ public sealed class RequestPayloadStorageTests
             Status = "processing",
         };
         Assert.Empty(await payloads.LoadExecutionResponseChunksAsync(processing));
+    }
+
+    [Fact]
+    public async Task ExecutionChunksPreferTheLiveRegistryForActiveStreams()
+    {
+        var buffer = _liveStreams.CreateBuffer();
+        buffer.Append(new StreamEvent { Type = "data", Data = "{\"live\":true}"u8.ToArray() });
+        _liveStreams.RegisterExecution(5, buffer);
+        var row = new RequestExecutionRecord
+        {
+            Id = 5,
+            Stream = true,
+            Status = "processing",
+            ResponseChunks = "[{\"persisted\":true}]",
+        };
+
+        var chunks = await NewStorage().LoadExecutionResponseChunksAsync(row);
+        var chunk = Assert.Single(chunks);
+        Assert.Equal("{\"event\":\"data\",\"data\":{\"live\":true}}", chunk);
     }
 
     [Fact]

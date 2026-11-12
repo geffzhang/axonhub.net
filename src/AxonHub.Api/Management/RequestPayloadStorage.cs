@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using AxonHub.Api.Persistence;
 using AxonHub.Api.Settings;
 using AxonHub.Api.Storage;
 using AxonHub.Persistence;
@@ -25,12 +26,15 @@ public readonly record struct ResponseBodyWrite(bool SetBody, string? DbValue, s
 /// reads the row on every call and builds a backend per operation (C199).
 /// Failures that the reference only logs (external read/write errors) degrade
 /// to the same observable values here: "{}", an empty chunk list, or "no
-/// marker written".
+/// marker written". The two chunk loaders consult the live preview registry
+/// first for an active stream, exactly like RequestService.LoadResponseChunks
+/// and LoadRequestExecutionResponseChunks (request.go:1509-1683).
 /// </remarks>
 public sealed class RequestPayloadStorage(
     IDataStorageStore dataStorages,
     ISystemSettingsAdminService settings,
-    IDataStorageBackendFactory backends)
+    IDataStorageBackendFactory backends,
+    LiveStreamRegistry? liveStreamRegistry = null)
 {
     public const string EmptyJson = "{}";
 
@@ -496,11 +500,10 @@ public sealed class RequestPayloadStorage(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // The live preview registry is not ported (C192): an active stream
-        // renders an empty list until it finishes.
+        // Live preview for active streaming requests (request.go:1511-1515).
         if (request.Stream && request.Status == ProcessingStatus)
         {
-            return [];
+            return liveStreamRegistry?.GetRequestChunks(request.Id) ?? [];
         }
 
         if (!request.Stream || !IsFinishedStatus(request.Status))
@@ -652,9 +655,10 @@ public sealed class RequestPayloadStorage(
     {
         ArgumentNullException.ThrowIfNull(execution);
 
+        // Live preview for active streaming executions (request.go:1641-1645).
         if (execution.Stream && execution.Status == ProcessingStatus)
         {
-            return [];
+            return liveStreamRegistry?.GetExecutionChunks(execution.Id) ?? [];
         }
 
         if (!execution.Stream || !IsFinishedStatus(execution.Status))

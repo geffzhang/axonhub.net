@@ -299,6 +299,19 @@ builder.Services.AddScoped<IApiKeyProfileQuotaReader>(
 builder.Services.AddScoped<IModelCandidateSelector, ModelCandidateSelector>();
 builder.Services.AddScoped<ChatCompletionOrchestrator>();
 
+// Live stream preview (biz.LiveStreamRegistry + chunkbuffer): the
+// orchestrator's live-preview middleware registers buffers for active streams,
+// the chunk loaders and GET /admin/requests/:id/preview read them, and the
+// hosted sweeper mirrors StartSweeper (5-minute tick, 10-minute idle
+// threshold). The registry is process-wide by design: the preview contract is
+// explicitly single-instance (request_live.go:66-87).
+builder.Services.AddSingleton<LiveStreamRegistry>();
+builder.Services.AddHostedService(
+    static services => new LiveStreamRegistrySweeper(
+        services.GetRequiredService<LiveStreamRegistry>(),
+        services.GetRequiredService<TimeProvider>(),
+        services.GetRequiredService<ILogger<LiveStreamRegistrySweeper>>()));
+
 // The owner-only cache diagnostics export runs the ordinary selector for its
 // candidate preview; the reference's OwnerRule admits owners where the port's
 // API-key privacy check would deny, so the preview uses its own bypass

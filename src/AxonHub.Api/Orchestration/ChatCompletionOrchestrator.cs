@@ -5,6 +5,7 @@ using AxonHub.Api.Management;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.PromptProtection;
 using AxonHub.Api.Prompts;
+using AxonHub.Api.Settings;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
@@ -57,6 +58,8 @@ public sealed class ChatCompletionOrchestrator
     private readonly ChannelAutoDisableService? _autoDisable;
     private readonly IChannelAutoDisableEvaluationQueue? _autoDisableQueue;
     private readonly ChannelProxyExecutors? _channelProxyExecutors;
+    private readonly LiveStreamRegistry? _liveStreamRegistry;
+    private readonly ISystemSettingsAdminService? _systemSettings;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -84,7 +87,9 @@ public sealed class ChatCompletionOrchestrator
         ChannelApiKeySelectionRegistry? apiKeySelection = null,
         ChannelAutoDisableService? autoDisable = null,
         IChannelAutoDisableEvaluationQueue? autoDisableQueue = null,
-        ChannelProxyExecutors? channelProxyExecutors = null)
+        ChannelProxyExecutors? channelProxyExecutors = null,
+        LiveStreamRegistry? liveStreamRegistry = null,
+        ISystemSettingsAdminService? systemSettings = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -166,6 +171,13 @@ public sealed class ChatCompletionOrchestrator
         // it null and keep the historical shared-executor behavior.
         _channelProxyExecutors = channelProxyExecutors;
 
+        // Production passes the process-wide live preview registry and the
+        // system settings reader; direct constructions leave both null, which
+        // keeps the live-preview middleware disabled exactly like the
+        // reference's nil LiveStreamRegistry (the tester).
+        _liveStreamRegistry = liveStreamRegistry;
+        _systemSettings = systemSettings;
+
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
         // is the same as no provider.
@@ -210,7 +222,9 @@ public sealed class ChatCompletionOrchestrator
             apiKeySelection: _apiKeySelection,
             autoDisable: _autoDisable,
             autoDisableQueue: _autoDisableQueue,
-            channelProxyExecutors: _channelProxyExecutors);
+            channelProxyExecutors: _channelProxyExecutors,
+            liveStreamRegistry: _liveStreamRegistry,
+            systemSettings: _systemSettings);
     }
 
     /// <summary>
@@ -250,7 +264,9 @@ public sealed class ChatCompletionOrchestrator
             apiKeySelection: _apiKeySelection,
             autoDisable: _autoDisable,
             autoDisableQueue: _autoDisableQueue,
-            channelProxyExecutors: _channelProxyExecutors);
+            channelProxyExecutors: _channelProxyExecutors,
+            liveStreamRegistry: _liveStreamRegistry,
+            systemSettings: _systemSettings);
     }
 
     /// <summary>
@@ -587,7 +603,12 @@ public sealed class ChatCompletionOrchestrator
                 includeRateLimits: false,
                 ensureUsage: true,
                 cancellationToken,
-                proxyOverride: proxy)
+                proxyOverride: proxy,
+                // The tester builds its own orchestrator without a live
+                // registry (tester.go:295-316), so channel tests never publish
+                // preview buffers even though they share this production
+                // instance.
+                livePreview: false)
             .ConfigureAwait(false);
     }
 
@@ -666,7 +687,8 @@ public sealed class ChatCompletionOrchestrator
         bool includeRateLimits,
         bool ensureUsage,
         CancellationToken cancellationToken,
-        ProxyConfig? proxyOverride = null)
+        ProxyConfig? proxyOverride = null,
+        bool livePreview = true)
     {
         // channel_llm.go:122-130,700-774: the reference builds the channel's
         // transformer with the channel's proxy-aware client, and the same client
@@ -700,6 +722,32 @@ public sealed class ChatCompletionOrchestrator
             .ConfigureAwait(false);
         var prompts = await LoadPromptsAsync(promptProvider, identity, cancellationToken)
             .ConfigureAwait(false);
+
+        // orchestrator.go:298-299 mounts withLivePreview after
+        // persistRequestExecution; the middleware reads
+        // SystemService.StoragePolicyOrDefault().LivePreview on the first
+        // streaming request. The port's settings read is asynchronous, so the
+        // snapshot happens here and the middleware still gates on the unified
+        // request's stream flag. A failed read falls back to the default
+        // policy, which disables the preview (StoragePolicyOrDefault).
+        var livePreviewEnabled = false;
+        if (livePreview && _liveStreamRegistry is not null && _systemSettings is not null)
+        {
+            try
+            {
+                livePreviewEnabled = (await _systemSettings
+                    .GetStoragePolicyAsync(cancellationToken)
+                    .ConfigureAwait(false)).LivePreview;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                livePreviewEnabled = false;
+            }
+        }
 
         var options = new PipelineOptions
         {
@@ -802,6 +850,18 @@ public sealed class ChatCompletionOrchestrator
                 _usageCostService,
                 _previousChannels);
             options.Middlewares.Add(persistence);
+        }
+
+        // Forward the events to the live preview buffer (orchestrator.go:298-299:
+        // registered right after persistRequestExecution and before the
+        // admission middlewares). The tester's processor has no registry, so
+        // channel tests never register preview buffers.
+        if (livePreview && _liveStreamRegistry is not null)
+        {
+            options.Middlewares.Add(new LivePreviewMiddleware(
+                _liveStreamRegistry,
+                persistence,
+                livePreviewEnabled));
         }
 
         // Per-channel admission, then RPM admission, then TPM/cooldown
