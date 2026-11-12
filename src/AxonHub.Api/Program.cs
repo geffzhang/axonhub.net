@@ -343,6 +343,25 @@ builder.Services.AddScoped<AntigravityOAuthService>();
 builder.Services.AddSingleton<ICodexOAuthStateCache, CodexOAuthStateCache>();
 builder.Services.AddScoped<CodexOAuthService>();
 
+// xAI OAuth management (api/xai.go): a 30-minute PKCE session bound to the
+// starting user, the token exchange, and the SSO-cookie device flow
+// (routes.go:117-119).
+builder.Services.AddSingleton<IXaiOAuthStateCache, XaiOAuthStateCache>();
+builder.Services.AddScoped<XaiOAuthService>(static services => new XaiOAuthService(
+    services.GetRequiredService<IXaiOAuthStateCache>(),
+    services.GetRequiredService<IExecutor>(),
+    services.GetRequiredService<IProxyExecutorFactory>(),
+    services.GetRequiredService<IManagementIdentity>()));
+
+// Claude Code OAuth management (api/claudecode.go): a 10-minute PKCE session.
+builder.Services.AddSingleton<IClaudeCodeOAuthStateCache, ClaudeCodeOAuthStateCache>();
+builder.Services.AddScoped<ClaudeCodeOAuthService>();
+
+// GitHub Copilot device-flow management (api/copilot.go): the device state is
+// cached for expires_in capped at 15 minutes and polled by session id.
+builder.Services.AddSingleton<ICopilotDeviceFlowCache, CopilotDeviceFlowCache>();
+builder.Services.AddScoped<CopilotOAuthService>();
+
 // Projects (biz.ProjectService): CRUD over the projects table plus the
 // project-level role presets and the creator's UserProject row. The project
 // cache is not ported (C174).
@@ -906,6 +925,15 @@ app.MapAntigravityOAuthRoutes();
 // sit on the admin group.
 app.MapCodexOAuthRoutes();
 
+// xAI OAuth (routes.go:117-119): start, exchange and the SSO cookie decode.
+app.MapXaiOAuthRoutes();
+
+// Claude Code OAuth (routes.go:120-121).
+app.MapClaudeCodeOAuthRoutes();
+
+// GitHub Copilot device flow (routes.go:127-128).
+app.MapCopilotOAuthRoutes();
+
 // NewOIDCHandlers warns when providers are configured without a public URL
 // (api/oidc.go:36-41). An empty value still fails each flow at getBaseURL.
 if (oidcProviders.Count > 0 && oidcLoginOptions.PublicUrl.Length == 0)
@@ -1008,6 +1036,35 @@ app.UseWhen(
 // WithProjectID.
 app.UseWhen(
     static context => context.Request.Path.StartsWithSegments("/admin/codex"),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+    });
+
+// The xAI OAuth surface (start / exchange / sso) sits on the admin group
+// (routes.go:106,117-119): the same plain user-JWT gate and WithProjectID.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/xai"),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+    });
+
+// The Claude Code OAuth pair sits on the admin group (routes.go:106,120-121).
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/claudecode"),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+    });
+
+// The GitHub Copilot device-flow pair sits on the admin group
+// (routes.go:106,127-128).
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/copilot"),
     static branch =>
     {
         branch.UseMiddleware<AdminJwtAuthMiddleware>();

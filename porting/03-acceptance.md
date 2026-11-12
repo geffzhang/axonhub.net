@@ -1425,6 +1425,58 @@ antigravity provider 复用）；新增 C270（gap：xai / claudecode / copilot 
 端点未移植）；lint 通过，`02-differences.md` 已重新生成；270 条（196 accepted /
 6 gap / 68 resolved）。
 
+§188（2026-11-12）关闭 C270：xai / claudecode / copilot 管理面 OAuth 端点。
+
+参照 routes.go:117-122、127-128 在 admin group 上挂载 POST /admin/xai/oauth/start、
+/oauth/exchange、/oauth/sso（internal/server/api/xai.go），POST
+/admin/claudecode/oauth/start、/oauth/exchange（api/claudecode.go）与 POST
+/admin/copilot/oauth/start、/oauth/poll（api/copilot.go）。端口此前只有这三类
+provider 的 llm 层构件（PKCE、SubscriptionToken、ClaudeCodeTokenProvider、
+SubscriptionSsoDevice、OAuthCredentials.ToJson），没有管理面 HTTP 表面；本切片
+接通七个端点。
+
+实现：新增 `src/AxonHub.Api/Management/XaiOAuthService.cs`、
+`ClaudeCodeOAuthService.cs`、`CopilotOAuthService.cs`（会话缓存、回调解析、令牌
+交换、设备码轮询与错误映射）、`src/AxonHub.Api/Auth/XaiOAuthHandlers.cs`、
+`ClaudeCodeOAuthHandlers.cs`、`CopilotOAuthHandlers.cs`（ShouldBindJSON 等价绑定、
+gin JSONError 信封、七条路由）与 `XaiOAuthStateCache.cs`、`ClaudeCodeOAuthCache.cs`、
+`CopilotDeviceFlowCache.cs`（go-cache 到期语义的进程内 typed 缓存；copilot 复刻
+0→默认 5 分钟、负值→永不过期，redis / two-level 见 C171）。Program.cs 注册 DI、
+`MapXaiOAuthRoutes()` / `MapClaudeCodeOAuthRoutes()` / `MapCopilotOAuthRoutes()` 与
+`/admin/xai`、`/admin/claudecode`、`/admin/copilot` 的 admin JWT + WithProjectID 门。
+xai start 不读 body，`GenerateState(32)` / `GenerateCodeVerifier(32)` / nonce 与
+S256 PKCE 按 `xai:oauth:<state>` 写入 30 分钟 TTL 并绑定 UserId；exchange 按 Get
+（错误按 miss）→ 未登录 401 → UserId 不符 400 且保留会话 → 解析回调（full URL /
+code 与 state）→ state 不符 400 且保留会话 → Delete（失败仅 warn）→ 仅 url 非空
+代理经 `HttpProxyExecutorFactory` → 令牌交换失败 502 → 凭据序列化失败 500；sso 走
+`SubscriptionSsoDevice.ConvertSsoToBuild`，失败 502。claudecode start 生成 64 字节
+verifier 并写入 10 分钟 TTL，绑定空结构体（空 body / 畸形 JSON 400，`{}` / `null`
+200）；exchange 先 Delete 再解析（回调畸形或 state 不匹配也消耗会话），state 优先
+取 fragment、再回退 query，令牌请求为带 state 的 JSON，失败 502。copilot start 仅
+容忍空/纯空白 body（Go EOF 语义），设备码缓存 TTL=min(expires_in,15 分钟)；poll
+用严格 `>` 过期判断，JSON/form 双解析，pending / slow_down 保留会话，
+expired_token / access_denied 删除并回 400，成功删除并回 complete，未知错误 502，
+空响应 500。`ProxyExecutorFactory` 抽出 `HttpProxyExecutorFactory.CreateTransport`
+供 xAI SSO 的非代理分支构造 transport（测试经 port-only `ssoTransportFactory`
+接缝注入脚本化 handler）。
+
+测试：`tests/AxonHub.Api.Tests/XaiOAuthServiceTests.cs`（30 例）、
+`ClaudeCodeOAuthServiceTests.cs`（29 例）、`CopilotOAuthServiceTests.cs`（32 例）、
+`AdminXaiOAuthEndpointTests.cs`（29 例）、`AdminClaudeCodeOAuthEndpointTests.cs`
+（29 例）、`AdminCopilotOAuthEndpointTests.cs`（29 例），合计 178 例（服务 91、
+端点 87）：PKCE 形状与授权 URL 键序、TTL 边界、会话保留 / 消耗矩阵、回调错误文案
+与解析次序、令牌请求的精确表单 / JSON 形状、双层错误包装、gin 信封与绑定矩阵、
+三条 poll 状态机、代理工厂 url 分支。
+
+本轮实测：新增 178 例通过（定向 `dotnet test`，耗时约 1 s）；`AxonHub.Api.Tests`
+未跑全量，静态计数 6280 → 6458；四项目合计 9994 → 10172（Llm 3161 / Persistence
+376 / Grains 177 未重跑）。
+
+台账：C270 关闭（resolved）；新增 C271（accepted：System.Uri 回调解析接受边界与
+本地化文案、claudecode fragment 解码、System.Text.Json 解码文案、SSO 传输构造、
+进程内缓存与 C171）；lint 通过，`02-differences.md` 已重新生成；271 条（197
+accepted / 5 gap / 69 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

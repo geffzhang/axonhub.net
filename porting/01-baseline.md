@@ -1039,6 +1039,28 @@ codex / codex alpha search / claudecode / xai_subscription / antigravity 的
 路由组。`DecodeAuthJson` 本身此前已移植，其消费方至此接通；解码错误文案仍为
 System.Text.Json（与 C093 同类的已接受差异）。新增 69 例（服务 32、端点 37）。
 
+2026-11-12 更新（§188）：C270 关闭。参照 routes.go:117-122、127-128 的三组管理面
+OAuth 七端点已移植：`POST /admin/xai/oauth/start|exchange|sso`（api/xai.go）、
+`POST /admin/claudecode/oauth/start|exchange`（api/claudecode.go）、
+`POST /admin/copilot/oauth/start|poll`（api/copilot.go），均挂在 admin JWT +
+WithProjectID 路由组。端口新增 `XaiOAuthService` / `ClaudeCodeOAuthService` /
+`CopilotOAuthService`（业务）、`XaiOAuthHandlers` / `ClaudeCodeOAuthHandlers` /
+`CopilotOAuthHandlers`（ShouldBindJSON 等价绑定与 gin JSONError 信封）与三个
+go-cache 语义的进程内 typed 缓存（xai 30 分钟且状态绑定 UserId、claudecode
+10 分钟、copilot TTL=min(expires_in,15 分钟) 且复刻 0→默认 5 分钟 / 负值→永不
+过期）。xai exchange 按 Get（错误按 miss）→ 未登录 401 → UserId 不符 400 且保留
+会话 → 解析回调 → state 不符 400 且保留会话 → Delete（失败仅 warn）→ 仅 url 非空
+代理替换 executor → Exchange 失败 502 → ToJson 失败 500 的次序；start 不读 body；
+SSO 经 `SubscriptionSsoDevice.ConvertSsoToBuild`，失败 502。claudecode exchange 先
+Delete 再解析（畸形回调与 state 不符都消耗会话），state 先 fragment 后 query；
+start 对空 body 与畸形 JSON 回 400、`{}` / `null` 回 200。copilot start 仅容忍
+空/纯空白 body（Go EOF 语义），poll 用严格 `>` 过期判断、JSON/form 双解析与
+pending / slow_down / expired_token / access_denied 状态机。`ProxyExecutorFactory`
+抽出 `HttpProxyExecutorFactory.CreateTransport` 供 xAI SSO 的非代理分支复用；
+跨语言细节差异（System.Uri 回调解析、System.Text.Json 解码文案、SSO 传输构造与
+进程内缓存）登记为 C271（accepted）。新增 178 例（服务 91、端点 87），定向
+`dotnet test` 全部通过。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

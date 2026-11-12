@@ -32,6 +32,20 @@ public sealed class HttpProxyExecutorFactory : IProxyExecutorFactory
 
     public IExecutor Create(ProxyConfig proxyConfig)
     {
+        var handler = CreateTransport(proxyConfig);
+
+        // Go's http.Client carries no total timeout (client.go:106).
+        return new HttpExecutor(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan });
+    }
+
+    /// <summary>
+    /// The transport half of <see cref="Create"/>, exposed for the xAI SSO
+    /// device flow, which needs an <see cref="HttpMessageHandler"/> rather than
+    /// an <see cref="IExecutor"/> (api/xai.go:192 passes
+    /// <c>client.GetNativeClient()</c>). The caller owns the returned handler.
+    /// </summary>
+    public static SocketsHttpHandler CreateTransport(ProxyConfig proxyConfig)
+    {
         ArgumentNullException.ThrowIfNull(proxyConfig);
 
         // client.go:76-78: only a URL proxy can disable connection reuse.
@@ -65,8 +79,7 @@ public sealed class HttpProxyExecutorFactory : IProxyExecutorFactory
                 break;
         }
 
-        // Go's http.Client carries no total timeout (client.go:106).
-        return new HttpExecutor(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan });
+        return handler;
     }
 
     /// <summary>
