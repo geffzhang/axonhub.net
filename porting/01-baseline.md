@@ -1099,6 +1099,28 @@ static 404。新增 29 例 `tests/AxonHub.Api.Tests/OpenApiEndpointTests.cs`；
 `POST /admin/playground/chat`（gap）；`AbortResponse` 改用 Go 兼容编码，
 单引号保持原样输出、不再转义。
 
+2026-11-12 更新（§191）：C272 闭合，参照 routes.go 的 64 条注册路由全部移植。
+`internal/server/api/playground.go:213-331` 的 `POST /admin/playground/chat`
+（admin 组：AdminJwtAuthMiddleware + ProjectIdMiddleware，WithSource(playground)、
+WithTimeout、WithResponseHeaders）由 `PlaygroundEndpoint.HandleAsync` 承担：
+ReadHTTPRequest 失败直接 400（不经 HandleError）；`channel_id` / `project_id`
+query 首值优先于 `X-Channel-ID` / `X-Project-ID` 头；project 覆盖 JWT 身份中的
+ProjectId；channel 经 `GidValue.Parse` 后套 `SpecifiedChannelSelector`；处理器以
+`WithInbound(new AiSdkDataStreamTransformer())` 派生，请求行 Source=playground、
+UserId=JWT 用户、ApiKeyId=null。`HandleError` 五级分类（配额 503、HttpClientError
+上游 message 或 StatusText、InvalidRequest→400 "Bad Request"、ResponseError 数字
+code/status、兜底 500）、`tryExtractUpstreamErrorMessage` 三种形状与 `GoAtoi`
+（Atoi 语法错 0、溢出钳制）逐项复刻。流式响应写 `text/event-stream` 五头
+（含 X-Vercel-AI-Data-Stream: v1）后由默认 SSE writer 输出 aisdk 事件并以
+`data:[DONE]` 收尾。aisdk transformer 五文件首次编译：TransformRequest
+（GoJsonSyntax 校验、根 null 零值、根非 object 的 Go 类型错误文案）、
+TransformStream（start / start-step / text-start / text-delta / text-end /
+finish-step / finish 与 reasoning、tool-input-* 状态机）、AggregateStreamChunks
+（UIMessage 手写 JSON、parts null、omitempty）与 TransformError（字面量插值
+不转义）。新增 `tests/AxonHub.Llm.Tests/AiSdkDataStreamTransformerTests.cs`
+21 例与 `tests/AxonHub.Api.Tests/PlaygroundEndpointTests.cs` 40 例；跨语言
+细节差异登记为 C278（accepted），C272 变为 resolved。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

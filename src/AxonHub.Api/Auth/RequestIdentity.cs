@@ -20,6 +20,9 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     /// <summary>Port of contexts.SourceTest: the channel tester's synthetic requests.</summary>
     public const string SourceTest = "test";
 
+    /// <summary>Port of contexts.SourcePlayground: the admin playground chat.</summary>
+    public const string SourcePlayground = "playground";
+
     /// <summary>
     /// The persisted trace row id resolved by <c>TraceMiddleware</c>, or null
     /// when the request has no trace. This is the reference's contexts.Trace.
@@ -67,6 +70,13 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     /// authentication. Null when the caller never authenticated.
     /// </summary>
     public ProjectRecord? Project { get; init; }
+
+    /// <summary>
+    /// Port of contexts.GetUser: the management user behind a playground
+    /// request. Only the playground sets it, and it lands on the request row's
+    /// user_id (internal/server/biz/request.go:279-283).
+    /// </summary>
+    public long? UserId { get; init; }
 
     /// <summary>
     /// Identity used when no authentication middleware ran (internal callers and

@@ -1551,6 +1551,30 @@ GeminiKeyAuthMiddlewareTests / AdminGraphqlAuthTests / AdminAuthEndpointTests
 `POST /admin/playground/chat`（gap）；新增 C274–C277（accepted）；lint 通过，
 `02-differences.md` 已重新生成；277 条（202 accepted / 6 gap / 69 resolved）。
 
+§191（2026-11-12）闭合 C272：`POST /admin/playground/chat`。
+
+参照 playground.go:213-331 与 llm/transformer/aisdk 的 datastream.go /
+convert_request.go / convert_stream.go。端口：
+
+- `src/AxonHub.Api/Endpoints/PlaygroundEndpoint.cs`：读请求失败 400 直返、
+  channel_id / project_id（query 优先于 header）、project 覆盖、指定通道选择器、
+  HandleError 五级分类、tryExtractUpstreamErrorMessage 三形状、GoAtoi、
+  SSE 五头 + 默认 FormatStreamError writer、请求行身份与响应头快照。
+- `src/AxonHub.Llm/Transformer/AiSdk/AiSdkDataStreamTransformer.cs`、
+  `AiSdkConvertRequest.cs`、`AiSdkConvertStream.cs`、`AiSdkModels.cs`：首次编译，
+  修正 TransformError 参数名（CA1725）、tool-call 累加改用 TryGetValue（CA1854）
+  与 playground 错误体 code 的 long 宽度。
+- `Program.cs`：admin 组 MapPost `/admin/playground/chat`，保留 JWT + ProjectId
+  门禁。
+
+测试：新增 `tests/AxonHub.Llm.Tests/AiSdkDataStreamTransformerTests.cs` 21 例
+（请求转换 6、流序列 4、聚合 5、错误 6）；`tests/AxonHub.Api.Tests/
+PlaygroundEndpointTests.cs` 18 个方法 / 40 例（请求级 4、流式成功 1、header
+优先级 1、上游错误 1、HandleError 8、tryExtract 10、GoAtoi 15；Theory 逐例
+计数）。实测 Llm 21 通过 / 0 失败，Api 40 通过 / 0 失败（2026-11-12）；
+`AxonHub.Api.Tests` 未跑全量。台账：C272 resolved；新增 C278（accepted）；
+lint 通过；278 条（203 accepted / 5 gap / 70 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

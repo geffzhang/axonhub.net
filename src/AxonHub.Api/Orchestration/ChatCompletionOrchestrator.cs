@@ -214,6 +214,46 @@ public sealed class ChatCompletionOrchestrator
     }
 
     /// <summary>
+    /// Returns an orchestrator that uses another candidate selector while
+    /// sharing this one's dependencies, mirroring the reference's playground
+    /// handler that rebuilds the orchestrator with a
+    /// <c>SpecifiedChannelSelector</c>
+    /// (internal/server/api/playground.go:NewPlaygroundHandlers).
+    /// </summary>
+    public ChatCompletionOrchestrator WithChannelSelector(
+        IModelCandidateSelector candidateSelector)
+    {
+        ArgumentNullException.ThrowIfNull(candidateSelector);
+
+        return new ChatCompletionOrchestrator(
+            _grainFactory,
+            _inbound,
+            _executor,
+            _metrics,
+            _retryPolicyProvider,
+            candidateSelector,
+            _timeProvider,
+            _requestChainRecorder,
+            _upstreamErrorPolicy,
+            null, // rateLimitTracker: the recorder below carries the state
+            _channelLimiterManager,
+            _usageCostService,
+            _passThroughSettings,
+            _promptProtectionRules,
+            _previousChannels,
+            _quotaStatusProvider,
+            _quotaRoutingSettings,
+            _modelSettingsProvider,
+            _quotaChecker,
+            _promptProvider,
+            rateLimitRecorder: _rateLimitRecorder,
+            apiKeySelection: _apiKeySelection,
+            autoDisable: _autoDisable,
+            autoDisableQueue: _autoDisableQueue,
+            channelProxyExecutors: _channelProxyExecutors);
+    }
+
+    /// <summary>
     /// Port of middleware/response_headers.go: persists the masked downstream
     /// response headers once the handler has written the response. The reference
     /// captures them at the first write; ASP.NET freezes headers after that, so

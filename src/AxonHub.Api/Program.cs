@@ -975,6 +975,10 @@ app.MapGraphQL("/openapi/v1/graphql", "openapi")
 // sits on the admin group.
 app.MapGet("/admin/playground", PlaygroundPages.ServeAdminAsync);
 
+// The playground chat (routes.go:134-140): POST only, so other methods fall
+// through to gin's NoRoute and the static 404 envelope (C116).
+app.MapPost("/admin/playground/chat", PlaygroundEndpoint.HandleAsync);
+
 // The OpenAPI playground and webhook echo (routes.go:171,176): both sit on the
 // openapi group.
 app.MapGet("/openapi/v1/playground", PlaygroundPages.ServeOpenApiAsync);
@@ -1064,6 +1068,18 @@ app.UseWhen(
 app.UseWhen(
     static context => context.Request.Path.Value == "/admin/playground"
         && HttpMethods.IsGet(context.Request.Method),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+    });
+
+// The playground chat also sits on the admin group (routes.go:106,134): the
+// same plain user-JWT gate and WithProjectID. Like every gin group middleware,
+// it only runs for the matched POST route (C116).
+app.UseWhen(
+    static context => context.Request.Path.Value == "/admin/playground/chat"
+        && HttpMethods.IsPost(context.Request.Method),
     static branch =>
     {
         branch.UseMiddleware<AdminJwtAuthMiddleware>();
