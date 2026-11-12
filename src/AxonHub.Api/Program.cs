@@ -348,6 +348,12 @@ builder.Services.AddSingleton<IProxyExecutorFactory, HttpProxyExecutorFactory>()
 // Channel.HTTPClient): a channel with settings.proxy gets a cached client; the
 // tester's per-request proxy builds a fresh override (§177).
 builder.Services.AddSingleton<ChannelProxyExecutors>();
+
+// Per-channel Copilot token exchanger (channel_llm.go:1218-1276): the reference
+// keeps the provider — and its SHA-256 keyed Copilot-token cache — on the
+// enabled-channel cache entry; the port reuses one exchanger per channel row
+// (§194). Copilot deliberately stays off the token grain.
+builder.Services.AddSingleton<ChannelCopilotTokenCache>();
 builder.Services.AddSingleton<IAntigravityOAuthStateCache, AntigravityOAuthStateCache>();
 builder.Services.AddScoped<AntigravityOAuthService>();
 

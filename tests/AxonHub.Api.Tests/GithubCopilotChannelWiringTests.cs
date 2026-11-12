@@ -148,6 +148,86 @@ public sealed class GithubCopilotChannelWiringTests
     }
 
     [Fact]
+    public void ASharedExchangerCacheReusesTheCopilotTokenAcrossBuilds()
+    {
+        // channel_llm.go:1218-1276 keeps the provider — and its SHA-256 keyed
+        // Copilot-token cache — on the enabled-channel cache entry, so a second
+        // attempt must not exchange the GitHub access token again (§194).
+        var credentials = "{\"apiKey\":\"placeholder\",\"oauth\":" + ValidOAuth + "}";
+        var cache = new ChannelCopilotTokenCache();
+        var executor = TokenExecutor();
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var transformer = Assert.IsType<CopilotOutboundTransformer>(
+                ChannelOutboundFactory.Create(
+                    Candidate(credentials),
+                    ChatRequest(),
+                    DateTimeOffset.UnixEpoch,
+                    executor,
+                    copilotTokens: cache));
+
+            var httpRequest = transformer.TransformRequest(ChatRequest("gpt-4o"));
+            Assert.Equal("copilot_token_ghu_test", httpRequest.Auth!.ApiKey);
+        }
+
+        Assert.Single(executor.Requests);
+    }
+
+    [Fact]
+    public void WithoutTheCacheEveryBuildExchangesAgain()
+    {
+        // Direct callers and tests keep the reference's per-provider exchanger.
+        var credentials = "{\"apiKey\":\"placeholder\",\"oauth\":" + ValidOAuth + "}";
+        var executor = TokenExecutor();
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var transformer = Assert.IsType<CopilotOutboundTransformer>(
+                ChannelOutboundFactory.Create(
+                    Candidate(credentials),
+                    ChatRequest(),
+                    DateTimeOffset.UnixEpoch,
+                    executor));
+
+            transformer.TransformRequest(ChatRequest("gpt-4o"));
+        }
+
+        Assert.Equal(2, executor.Requests.Count);
+    }
+
+    [Fact]
+    public void AChannelRowUpdateReplacesTheCachedExchanger()
+    {
+        // The reference rebuilds the provider when the enabled-channel cache is
+        // invalidated by a channel update, discarding the exchange cache; the
+        // cache entry follows the row timestamp for the same effect.
+        var credentials = "{\"apiKey\":\"placeholder\",\"oauth\":" + ValidOAuth + "}";
+        var cache = new ChannelCopilotTokenCache();
+        var executor = TokenExecutor();
+
+        var first = Candidate(credentials);
+        first.UpdatedAt = new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
+        var second = Candidate(credentials);
+        second.UpdatedAt = first.UpdatedAt.AddMinutes(1);
+
+        foreach (var candidate in new[] { first, second })
+        {
+            var transformer = Assert.IsType<CopilotOutboundTransformer>(
+                ChannelOutboundFactory.Create(
+                    candidate,
+                    ChatRequest(),
+                    DateTimeOffset.UnixEpoch,
+                    executor,
+                    copilotTokens: cache));
+
+            transformer.TransformRequest(ChatRequest("gpt-4o"));
+        }
+
+        Assert.Equal(2, executor.Requests.Count);
+    }
+
+    [Fact]
     public void AnApiKeyWithoutOAuthIsRejected()
     {
         var error = Assert.Throws<InvalidOperationException>(

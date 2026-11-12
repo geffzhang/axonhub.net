@@ -23,6 +23,15 @@ public sealed class CopilotTokenProviderParams
 
     /// <summary>Called when the OAuth credentials are refreshed (for persistence).</summary>
     public Func<CancellationToken, OAuthCredentials, Exception?>? OnRefreshed { get; set; }
+
+    /// <summary>
+    /// Port-only seam (§194): the shared per-channel Copilot token exchanger.
+    /// The reference owns one exchanger per enabled-channel cache entry; the
+    /// port builds the outbound per attempt, so the API layer hands the same
+    /// exchanger back on every attempt. When null the provider creates its own
+    /// like <c>copilot.NewTokenProvider</c> (token_provider.go:26-50).
+    /// </summary>
+    public ITokenExchanger? TokenExchanger { get; set; }
 }
 
 /// <summary>
@@ -39,7 +48,7 @@ public sealed class CopilotTokenProvider : ICopilotTokenProvider
     {
         ArgumentNullException.ThrowIfNull(parameters);
 
-        var exchanger = new CopilotTokenExchanger(new CopilotTokenExchangerParams
+        var exchanger = parameters.TokenExchanger ?? new CopilotTokenExchanger(new CopilotTokenExchangerParams
         {
             HttpClient = parameters.HttpClient,
         });

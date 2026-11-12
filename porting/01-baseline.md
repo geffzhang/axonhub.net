@@ -1160,6 +1160,23 @@ EmbeddedResource 嵌入 AxonHub.Llm，`ChannelOutboundFactory` 新增两个常�
 分支与两路 dispatch。新增 Llm 6 例 + Api 2 例，定向通过；实现差异登记为 C280
 （accepted）。
 
+2026-11-13 更新（§194）：C094 闭合，fenno / github_copilot / antigravity 的 token
+provider 复用补齐。参照 `channel_llm.go:1208`（codex 与 fenno 同走
+`buildCodexOutbound` 的同一 token 配方）、`:1218-1276`（copilot 的 provider/exchanger
+活在 enabled-cache 条目上；配置 exchanger 后 `GetToken` 只走 exchange，OAuth 刷新路径
+不可达）、`:1375-1391` 与 `transformer.go:94-122`（antigravity 仅在 refreshToken 非空时
+构建 provider，`setupAutoRefresh` 才运行）、`:1451-1481`（antigravity 把 apiKey 写回
+`refreshToken|projectID`）。端口：codex/fenno 共用 grain 条件与 CodexToken 配方；
+`AntigravityTransformerOptions` 新增 port-only `TokenProvider` 接缝（Auth 用注入 getter，
+本地 provider 仍构建），工厂在 refreshToken 非空时注入 `GrainTokenGetter`，
+`ChannelTokenSource` 增加 `AntigravityTokenProviderFactory` 配方与 antigravity 持久化
+分支（缺 project ID 返回参照错误文案、不写库）；新增 `ChannelCopilotTokenCache` 单例，
+按 (channelId, updated_at) 复用 `CopilotTokenExchanger`，并把
+`CopilotTokenProviderParams.TokenExchanger` 作为 port-only 注入接缝（copilot 不接 grain：
+参照从不刷新其 OAuth 凭据）。新增 Api 10 例（ChannelTokenSourceTests 4、
+GithubCopilotChannelWiringTests 3、TokenGrainOutboundWiringTests 3），定向 Api 56 /
+Llm 188 通过。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

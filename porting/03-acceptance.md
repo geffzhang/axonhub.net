@@ -1631,6 +1631,36 @@ loader 优先实时 registry）。实测组合过滤 124 通过 / 0 失败（202
 `AxonHub.Api.Tests` 未跑全量。台账：C126 resolved；新增 C280（accepted）；lint 通过；
 `02-differences.md` 已重新生成；280 条（205 accepted / 4 gap / 71 resolved）。
 
+§194（2026-11-13）接通 C094 的 fenno / github_copilot / antigravity provider 复用。
+
+参照 `channel_llm.go:1208`、`:1218-1276`、`:1375-1391`、`:1451-1481` 与 antigravity
+`transformer.go:94-122`。端口：
+
+- `src/AxonHub.Api/Orchestration/ChannelOutboundFactory.cs`：codex/fenno 共用 grain
+  条件（fenno 与 codex 同走 `buildCodexOutbound`）；`CreateAntigravityOutbound` 增加
+  grainFactory，refreshToken 非空时注入 `GrainTokenGetter`（seed 携带 Antigravity
+  ClientID/Scopes，无 access token）；`Create` 增加 `ChannelCopilotTokenCache` 参数并在
+  copilot 分支取 exchanger。
+- `src/AxonHub.Llm/Transformer/Antigravity/AntigravityTransformer.cs`：
+  `AntigravityTransformerOptions.TokenProvider`（`ITokenGetter`）port-only 接缝；
+  Auth 使用注入 getter，本地 provider 仍由 `initTokenProvider` 构建
+  （`GetTokenProvider()` 语义不变）；`ParseCredentials` 改为 public 供工厂复用。
+- `src/AxonHub.Llm/Transformer/OpenAI/Copilot/CopilotTokenProvider.cs`：
+  `CopilotTokenProviderParams.TokenExchanger` port-only 共享 exchanger 接缝。
+- 新增 `src/AxonHub.Api/Orchestration/ChannelCopilotTokenCache.cs`（按 (channelId,
+  updated_at) 复用 exchanger）与 `Program.cs` 单例注册。
+- `src/AxonHub.Api/Orchestration/ChannelTokenSource.cs`：fenno 复用 CodexToken 配方；
+  新增 antigravity 配方与持久化分支（`refreshToken|projectID` 写回；缺 project ID 返回
+  参照错误文案且不写库）。
+- `src/AxonHub.Api/Orchestration/ChatCompletionOrchestrator.cs`：新依赖参数、两处克隆
+  转发与工厂 lambda 透传。
+
+测试：`ChannelTokenSourceTests` +4（共 12）、`GithubCopilotChannelWiringTests` +3
+（共 12）、新增 `TokenGrainOutboundWiringTests` 3 例。定向实测 Api 56 通过 / 0 失败、
+Llm 188 通过 / 0 失败（2026-11-13）；`AxonHub.Api.Tests` 未跑全量。台账：C094
+resolved；lint 通过；`02-differences.md` 已重新生成；280 条
+（205 accepted / 3 gap / 72 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

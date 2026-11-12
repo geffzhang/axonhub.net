@@ -3,6 +3,7 @@ using System.Text.Json;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Transformer.Antigravity;
 using AxonHub.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -256,6 +257,108 @@ public sealed class ChannelTokenSourceTests
         Assert.Single(shared.Requests);
         Assert.Empty(factory.Requests);
     }
+
+    [Fact]
+    public async Task FennoRefreshesThroughTheCodexRecipe()
+    {
+        // channel_llm.go:1208: fenno dispatches to buildCodexOutbound, so its
+        // grain refresh uses the codex provider and the OpenAI OAuth endpoint
+        // (§194). Before §194 this threw "token refresh is not supported".
+        var store = new FakeChannelTokenStore();
+        var executor = TokenExecutor();
+        var source = NewSource(store, executor);
+
+        var request = Request();
+        request.ChannelType = ChannelOutboundFactory.FennoChannelType;
+
+        var result = await source.RefreshAsync(request);
+
+        Assert.Equal("access-refreshed", result.Credentials!.AccessToken);
+        Assert.Equal(
+            "https://auth.openai.com/oauth/token",
+            Assert.Single(executor.Requests).Url);
+        Assert.Single(store.Updates);
+    }
+
+    [Fact]
+    public async Task AntigravityWritesTheRotatedRefreshTokenBackInTheLegacyKeyForm()
+    {
+        // channel_llm.go:1451-1475: antigravity keeps "<refreshToken>|<projectID>"
+        // in apiKey while oauth carries the full credentials document (§194).
+        var store = new FakeChannelTokenStore();
+        var executor = TokenExecutor();
+        var source = NewSource(store, executor);
+
+        var result = await source.RefreshAsync(AntigravityRequest("refresh-old|project-123"));
+
+        Assert.Equal("access-refreshed", result.Credentials!.AccessToken);
+
+        var tokenRequest = Assert.Single(executor.Requests);
+        Assert.Equal(AntigravityConstants.TokenURL, tokenRequest.Url);
+        var form = Encoding.UTF8.GetString(tokenRequest.Body!);
+        Assert.Contains("grant_type=refresh_token", form, StringComparison.Ordinal);
+        Assert.Contains("client_secret=", form, StringComparison.Ordinal);
+
+        var call = Assert.Single(store.Updates);
+        using var document = JsonDocument.Parse(call.Credentials);
+        var root = document.RootElement;
+        Assert.Equal("refresh-refreshed|project-123", root.GetProperty("apiKey").GetString());
+        Assert.Equal("mgmt", root.GetProperty("managementApiKey").GetString());
+        Assert.Equal(
+            "refresh-refreshed",
+            root.GetProperty("oauth").GetProperty("refresh_token").GetString());
+    }
+
+    [Fact]
+    public async Task AntigravityKeepsEverythingAfterTheFirstSeparatorInTheProjectSegment()
+    {
+        // Go's strings.Split keeps empty trailing parts and the helper takes
+        // parts[1] verbatim (channel_llm.go:1443-1449).
+        var store = new FakeChannelTokenStore();
+        var source = NewSource(store, TokenExecutor());
+
+        await source.RefreshAsync(AntigravityRequest("refresh-old|project-abc|extra"));
+
+        using var document = JsonDocument.Parse(Assert.Single(store.Updates).Credentials);
+        Assert.Equal(
+            "refresh-refreshed|project-abc",
+            document.RootElement.GetProperty("apiKey").GetString());
+    }
+
+    [Fact]
+    public async Task AntigravityWithoutAProjectIdFailsTheWriteButKeepsTheRefreshedToken()
+    {
+        // extractProjectIDFromAntigravityCreds reports
+        // "api key does not contain project ID"; the provider logs the persist
+        // failure and keeps the refreshed credentials in memory.
+        var store = new FakeChannelTokenStore();
+        var source = NewSource(store, TokenExecutor());
+
+        var result = await source.RefreshAsync(AntigravityRequest("refresh-old"));
+
+        Assert.Equal("access-refreshed", result.Credentials!.AccessToken);
+        Assert.Equal("refresh-refreshed", result.Credentials.RefreshToken);
+        Assert.Empty(store.Updates);
+        Assert.Equal(AntigravitySeedJson("refresh-old"), result.CredentialsJson);
+    }
+
+    private static ChannelTokenRefreshRequest AntigravityRequest(string apiKey)
+    {
+        var request = Request();
+        request.ChannelType = ChannelOutboundFactory.AntigravityChannelType;
+        request.Credentials = new ChannelOAuthToken
+        {
+            ClientId = AntigravityConstants.ClientID,
+            RefreshToken = "refresh-old",
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            Scopes = [.. AntigravityConstants.Scopes],
+        };
+        request.CredentialsJson = AntigravitySeedJson(apiKey);
+        return request;
+    }
+
+    private static string AntigravitySeedJson(string apiKey)
+        => $$"""{"apiKey":"{{apiKey}}","managementApiKey":"mgmt"}""";
 }
 
 /// <summary>In-memory <see cref="IChannelTokenStore"/> for the source tests.</summary>

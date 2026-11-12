@@ -253,15 +253,21 @@ public static class ChannelOutboundFactory
     /// while direct callers fall back to their shared executor.
     /// </param>
     /// <param name="grainFactory">
-    /// When present, the codex, claudecode and xai_subscription OAuth channels
-    /// take their token from <see cref="IChannelTokenGrain"/> instead of a
-    /// throwaway per-attempt <see cref="TokenProvider"/> (§146). Direct callers
-    /// (endpoint detection, tests) leave it null and keep the local provider.
+    /// When present, the codex, fenno, claudecode, xai_subscription and
+    /// antigravity OAuth channels take their token from
+    /// <see cref="IChannelTokenGrain"/> instead of a throwaway per-attempt
+    /// <see cref="TokenProvider"/> (§146, §194). Direct callers (endpoint
+    /// detection, tests) leave it null and keep the local provider.
     /// </param>
     /// <param name="apiKeySelection">
     /// The process-wide multi-key selection state
     /// (<c>ChannelService.apiKeyStates</c>). Direct callers and tests leave it
     /// null and keep the per-provider historical behavior.
+    /// </param>
+    /// <param name="copilotTokens">
+    /// The process-wide per-channel Copilot exchanger cache, standing in for the
+    /// reference's exchanger on the enabled-channel cache entry (§194). Direct
+    /// callers and tests leave it null and get a throwaway exchanger per build.
     /// </param>
     public static IOutboundTransformer Create(
         ChannelCandidate candidate,
@@ -269,7 +275,8 @@ public static class ChannelOutboundFactory
         DateTimeOffset now,
         IExecutor? channelExecutor = null,
         IGrainFactory? grainFactory = null,
-        ChannelApiKeySelectionRegistry? apiKeySelection = null)
+        ChannelApiKeySelectionRegistry? apiKeySelection = null,
+        ChannelCopilotTokenCache? copilotTokens = null)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(request);
@@ -998,7 +1005,11 @@ public static class ChannelOutboundFactory
             // internally, so no ApiFormat branching is needed here
             // (channel_endpoint.go:322).
             GithubCopilotChannelType
-                => CreateGithubCopilotOutbound(candidate, channelExecutor, request),
+                => CreateGithubCopilotOutbound(
+                    candidate,
+                    channelExecutor,
+                    request,
+                    copilotTokens),
             // channel_llm.go:1109-1118: Gemini's OpenAI-compatible endpoint;
             // the default endpoint set is chat only (channel_endpoint.go:253).
             GeminiOpenAiChannelType => CreateGeminiOpenAiOutbound(candidate, provider),
@@ -1028,7 +1039,10 @@ public static class ChannelOutboundFactory
             // outbound in the project envelope and authenticates exclusively
             // through OAuth tokens minted from the legacy refreshToken|projectID
             // key (channel_endpoint.go:325: a single Gemini-contents endpoint).
-            AntigravityChannelType => CreateAntigravityOutbound(candidate, channelExecutor),
+            AntigravityChannelType => CreateAntigravityOutbound(
+                candidate,
+                channelExecutor,
+                grainFactory),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
@@ -1640,25 +1654,34 @@ public static class ChannelOutboundFactory
     /// Port of the antigravity branch of <c>buildChannelWithTransformer</c>
     /// (channel_llm.go:1375-1391). The transformer consumes the single legacy
     /// APIKey field (refreshToken|projectID) directly. The reference registers
-    /// <c>onTokenRefreshed</c> and <c>setupAutoRefresh</c> on the channel; the
-    /// port's channels do not run refresh loops or write refreshed tokens back
-    /// (C094).
+    /// <c>onTokenRefreshed</c> and <c>setupAutoRefresh</c> on the provider the
+    /// transformer builds (<c>GetTokenProvider()</c> is non-null exactly when
+    /// the key carries a refresh token). With a grain factory (§194) the refresh
+    /// and its write-back run in the channel's token grain instead; the local
+    /// provider still exists, so the transformer's own behavior is unchanged.
     /// </summary>
     private static AntigravityTransformer CreateAntigravityOutbound(
         ChannelCandidate candidate,
-        IExecutor? channelExecutor)
+        IExecutor? channelExecutor,
+        IGrainFactory? grainFactory)
     {
         try
         {
+            var apiKey = ChannelCredentials.GetLegacyApiKey(candidate.Credentials);
+
             return AntigravityTransformer.Create(
                 new AntigravityConfig
                 {
                     BaseURL = candidate.BaseUrl ?? string.Empty,
-                    APIKey = ChannelCredentials.GetLegacyApiKey(candidate.Credentials),
+                    APIKey = apiKey,
                 },
                 new AntigravityTransformerOptions
                 {
                     HttpClient = channelExecutor,
+                    TokenProvider = CreateAntigravityTokenProvider(
+                        candidate,
+                        apiKey,
+                        grainFactory),
                 });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -1667,6 +1690,40 @@ public static class ChannelOutboundFactory
                 "failed to create antigravity outbound transformer: " + ex.Message,
                 ex);
         }
+    }
+
+    /// <summary>
+    /// The grain-backed getter seeded from the parsed refresh token
+    /// (transformer.go:94-122). Null keeps the transformer's local provider:
+    /// without a grain factory, or when the legacy key has no refresh token
+    /// (the reference's <c>initTokenProvider</c> then leaves the provider nil
+    /// and Auth reports <c>no OAuth token provider configured</c>).
+    /// </summary>
+    private static ITokenGetter? CreateAntigravityTokenProvider(
+        ChannelCandidate candidate,
+        string apiKey,
+        IGrainFactory? grainFactory)
+    {
+        if (grainFactory is null)
+        {
+            return null;
+        }
+
+        var (refreshToken, _) = AntigravityTransformer.ParseCredentials(apiKey);
+        if (refreshToken.Length == 0)
+        {
+            return null;
+        }
+
+        // Same seed initTokenProvider builds: the Antigravity client id and
+        // scopes, no access token — the first Get refreshes through the
+        // channel's proxy-aware client in ChannelTokenSource (§194).
+        return new GrainTokenGetter(grainFactory, CreateTokenSeed(candidate, new OAuthCredentials
+        {
+            RefreshToken = refreshToken,
+            ClientId = AntigravityConstants.ClientID,
+            Scopes = [.. AntigravityConstants.Scopes],
+        }));
     }
 
     /// <summary>Port of the claudecode branch of buildChannelWithTransformer.</summary>
@@ -1775,14 +1832,24 @@ public static class ChannelOutboundFactory
     /// Port of the github_copilot branch of <c>buildChannelWithTransformer</c>
     /// (channel_llm.go:1218-1276). The typed <c>oauth</c> object is re-marshalled
     /// without <c>id_token</c>, parsed, and wrapped in the device-flow token
-    /// provider that mints Copilot tokens. The reference also registers the
-    /// provider's auto-refresh (channel_llm.go:1270-1275); copilot still uses a
-    /// local provider, so the port has no auto-refresh for it yet (C094).
+    /// provider that mints Copilot tokens.
     /// </summary>
+    /// <remarks>
+    /// The reference also registers the provider's auto-refresh
+    /// (channel_llm.go:1270-1275), but with the exchanger configured
+    /// <c>GetToken</c> always goes through the exchange cache and never checks
+    /// or refreshes the OAuth credentials, so that loop only re-runs the
+    /// exchange. The port reproduces the observable state — the per-channel
+    /// exchanger and its SHA-256 keyed token cache — through
+    /// <see cref="ChannelCopilotTokenCache"/> and deliberately leaves the
+    /// credentials unrefreshed (a token grain would synthesize an expiry and
+    /// run a GitHub refresh grant the reference never issues, §194).
+    /// </remarks>
     private static CopilotOutboundTransformer CreateGithubCopilotOutbound(
         ChannelCandidate candidate,
         IExecutor? channelExecutor,
-        LlmRequest request)
+        LlmRequest request,
+        ChannelCopilotTokenCache? copilotTokens)
     {
         if (!ChannelCredentials.IsOAuth(candidate.Credentials))
         {
@@ -1844,6 +1911,10 @@ public static class ChannelOutboundFactory
             {
                 Credentials = credentials,
                 HttpClient = channelExecutor,
+                TokenExchanger = copilotTokens?.ForChannel(
+                    candidate.ChannelId,
+                    candidate.UpdatedAt,
+                    channelExecutor),
             });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -2046,11 +2117,12 @@ public static class ChannelOutboundFactory
             return new ApiKeyTokenProvider(_ => apiKeyProvider.Get());
         }
 
+        // channel_llm.go:1208: codex and fenno share buildCodexOutbound — the
+        // same credentials parse and the same codex token recipe — so both take
+        // the grain (§194).
         var credentials = ParseOAuthCredentials(candidate, "codex");
 
-        // Fenno shares the codex outbound but not the codex token recipe, so it
-        // keeps its throwaway provider (§146).
-        if (grainFactory is not null && candidate.Type == CodexChannelType)
+        if (grainFactory is not null && candidate.Type is CodexChannelType or FennoChannelType)
         {
             return new GrainTokenGetter(grainFactory, CreateTokenSeed(candidate, credentials));
         }

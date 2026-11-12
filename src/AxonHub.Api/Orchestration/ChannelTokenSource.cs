@@ -6,6 +6,7 @@ using AxonHub.Llm.Json;
 using AxonHub.Llm.OAuth;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
+using AxonHub.Llm.Transformer.Antigravity;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
 using AxonHub.Llm.Transformer.Xai.Subscription;
 using AxonHub.Persistence;
@@ -27,10 +28,12 @@ namespace AxonHub.Api.Orchestration;
 /// the grain's, while the recipe (endpoints, exchange strategy, user agent) is
 /// stateless.
 /// <para>
-/// Scoped to codex, claudecode and xai_subscription — the three channel types
-/// whose outbound is a bare <see cref="ITokenGetter"/> (§146). Copilot,
-/// Antigravity and the model-fetcher/endpoint-detect refresh paths keep their
-/// own providers (C094, C158).
+/// Scoped to codex, fenno, claudecode, xai_subscription and antigravity — the
+/// OAuth channel types whose outbound takes a bare <see cref="ITokenGetter"/>
+/// (§146, §194). Copilot keeps the reference's semantics instead: its
+/// exchanger path never refreshes the OAuth credentials, so it stays on a
+/// process-wide exchanger cache and the model-fetcher/endpoint-detect refresh
+/// paths keep their own providers (C158).
 /// </para>
 /// <para>
 /// The refresh HTTP uses the channel's own client, resolved from the seed's
@@ -103,8 +106,8 @@ public sealed class ChannelTokenSource(
 
     /// <summary>
     /// Builds the reference's per-type provider around the grain's snapshot
-    /// (channel_llm.go:331-425 codex, :924-989 claudecode, :867-884
-    /// xai_subscription).
+    /// (channel_llm.go:331-425 codex and fenno, :924-989 claudecode, :867-884
+    /// xai_subscription, :1375-1391 antigravity).
     /// </summary>
     private TokenProvider CreateProvider(
         string channelType,
@@ -113,13 +116,16 @@ public sealed class ChannelTokenSource(
         IExecutor executor)
         => channelType switch
         {
-            ChannelOutboundFactory.CodexChannelType => CodexToken.CreateTokenProvider(
-                new CodexTokenProviderParams
-                {
-                    Credentials = credentials,
-                    HttpClient = executor,
-                    OnRefreshed = onRefreshed,
-                }),
+            // channel_llm.go:1208: fenno dispatches to buildCodexOutbound and
+            // shares its token recipe.
+            ChannelOutboundFactory.CodexChannelType or ChannelOutboundFactory.FennoChannelType
+                => CodexToken.CreateTokenProvider(
+                    new CodexTokenProviderParams
+                    {
+                        Credentials = credentials,
+                        HttpClient = executor,
+                        OnRefreshed = onRefreshed,
+                    }),
             ChannelOutboundFactory.ClaudeCodeChannelType => ClaudeCodeTokenProvider.Create(
                 new TokenProviderParams
                 {
@@ -129,6 +135,15 @@ public sealed class ChannelTokenSource(
                 }),
             ChannelOutboundFactory.XaiSubscriptionChannelType => SubscriptionToken.NewTokenProvider(
                 new SubscriptionTokenProviderParams
+                {
+                    Credentials = credentials,
+                    HttpClient = executor,
+                    OnRefreshed = onRefreshed,
+                }),
+            // transformer.go:94-122: the Antigravity provider fills in the
+            // Google endpoints, user agent and client-secret exchange strategy.
+            ChannelOutboundFactory.AntigravityChannelType => AntigravityTokenProviderFactory.NewTokenProvider(
+                new TokenProviderParams
                 {
                     Credentials = credentials,
                     HttpClient = executor,
@@ -189,10 +204,27 @@ public sealed class ChannelTokenSource(
         CancellationToken cancellationToken)
     {
         // channel_llm.go:1647-1667: the write base is the snapshot credentials
-        // document; only apiKey and oauth are replaced (antigravity's
-        // refreshToken|projectID form is not supported here, C094).
+        // document; only apiKey and oauth are replaced. Antigravity's legacy key
+        // must keep the refreshToken|projectID form (:1451-1475), so a key
+        // without a project ID fails the write instead of storing JSON.
         var updated = ChannelWriteSerialization.ParseCredentials(state.CredentialsJson);
-        updated.ApiKey = refreshed.ToJson();
+        if (string.Equals(request.ChannelType, ChannelOutboundFactory.AntigravityChannelType, StringComparison.Ordinal))
+        {
+            var parts = (updated.ApiKey ?? string.Empty).Split('|', StringSplitOptions.None);
+            if (parts.Length < 2)
+            {
+                return new InvalidOperationException(
+                    "failed to extract project ID from antigravity credentials: "
+                    + "api key does not contain project ID (expected format: \"<refreshToken>|<projectID>\")");
+            }
+
+            updated.ApiKey = refreshed.RefreshToken + "|" + parts[1];
+        }
+        else
+        {
+            updated.ApiKey = refreshed.ToJson();
+        }
+
         updated.OAuth = ToOAuthDraft(refreshed);
         var credentialsJson = AxonHub.Llm.Json.GoJson.MarshalToString(updated);
 

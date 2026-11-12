@@ -32,6 +32,16 @@ public sealed class AntigravityTransformerOptions
 
     /// <summary>Called after a token refresh succeeds; a failure is logged and ignored.</summary>
     public Func<CancellationToken, OAuthCredentials, Exception?>? OnTokenRefreshed { get; set; }
+
+    /// <summary>
+    /// Port-only seam (§194): answers the Auth token in place of the local
+    /// provider constructed by <c>initTokenProvider</c>. The API layer injects
+    /// the channel's grain-backed getter so the refresh and its persistence
+    /// live in the per-channel token grain. The local provider is still built
+    /// and returned by <see cref="AntigravityTransformer.GetTokenProvider"/>,
+    /// matching the reference's non-null provider behind <c>setupAutoRefresh</c>.
+    /// </summary>
+    public ITokenGetter? TokenProvider { get; set; }
 }
 
 /// <summary>
@@ -51,6 +61,12 @@ public sealed class AntigravityTransformer : IOutboundTransformer, IChannelCusto
     private readonly IExecutor? _httpClient;
 
     private TokenProvider? _tokenProvider;
+
+    /// <summary>
+    /// The getter Auth uses. Without an injected provider (§194) this is the
+    /// local provider built by <c>initTokenProvider</c>.
+    /// </summary>
+    private ITokenGetter? _tokenGetter;
 
     private AntigravityTransformer(
         AntigravityConfig config,
@@ -85,6 +101,14 @@ public sealed class AntigravityTransformer : IOutboundTransformer, IChannelCusto
         if (config.APIKey.Length > 0)
         {
             t.InitTokenProvider(config.APIKey);
+
+            // A refresh token exists, so the reference's GetTokenProvider() is
+            // non-null and setupAutoRefresh would run (channel_llm.go:1375-1391).
+            // The injected grain getter then takes over the request path (§194).
+            if (t._tokenProvider is not null)
+            {
+                t._tokenGetter = options?.TokenProvider ?? t._tokenProvider;
+            }
 
             // If Project is not explicitly set, try to extract it from credentials.
             if (t._config.Project.Length == 0)
@@ -135,9 +159,11 @@ public sealed class AntigravityTransformer : IOutboundTransformer, IChannelCusto
     /// <summary>
     /// Port of parseCredentials (transformer.go:124-131): "&lt;refreshToken&gt;|&lt;projectID&gt;".
     /// Go <c>strings.Split</c> keeps trailing empty parts, so the port must too
-    /// (<c>SplitOptions.None</c>; the C# default drops them).
+    /// (<c>SplitOptions.None</c>; the C# default drops them). Public so the
+    /// outbound factory can apply the same split when it seeds the channel's
+    /// token grain (§194).
     /// </summary>
-    internal static (string RefreshToken, string ProjectID) ParseCredentials(string creds)
+    public static (string RefreshToken, string ProjectID) ParseCredentials(string creds)
     {
         var parts = creds.Split('|', StringSplitOptions.None);
         if (parts.Length >= 2)
@@ -235,7 +261,7 @@ public sealed class AntigravityTransformer : IOutboundTransformer, IChannelCusto
         // Auth - OAuth only, no API key fallback.
         AuthConfig? authConfig;
 
-        if (_tokenProvider is { } tokenProvider)
+        if (_tokenGetter is { } tokenProvider)
         {
             OAuthCredentials creds;
             try

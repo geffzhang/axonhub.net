@@ -58,6 +58,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly ChannelAutoDisableService? _autoDisable;
     private readonly IChannelAutoDisableEvaluationQueue? _autoDisableQueue;
     private readonly ChannelProxyExecutors? _channelProxyExecutors;
+    private readonly ChannelCopilotTokenCache? _copilotTokens;
     private readonly LiveStreamRegistry? _liveStreamRegistry;
     private readonly ISystemSettingsAdminService? _systemSettings;
 
@@ -89,7 +90,8 @@ public sealed class ChatCompletionOrchestrator
         IChannelAutoDisableEvaluationQueue? autoDisableQueue = null,
         ChannelProxyExecutors? channelProxyExecutors = null,
         LiveStreamRegistry? liveStreamRegistry = null,
-        ISystemSettingsAdminService? systemSettings = null)
+        ISystemSettingsAdminService? systemSettings = null,
+        ChannelCopilotTokenCache? copilotTokens = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -171,6 +173,11 @@ public sealed class ChatCompletionOrchestrator
         // it null and keep the historical shared-executor behavior.
         _channelProxyExecutors = channelProxyExecutors;
 
+        // Production passes the per-channel Copilot exchanger cache, which
+        // stands in for the reference's exchanger on the enabled-channel cache
+        // entry; direct constructions keep the per-attempt exchanger (§194).
+        _copilotTokens = copilotTokens;
+
         // Production passes the process-wide live preview registry and the
         // system settings reader; direct constructions leave both null, which
         // keeps the live-preview middleware disabled exactly like the
@@ -224,7 +231,8 @@ public sealed class ChatCompletionOrchestrator
             autoDisableQueue: _autoDisableQueue,
             channelProxyExecutors: _channelProxyExecutors,
             liveStreamRegistry: _liveStreamRegistry,
-            systemSettings: _systemSettings);
+            systemSettings: _systemSettings,
+            copilotTokens: _copilotTokens);
     }
 
     /// <summary>
@@ -266,7 +274,8 @@ public sealed class ChatCompletionOrchestrator
             autoDisableQueue: _autoDisableQueue,
             channelProxyExecutors: _channelProxyExecutors,
             liveStreamRegistry: _liveStreamRegistry,
-            systemSettings: _systemSettings);
+            systemSettings: _systemSettings,
+            copilotTokens: _copilotTokens);
     }
 
     /// <summary>
@@ -709,7 +718,8 @@ public sealed class ChatCompletionOrchestrator
                 now,
                 ChannelExecutorFor(candidate),
                 _grainFactory,
-                _apiKeySelection),
+                _apiKeySelection,
+                _copilotTokens),
             _channelProxyExecutors,
             proxyOverride);
 
