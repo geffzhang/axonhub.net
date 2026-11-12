@@ -1661,6 +1661,27 @@ Llm 188 通过 / 0 失败（2026-11-13）；`AxonHub.Api.Tests` 未跑全量。�
 resolved；lint 通过；`02-differences.md` 已重新生成；280 条
 （205 accepted / 3 gap / 72 resolved）。
 
+§195（2026-11-13）接通 C056 的 Bedrock AWS EventStream 流式解码。
+
+参照 llm/bedrock/register.go、llm/bedrock/stream.go 与 aws-sdk-go-v2
+aws/protocol/eventstream@v1.7.10（decode.go / message.go / header.go / header_value.go）。
+端口：
+
+- 新增 `src/AxonHub.Llm/Http/HttpAwsEventStream.cs`：AWS EventStream 帧解码
+  （prelude + 两道 CRC32、十种 header 值类型、重名覆盖、headers 限长与 EOF 边界）、
+  `:message-type` 分派、chunk 的 base64+JSON 还原、exception/error 文案、EOF 静默关闭、
+  解码失败关闭读取器；Go error 与 exception payload 的 `__type`/`code` 回退规则逐项对齐。
+- `src/AxonHub.Llm/Http/HttpExecutor.cs`：按 `RegisterDecoder`/`GetDecoder` 语义注册
+  application/vnd.amazon.eventstream（精确值优先，其次解析后的媒体类型）。
+- `src/AxonHub.Llm/Json/GjsonRootKeyProbe.cs`：新增 `GetString` 复刻
+  `gjson.GetBytes(decoded, "type").String()`。
+
+测试：新增 `tests/AxonHub.Llm.Tests/HttpAwsEventStreamTests.cs` 39 例（参照 stream_test.go
+的 9 个场景 + header 类型 / CRC / 截断 / EOF / gjson 语义 / DoStream 路由）。实测 Llm 39
+通过 / 0 失败，相关回归 223 通过 / 0 失败（2026-11-13）；`AxonHub.Api.Tests` 未跑全量。
+台账：C056 resolved；新增 C281–C282（accepted）；lint 通过；`02-differences.md` 已重新生成；
+282 条（206 accepted / 3 gap / 73 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
@@ -1947,7 +1968,7 @@ resolved；lint 通过；`02-differences.md` 已重新生成；280 条
 | C003：字段级 JSON 类型错误文案 | 已解决：入站请求按参照的字段/类型表逐 token 复刻 Go 解码语义，错误文案逐字节一致 | 已关闭（101 例锁定；残余见 C022） |
 | C022：int32 index 上限与响应侧 null 元素 | 已解决（§140）：index 全部加宽为 long，`tool_calls[].index=3000000000` 被接受；响应转换对 Go 值结构切片的 null 元素补零值（choices / content parts / logprobs / image data / Jina / Cline / Anthropic citations / Responses output/sources），指针切片保持 null；`ParseOverrideOperations` 的 index 放宽到 int64 | 已关闭（§140，13 例）；残余 C224（普通 `List<string>` 的 null 元素保留 null） |
 | 持久化测试依赖 Docker（Testcontainers 启动 `postgres:17-alpine`） | 无 Docker 的环境无法运行持久化测试 | CI 必须提供 Docker；随 M3 补 CI 配置 |
-| C050–C058：Anthropic 双向流式、聚合器与出站 | C050 已解决：流式状态机与聚合器按 `inbound_stream.go`/`aggregator.go` 移植，4 组 xtest fixture 逐事件对比，`stream:true` 返回 200 `text/event-stream`；C051 已接受（raw JSON 载体，见登记）；C052 已接受：多条非法工具调用按 index 升序报告（参照 map 迭代随机）；C053 已接受：聚合器跳过负 index（参照 panic）；C054 已接受：无效工具输入在聚合早期抛 `InvalidOperationException`（参照在 `json.Marshal` 时失败，死 jsonrepair 省略）；C055 已接受：省略从未赋值的 `pendingReasoningItemID` 死字段；C056 真实缺口：Vertex AI 出站执行器（OAuth/JWT/区域 URL）未移植，构造期显式拒绝，Bedrock 仅保留直连报文形状；C057 已接受：缺失 `delta.type` 时跳过而非 panic；C058 已接受：流错误事件用严格 JSON 解析，畸形输入的兜底文案退化为 `stream_error` | C050 已关闭（测试锁定）；C056 为后续里程碑的显式缺口（不会发出错误请求）；C052–C055、C057、C058 仅影响畸形输入或内部错误文案 |
+| C050–C058：Anthropic 双向流式、聚合器与出站 | C050 已解决：流式状态机与聚合器按 `inbound_stream.go`/`aggregator.go` 移植，4 组 xtest fixture 逐事件对比，`stream:true` 返回 200 `text/event-stream`；C051 已接受（raw JSON 载体，见登记）；C052 已接受：多条非法工具调用按 index 升序报告（参照 map 迭代随机）；C053 已接受：聚合器跳过负 index（参照 panic）；C054 已接受：无效工具输入在聚合早期抛 `InvalidOperationException`（参照在 `json.Marshal` 时失败，死 jsonrepair 省略）；C055 已接受：省略从未赋值的 `pendingReasoningItemID` 死字段；C056 已解决：Vertex AI 出站执行器由 C125 闭合，Bedrock 的 AWS EventStream 帧解码由 §195 闭合（HttpAwsEventStream）；C057 已接受：缺失 `delta.type` 时跳过而非 panic；C058 已接受：流错误事件用严格 JSON 解析，畸形输入的兜底文案退化为 `stream_error` | C050 已关闭（测试锁定）；C056 已关闭（Vertex 见 C125、Bedrock 见 §195）；C052–C055、C057、C058 仅影响畸形输入或内部错误文案 |
 | C076：OpenAI Embeddings / Moderations | 已解决：按 `embedding.go`、`moderation.go`、`embedding_inbound.go`、`moderation_inbound.go` 移植统一模型、自定义 JSON 编解码、双向变换与两条路由，59 例变换器测试 + 5 例空响应探测 + 7 例端点接线锁定；校验顺序与文案、URL 构造（EndpointPath/raw URL）与默认审核模型逐字对齐 | 已关闭（测试锁定） |
 | C077：OpenAI Alpha Search / Decisions | 已解决：按 `alpha_search_inbound.go`、`alpha_search_outbound.go` 与 `decisions/{inbound,outbound}.go` 移植双向变换与两条路由；原始 body 只改写顶层 model、其余字节原样保留；严格信封校验与 Go 解码文案逐字对齐；嵌套上限 10000 层。19 + 110 例变换器测试、2 例空响应探测与 6 例端点接线锁定 | 已关闭（测试锁定）；model 补丁的 HTML 转义字节差异见 C078 |
 | C078：model 补丁的 HTML 字符转义 | 已接受：sjson 的快速路径对纯可打印 ASCII 字符串原样写入，端口用 Go `json.Marshal` 会把 <、>、& 写成 Unicode 转义序列；JSON 语义相同，仅字节表示不同，混合非 ASCII 时两侧一致（Go 探针确认） | 已接受（1 例锁定差异面；逐字节对齐需实现 sjson 的 mustMarshalString 判定） |

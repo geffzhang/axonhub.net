@@ -350,8 +350,9 @@ C055（省略死字段）。`input_schema` / `caller` 的显式 null 与缺失�
 
 说明：出站路径发现并修复了 `GoSortedMapConverterFactory` 的缺陷（`TValue = object` 时直接调用元素
 转换器的 `Write` 跳过运行时类型分派，`object` 值被写成 `{}`），raw 断点裁剪用例锁定该回归。
-残余差异为 C056（Vertex 执行器未移植，Bedrock 仅直连报文形状）、C057（缺失 `delta.type` 时跳过而非
-panic）与 C058（流错误事件的 gjson 宽松解析 vs 严格 JSON）。
+残余差异曾为 C056（Bedrock 流式解码；Vertex 执行器已由 C125 闭合，AWS EventStream 解码
+由 §195 闭合）、C057（缺失 `delta.type` 时跳过而非 panic）与 C058（流错误事件的 gjson
+宽松解析 vs 严格 JSON）。
 
 ## 12. Responses API 非流式双向变换（158 例，2026-10-31）
 
@@ -1176,6 +1177,21 @@ provider 复用补齐。参照 `channel_llm.go:1208`（codex 与 fenno 同走
 参照从不刷新其 OAuth 凭据）。新增 Api 10 例（ChannelTokenSourceTests 4、
 GithubCopilotChannelWiringTests 3、TokenGrainOutboundWiringTests 3），定向 Api 56 /
 Llm 188 通过。
+
+2026-11-13 更新（§195）：C056 闭合，Bedrock 的 AWS EventStream 流式解码已移植。参照
+`llm/bedrock/register.go`（把 application/vnd.amazon.eventstream 注册到 httpclient 解码表，
+anthropic outbound 以空导入触发）、`llm/bedrock/stream.go` 与 aws-sdk-go-v2
+`aws/protocol/eventstream@v1.7.10` 的 decode.go / message.go / header.go / header_value.go：
+prelude（总长 + 头长 + prelude CRC32 IEEE）、headers（十种值类型、重名后值覆盖、读到头部边界
+即结束）、payload、尾部 message CRC32；`:message-type` 分派 event/exception/error，event 的
+chunk 负载是 base64 的 JSON（`{"bytes": ..., "p": ...}`），解码后 Type 取 gjson 的 `type`；
+解码错误与 EOF 关闭读取器，事件级错误只置 err。端口新增
+`src/AxonHub.Llm/Http/HttpAwsEventStream.cs`（`IStream<StreamEvent>`，含增量 CRC、带限读
+与 Go 的 EOF/ErrUnexpectedEOF 区分），`HttpExecutor.DoStream` 按注册表语义（精确
+Content-Type 优先、其次 `mime.ParseMediaType` 的媒体类型）路由到该解码器；
+`GjsonRootKeyProbe` 新增 `GetString`（首个键命中、字符串反转义、对象/数组原文、
+true/false、整数原样、其余数值 FormatFloat('f',-1,64)）。新增 39 例，定向 Llm 39 通过、
+相关回归 223 通过。
 
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
@@ -2764,8 +2780,8 @@ reuseTokenSource 缓存（10 秒提前量、零过期永不过期、空 access_t
 未移植并登记：external_account / external_account_authorized_user /
 impersonated_service_account 与交互式 web/installed 客户端配置显式
 NotSupportedException，私钥/jws/传输错误文本的底层后缀近似，统一登记为
-C128；Bedrock 的 AWS EventStream 流式解码仍是独立缺口，C056 已收窄为
-Bedrock 单项。差异条目 C125 由「真实缺口」改写为「已解决（残余 C128）」。
+C128；Bedrock 的 AWS EventStream 流式解码当时仍是独立缺口（C056，§195 已闭合）。
+差异条目 C125 由「真实缺口」改写为「已解决（残余 C128）」。
 
 ## 62. 静态托管与 SPA fallback：NoRoute 静态处理器（2 文件 + 26 例，2026-11-02）
 

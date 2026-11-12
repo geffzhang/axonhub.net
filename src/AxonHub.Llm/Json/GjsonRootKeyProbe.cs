@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace AxonHub.Llm.Json;
@@ -41,6 +42,252 @@ internal static class GjsonRootKeyProbe
 
         return false;
     }
+
+    /// <summary>
+    /// Port of <c>gjson.GetBytes(body, key).String()</c> for a simple top-level
+    /// key. The first occurrence wins. A string value is unescaped, an object
+    /// or array keeps its raw JSON, literals become <c>true</c>/<c>false</c>,
+    /// an integer number keeps its raw text while other numbers use Go's
+    /// shortest plain notation, and a missing key, <c>null</c> or a malformed
+    /// document yields the empty string.
+    /// </summary>
+    /// <remarks>
+    /// Used by the Bedrock EventStream decoder, whose chunk payload starts as
+    /// opaque bytes; like gjson it never validates the surrounding document.
+    /// </remarks>
+    public static string GetString(ReadOnlySpan<byte> body, ReadOnlySpan<byte> key)
+    {
+        for (var i = 0; i < body.Length; i++)
+        {
+            if (body[i] == (byte)'{')
+            {
+                return ParseObjectString(body, i + 1, key);
+            }
+
+            // gjson.Get searches only the first container; a simple key cannot
+            // match an array root (gjson.go:2212-2223).
+            if (body[i] == (byte)'[')
+            {
+                return string.Empty;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    // Port of parseObject (gjson.go:1189-1350) for a single-segment path,
+    // returning Result.String() instead of Exists().
+    private static string ParseObjectString(ReadOnlySpan<byte> body, int i, ReadOnlySpan<byte> key)
+    {
+        while (i < body.Length)
+        {
+            ReadOnlySpan<byte> candidate = default;
+            var escaped = false;
+            var closed = false;
+
+            for (; i < body.Length; i++)
+            {
+                if (body[i] == (byte)'"')
+                {
+                    i = ScanKey(body, i + 1, out candidate, out escaped, out closed);
+                    break;
+                }
+
+                if (body[i] == (byte)'}')
+                {
+                    return string.Empty;
+                }
+            }
+
+            if (!closed)
+            {
+                return string.Empty;
+            }
+
+            var matched = escaped
+                ? Unescape(candidate).AsSpan().SequenceEqual(key)
+                : candidate.SequenceEqual(key);
+
+            for (; i < body.Length; i++)
+            {
+                var isNumber = false;
+
+                switch (body[i])
+                {
+                    default:
+                        continue;
+                    case (byte)'"':
+                    {
+                        var start = i + 1;
+                        i = ParseString(body, i + 1, out var stringClosed);
+                        if (!stringClosed)
+                        {
+                            return string.Empty;
+                        }
+
+                        if (matched)
+                        {
+                            var raw = body[start..(i - 1)];
+                            return ContainsBackslash(raw)
+                                ? Encoding.UTF8.GetString(Unescape(raw))
+                                : Encoding.UTF8.GetString(raw);
+                        }
+
+                        break;
+                    }
+
+                    case (byte)'{':
+                    case (byte)'[':
+                    {
+                        var start = i;
+                        i = Squash(body, i);
+                        if (matched)
+                        {
+                            return Encoding.UTF8.GetString(body[start..i]);
+                        }
+
+                        break;
+                    }
+
+                    case (byte)'n':
+                        if (i + 1 < body.Length && body[i + 1] != (byte)'u')
+                        {
+                            isNumber = true;
+                            break;
+                        }
+
+                        goto case (byte)'t';
+                    case (byte)'t':
+                    case (byte)'f':
+                    {
+                        var literal = body[i];
+                        i = ParseLiteral(body, i);
+                        if (matched)
+                        {
+                            // 'n' (null) carries the zero Result type, whose
+                            // String() is the empty string.
+                            return literal switch
+                            {
+                                (byte)'t' => "true",
+                                (byte)'f' => "false",
+                                _ => string.Empty,
+                            };
+                        }
+
+                        break;
+                    }
+
+                    case (byte)'+':
+                    case (byte)'-':
+                    case >= (byte)'0' and <= (byte)'9':
+                    case (byte)'i':
+                    case (byte)'I':
+                    case (byte)'N':
+                        isNumber = true;
+                        break;
+                }
+
+                if (isNumber)
+                {
+                    var start = i;
+                    i = ParseNumber(body, i);
+                    if (matched)
+                    {
+                        return NumberString(body[start..i]);
+                    }
+                }
+
+                break;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    // Port of Result.String()'s Number branch (gjson.go:87-110): a raw integer
+    // literal is returned verbatim, anything else goes through
+    // strconv.FormatFloat(t.Num, 'f', -1, 64).
+    private static string NumberString(ReadOnlySpan<byte> raw)
+    {
+        var i = raw.Length > 0 && raw[0] == (byte)'-' ? 1 : 0;
+        var integer = raw.Length > i;
+        for (var j = i; j < raw.Length; j++)
+        {
+            if (raw[j] < (byte)'0' || raw[j] > (byte)'9')
+            {
+                integer = false;
+                break;
+            }
+        }
+
+        if (integer)
+        {
+            return Encoding.UTF8.GetString(raw);
+        }
+
+        // ParseFloat's error is discarded by gjson; its zero value formats as
+        // "0".
+        return double.TryParse(
+            Encoding.ASCII.GetString(raw),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? FormatGoFloat(value)
+            : "0";
+    }
+
+    // Port of strconv.FormatFloat(value, 'f', -1, 64): the shortest round-trip
+    // digits in plain decimal notation, never an exponent.
+    private static string FormatGoFloat(double value)
+    {
+        if (double.IsNaN(value))
+        {
+            return "NaN";
+        }
+
+        if (double.IsPositiveInfinity(value))
+        {
+            return "+Inf";
+        }
+
+        if (double.IsNegativeInfinity(value))
+        {
+            return "-Inf";
+        }
+
+        var text = value.ToString("R", CultureInfo.InvariantCulture);
+        var exponentAt = text.IndexOfAny(['E', 'e']);
+        if (exponentAt < 0)
+        {
+            return text;
+        }
+
+        var sign = text[0] == '-' ? "-" : string.Empty;
+        var start = sign.Length;
+        var mantissa = text[start..exponentAt];
+        var exponent = int.Parse(text[(exponentAt + 1)..], CultureInfo.InvariantCulture);
+        var digits = mantissa.Replace(".", string.Empty, StringComparison.Ordinal);
+        var point = (mantissa.Contains('.') ? mantissa.IndexOf('.') : mantissa.Length) + exponent;
+
+        string body;
+        if (point <= 0)
+        {
+            body = "0." + new string('0', -point) + digits;
+        }
+        else if (point >= digits.Length)
+        {
+            body = digits + new string('0', point - digits.Length);
+        }
+        else
+        {
+            body = digits[..point] + "." + digits[point..];
+        }
+
+        return sign + body;
+    }
+
+    private static bool ContainsBackslash(ReadOnlySpan<byte> data)
+        => data.IndexOf((byte)'\\') >= 0;
 
     // Port of parseObject (gjson.go:1189-1350) for a single-segment path.
     private static bool ParseObject(ReadOnlySpan<byte> body, int i, ReadOnlySpan<byte> key)

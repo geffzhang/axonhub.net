@@ -223,11 +223,13 @@ public sealed class HttpExecutor : IExecutor
 
         var bodyStream = raw.Content.ReadAsStream(cancellationToken);
         var binaryContentType = SelectBinaryDecoderContentType(contentType);
-        IStream<StreamEvent> stream = binaryContentType is not null
-            ? new HttpBinaryEventStream(bodyStream, binaryContentType, cancellationToken, raw)
-            : IsNdjsonContentType(contentType)
-                ? new HttpNdjsonEventStream(bodyStream, raw)
-                : new HttpSseEventStream(bodyStream, raw);
+        IStream<StreamEvent> stream = IsAwsEventStreamContentType(contentType)
+            ? new HttpAwsEventStream(bodyStream, raw)
+            : binaryContentType is not null
+                ? new HttpBinaryEventStream(bodyStream, binaryContentType, cancellationToken, raw)
+                : IsNdjsonContentType(contentType)
+                    ? new HttpNdjsonEventStream(bodyStream, raw)
+                    : new HttpSseEventStream(bodyStream, raw);
 
         // Codex turn-state propagation: only the first event carries it.
         var firstEventHeaders = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -909,6 +911,17 @@ public sealed class HttpExecutor : IExecutor
     private const string NdjsonContentType = "application/x-ndjson";
 
     private const string NdjsonCharsetContentType = "application/x-ndjson; charset=utf-8";
+
+    /// <summary>
+    /// llm/bedrock/register.go: the Bedrock package registers this content type
+    /// with the AWS EventStream decoder.
+    /// </summary>
+    private const string AwsEventStreamContentType = "application/vnd.amazon.eventstream";
+
+    private static bool IsAwsEventStreamContentType(string contentType)
+        => string.Equals(contentType, AwsEventStreamContentType, StringComparison.Ordinal)
+            || (GoMimeTypes.TryParseMediaType(contentType, out var mediaType, out _)
+                && string.Equals(mediaType, AwsEventStreamContentType, StringComparison.Ordinal));
 
     private static bool IsNdjsonContentType(string contentType)
         => string.Equals(contentType, NdjsonContentType, StringComparison.Ordinal)
