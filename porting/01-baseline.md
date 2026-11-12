@@ -1144,7 +1144,11 @@ UA 捕获与清理、`proxy_` 前缀、系统消息注入、伪造 user id、13 
 执行 key 审计与凭据文案的残余差异。2026-11-12 更新：§180 给 claudecode 与 codex 的
 api-key 出站补上 `IApiKeyProvenance`（含 codex alpha-search），执行 key 审计不再是残余；
 `ClaudeCodeOutboundTransformerTests` 由 23 增至 25 例，`ClaudeCodeAndOpenCodeChannelWiringTests`
-由 11 增至 13 例。
+由 11 增至 13 例。2026-11-12 更新（§185）：C096 (8) 关闭——claudecode / codex 的 OAuth
+凭据按参照分两阶段复刻（typed oauth 拷贝丢弃 `id_token` 后 encode，再 parse），错误文案
+分别为 `failed to encode` / `failed to parse` + `{channelType} oauth credentials`；
+`ClaudeCodeAndOpenCodeChannelWiringTests` 由 13 增至 15 例、`CodexChannelWiringTests` 新增
+1 例，C096 残余全部关闭（resolved）。
 
 ## 34. Ollama 原生出站、NDJSON 流与两个通道类型（59 例，2026-11-01）
 

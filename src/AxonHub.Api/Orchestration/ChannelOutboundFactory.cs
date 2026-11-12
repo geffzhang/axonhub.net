@@ -1710,17 +1710,43 @@ public static class ChannelOutboundFactory
 
     /// <summary>
     /// Re-marshals the channel's typed <c>oauth</c> object (canonical field
-    /// order, empty fields omitted), falling back to parsing the legacy apiKey
-    /// string as OAuth JSON, then parses the credentials document.
+    /// order, empty fields omitted, <c>id_token</c> dropped like the
+    /// reference's struct copy), falling back to parsing the legacy apiKey
+    /// string as OAuth JSON, then parses the credentials document. The two
+    /// stages keep the reference's error copy (channel_llm.go:938-949, :345-356,
+    /// :1239-1250).
     /// </summary>
     private static OAuthCredentials ParseOAuthCredentials(
         ChannelCandidate candidate,
         string channelType)
     {
+        var credentialsJson = ChannelCredentials.GetLegacyApiKey(candidate.Credentials);
         var oauthJson = ChannelCredentials.GetOAuthObjectJson(candidate.Credentials);
-        var credentialsJson = oauthJson is not null
-            ? OAuthCredentialsJson.ParseOAuthObject(oauthJson).ToJson()
-            : ChannelCredentials.GetLegacyApiKey(candidate.Credentials);
+        if (oauthJson is not null)
+        {
+            try
+            {
+                // The reference builds a fresh oauth.OAuthCredentials without
+                // id_token; failing to decode or marshal it here is that copy's
+                // encode stage.
+                var oauth = OAuthCredentialsJson.ParseOAuthObject(oauthJson);
+                credentialsJson = new OAuthCredentials
+                {
+                    AccessToken = oauth.AccessToken,
+                    RefreshToken = oauth.RefreshToken,
+                    ClientId = oauth.ClientId,
+                    ExpiresAt = oauth.ExpiresAt,
+                    TokenType = oauth.TokenType,
+                    Scopes = oauth.Scopes,
+                }.ToJson();
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+            {
+                throw new InvalidOperationException(
+                    "failed to encode " + channelType + " oauth credentials: " + ex.Message,
+                    ex);
+            }
+        }
 
         try
         {

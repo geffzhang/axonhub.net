@@ -220,6 +220,25 @@ public sealed class CodexChannelWiringTests
     }
 
     [Fact]
+    public void CodexOAuthCredentialsKeepTheReferenceParseErrorCopy()
+    {
+        // channel_llm.go:353-356: an OAuth JSON document in the legacy apiKey
+        // field is parsed as the credentials; the failure keeps the reference's
+        // "failed to parse codex oauth credentials" copy (C096 item 8).
+        var error = Assert.Throws<InvalidOperationException>(
+            () => ChannelOutboundFactory.Create(
+                Candidate(
+                    ChannelOutboundFactory.CodexChannelType,
+                    credentials: """{"apiKey":"{\"access_token\":\"\"}"}"""),
+                Request(ApiFormats.OpenAIResponse),
+                DateTimeOffset.UnixEpoch));
+
+        Assert.Equal(
+            "failed to parse codex oauth credentials: access_token is empty",
+            error.Message);
+    }
+
+    [Fact]
     public void CodexLegacyOAuthJsonApiKeyIsParsedAsOAuth()
     {
         var legacyJson = JsonSerializer.Serialize(new

@@ -183,6 +183,37 @@ public sealed class ClaudeCodeAndOpenCodeChannelWiringTests
             error.Message);
     }
 
+    [Fact]
+    public void ClaudeCodeOAuthCredentialsKeepTheReferenceParseErrorCopy()
+    {
+        // channel_llm.go:946-949: an OAuth JSON document in the legacy apiKey
+        // field is parsed as the credentials; the failure keeps the reference's
+        // "failed to parse claudecode oauth credentials" copy (C096 item 8).
+        var error = Assert.Throws<InvalidOperationException>(
+            () => CreateClaudeCode(
+                """{"apiKey":"{\"access_token\":\"\"}"}""",
+                Request()));
+
+        Assert.Equal(
+            "failed to parse claudecode oauth credentials: access_token is empty",
+            error.Message);
+    }
+
+    [Fact]
+    public void ClaudeCodeOAuthCredentialsKeepTheReferenceEncodeErrorCopy()
+    {
+        // channel_llm.go:931-941 copies the typed oauth object into fresh
+        // credentials and re-marshals it before parsing; a document the port's
+        // lenient load could not decode fails in that copy and keeps the
+        // reference's "failed to encode" copy (C096 item 8).
+        var error = Assert.Throws<InvalidOperationException>(
+            () => CreateClaudeCode(
+                """{"oauth":{"access_token":"oauth-access","expires_at":123}}""",
+                Request()));
+
+        Assert.StartsWith("failed to encode claudecode oauth credentials: ", error.Message);
+    }
+
     [Theory]
     [InlineData("deepseek-v4-flash", "/v1/chat/completions", "deepseek")]
     [InlineData("grok-4.5", "/v1/responses", "responses")]

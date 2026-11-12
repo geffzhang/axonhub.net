@@ -1329,6 +1329,38 @@ websocket 拒绝）。
 antigravity provider 复用。§183 的 Api 静态计数由 6202 更正为 6195。lint 通过，
 `02-differences.md` 已重新生成；269 条（196 accepted / 6 gap / 67 resolved）。
 
+§185（2026-11-12）关闭 C096 (8)：claudecode / codex 的 OAuth 凭据错误文案。参照
+`buildChannelWithTransformer` 的 claudecode 分支（channel_llm.go:924-949）与
+`buildCodexOutbound`（:334-356）分两阶段处理凭据：先把 typed `oauth` 对象按字段
+拷贝（不复制 `id_token`）重新序列化，失败报
+`failed to encode {channelType} oauth credentials: %w`；再解析凭据文档，失败报
+`failed to parse {channelType} oauth credentials: %w`。端口此前只包装了 parse 阶段，
+encode 阶段（`ParseOAuthObject(...).ToJson()`）的失败以原始 `JsonException` 逃逸，
+且重序列化会带上 `id_token`。
+
+实现：`ChannelOutboundFactory.ParseOAuthCredentials` 现保留参照的两阶段结构。typed
+`oauth` 对象存在时按参照字段拷贝（AccessToken / RefreshToken / ClientId / ExpiresAt /
+TokenType / Scopes，丢弃 `id_token`）重新序列化，decode 或 marshal 失败统一归入
+encode 阶段并保留参照文案；随后 `ParseCredentialsJson` 的失败保留 parse 文案。
+端口由宽松载入（C013）把参照在 Ent 解码阶段就会拒绝的畸形 oauth 对象带到此处，
+其错误现归入 encode 文案，与参照的可观察文案对齐。
+
+测试：`ClaudeCodeAndOpenCodeChannelWiringTests` 新增
+`ClaudeCodeOAuthCredentialsKeepTheReferenceParseErrorCopy`（legacy apiKey 中的 OAuth
+JSON 空 access_token → `failed to parse claudecode oauth credentials: access_token is
+empty`）与 `ClaudeCodeOAuthCredentialsKeepTheReferenceEncodeErrorCopy`（畸形 typed
+oauth → `failed to encode claudecode oauth credentials: ` 前缀，2 例）；
+`CodexChannelWiringTests` 新增 `CodexOAuthCredentialsKeepTheReferenceParseErrorCopy`
+（1 例）。
+
+本轮实测：新增 3 例通过；定向 39 例（两个接线测试类）与 580 例（OAuth / ChannelToken /
+ClaudeCode / Codex / GithubCopilot / Antigravity）通过。`AxonHub.Api.Tests` 未跑全量，
+静态计数 6208 → 6211；四项目合计 9883 → 9886（Llm 3122 / Persistence 376 / Grains 177
+未重跑）。
+
+台账：C096 (8) 关闭，C096 全部条目关闭（resolved）；lint 通过，`02-differences.md`
+已重新生成；269 条（196 accepted / 5 gap / 68 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
