@@ -246,9 +246,10 @@ builder.Services.AddScoped<IPromptProtectionRuleProvider, PromptProtectionRuleSe
 
 // Prompt protection management (the rule service's create/update/delete/status/
 // bulk/preview surface): promptProtectionRules / node(PromptProtectionRule)
-// and the mutations the unchanged admin frontend sends. The reference's scope
-// policy is not ported (C014) and its asyncReloadEnabledRules cache refresh is
-// a no-op here (C092).
+// and the mutations the unchanged admin frontend sends. The schema's
+// read/write channels policy is evaluated by PromptProtectionRulePrivacy
+// (C014); its asyncReloadEnabledRules cache refresh is a no-op here (C092).
+builder.Services.AddScoped<PromptProtectionRulePrivacy>();
 builder.Services.AddScoped<PromptProtectionRuleManagementService>();
 
 // Project prompts (biz.PromptService): the port reads enabled prompts per

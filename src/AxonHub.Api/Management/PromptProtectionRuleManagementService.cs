@@ -41,10 +41,14 @@ public sealed record UpdatePromptProtectionRuleCommand
 /// <remarks>
 /// The reference refreshes its 30-second live cache after every mutation
 /// (asyncReloadEnabledRules); the port reads the database per request, so the
-/// mutation is the whole effect (C092). The rule schema's scope policy
-/// (read/write channels) is not ported (C014).
+/// mutation is the whole effect (C092). The schema's scope policy
+/// (read/write channels) is evaluated at the same points ent applies it: the
+/// query policy on the connection and on the service's own reads, the mutation
+/// policy right before each write (C014).
 /// </remarks>
-public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleStore rules)
+public sealed class PromptProtectionRuleManagementService(
+    IPromptProtectionRuleStore rules,
+    PromptProtectionRulePrivacy privacy)
 {
     /// <summary>Ent's NotFoundError text for the PromptProtectionRule label.</summary>
     public const string RuleNotFound = "ent: prompt_protection_rule not found";
@@ -62,6 +66,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         }
 
         ValidateSettings(command.Pattern, command.Settings);
+
+        // CreateRule's name lookup is the first read (prompt_protection_rule.go:230-235);
+        // ent evaluates the query policy on it before the duplicate result is known.
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
 
         bool exists;
         try
@@ -82,6 +90,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         {
             throw DuplicateName(command.Name);
         }
+
+        // The ent Create mutation evaluates the write policy after the name
+        // check (prompt_protection_rule.go:241-243).
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
 
         var record = new PromptProtectionRuleRecord
         {
@@ -117,7 +129,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         ArgumentNullException.ThrowIfNull(command);
 
         // UpdateRule re-reads the row first (through the soft-delete-aware
-        // query) and validates the effective pattern/settings pair.
+        // query) and validates the effective pattern/settings pair. ent
+        // evaluates the query policy on that Get (prompt_protection_rule.go:254).
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+
         PromptProtectionRuleRecord current;
         PromptProtectionSettings? currentSettings;
         try
@@ -140,6 +155,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         var settings = command.Settings ?? currentSettings;
 
         ValidateSettings(pattern, settings);
+
+        // The ent UpdateOneID mutation evaluates the write policy after the
+        // re-read and validation (prompt_protection_rule.go:270-273).
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
 
         PromptProtectionRuleRecord? updated;
         try
@@ -174,6 +193,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
     /// <summary>Port of PromptProtectionRuleService.DeleteRule.</summary>
     public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
     {
+        // DeleteOneID evaluates the write policy when the mutation runs
+        // (prompt_protection_rule.go:283-285).
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         int affected;
         try
         {
@@ -203,6 +226,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         string status,
         CancellationToken cancellationToken = default)
     {
+        // UpdateOneID evaluates the write policy when the mutation runs
+        // (prompt_protection_rule.go:293-295).
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
         PromptProtectionRuleRecord? updated;
         try
         {
@@ -234,6 +261,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         {
             return;
         }
+
+        // Delete().Where(idIn) evaluates the write policy once the empty list
+        // has been short-circuited (prompt_protection_rule.go:306-311).
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -275,6 +306,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+
+        // The promptProtectionRules connection runs through the schema query
+        // policy (prompt_protection_rule.go:65-71).
+        await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
 
         return await rules.ListAsync(query, cancellationToken).ConfigureAwait(false);
     }
@@ -393,6 +428,10 @@ public sealed class PromptProtectionRuleManagementService(IPromptProtectionRuleS
         {
             return;
         }
+
+        // Update().Where(idIn) evaluates the write policy once the empty list
+        // has been short-circuited (prompt_protection_rule.go:322-331).
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {

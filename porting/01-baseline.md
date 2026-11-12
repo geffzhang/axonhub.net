@@ -1193,6 +1193,17 @@ Content-Type 优先、其次 `mime.ParseMediaType` 的媒体类型）路由到�
 true/false、整数原样、其余数值 FormatFloat('f',-1,64)）。新增 39 例，定向 Llm 39 通过、
 相关回归 223 通过。
 
+2026-11-13 更新（§196）：PromptProtectionRule 的 schema 策略已移植（C014 残余收窄）。参照
+`internal/ent/schema/prompt_protection_rule.go:65-77`：查询侧
+`APIKeyScopeQueryRule(read_channels)` → `OwnerRule()` → `UserReadScopeRule(read_channels)` →
+默认拒绝；变更侧 `OwnerRule()` → `UserWriteScopeRule(write_channels)` → 默认拒绝。端口新增
+`PromptProtectionRulePrivacy`，在服务执行 ent 读写的同一点求值：`CreateRule` 先校验 settings、
+再对名称查重做查询策略、最后在 Create 前做变更策略；`UpdateRule` 的重读先做查询策略、校验后
+再做变更策略；delete / status / 两个批量更新在空列表短路之后、写库之前做变更策略；
+`promptProtectionRules` 连接在读取前做查询策略；preview 不触碰规则表，保持无策略。拒绝文案与
+ent 的 `%s: %w` 形状一致，GraphQL 错误过滤统一报告 permission denied / FORBIDDEN。新增 7 例
+（定向 25 通过），相关回归 122 通过。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

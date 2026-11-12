@@ -1682,6 +1682,27 @@ aws/protocol/eventstream@v1.7.10（decode.go / message.go / header.go / header_v
 台账：C056 resolved；新增 C281–C282（accepted）；lint 通过；`02-differences.md` 已重新生成；
 282 条（206 accepted / 3 gap / 73 resolved）。
 
+§196（2026-11-13）接入 PromptProtectionRule 的 schema 隐私策略（C014 残余）。
+
+参照 internal/ent/schema/prompt_protection_rule.go:65-77 与 internal/scopes 的
+APIKeyScopeQueryRule / OwnerRule / UserReadScopeRule / UserWriteScopeRule：
+
+- 新增 `src/AxonHub.Api/Management/PromptProtectionRulePrivacy.cs`；查询策略允许持
+  read_channels 的 API key、owner 与持 read_channels 系统 scope 的用户，其余默认拒绝；
+  变更策略允许 owner 与持 write_channels 的用户，API key 无用户上下文时以
+  no user in context 拒绝。
+- `PromptProtectionRuleManagementService` 在 ent 求值点应用策略：连接查询与创建的名称查重、
+  更新的重读走查询策略；创建 / 更新 / 删除 / 状态 / 两个批量操作在写库前走变更策略；
+  空批量列表短路不触发策略；preview 不触表、无策略。
+- `Program.cs` 与测试宿主注册该隐私服务。
+
+测试：tests/AxonHub.Api.Tests/AdminPromptProtectionRulesEndpointTests.cs 新增 7 例
+（查询的 read_channels 门禁、service account 的 scope、write-only 成员被内部读拒绝而
+status / bulk 放行、只读成员的变更拒绝与 preview 放行、校验与策略的先后顺序、双 scope
+成员全流程）。实测定向 25 通过 / 0 失败，相关回归 122 通过 / 0 失败（2026-11-13）。
+台账：C014 保持 gap（残余收窄为其余管理实体的 schema 策略）；lint 通过；
+`02-differences.md` 已重新生成；282 条（206 accepted / 3 gap / 73 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
@@ -1954,7 +1975,7 @@ aws/protocol/eventstream@v1.7.10（decode.go / message.go / header.go / header_v
 | C035：RateLimitAware 恒满分 | 已解决：`ChannelRequestTracker`（自然分钟窗口、只延长的冷却、惰性清理）、`ChannelLimiter`/`ChannelLimiterManager`（硬信号量、FIFO、配置重建）、`RateLimitAwareScorer`（RPM/TPM 与并发取最小值、-10000）接入四条策略链；RPM 准入、TPM 追踪与 429 冷却中间件挂在请求链路上；93 个用例锁定（64 grain + 29 API）。残余：C042（阻塞线程）、C043（单 InnerException）、C044（已由 §138 闭合）、C045（nil tracker 的 noop 不可达） | 已关闭；残余已登记 |
 | C013：多 API key 的 trace 粘性 | 已解决：无 trace 时的随机分配、rendezvous/FNV-1a 选择器与 `channel_api_key_suffix`/`channel_api_key_index` 审计列已按参照实现（23 例）；`ChannelApiKeyProvider` 读取 `WithTrace` 发布的 trace id（线上请求 `SessionId` 接缝），多 key 通道按 `traceID|key` 做 rendezvous 固定选择，同一 trace 在重试与跨请求间同一 key，另有 1 例编排端到端锁定；参照的 1024 项 LRU 不单独保留（它只记忆固定启用集合内的 rendezvous 结果，通道重建会新建 provider 与空缓存） | 已关闭；残余 apiKeyOverride（通道 key 测试流程）与 `trace_sticky_mode` 通道粘性未接入 |
 | C042–C045：限流的实现结构差异 | C042 等待中的请求占用线程而非 goroutine；C043 队列错误用 `Cause` 属性承载类型化原因而非多错误 Unwrap；C044 五个 OTel 限流指标已由 §138 按 System.Diagnostics.Metrics 移植，部署方订阅 axonhub Meter 即可获得 inflight/waiting/拒绝计数；C045 nil tracker 的 noop 路径不可达；C223 通用 HTTP metrics 亦已由 §139 按同名 instrument 与 provider 配置移植（默认关闭，开启后导出面一致） | 准入与打分行为等价，差异在资源模型与可观测性；已按同名 instrument 与 Snapshot 回调接入（§138、§139） |
-| C014：成本计费、用户鉴权（JWT/OIDC/角色）与通道管理面未接入 | API key 鉴权与身份传播已接入（C023），系统安全设置与 IP 黑名单已接入（C028）：`/v1` 先过黑名单再过鉴权，request/execution/usage 的 project/api_key 已回填；通道级请求改写已接入（body/header 覆盖、模板渲染、sjson 路径语义，134 例锁定，残余 C037–C041）；通道限流与并发准入已接入（C035，93 例锁定，残余 C042–C045）；usage 成本计费与注入已接入（C046–C049，43 例锁定）；管理面登录（§80）与管理员 GraphQL 鉴权（§81）已接入，OIDC 提供方配置、启动发现与 providers 列表（§82）已接入，登录流程与角色权限仍未接入；通道写入校验已覆盖 createChannel（§67）、updateChannel（§68：部分列更新、乐观守卫与同一套 body/header、限流、设置、端点与凭据校验）与批量排序 / 批量自动禁用（§69）、端点保存（§70：类型与已存 modelProtocols 校验、updated_at 守卫）与 API key 记账（§71：禁用 / 启用 / 启用全部 / 启用选定 / 删除禁用 key，按冻结语义；live 的 Vertex key 删除与自动禁用事件 / 缓存刷新延后，见 C149）；覆盖模板 CRUD 与 `channel_model_prices` 管理面未接入（C037/C048/C143） | 后续里程碑按参照逐项接入并补测 |
+| C014：请求链路与通道管理面的范围裁剪 | API key 鉴权与身份传播（C023）、系统安全设置与 IP 黑名单（C028）、通道级请求改写（134 例，残余 C037–C041）、通道限流与并发准入（C035，93 例，残余 C042–C045）与 usage 成本计费（C046–C049，43 例）均已接入；管理面登录（§80）、管理员 GraphQL 鉴权（§81）、OIDC 提供方配置（§82）与登录流程（§83）、权限校验器（§84）、通道隐私与写入门禁（§175/§176）、通道写入校验（§67–§73、§75、§76、§136）、覆盖模板与 `channel_model_prices` 管理面均已接入；§196 接入 PromptProtectionRule 的 schema 策略（查询 read_channels、变更 write_channels，7 例锁定）。残余裁剪为其余管理实体的 schema 查询/变更策略（users / roles / projects 等的根查询；users/roles 变更由 §84 的校验器覆盖）与通道管理面的已接受细节（C037–C041、C149） | 剩余实体策略按管理面切片补齐；请求链路与通道管理面已达成的行为由分段测试锁定 |
 | C046–C049：成本计费的精度、读取与未命中语义 | C046 已接受：金额用 `System.Decimal`（约 28–29 位有效数字），参照为 shopspring 任意精度，极端乘积可能有末位差异；C047 已接受：价格按请求实时读库（注入开启时最多两次查询），参照为进程内缓存，外部改价立即生效；C048 真实缺口：`channel_model_prices` 管理面（写入、reference-id 轮换、版本表、自动定价）未移植，§67 的 createChannel 与 §68 的 updateChannel 均尚未调用 ensureChannelModelPrices（C143）；C049 推断：未命中价格时 `cost_items` 写 JSON `null`（Ent `SetCostItems(nil)` 语义，Ent 源码不可得） | 读取路径与可观察金额一致；管理面随通道管理面落地；C049 若日后用真实 Ent 数据库核对为 `[]`，只需改中间件字面量并更新条目与测试 |
 | C015：zstd 请求体与压缩错误文案 | 已解决：gzip/x-gzip/deflate/zstd 全部解码；gzip 头错误与 zlib/raw DEFLATE 分支逐字/逐分支对齐。残余差异仅损坏/截断压缩体的错误细节（缺 flate 偏移、gzip 尾部校验、zstd 内层文案） | 已关闭（ZstdSharp.Port；残余差异见 C015） |
 | C016：通道级 `retryableStatusCodes` / `retryableErrorPatterns` 未生效 | 已解决：候选携带从 settings 解析的重试规则，`CanRetry` 按参照逐条判断（传输错误、429/5xx、额外状态码、子串/正则文本） | 已关闭（16 个谓词/解析用例 + 3 个端到端用例锁定） |

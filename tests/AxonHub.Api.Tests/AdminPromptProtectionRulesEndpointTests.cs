@@ -16,9 +16,10 @@ namespace AxonHub.Api.Tests;
 /// the operations the unchanged frontend sends
 /// (frontend/src/features/prompt-protection-rules/data/rules.ts): gid IDs, the
 /// PromptProtectionSettings JSON shape, the ported where predicates, entgql
-/// pagination, and the reference mutation semantics from
+/// pagination, the reference mutation semantics from
 /// internal/server/biz/prompt_protection_rule.go and
-/// prompt_protection_preview.go.
+/// prompt_protection_preview.go, and the schema's read/write channels privacy
+/// policy (internal/ent/schema/prompt_protection_rule.go:65-77).
 /// </summary>
 public sealed class AdminPromptProtectionRulesEndpointTests : IAsyncLifetime
 {
@@ -841,11 +842,398 @@ public sealed class AdminPromptProtectionRulesEndpointTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task RulesQueryRunsThroughTheReadChannelsPolicy()
+    {
+        _rules.Seed(record =>
+        {
+            record.Name = "rule";
+            record.Pattern = "secret";
+            record.Settings = """{"action":"reject"}""";
+        });
+
+        var readerToken = await SeedMemberTokenAsync(
+            "reader@example.com",
+            scopes: """["read_channels"]""",
+            id: 71);
+        var data = await QueryDataAsync(
+            "query Rules { promptProtectionRules(first: 10) { totalCount } }",
+            token: readerToken);
+        Assert.Equal(
+            1,
+            data.GetProperty("promptProtectionRules").GetProperty("totalCount").GetInt32());
+
+        // write_channels without read_channels: the query policy still denies.
+        var writerToken = await SeedMemberTokenAsync(
+            "writer@example.com",
+            scopes: """["write_channels"]""",
+            id: 72);
+        var writerErrors = await QueryErrorsAsync(
+            "query Rules { promptProtectionRules(first: 10) { totalCount } }",
+            token: writerToken);
+        Assert.Equal("permission denied", writerErrors[0].GetProperty("message").GetString());
+
+        // No scopes at all: every rule skips and the policy denies by default.
+        var plainToken = await SeedMemberTokenAsync(
+            "plain@example.com",
+            scopes: null,
+            id: 73);
+        var plainErrors = await QueryErrorsAsync(
+            "query Rules { promptProtectionRules(first: 10) { totalCount } }",
+            token: plainToken);
+        Assert.Equal("permission denied", plainErrors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ServiceAccountKeysNeedReadChannelsForTheRulesQuery()
+    {
+        _rules.Seed(record =>
+        {
+            record.Name = "rule";
+            record.Pattern = "secret";
+            record.Settings = """{"action":"reject"}""";
+        });
+
+        // The store's default key scopes include read_channels.
+        _gate.AddServiceAccountKey();
+        var data = await QueryDataAsync(
+            "query Rules { promptProtectionRules(first: 10) { totalCount } }",
+            token: "sk-service-account");
+        Assert.Equal(
+            1,
+            data.GetProperty("promptProtectionRules").GetProperty("totalCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task ServiceAccountKeysWithoutReadChannelsAreDenied()
+    {
+        _rules.Seed(record =>
+        {
+            record.Name = "rule";
+            record.Pattern = "secret";
+            record.Settings = """{"action":"reject"}""";
+        });
+
+        _gate.AddServiceAccountKey(
+            configure: key => key.Scopes = """["read_models"]""");
+        var errors = await QueryErrorsAsync(
+            "query Rules { promptProtectionRules(first: 10) { totalCount } }",
+            token: "sk-service-account");
+        Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task WriteOnlyMembersAreDeniedByTheInternalRuleReads()
+    {
+        var rule = _rules.Seed(record =>
+        {
+            record.Name = "existing";
+            record.Pattern = "secret";
+            record.Settings = """{"action":"reject"}""";
+        });
+        var token = await SeedMemberTokenAsync(
+            "writer@example.com",
+            scopes: """["write_channels"]""",
+            id: 74);
+
+        // CreateRule's name lookup runs through the query policy.
+        var create = await QueryErrorsAsync(
+            """
+            mutation Create($input: CreatePromptProtectionRuleInput!) {
+              createPromptProtectionRule(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    name = "fresh",
+                    pattern = "secret",
+                    settings = new { action = "reject" },
+                },
+            },
+            token);
+        Assert.Equal("permission denied", create[0].GetProperty("message").GetString());
+        Assert.Single(_rules.Rows);
+
+        // UpdateRule's re-read does too.
+        var update = await QueryErrorsAsync(
+            """
+            mutation Update($id: ID!, $input: UpdatePromptProtectionRuleInput!) {
+              updatePromptProtectionRule(id: $id, input: $input) { id }
+            }
+            """,
+            new { id = Gid(rule.Id), input = new { name = "renamed" } },
+            token);
+        Assert.Equal("permission denied", update[0].GetProperty("message").GetString());
+        Assert.Equal("existing", rule.Name);
+
+        // Status, bulk status and delete have no internal read, so the write
+        // policy allows a write-only member.
+        var status = await QueryDataAsync(
+            """
+            mutation Status($id: ID!, $status: PromptProtectionRuleStatus!) {
+              updatePromptProtectionRuleStatus(id: $id, status: $status)
+            }
+            """,
+            new { id = Gid(rule.Id), status = "enabled" },
+            token);
+        Assert.True(status.GetProperty("updatePromptProtectionRuleStatus").GetBoolean());
+        Assert.Equal("enabled", rule.Status);
+
+        var deleted = await QueryDataAsync(
+            """
+            mutation Delete($ids: [ID!]!) {
+              bulkDeletePromptProtectionRules(ids: $ids)
+            }
+            """,
+            new { ids = new[] { Gid(rule.Id) } },
+            token);
+        Assert.True(deleted.GetProperty("bulkDeletePromptProtectionRules").GetBoolean());
+        Assert.NotEqual(0, rule.DeletedAt);
+
+        // An empty bulk list short-circuits before the empty ent mutation runs,
+        // so even a scope-less member gets true instead of a deny.
+        var plainToken = await SeedMemberTokenAsync(
+            "plain@example.com",
+            scopes: null,
+            id: 75);
+        var empty = await QueryDataAsync(
+            "mutation Delete { bulkDeletePromptProtectionRules(ids: []) }",
+            token: plainToken);
+        Assert.True(empty.GetProperty("bulkDeletePromptProtectionRules").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ReadOnlyMembersCannotWriteRules()
+    {
+        var rule = _rules.Seed(record =>
+        {
+            record.Name = "existing";
+            record.Pattern = "secret";
+            record.Settings = """{"action":"reject"}""";
+        });
+        var token = await SeedMemberTokenAsync(
+            "reader@example.com",
+            scopes: """["read_channels"]""",
+            id: 76);
+
+        // The duplicate check runs before the write policy, so a read-only
+        // member sees the coded duplicate error rather than permission denied.
+        var duplicate = await QueryErrorsAsync(
+            """
+            mutation Create($input: CreatePromptProtectionRuleInput!) {
+              createPromptProtectionRule(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    name = "existing",
+                    pattern = "secret",
+                    settings = new { action = "reject" },
+                },
+            },
+            token);
+        Assert.Equal(
+            "prompt protection rule name 'existing' already exists",
+            duplicate[0].GetProperty("message").GetString());
+        Assert.Equal(
+            "DUPLICATE_NAME",
+            duplicate[0].GetProperty("extensions").GetProperty("code").GetString());
+
+        var create = await QueryErrorsAsync(
+            """
+            mutation Create($input: CreatePromptProtectionRuleInput!) {
+              createPromptProtectionRule(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    name = "fresh",
+                    pattern = "secret",
+                    settings = new { action = "reject" },
+                },
+            },
+            token);
+        Assert.Equal("permission denied", create[0].GetProperty("message").GetString());
+        Assert.Single(_rules.Rows);
+
+        var update = await QueryErrorsAsync(
+            """
+            mutation Update($id: ID!, $input: UpdatePromptProtectionRuleInput!) {
+              updatePromptProtectionRule(id: $id, input: $input) { id }
+            }
+            """,
+            new { id = Gid(rule.Id), input = new { name = "renamed" } },
+            token);
+        Assert.Equal("permission denied", update[0].GetProperty("message").GetString());
+        Assert.Equal("existing", rule.Name);
+
+        var delete = await QueryErrorsAsync(
+            "mutation Delete($id: ID!) { deletePromptProtectionRule(id: $id) }",
+            new { id = Gid(rule.Id) },
+            token);
+        Assert.Equal("permission denied", delete[0].GetProperty("message").GetString());
+        Assert.Equal(0, rule.DeletedAt);
+
+        // Preview evaluates no rules, so it carries no schema policy.
+        var preview = await QueryDataAsync(
+            """
+            mutation Preview($input: PromptProtectionRulePreviewInput!) {
+              previewPromptProtectionRule(input: $input) { result hasMatch }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    pattern = "secret",
+                    testText = "my secret",
+                    settings = new { action = "reject" },
+                },
+            },
+            token);
+        Assert.True(
+            preview.GetProperty("previewPromptProtectionRule").GetProperty("hasMatch").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ValidationPrecedesTheRulePolicyOnCreateButNotOnUpdate()
+    {
+        var plainToken = await SeedMemberTokenAsync(
+            "plain@example.com",
+            scopes: null,
+            id: 77);
+
+        // CreateRule validates the pattern before its first read.
+        var invalid = await QueryErrorsAsync(
+            """
+            mutation Create($input: CreatePromptProtectionRuleInput!) {
+              createPromptProtectionRule(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    name = "broken",
+                    pattern = "(",
+                    settings = new { action = "reject" },
+                },
+            },
+            plainToken);
+        Assert.StartsWith(
+            "invalid regex pattern: ",
+            invalid[0].GetProperty("message").GetString());
+
+        // UpdateRule reads the row first, so the query policy denies before the
+        // effective settings are validated.
+        var rule = _rules.Seed(record =>
+        {
+            record.Name = "kept";
+            record.Pattern = "secret";
+            record.Settings = """{"action":"reject"}""";
+        });
+        var update = await QueryErrorsAsync(
+            """
+            mutation Update($id: ID!, $input: UpdatePromptProtectionRuleInput!) {
+              updatePromptProtectionRule(id: $id, input: $input) { id }
+            }
+            """,
+            new { id = Gid(rule.Id), input = new { pattern = "[" } },
+            plainToken);
+        Assert.Equal("permission denied", update[0].GetProperty("message").GetString());
+        Assert.Equal("secret", rule.Pattern);
+    }
+
+    [Fact]
+    public async Task MembersWithBothScopesCanManageRules()
+    {
+        var token = await SeedMemberTokenAsync(
+            "manager@example.com",
+            scopes: """["read_channels","write_channels"]""",
+            id: 78);
+
+        var created = await QueryDataAsync(
+            """
+            mutation Create($input: CreatePromptProtectionRuleInput!) {
+              createPromptProtectionRule(input: $input) { id name status }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    name = "managed",
+                    pattern = "secret",
+                    settings = new { action = "reject" },
+                },
+            },
+            token);
+        var node = created.GetProperty("createPromptProtectionRule");
+        var id = node.GetProperty("id").GetString();
+        Assert.Equal("managed", node.GetProperty("name").GetString());
+        Assert.Equal("disabled", node.GetProperty("status").GetString());
+
+        var updated = await QueryDataAsync(
+            """
+            mutation Update($id: ID!, $input: UpdatePromptProtectionRuleInput!) {
+              updatePromptProtectionRule(id: $id, input: $input) { id name }
+            }
+            """,
+            new { id, input = new { name = "renamed" } },
+            token);
+        Assert.Equal(
+            "renamed",
+            updated.GetProperty("updatePromptProtectionRule").GetProperty("name").GetString());
+
+        var deleted = await QueryDataAsync(
+            "mutation Delete($id: ID!) { deletePromptProtectionRule(id: $id) }",
+            new { id },
+            token);
+        Assert.True(deleted.GetProperty("deletePromptProtectionRule").GetBoolean());
+    }
+
     private static string Gid(long id) => "gid://axonhub/PromptProtectionRule/" + id;
 
-    private async Task<JsonElement> QueryDataAsync(string query, object? variables = null)
+    /// <summary>
+    /// Seeds a non-owner management user both in the JWT store and in the
+    /// scopes store the rule policy reads.
+    /// </summary>
+    private async Task<string> SeedMemberTokenAsync(string email, string? scopes, long id)
     {
-        var root = await ExecuteAsync(query, variables, token: null);
+        var member = _gate.Users.Add(user =>
+        {
+            user.Id = id;
+            user.Email = email;
+            user.Status = "activated";
+            user.IsOwner = false;
+        });
+
+        await _users.CreateAsync(
+            new UserRecord
+            {
+                Id = id,
+                Email = email,
+                Status = "activated",
+                IsOwner = false,
+                Scopes = scopes,
+            },
+            roleIds: null);
+
+        return _gate.IssueJwt(member);
+    }
+
+    private async Task<JsonElement> QueryDataAsync(
+        string query,
+        object? variables = null,
+        string? token = null)
+    {
+        var root = await ExecuteAsync(query, variables, token);
         Assert.False(root.TryGetProperty("errors", out var errors), errors.ToString());
         return root.GetProperty("data");
     }

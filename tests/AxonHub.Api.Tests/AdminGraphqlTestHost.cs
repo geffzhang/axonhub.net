@@ -122,8 +122,10 @@ internal sealed class AdminGraphqlGateServices
         services.AddScoped<IManagementIdentity, HttpContextManagementIdentity>();
 
         // Shared privacy seams: channel field gates and the summary/tag roots
-        // resolve them in every fixture (C014).
+        // resolve them in every fixture; the prompt-protection rule service
+        // resolves its schema policy the same way (C014).
         services.AddScoped<ChannelPrivacy>();
+        services.AddScoped<PromptProtectionRulePrivacy>();
         services.AddScoped<AuthorizationScope>();
     }
 
