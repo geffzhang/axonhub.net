@@ -985,6 +985,54 @@ public sealed class CodexOutboundExecutorTests
         Assert.Equal("all_turns", CodexJson.PathString(root, "reasoning", "context"));
     }
 
+    // ------------------------------------------------------------------
+    // Execution audit (C096)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void ApiKeyChannelAuditTracksTheTokenItSends()
+    {
+        var outbound = new CodexOutboundTransformer(new CodexOutboundParams
+        {
+            BaseUrl = "https://upstream.example",
+            TokenProvider = new StaticCodexTokenGetter
+            {
+                Creds = CodexTestSupport.Credentials("sk-codex-key"),
+            },
+            AuditApiKey = true,
+            ChannelApiKeyIndex = 2,
+        });
+
+        Assert.Null(outbound.SelectedApiKey);
+        Assert.Equal(2, outbound.SelectedApiKeyIndex);
+
+        var request = outbound.TransformRequest(new LlmRequest
+        {
+            Model = "gpt-5.4",
+            ApiFormat = ApiFormats.OpenAIResponse,
+            Messages = [new Message { Role = "user", Content = MessageContent.FromText("hi") }],
+        });
+
+        Assert.Equal("sk-codex-key", outbound.SelectedApiKey);
+        Assert.Equal("sk-codex-key", request.Auth?.ApiKey);
+    }
+
+    [Fact]
+    public void OAuthChannelIsNotAudited()
+    {
+        var outbound = CodexTestSupport.NewTestCodexOutbound();
+
+        outbound.TransformRequest(new LlmRequest
+        {
+            Model = "gpt-5.4",
+            ApiFormat = ApiFormats.OpenAIResponse,
+            Messages = [new Message { Role = "user", Content = MessageContent.FromText("hi") }],
+        });
+
+        Assert.Null(outbound.SelectedApiKey);
+        Assert.Null(outbound.SelectedApiKeyIndex);
+    }
+
     private static CodexOutboundTransformer NewPassThroughOutbound()
         => new(new CodexOutboundParams
         {

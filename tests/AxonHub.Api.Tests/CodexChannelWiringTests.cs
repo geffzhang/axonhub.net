@@ -138,6 +138,58 @@ public sealed class CodexChannelWiringTests
     }
 
     [Fact]
+    public void CodexApiKeyChannelAuditsTheKeyItSends()
+    {
+        // buildCodexOutbound's key branch wraps getAPIKeyProvider in
+        // ChannelAPIKeyContextProvider, which is what the execution audit reads
+        // (C096).
+        var transformer = Create(Candidate(ChannelOutboundFactory.CodexChannelType), Request(ApiFormats.OpenAIResponse));
+        Assert.Null(transformer.SelectedApiKey);
+
+        var httpRequest = transformer.TransformRequest(new LlmRequest
+        {
+            Model = "gpt-5.4",
+            ApiFormat = ApiFormats.OpenAIResponse,
+            Messages = [new Message { Role = "user", Content = new MessageContent { Content = "hi" } }],
+        });
+
+        Assert.Equal("sk-codex", transformer.SelectedApiKey);
+        Assert.Equal("sk-codex", httpRequest.Auth?.ApiKey);
+        Assert.Null(transformer.SelectedApiKeyIndex);
+    }
+
+    [Fact]
+    public void CodexOAuthChannelDoesNotAuditTheAccessToken()
+    {
+        const string Credentials = """
+            {
+              "oauth": {
+                "client_id": "codex-client",
+                "access_token": "oauth-access",
+                "refresh_token": "oauth-refresh",
+                "expires_at": "2030-01-01T00:00:00Z",
+                "token_type": "Bearer"
+              }
+            }
+            """;
+
+        var transformer = Create(
+            Candidate(ChannelOutboundFactory.CodexChannelType, credentials: Credentials),
+            Request(ApiFormats.OpenAIResponse));
+
+        var httpRequest = transformer.TransformRequest(new LlmRequest
+        {
+            Model = "gpt-5.4",
+            ApiFormat = ApiFormats.OpenAIResponse,
+            Messages = [new Message { Role = "user", Content = new MessageContent { Content = "hi" } }],
+        });
+
+        Assert.Equal("oauth-access", httpRequest.Auth?.ApiKey);
+        Assert.Null(transformer.SelectedApiKey);
+        Assert.Null(transformer.SelectedApiKeyIndex);
+    }
+
+    [Fact]
     public void CodexOAuthObjectChannelUsesARefreshingTokenProvider()
     {
         const string Credentials = """

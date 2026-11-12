@@ -91,6 +91,34 @@ public sealed class ClaudeCodeAndOpenCodeChannelWiringTests
     }
 
     [Fact]
+    public void ClaudeCodeApiKeyChannelAuditsTheKeyItSends()
+    {
+        // channel_llm.go:974-975: the non-OAuth branch wraps the per-attempt
+        // key provider in ChannelAPIKeyContextProvider, which is what the
+        // execution audit reads (C096).
+        var transformer = CreateClaudeCode(ClaudeCodeApiKeyCredentials, Request());
+        Assert.Null(transformer.SelectedApiKey);
+
+        transformer.TransformRequest(Request());
+
+        Assert.Equal("sk-ant-api-key", transformer.SelectedApiKey);
+        Assert.Null(transformer.SelectedApiKeyIndex);
+    }
+
+    [Fact]
+    public void ClaudeCodeOAuthChannelDoesNotAuditTheAccessToken()
+    {
+        // The OAuth branch never goes through getAPIKeyProvider, so its token
+        // is not a channel key and stays out of the audit row.
+        var transformer = CreateClaudeCode(ClaudeCodeOAuthCredentials, Request());
+
+        transformer.TransformRequest(Request());
+
+        Assert.Null(transformer.SelectedApiKey);
+        Assert.Null(transformer.SelectedApiKeyIndex);
+    }
+
+    [Fact]
     public void ClaudeCodeApiKeyChannelDoesNotApplyTheOfficialToolPrefix()
     {
         // IsOfficial=false for key channels, so tools are forwarded unchanged and

@@ -23,6 +23,10 @@ public sealed partial class CodexOutboundTransformer
         }
 
         var credentials = _tokens.Get(CancellationToken.None);
+        if (_auditApiKey)
+        {
+            _selectedApiKey = credentials.AccessToken;
+        }
 
         // The opaque body is replayed with only the routed model patched in.
         var body = RawJsonModelPatch.SetModel(llmRequest.AlphaSearch.Body, llmRequest.Model);

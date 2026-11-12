@@ -1432,13 +1432,17 @@ public static class ChannelOutboundFactory
 
         if (!ChannelCredentials.IsOAuth(candidate.Credentials))
         {
-            // Non-OAuth: use the API key provider for multi-key rotation.
+            // Non-OAuth: use the API key provider for multi-key rotation. The
+            // reference wraps this provider in ChannelAPIKeyContextProvider, so
+            // the execution audit records the key actually sent (C096).
             return new ClaudeCodeOutboundTransformer(new ClaudeCodeParams
             {
                 TokenProvider = new ApiKeyTokenProvider(_ => apiKeyProvider.Get()),
                 BaseUrl = baseUrl,
                 IsOfficial = false,
                 AccountIdentity = accountIdentity,
+                AuditApiKey = true,
+                ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
             });
         }
 
@@ -1689,6 +1693,10 @@ public static class ChannelOutboundFactory
         var alphaSearchPath = apiFormat == ApiFormats.OpenAIAlphaSearch ? endpointPath : string.Empty;
         var responsesPath = apiFormat == ApiFormats.OpenAIAlphaSearch ? string.Empty : endpointPath;
 
+        // Only key channels wrap the per-attempt key provider; OAuth channels
+        // refresh their own token and have no channel key to audit (C096).
+        var auditsApiKey = !ChannelCredentials.IsOAuth(candidate.Credentials);
+
         return new CodexOutboundTransformer(new CodexOutboundParams
         {
             TokenProvider = CreateCodexTokenProvider(
@@ -1709,6 +1717,8 @@ public static class ChannelOutboundFactory
             // (C062). Both are null until the inbound layer captures one.
             SessionIdProvider = () => request.RawRequest?.SessionId,
             SessionScopeProvider = () => request.RawRequest?.SessionScope,
+            AuditApiKey = auditsApiKey,
+            ChannelApiKeyIndex = auditsApiKey ? apiKeyProvider.KeyIndex : null,
         });
     }
 

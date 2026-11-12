@@ -443,6 +443,43 @@ public sealed class ClaudeCodeOutboundTransformerTests
     }
 
     // ------------------------------------------------------------------
+    // Execution audit (C096)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void ApiKeyChannelAuditTracksTheTokenItSends()
+    {
+        var transformer = new ClaudeCodeOutboundTransformer(new ClaudeCodeParams
+        {
+            TokenProvider = new StaticTokenGetter("sk-ant-api-key"),
+            AccountIdentity = "42",
+            AuditApiKey = true,
+            ChannelApiKeyIndex = 2,
+        });
+
+        Assert.Null(transformer.SelectedApiKey);
+        Assert.Equal(2, transformer.SelectedApiKeyIndex);
+
+        var request = transformer.TransformRequest(SimpleRequest());
+
+        Assert.Equal("sk-ant-api-key", transformer.SelectedApiKey);
+        Assert.Equal("sk-ant-api-key", request.Auth?.ApiKey);
+    }
+
+    [Fact]
+    public void OAuthChannelIsNotAudited()
+    {
+        // The reference only publishes the wrapped API-key provider's key; an
+        // OAuth access token is not a channel key.
+        var transformer = Transformer();
+
+        transformer.TransformRequest(SimpleRequest());
+
+        Assert.Null(transformer.SelectedApiKey);
+        Assert.Null(transformer.SelectedApiKeyIndex);
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 

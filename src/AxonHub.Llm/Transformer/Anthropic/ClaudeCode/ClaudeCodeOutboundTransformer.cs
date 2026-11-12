@@ -2,6 +2,7 @@ using System.Text;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.OAuth;
 using AxonHub.Llm.Streams;
+using AxonHub.Llm.Transformer.OpenAI;
 
 namespace AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
 
@@ -19,6 +20,20 @@ public sealed class ClaudeCodeParams
 
     /// <summary>Stable channel identity for the deterministic fake user id.</summary>
     public string AccountIdentity { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Port-only (C096): record the token actually sent upstream so the request
+    /// execution can audit the selected channel key. The reference publishes it
+    /// through the wrapped API-key provider's context value; OAuth tokens are
+    /// not channel keys and are never audited.
+    /// </summary>
+    public bool AuditApiKey { get; set; }
+
+    /// <summary>
+    /// Port-only: 1-based index over the channel's full key list for the audit
+    /// row; null for single-key channels and non-audited tokens.
+    /// </summary>
+    public int? ChannelApiKeyIndex { get; set; }
 }
 
 /// <summary>
@@ -26,7 +41,7 @@ public sealed class ClaudeCodeParams
 /// messages outbound with Claude Code OAuth, headers, system message and tool
 /// prefix conventions.
 /// </summary>
-public sealed class ClaudeCodeOutboundTransformer : IOutboundTransformer
+public sealed class ClaudeCodeOutboundTransformer : IOutboundTransformer, IApiKeyProvenance
 {
     private const string DefaultBaseUrl = "https://api.anthropic.com/v1";
 
@@ -34,6 +49,11 @@ public sealed class ClaudeCodeOutboundTransformer : IOutboundTransformer
     private readonly ITokenGetter _tokens;
     private readonly bool _isOfficial;
     private readonly string _accountIdentity;
+    private readonly bool _auditApiKey;
+    private readonly int? _channelApiKeyIndex;
+
+    /// <summary>The token the latest TransformRequest sent; null when not audited.</summary>
+    private string? _selectedApiKey;
 
     /// <summary>Port of NewOutboundTransformer.</summary>
     public ClaudeCodeOutboundTransformer(ClaudeCodeParams parameters)
@@ -65,9 +85,15 @@ public sealed class ClaudeCodeOutboundTransformer : IOutboundTransformer
         _tokens = parameters.TokenProvider;
         _isOfficial = parameters.IsOfficial;
         _accountIdentity = parameters.AccountIdentity;
+        _auditApiKey = parameters.AuditApiKey;
+        _channelApiKeyIndex = parameters.ChannelApiKeyIndex;
     }
 
     public string ApiFormat => ApiFormats.AnthropicMessage;
+
+    public string? SelectedApiKey => _selectedApiKey;
+
+    public int? SelectedApiKeyIndex => _channelApiKeyIndex;
 
     /// <summary>Port of TransformRequest.</summary>
     public HttpRequestData TransformRequest(LlmRequest? request)
@@ -111,6 +137,10 @@ public sealed class ClaudeCodeOutboundTransformer : IOutboundTransformer
         }
 
         var apiKey = credentials.AccessToken;
+        if (_auditApiKey)
+        {
+            _selectedApiKey = apiKey;
+        }
 
         // Structured transformations before serialization.
         requestCopy = ClaudeCodeUtils.DisableThinkingIfToolChoiceForced(requestCopy);

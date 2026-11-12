@@ -1156,6 +1156,45 @@ Grains / Llm 本轮未改动，沿用实测 376 / 177 / 3110，四项目合计 9
 台账：C104 / C105 / C158 的残余与 decision 更新（C158 ②关闭），C014 补记 §179 接线；
 269 条（196 accepted / 6 gap / 67 resolved），lint 通过，`02-differences.md` 已重新生成。
 
+§180（2026-11-12）关闭 C096 (7)：claudecode 与 codex 的 api-key 出站补上执行 key 审计。
+参照由 `getAPIKeyProvider`（channel_llm.go:169-184）把实际发送的 key 包进
+`ChannelAPIKeyContextProvider` 发布到 ctx，`CreateRequestExecution` 据此写
+`request_executions.channel_api_key_suffix` / `channel_api_key_index`；端口从出站的
+`IApiKeyProvenance` 读取，而 claudecode 与 codex 此前没有实现该接缝（codex 的
+alpha-search 请求同样发送 Bearer key）。
+
+实现：`ClaudeCodeParams` / `CodexOutboundParams` 增加端口专用的 `AuditApiKey`（bool）与
+`ChannelApiKeyIndex`（int?）；`ClaudeCodeOutboundTransformer` 与
+`CodexOutboundTransformer` 实现 `IApiKeyProvenance`，在取到 `AccessToken` 后按
+`AuditApiKey` 记录实际写入 `Auth.ApiKey` 的 token（codex 的普通 Responses 路径与
+`CodexAlphaSearch` 各一处）。`ChannelOutboundFactory.CreateClaudeCodeOutbound` 的非 OAuth
+分支设置 `AuditApiKey = true`、`ChannelApiKeyIndex = apiKeyProvider.KeyIndex`；
+`CreateCodexOutbound` 以 `!ChannelCredentials.IsOAuth(...)` 决定同样的两项（codex 与
+fenno 的非 OAuth 分支共用）。OAuth 分支保持不审计：参照的 OAuth 路径不经过
+`getAPIKeyProvider`，访问令牌不是通道 key；索引沿用 `ChannelApiKeyProvider.KeyIndex`
+（全量 key 列表的 1-based 位置，单 key 或不在列表时为 null）。
+
+测试：新增 11 例。Llm 5 例（`ClaudeCodeOutboundTransformerTests` 2：审计记录 / OAuth
+不审计；`CodexOutboundExecutorTests` 2：同上；`CodexAlphaSearchTests` 1：alpha-search
+审计）。Api 6 例（`ClaudeCodeAndOpenCodeChannelWiringTests` 2、
+`CodexChannelWiringTests` 2、`ChannelApiKeyAuditTests` 2 例端到端断言后缀与 1-based
+索引，覆盖 claudecode 与 codex 多 key 通道）。
+
+本轮实测：`AxonHub.Llm.Tests` 3115 通过 / 0 失败 / 0 跳过（§179 的 3110 + 5）；
+`AxonHub.Api.Tests` 定向 45 例通过（上述三个改动类），全量未跑——应要求停掉本轮
+全量（约 24 分钟），并按本节起采用的分层验收策略顺延。Persistence / Grains 未改动，
+沿用 376 / 177；`AxonHub.Api.Tests` 静态计数 6157（6151 + 6），四项目合计 9825，
+等待下一次全量复核。
+
+分层验收策略（自 §180 起）：每次切片跑受影响项目的定向测试，Llm 类切片同时跑
+`AxonHub.Llm.Tests` 全量（秒级）；`AxonHub.Api.Tests` 全量只在以下情形触发：改动
+编排中间件 / 请求管线 / 持久化落库 / DI 与宿主启动 / 共享序列化等横切面，跨多个通道
+家族的共享代码，连续 3–5 个切片未跑，或发布前收口。定向失败或全量失败时先单类重跑，
+以区分 §103 记录的 testhost 随机崩溃与真实回归。
+
+台账：C096 (7) 关闭、C013 的审计用例数更新，lint 通过，`02-differences.md` 已重新生成；
+269 条（196 accepted / 6 gap / 67 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

@@ -46,6 +46,20 @@ public sealed class CodexOutboundParams
 
     /// <summary>Port-only seam for <c>shared.GetSessionScope(ctx)</c> (difference C062).</summary>
     public Func<string?>? SessionScopeProvider { get; set; }
+
+    /// <summary>
+    /// Port-only (C096): record the access token actually sent upstream so the
+    /// request execution can audit the selected channel key. The reference
+    /// publishes it through the wrapped API-key provider's context value; OAuth
+    /// tokens are not channel keys and are never audited.
+    /// </summary>
+    public bool AuditApiKey { get; set; }
+
+    /// <summary>
+    /// Port-only: 1-based index over the channel's full key list for the audit
+    /// row; null for single-key channels and non-audited tokens.
+    /// </summary>
+    public int? ChannelApiKeyIndex { get; set; }
 }
 
 /// <summary>
@@ -54,9 +68,9 @@ public sealed class CodexOutboundParams
 /// requests accordingly; compatible relays that return a completed JSON
 /// response are also supported for non-stream callers.
 /// </summary>
-public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPassThroughBodyPolicy,
-    ITransportRequestFinalizer, IChannelCustomizedExecutor, ISupportsCodexResponseHeaders,
-    IStoppableOutbound
+public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IApiKeyProvenance,
+    IPassThroughBodyPolicy, ITransportRequestFinalizer, IChannelCustomizedExecutor,
+    ISupportsCodexResponseHeaders, IStoppableOutbound
 {
     internal const string CodexBaseUrl = "https://chatgpt.com/backend-api/codex#";
 
@@ -90,6 +104,12 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
     /// <summary>The existing Responses outbound reused for payload building.</summary>
     private readonly ResponsesOutboundTransformer _responsesOutbound;
     private readonly Func<string?>? _sessionIdProvider;
+
+    private readonly bool _auditApiKey;
+    private readonly int? _channelApiKeyIndex;
+
+    /// <summary>The token the latest TransformRequest sent; null when not audited.</summary>
+    private string? _selectedApiKey;
 
 
     public CodexOutboundTransformer(CodexOutboundParams parameters)
@@ -149,12 +169,18 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
         _imageMainModel = imageMainModel;
         _official = official;
         _sessionIdProvider = parameters.SessionIdProvider;
+        _auditApiKey = parameters.AuditApiKey;
+        _channelApiKeyIndex = parameters.ChannelApiKeyIndex;
     }
 
     /// <summary>Port of codex.OutboundTransformer.APIFormat (outbound.go:154-159).</summary>
     public string ApiFormat => _transport == ResponsesOutboundTransformer.TransportWebSocket
         ? ApiFormats.OpenAIResponseWebSocket
         : ApiFormats.OpenAIResponse;
+
+    public string? SelectedApiKey => _selectedApiKey;
+
+    public int? SelectedApiKeyIndex => _channelApiKeyIndex;
 
     /// <summary>Port of <c>TokenProvider()</c>.</summary>
     public ITokenGetter TokenProvider => _tokens;
@@ -348,6 +374,10 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IPa
         }
 
         var creds = _tokens.Get(CancellationToken.None);
+        if (_auditApiKey)
+        {
+            _selectedApiKey = creds.AccessToken;
+        }
 
         // Parse the account id from the access token JWT.
         var accountId = CodexUtils.ExtractChatGptAccountIdFromJwt(creds.AccessToken);

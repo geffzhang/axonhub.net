@@ -97,6 +97,39 @@ public sealed class CodexAlphaSearchTests
         Assert.Equal("mapped-model", CodexJson.PathString(requestBody, "model"));
     }
 
+    [Fact]
+    public void AlphaSearchAuditsTheTokenItSends()
+    {
+        var accessToken = CodexTestSupport.TestAccessTokenWithAccountId();
+        var outbound = new CodexOutboundTransformer(new CodexOutboundParams
+        {
+            BaseUrl = CodexOutboundTransformer.CodexBaseUrl,
+            TokenProvider = new StaticCodexTokenGetter
+            {
+                Creds = CodexTestSupport.Credentials(accessToken),
+            },
+            AuditApiKey = true,
+            ChannelApiKeyIndex = 2,
+        });
+
+        Assert.Null(outbound.SelectedApiKey);
+
+        outbound.TransformRequest(new LlmRequest
+        {
+            Model = "mapped-model",
+            RequestType = RequestTypes.AlphaSearch,
+            ApiFormat = ApiFormats.OpenAIAlphaSearch,
+            AlphaSearch = new AlphaSearchRequest
+            {
+                Body = Encoding.UTF8.GetBytes(
+                    """{"id":"body-session","model":"client-model"}"""),
+            },
+        });
+
+        Assert.Equal(accessToken, outbound.SelectedApiKey);
+        Assert.Equal(2, outbound.SelectedApiKeyIndex);
+    }
+
     private static CodexOutboundTransformer NewAlphaSearchTestTransformer(
         Func<string?>? sessionId = null)
         => new(new CodexOutboundParams

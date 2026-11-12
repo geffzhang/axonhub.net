@@ -1,3 +1,4 @@
+using System.Text;
 using AxonHub.Abstractions;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
@@ -70,6 +71,35 @@ public sealed class ChannelApiKeyAuditTests(GrainClusterFixture fixture)
         Assert.True(index >= 0, "upstream key " + key + " is not one of the configured keys");
         return index + 1;
     }
+
+    private static HttpResponseData AnthropicCompletion(string model) => new()
+    {
+        StatusCode = 200,
+        Headers = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            ["Content-Type"] = ["application/json"],
+        },
+        Body = Encoding.UTF8.GetBytes(
+            "{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\""
+            + model
+            + "\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}],"
+            + "\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"),
+    };
+
+    private static HttpResponseData CodexCompletion(string model) => new()
+    {
+        StatusCode = 200,
+        Headers = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            ["Content-Type"] = ["application/json"],
+        },
+        Body = Encoding.UTF8.GetBytes(
+            "{\"id\":\"resp_test\",\"object\":\"response\",\"created_at\":1700000000,"
+            + "\"status\":\"completed\",\"model\":\""
+            + model
+            + "\",\"output\":[{\"id\":\"msg_test\",\"type\":\"message\",\"status\":\"completed\","
+            + "\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}]}"),
+    };
 
     [Fact]
     public async Task MultiKeyAttemptRecordsTheSuffixAndIndexItSent()
@@ -216,6 +246,73 @@ public sealed class ChannelApiKeyAuditTests(GrainClusterFixture fixture)
         var execution = Assert.Single(recorder.Executions);
         Assert.Equal(sentKey[^4..], execution.ChannelApiKeySuffix);
         Assert.Equal(IndexOfKey(sentKey, OAuthKeys), execution.ChannelApiKeyIndex);
+    }
+
+    [Fact]
+    public async Task ClaudeCodeKeyChannelAuditsTheKeyItSends()
+    {
+        // channel_llm.go:973-975: the claudecode non-OAuth branch wraps its key
+        // provider in ChannelAPIKeyContextProvider, so requests sent through it
+        // are audited exactly like the OpenAI-family channels (C096).
+        string[] allKeys = ["sk-claude-aaaa", "sk-claude-bbbb"];
+        fixture.Channels.Set(Channel(
+            7110,
+            "key-audit-claudecode",
+            "{\"apiKeys\":[\"sk-claude-aaaa\",\"sk-claude-bbbb\"]}") with
+        {
+            Type = "claudecode",
+        });
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => AnthropicCompletion("key-audit-claudecode"),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+
+        var result = await NewOrchestrator(executor, recorder)
+            .ProcessAsync(TestChannels.ChatRequest("key-audit-claudecode"));
+
+        Assert.Equal(200, result.Response!.StatusCode);
+
+        var sentKey = SentKey(Assert.Single(executor.Requests));
+        Assert.Contains(sentKey, allKeys);
+
+        var execution = Assert.Single(recorder.Executions);
+        Assert.Equal(sentKey[^4..], execution.ChannelApiKeySuffix);
+        Assert.Equal(IndexOfKey(sentKey, allKeys), execution.ChannelApiKeyIndex);
+    }
+
+    [Fact]
+    public async Task CodexKeyChannelAuditsTheKeyItSends()
+    {
+        // buildCodexOutbound uses the same wrapped key provider as the codex
+        // OAuth-free path, so the audit row carries the key it sent (C096).
+        string[] allKeys = ["sk-codex-aaaa", "sk-codex-bbbb"];
+        fixture.Channels.Set(Channel(
+            7111,
+            "key-audit-codex",
+            "{\"apiKeys\":[\"sk-codex-aaaa\",\"sk-codex-bbbb\"]}") with
+        {
+            Type = "codex",
+        });
+
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => CodexCompletion("key-audit-codex"),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+
+        var result = await NewOrchestrator(executor, recorder)
+            .ProcessAsync(TestChannels.ChatRequest("key-audit-codex"));
+
+        Assert.Equal(200, result.Response!.StatusCode);
+
+        var sentKey = SentKey(Assert.Single(executor.Requests));
+        Assert.Contains(sentKey, allKeys);
+
+        var execution = Assert.Single(recorder.Executions);
+        Assert.Equal(sentKey[^4..], execution.ChannelApiKeySuffix);
+        Assert.Equal(IndexOfKey(sentKey, allKeys), execution.ChannelApiKeyIndex);
     }
 
     [Fact]
