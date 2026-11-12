@@ -1195,6 +1195,43 @@ fenno 的非 OAuth 分支共用）。OAuth 分支保持不审计：参照的 OAu
 台账：C096 (7) 关闭、C013 的审计用例数更新，lint 通过，`02-differences.md` 已重新生成；
 269 条（196 accepted / 6 gap / 67 resolved）。
 
+§181（2026-11-12）收口 C097 (6)：全量移植 `llm/modelname/model.go` 的上游模型名提取。
+参照的 `FromResponse` / `FromEvent` 按请求的 API format 分派：非流式响应取协议元数据
+（Anthropic、Responses 与 Responses Compact / 图片生成的顶层 `model`；Gemini 与 Gemini
+Embedding 的 `modelVersion`，缺失时再取 `response.modelVersion`；OpenAI chat / legacy
+completion / Ollama chat 的 `model`；Cline 信封在 `success` 为布尔真时取 `data.model`；
+Decisions / Embedding / Moderation / ImageVariation / TypeSafe / Transcription /
+Translation / Video / Jina Embedding / Jina Rerank / Seedance / Zenmux Video 的仅非流式
+`model`），流式事件只从生命周期事件读取（Anthropic `message_start` 的 `message.model`、
+Responses 七个生命周期事件 `response.created` / `in_progress` / `completed` / `incomplete` /
+`failed` / `cancelled` / `canceled` 的 `response.model`、Gemini 的 `modelVersion`），
+其余格式与事件一律为空。响应上记录的 `Request.APIFormat` 非空时覆盖执行格式；状态码
+>= 400 不取模型；transcription / translation 以 JSON media type 设闸（`application/json`
+或 `+json` 后缀）；`validModel` 的 512 字节、TrimSpace 非空与控制字符规则原样移植。
+
+实现：`RequestChainPersistenceMiddleware` 的 `EventModel` 保留“首事件取到非空值即停”的
+参照语义；`ResponseModel` 接入非流式成功与 `OnOutboundRawError` 两处落库；`ReportedModel`
+按上表逐分支移植，`FirstJsonModel` 支持 `message.model` / `response.model` 点路径并在值
+无效时回退下一路径，`IsJsonMediaType` 对应 Go 的 `mime.ParseMediaType`；无效 JSON、
+非对象根与空响应体返回空。删除重构后不再使用的 `ValidModel(JsonElement)` 重载。
+
+测试：`RequestChainModelNameTests` 由 4 例增至 29 例（19 Fact + 10 Theory）。新增 Anthropic
+`message_start` 嵌套模型与事件类型优先级、Responses 七个生命周期事件（Theory）与内容
+事件为空、codex 图片格式流、Gemini 两级 `modelVersion`、Responses 与 Anthropic 非流式、
+清单外格式（AiSDK / Speech）为空、transcription 的 text/plain 与 application/json /
+`+json` 三态、400 错误状态、请求格式覆盖、Cline 信封的 success 闸门、二进制音频块、
+数字 / 空白 / 控制字符 / 513 字节四类无效值。
+
+本轮实测：`AxonHub.Api.Tests` 6182 通过 / 0 失败 / 0 跳过（21m33s，全量重建运行），
+与 §180 静态计数 6157 + 25 一致；`AxonHub.Llm.Tests` 3115、`AxonHub.Persistence.Tests`
+376、`AxonHub.Grains.Tests` 177 未重跑，四项目合计 9850。定向 35 例（模型名 29 +
+`RequestChainPersistenceTests` 6）在删除死代码后复跑通过。
+
+台账：C097 (6) 关闭；`what` 记录非法 UTF-8 模型值的极窄残余（共享修复器把非法字节
+变为 U+FFFD 后接受，参照 gjson 原样返回后被 `validModel` 的 UTF-8 检查拒绝，沿用 C008
+的修复策略、无测试）；lint 通过，`02-differences.md` 已重新生成；269 条（196 accepted /
+6 gap / 67 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

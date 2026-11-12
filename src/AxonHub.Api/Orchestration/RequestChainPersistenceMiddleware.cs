@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using AxonHub.Api.Auth;
@@ -276,7 +277,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
         {
             var now = _timeProvider.GetUtcNow();
             var rawResponse = attempt.RawResponse;
-            var upstreamModel = RequestChainPayloads.ReportedModel(rawResponse?.Body);
+            var upstreamModel = RequestChainPayloads.ResponseModel(rawResponse, attempt.ApiFormat);
 
             _recorder.UpdateExecutionResult(
                 attempt.ExecutionId,
@@ -319,7 +320,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware
                 attempt.ExecutionId,
                 StatusFailed,
                 RequestChainPayloads.ErrorStatusCode(classified),
-                NullIfEmpty(RequestChainPayloads.ReportedModel(attempt.RawResponse?.Body)),
+                NullIfEmpty(RequestChainPayloads.ResponseModel(attempt.RawResponse, attempt.ApiFormat)),
                 RequestChainPayloads.ErrorMessage(classified),
                 null,
                 null,
@@ -1310,31 +1311,57 @@ internal static class RequestChainPayloads
     }
 
     /// <summary>
-    /// Port of modelname.FromEvent for the formats that report a top-level
-    /// <c>model</c>: OpenAI chat, legacy completions and Ollama chat. The first
-    /// event that carries a valid name wins. Binary audio chunks carry no
-    /// metadata.
+    /// Port of modelname.FromEvent (llm/modelname/model.go:61-67): the model a
+    /// provider stream event reports, dispatched on the request's API format.
+    /// The first event that yields a valid name wins. Nil events and binary
+    /// audio chunks carry no metadata.
     /// </summary>
-    public static string EventModel(StreamEvent streamEvent, string apiFormat)
+    public static string EventModel(StreamEvent? streamEvent, string apiFormat)
     {
-        if (apiFormat is not (ApiFormats.OpenAIChatCompletion
-                or ApiFormats.OpenAICompletion
-                or ApiFormats.OllamaChat)
-            || streamEvent.IsBinaryAudioChunk())
+        if (streamEvent is null || streamEvent.IsBinaryAudioChunk())
         {
             return string.Empty;
         }
 
-        return ReportedModel(streamEvent.Data);
+        return ReportedModel(streamEvent.Data, apiFormat, streamEvent.Type, stream: true);
     }
 
     /// <summary>
-    /// Port of modelname's top-level <c>model</c> path, shared by the OpenAI
-    /// chat / legacy completion and Ollama chat formats: the reported model in
-    /// the provider body (Cline's success/data envelope is unwrapped),
-    /// validated like jsonModel.
+    /// Port of modelname.FromResponse (llm/modelname/model.go:44-58): the model
+    /// a non-streaming provider response reports. Error responses carry no
+    /// upstream model; a request-level API format wins over the execution
+    /// format; transcription/translation bodies are gated on a JSON media type
+    /// because their payload is text-bearing content that may coincide with
+    /// JSON.
     /// </summary>
-    public static string ReportedModel(byte[]? body)
+    public static string ResponseModel(HttpResponseData? response, string apiFormat)
+    {
+        if (response is null || response.StatusCode >= 400)
+        {
+            return string.Empty;
+        }
+
+        if (response.Request is { ApiFormat.Length: > 0 } request)
+        {
+            apiFormat = request.ApiFormat;
+        }
+
+        if ((apiFormat is ApiFormats.OpenAITranscription or ApiFormats.OpenAITranslation)
+            && !IsJsonMediaType(HttpClientUtils.HeaderGet(response.Headers, "Content-Type")))
+        {
+            return string.Empty;
+        }
+
+        return ReportedModel(response.Body, apiFormat, string.Empty, stream: false);
+    }
+
+    /// <summary>
+    /// Port of modelname.reportedModel (llm/modelname/model.go:69-121). The
+    /// body must be a JSON object and the name must sit on one of the
+    /// format-specific metadata paths; text-bearing endpoints and unknown
+    /// formats report nothing.
+    /// </summary>
+    private static string ReportedModel(byte[]? body, string apiFormat, string eventType, bool stream)
     {
         if (body is null || body.Length == 0)
         {
@@ -1351,21 +1378,144 @@ internal static class RequestChainPayloads
                 return string.Empty;
             }
 
-            if (root.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.True)
+            if (eventType.Length == 0)
             {
-                return root.TryGetProperty("data", out var data)
-                    && data.ValueKind == JsonValueKind.Object
-                    && data.TryGetProperty("model", out var envelopeModel)
-                    ? ValidModel(envelopeModel)
-                    : string.Empty;
+                eventType = JsonString(root, "type");
             }
 
-            return root.TryGetProperty("model", out var model) ? ValidModel(model) : string.Empty;
+            switch (apiFormat)
+            {
+                case ApiFormats.AnthropicMessage:
+                    if (!stream)
+                    {
+                        return FirstJsonModel(root, "model");
+                    }
+
+                    if (eventType == "message_start")
+                    {
+                        return FirstJsonModel(root, "message.model");
+                    }
+
+                    break;
+                case ApiFormats.OpenAIResponse:
+                case ApiFormats.OpenAIResponseCompact:
+                case ApiFormats.OpenAIImageGeneration:
+                case ApiFormats.OpenAIImageEdit:
+                    if (!stream)
+                    {
+                        return FirstJsonModel(root, "model");
+                    }
+
+                    // Codex preserves the image API format on requests while
+                    // returning Responses SSE. Only lifecycle metadata
+                    // identifies the reported model.
+                    if (eventType is "response.created" or "response.in_progress"
+                        or "response.completed" or "response.incomplete"
+                        or "response.failed" or "response.cancelled" or "response.canceled")
+                    {
+                        return FirstJsonModel(root, "response.model");
+                    }
+
+                    break;
+                case ApiFormats.GeminiContents:
+                case ApiFormats.GeminiEmbedding:
+                    return FirstJsonModel(root, "modelVersion", "response.modelVersion");
+                case ApiFormats.OpenAIChatCompletion:
+                case ApiFormats.OpenAICompletion:
+                case ApiFormats.OllamaChat:
+                    // Cline wraps an OpenAI-compatible response in a
+                    // success/data envelope.
+                    if (root.TryGetProperty("success", out var success)
+                        && success.ValueKind == JsonValueKind.True)
+                    {
+                        return FirstJsonModel(root, "data.model");
+                    }
+
+                    return FirstJsonModel(root, "model");
+                case ApiFormats.OpenAIDecisions:
+                    if (!stream)
+                    {
+                        return FirstJsonModel(root, "model");
+                    }
+
+                    break;
+                case ApiFormats.OpenAIEmbedding:
+                case ApiFormats.OpenAIModeration:
+                case ApiFormats.OpenAIImageVariation:
+                case ApiFormats.TypeSafeSystemOne:
+                case ApiFormats.OpenAITranscription:
+                case ApiFormats.OpenAITranslation:
+                case ApiFormats.OpenAIVideo:
+                case ApiFormats.JinaEmbedding:
+                case ApiFormats.JinaRerank:
+                case ApiFormats.SeedanceVideo:
+                case ApiFormats.ZenmuxVideo:
+                    if (!stream)
+                    {
+                        return FirstJsonModel(root, "model");
+                    }
+
+                    break;
+            }
+
+            return string.Empty;
         }
         catch (JsonException)
         {
             return string.Empty;
         }
+    }
+
+    /// <summary>
+    /// Port of modelname.jsonModel: the first dot-separated path that holds a
+    /// valid model string.
+    /// </summary>
+    private static string FirstJsonModel(JsonElement root, params string[] paths)
+    {
+        foreach (var path in paths)
+        {
+            var value = root;
+            var found = true;
+            foreach (var segment in path.Split('.'))
+            {
+                if (value.ValueKind != JsonValueKind.Object
+                    || !value.TryGetProperty(segment, out value))
+                {
+                    found = false;
+                    break;
+                }
+            }
+
+            if (found && value.ValueKind == JsonValueKind.String)
+            {
+                var model = ValidModel(value.GetString());
+                if (model.Length > 0)
+                {
+                    return model;
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string JsonString(JsonElement root, string name)
+        => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+
+    /// <summary>Port of the JSON media-type gate in modelname.FromResponse.</summary>
+    private static bool IsJsonMediaType(string contentType)
+    {
+        if (!MediaTypeHeaderValue.TryParse(contentType, out var mediaType))
+        {
+            return false;
+        }
+
+        var type = mediaType.MediaType;
+        return !string.IsNullOrEmpty(type)
+            && (type.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+                || type.EndsWith("+json", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Port of modelname.validModel.</summary>
@@ -1477,7 +1627,4 @@ internal static class RequestChainPayloads
 
         return error.Message;
     }
-
-    private static string ValidModel(JsonElement value)
-        => value.ValueKind == JsonValueKind.String ? ValidModel(value.GetString()) : string.Empty;
 }

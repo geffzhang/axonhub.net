@@ -1161,22 +1161,33 @@ Content-Type 选择（二进制 → NDJSON → SSE）；`ChannelOutboundFactory`
 `Authorization`；被禁用但已存储的 key 也不会被重新使用。另把
 `RequestChainPersistenceMiddleware.EventModel` 的格式分派补齐为 OpenAI chat /
 legacy completion / Ollama chat（参照 `llm/modelname.FromEvent`），使流式响应的
-`upstream_model_id` 与参照一致（4 例）。差异与残余缺口登记为 C097：
-NDJSON 取消以 `OperationCanceledException` 而非 `ctx.Err` 出现、`arguments` 数字
-字面量保真（参照经 float64 重编码）、`arguments` 非对象报文的宽容度、STJ 与 Go 的
-解码文案差异、能力/端点表未建模、`modelname` 响应模型名提取与 apiKeyOverride 未移植。
+`upstream_model_id` 与参照一致（4 例；§181 已扩展为全部 format，见下）。差异与残余
+缺口登记为 C097：NDJSON 取消以 `OperationCanceledException` 而非 `ctx.Err` 出现、
+`arguments` 数字字面量保真（参照经 float64 重编码）、`arguments` 非对象报文的宽容度、
+STJ 与 Go 的解码文案差异、能力/端点表未建模、apiKeyOverride 未移植。
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
 | `OllamaOutboundTransformer`：请求线格式（字段顺序、`stream` 恒显式、`options`、`images` 省略与 data-URL 剥离、工具与 `tool_calls` 的 Go map 排序往返、缺省 `{}` schema）、URL 与 `EndpointPath`、可选 Bearer、响应 / 流 / 聚合、`ollama_error`、校验与构造 | `tests/AxonHub.Llm.Tests/OllamaOutboundTransformerTests.cs` | 42 |
 | NDJSON 解码器与传输选择：逐行、空行、CRLF、EOF 残余、无额外空事件、读错误、`application/x-ndjson` 及其 charset 变体的路由 | `tests/AxonHub.Llm.Tests/HttpNdjsonEventStreamTests.cs` | 10 |
 | 通道接线：`ollama` / `ollama_anthropic` 的类型分派、无 key 建站、禁用 key 不发送、Bearer、`/v1/messages` 归一与 `num_predict` 映射 | `tests/AxonHub.Api.Tests/OllamaChannelWiringTests.cs` | 7 |
-| 流式模型名分派：OllamaChat / OpenAICompletion 的顶层 `model`、其它格式为空、Cline 信封仅在 `success` 为真时解包 | `tests/AxonHub.Api.Tests/RequestChainModelNameTests.cs` | 4 |
+| 模型名分派（§34 + §181）：FromEvent 的 OllamaChat / OpenAICompletion / Anthropic message_start / Responses 生命周期 / Gemini modelVersion / 二进制音频；FromResponse 的格式分派、JSON media-type 闸门、错误状态与 request-format 覆盖；Cline 信封仅在 `success` 为真时解包 | `tests/AxonHub.Api.Tests/RequestChainModelNameTests.cs` | 4 + 25（§181） |
 
 合计 63 例（Llm 52、Api 11）：`AxonHub.Llm.Tests` 由 1519 增至 1571，
 `AxonHub.Api.Tests` 由 960 增至 971，`AxonHub.Persistence.Tests` 保持 70，
 `AxonHub.Grains.Tests` 保持 92；四个项目合计 2641 增至 2704。C097 登记本切片的
 已接受差异与残余缺口（能力表 / 端点表、apiKeyOverride、其余 provider 通道）。
+
+2026-11-12 更新（§181）：`llm/modelname/model.go` 的 `FromResponse` / `FromEvent` /
+`reportedModel` / `jsonModel` / `validModel` 已全量移植到
+`RequestChainPersistenceMiddleware`（`EventModel` / `ResponseModel`）。非流式成功与
+失败落库改用 `ResponseModel`：错误状态不取模型、`response.Request.ApiFormat` 覆盖
+执行格式、transcription / translation 以 JSON media-type 设闸；`EventModel` 增加
+Anthropic `message_start` 的 `message.model`、Responses 生命周期事件（含图片格式）的
+`response.model`、Gemini 的 `modelVersion` / `response.modelVersion`，未知格式与二进制
+音频块保持为空。`RequestChainModelNameTests` 由 4 例增至 29 例（19 Fact + 10 Theory），
+`AxonHub.Api.Tests` 静态计数相应增加 25。C097 (6) 关闭；能力表 / 端点表与
+apiKeyOverride 仍属后续切片。
 
 ## 35. DeepSeek 通道接线（4 例，2026-11-01）
 
