@@ -494,11 +494,10 @@ public static class ChannelOutboundFactory
             // set is chat only (channel_endpoint.go:339). A custom
             // Anthropic-format endpoint would be served by the Command Code
             // anthropic outbound with Bearer auth (channel_llm.go:527-529),
-            // but the slice has no endpoint records (C082). Credential
-            // validation shares the generic enabled-keys check
-            // (channel_llm.go:683-688 behaves like the default case once the
-            // key-test override is absent; the port has no key-test flow,
-            // C014). The reference's error wrap is unreachable after the
+            // but the slice has no endpoint records (C082). The credential
+            // check above mirrors channel_llm.go:683-688: enabled keys or the
+            // key-test override (channel_llm.go:655-658), unlike the default
+            // case. The reference's error wrap is unreachable after the
             // credential check.
             CommandcodeChannelType => OpenAiOutboundTransformer.Create(
                 candidate.BaseUrl ?? string.Empty,

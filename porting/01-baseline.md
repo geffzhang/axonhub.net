@@ -3513,6 +3513,18 @@ failedCount / results [TestAPIKeyResult!]!），
 对 policies / disabled_api_keys 原始列宽松读取）；更新 C014（通道测试已接入，
 剩模型同步）与覆盖缺口表。
 
+2026-11-12 更新（§182）：通道 key 测试流的 `apiKeyOverride` 凭据语义由
+`ChannelApiKeyOverrideTests` 11 例锁定，§76 的接线从此有直接回归。强制 key 先
+`TrimSpace`，非空时覆盖已启用 key（`channel_llm.go:655-658`、`716`），空白 key
+等同没有 override；`ollama` / `ollama_anthropic` 在无存储 key 时凭 override 安装
+provider 并发送 Bearer（`channel_llm.go:1392-1428`，参照
+`TestOllamaAnthropicChannel_APIKeyOverrideWithoutStoredKeys`）；`commandcode` /
+`commandcode_anthropic` 的凭据检查接受 enabled key 或 override，空白 override 不
+满足检查（`channel_llm.go:683-688`）；default 类型仍要求至少一个 enabled 存储 key，
+override 不能替代（`channel_llm.go:691-693`）；override 的 1-based 审计索引仅在
+全量存储 key 列表（>1）中命中时写入，否则为 null（`request.go:414-421`）。C013 /
+C014 的“apiKeyOverride 未接入”描述同步纠正；C097 (7) 关闭。
+
 ## 77. 管理面 channels 模型同步切片（syncChannelModels / ModelFetcher，68 例，2026-11-03）
 
 `ModelFetcher` 按 `model_fetcher.go` / `model_fetcher_antigravity.go` 逐分支移植：

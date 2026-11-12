@@ -1232,6 +1232,36 @@ Responses 七个生命周期事件 `response.created` / `in_progress` / `complet
 的修复策略、无测试）；lint 通过，`02-differences.md` 已重新生成；269 条（196 accepted /
 6 gap / 67 resolved）。
 
+§182（2026-11-12）纠正 apiKeyOverride 的台账并补齐通道 key 测试流的凭据语义。
+§76 已把 `ChannelCandidate.ApiKeyOverride` 接到 `ChannelApiKeyProvider.ForOverride`，
+`ChannelOutboundFactory` 在构建出站前按参照先 `TrimSpace` 再应用；但 C013 / C014 /
+C097 (7) 仍写着“apiKeyOverride 未移植”，且参照的强制 key 分支没有直接端口测试。
+参照路线：`channel_llm.go:655-658`（TrimSpace 与仅非空才设置）、`:677-693`（按通道
+类型的凭据检查）、`:716`（override 写入通道）、`:1392-1428`（ollama /
+ollama_anthropic 的 override 感知 provider 守卫）、`request.go:414-421`（1-based
+审计索引仅在全量 key 列表命中时写入）。
+
+实现：工厂与 provider 无需改动（§76 / §164 已按参照实现），只纠正
+`ChannelOutboundFactory` 中“端口没有 key-test flow”的过时注释。新增
+`tests/AxonHub.Api.Tests/ChannelApiKeyOverrideTests.cs` 11 例：ollama /
+ollama_anthropic 无存储 key 时 override 安装 provider 并发送 Bearer（参照
+`TestOllamaAnthropicChannel_APIKeyOverrideWithoutStoredKeys` 的直接移植，另含原生
+ollama 的对称面）；空白 override 被 TrimSpace 成空、保持无认证；commandcode /
+commandcode_anthropic 的存储 key 全部禁用时 override 通过检查并按 TrimSpace 后的值
+发送 Bearer；空白 override 不满足命令码检查（missing api key）；default 类型
+（OpenAI）的 override 不能替代缺失的存储 key（`channel_llm.go:691-693`）；空白
+override 回退存储 key；override 命中存储列表时审计索引为 1-based 位置，不在列表时
+为 null。
+
+本轮实测：定向 136 例通过（新增 11 + `OllamaChannelWiringTests` 7 +
+`CommandcodeChannelWiringTests` 12 + `ChannelApiKeyStrategiesTests` 57 +
+`ChannelTestServiceTests` 49）；`AxonHub.Api.Tests` 未跑全量，静态计数 6182 → 6193，
+四项目合计 9850 → 9861（Llm 3115 / Persistence 376 / Grains 177 未重跑）。
+
+台账：C013 / C014 的 apiKeyOverride 描述纠正为“已由 §76 接线、§182 锁定”，C014
+补记 11 例；C097 (7) 关闭。lint 通过，`02-differences.md` 已重新生成；269 条
+（196 accepted / 6 gap / 67 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
