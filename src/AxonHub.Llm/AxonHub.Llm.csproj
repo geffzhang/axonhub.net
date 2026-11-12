@@ -11,4 +11,16 @@
          复现同一可见性，便于逐条移植 preReadLlmStream 等未导出行为的测试。 -->
     <InternalsVisibleTo Include="AxonHub.Llm.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- go:embed testdata/*（anthropic/fake.go、openai/fake.go）；显式 LogicalName
+         与资源读取常量一一对应。 -->
+    <EmbeddedResource Include="Transformer\Anthropic\TestData\anthropic-stop.response.json"
+                      LogicalName="AxonHub.Llm.Transformer.Anthropic.TestData.anthropic-stop.response.json" />
+    <EmbeddedResource Include="Transformer\Anthropic\TestData\anthropic-stop.stream.jsonl"
+                      LogicalName="AxonHub.Llm.Transformer.Anthropic.TestData.anthropic-stop.stream.jsonl" />
+    <EmbeddedResource Include="Transformer\OpenAI\TestData\openai-stop.response.json"
+                      LogicalName="AxonHub.Llm.Transformer.OpenAI.TestData.openai-stop.response.json" />
+    <EmbeddedResource Include="Transformer\OpenAI\TestData\openai-stop.stream.jsonl"
+                      LogicalName="AxonHub.Llm.Transformer.OpenAI.TestData.openai-stop.stream.jsonl" />
+  </ItemGroup>
 </Project>

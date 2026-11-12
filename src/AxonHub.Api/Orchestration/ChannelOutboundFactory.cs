@@ -221,6 +221,12 @@ public static class ChannelOutboundFactory
     // credentials and has no API keys.
     public const string AnthropicGcpChannelType = "anthropic_gcp";
 
+    // channel_llm.go:1089-1095, channel_endpoint.go:282-283: test-only fake
+    // channels serve embedded fixtures and take no credentials.
+    public const string AnthropicFakeChannelType = "anthropic_fake";
+
+    public const string OpenaiFakeChannelType = "openai_fake";
+
     // channel_llm.go:855-863: the xAI responses channel has exactly one
     // endpoint, the responses API (channel_endpoint.go:296).
     public const string XaiResponsesChannelType = "xai_responses";
@@ -307,7 +313,7 @@ public static class ChannelOutboundFactory
                 }
 
                 break;
-            case AnthropicGcpChannelType or "anthropic_fake" or "openai_fake":
+            case AnthropicGcpChannelType or AnthropicFakeChannelType or OpenaiFakeChannelType:
                 // anthropic_gcp uses GCP credentials; *_fake are test-only.
                 break;
             case OllamaChannelType or OllamaAnthropicChannelType:
@@ -608,6 +614,11 @@ public static class ChannelOutboundFactory
             // channel_llm.go:1069-1085: anthropic_gcp authenticates with the
             // channel's GCP credentials and rewrites requests for Vertex AI.
             AnthropicGcpChannelType => CreateAnthropicGcpOutbound(candidate),
+            // channel_llm.go:1089-1095: test-only fake channels wrap the real
+            // provider outbound but replace the transport with embedded
+            // testdata fixtures; credentials and base URL are ignored.
+            AnthropicFakeChannelType => new AnthropicFakeTransformer(),
+            OpenaiFakeChannelType => new OpenAiFakeTransformer(),
             // channel_llm.go:1277-1280: the OpenAI-compatible alias channels
             // share the plain OpenAI outbound (PlatformOpenAI). Their default
             // endpoint sets — openAICompatibleDefaultEndpoints

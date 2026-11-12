@@ -1608,6 +1608,29 @@ loader 优先实时 registry）。实测组合过滤 124 通过 / 0 失败（202
 收窄，新增 C279（accepted）；lint 通过；`02-differences.md` 已重新生成；279 条
 （204 accepted / 5 gap / 70 resolved）。
 
+§193（2026-11-13）接通 C126 的 anthropic_fake / openai_fake 测试通道。
+
+参照 llm/transformer/anthropic/fake.go、openai/fake.go、biz/channel_llm.go:1089-1095
+与 channel_endpoint.go:282-283。端口：
+
+- `src/AxonHub.Llm/Transformer/Anthropic/AnthropicFakeTransformer.cs`、
+  `OpenAI/OpenAiFakeTransformer.cs`：包装真实 provider outbound，CustomizeExecutor
+  丢弃传入传输并返回固定固件执行器；Do / DoStream 读取嵌入的 testdata，请求的 URL
+  与认证头仍由真实 outbound 生成。
+- `src/AxonHub.Llm/Transformer/FakeTestData.cs` 与 `AxonHub.Llm.csproj`：四个 fixture
+  （anthropic / openai 的 stop.response.json 与 stop.stream.jsonl）以显式 LogicalName
+  嵌入。
+- `src/AxonHub.Api/Orchestration/ChannelOutboundFactory.cs`：新增
+  AnthropicFakeChannelType / OpenaiFakeChannelType 常量、免凭据 fail-fast 分支与两路
+  dispatch（用户端点仍优先）。
+
+测试：新增 `tests/AxonHub.Llm.Tests/FakeTransformerTests.cs` 6 例（请求 URL / 认证头、
+响应体逐字节相等、流事件逐项相等、anthropic 10 事件、openai 68 事件与 [DONE]）与
+`tests/AxonHub.Api.Tests/FakeChannelWiringTests.cs` 2 例（空凭据工厂分派、自定义
+执行器接管网络传输）。实测 Llm 6 通过 / 0 失败、Api 2 通过 / 0 失败（2026-11-13）；
+`AxonHub.Api.Tests` 未跑全量。台账：C126 resolved；新增 C280（accepted）；lint 通过；
+`02-differences.md` 已重新生成；280 条（205 accepted / 4 gap / 71 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
