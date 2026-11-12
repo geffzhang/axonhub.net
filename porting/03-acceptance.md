@@ -1477,6 +1477,48 @@ expired_token / access_denied 删除并回 400，成功删除并回 complete，�
 进程内缓存与 C171）；lint 通过，`02-differences.md` 已重新生成；271 条（197
 accepted / 5 gap / 69 resolved）。
 
+§189（2026-11-12）收窄 C272：请求正文下载与预览两条辅助路由。
+
+参照 routes.go:145-152 在 admin group（JWT + WithProjectID）上挂载
+GET /admin/requests/:request_id/content（internal/server/api/request_content.go）
+与 GET /admin/requests/:request_id/preview（api/request_live.go）。端口新增
+`src/AxonHub.Api/Management/AdminRequestEndpointSupport.cs`（共享项目门、gin URI
+绑定文案、未加项目过滤的 requests 行读取与项目比对、filepath.Base 文件名、
+safeRelativePath / filepath.Join / FromSlash / Clean、gin FileAttachment 的
+Content-Disposition）、`RequestContentHandlers.cs` 与 `RequestPreviewHandlers.cs`；
+`Program.cs` 为 `/admin/requests` 挂同一 admin JWT + ProjectID 门并调用
+`MapRequestDetailRoutes()`。
+
+content：项目缺失或非正 → 400 Project ID not found in context；URI 绑定失败 →
+400 Invalid request body 加 strconv.ParseInt 文案；行缺失或跨项目 → 404 Request
+not found；未保存 / 空 key → 404 Content not found；key 必须是
+`/<project>/requests/<id>/` 前缀；存储行缺失 → 404 Content storage not found、
+读取异常 → 500；Primary 或 database → 400 Content storage is not file-based；
+fs+Directory 直读（safeRelativePath 拒绝 `.`、空、`..` 前缀）后按 gin 规则写
+Content-Disposition，缺失文件复刻 http.ServeFile 的 404 文本；其余存储经
+`IDataStorageBackendFactory`（fs 走 FromSlash、s3 path-style 去一个前导斜杠），
+读取失败一律 404 Content not found，成功写 Content-Length、`attachment;
+filename=%q`、application/octet-stream、Cache-Control: private, max-age=0,
+no-cache 后返回字节。preview：端口无 LiveStreamRegistry，processing+stream 与
+其余状态统一走静态回退，chunk 逐个按 Go json.Marshal 语义压缩并转义 HTML，
+`_ext` 标记按 loader 规则折叠；参照的 500 预览错误不可达。
+
+测试：`tests/AxonHub.Api.Tests/AdminRequestContentEndpointTests.cs` 39 例（19 个
+Fact + 9 个 Theory / 20 行）：两条路由的 JWT 门与项目门、gin URI 绑定文案（含
+value out of range）、未知与跨项目 404、请求读取 500、未保存内容矩阵、key 前缀、
+存储缺失与加载失败、primary / database 拒绝、fs 直读（精确 Content-Disposition、
+非 ASCII 的 filename*、目录穿越 404 与 ServeFile 文本）、fs 无 Directory / s3 /
+gcs 的后端 key 形状与响应头、后端构造 500 与读取 404、filename 引号转义、
+预览的持久化 chunk / 压缩 / 外部存储 chunk / processing 空列表。
+`FakeRequestStore` 增加 `GetByIdFailure`。
+
+本轮实测：新增 39 例通过（连同既有 AdminRequestsEndpointTests 定向过滤 44 例通过，
+耗时约 15 s）；`AxonHub.Api.Tests` 未跑全量。台账：C272 收窄为剩余 5 条路由
+（playground 2 条、openapi 组 3 条，仍为 gap）；新增 C273（accepted：Results.File
+的 MIME 表与条件请求细节、ServeFile 缺失/目录行为、整块读取的 Content-Length、
+预览对 `_ext` 标记的折叠）；lint 通过，`02-differences.md` 已重新生成；273 条
+（198 accepted / 6 gap / 69 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

@@ -51,8 +51,13 @@ internal sealed class FakeRequestStore : IRequestStore
     public Task<long> CreateAsync(RequestRecord request, CancellationToken cancellationToken = default)
         => Task.FromResult(Add(request).Id);
 
+    /// <summary>Simulates a failed row read (ent returns a non-NotFound error).</summary>
+    public Exception? GetByIdFailure { get; set; }
+
     public Task<RequestRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
-        => Task.FromResult(Rows.FirstOrDefault(row => row.Id == id));
+        => GetByIdFailure is null
+            ? Task.FromResult(Rows.FirstOrDefault(row => row.Id == id))
+            : Task.FromException<RequestRecord?>(GetByIdFailure);
 
     public Task<RequestRecord?> GetByExternalIdAndProjectAsync(
         string externalId,

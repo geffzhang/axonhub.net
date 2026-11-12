@@ -1061,6 +1061,24 @@ pending / slow_down / expired_token / access_denied 状态机。`ProxyExecutorFa
 进程内缓存）登记为 C271（accepted）。新增 178 例（服务 91、端点 87），定向
 `dotnet test` 全部通过。
 
+2026-11-12 更新（§189）：C272 收窄。参照 routes.go:145-152 的两条请求辅助路由已移植：
+`GET /admin/requests/:request_id/content`（api/request_content.go:40-167）与
+`GET /admin/requests/:request_id/preview`（api/request_live.go:97-163），挂在 admin
+JWT + WithProjectID 路由组（`Program.cs` 的 `/admin/requests` UseWhen 分支）。
+端口新增 `AdminRequestEndpointSupport`（项目门、gin `ShouldBindUri` 的
+`strconv.ParseInt` 文案、未加项目过滤的 `Request.Get` 与项目比对、`filepath.Base`
+文件名、`safeRelativePath` / `filepath.Join` / `FromSlash` / `Clean`、
+gin FileAttachment 的 Content-Disposition 规则）、`RequestContentHandlers`
+（content 全部分支：未保存 / key 前缀 / 存储缺失与加载失败 / primary 与 database
+拒绝 / fs+Directory 直读 / 其余经后端读取）、`RequestPreviewHandlers`（静态回退：
+持久化 chunk、外部存储 chunk、chunk 压缩与 HTML 转义、无 LiveStreamRegistry 时
+所有请求都走静态分支）。参照的 500「Failed to load request preview」不可达
+（`LoadResponseChunks` 只在 nil request 时返回错误），端口同样不产生。新增 39 例
+（28 个方法，Theory 展开后 39 例）：`tests/AxonHub.Api.Tests/AdminRequestContentEndpointTests.cs`。
+`FakeRequestStore` 增加 `GetByIdFailure` 以覆盖 500「Failed to load request」。
+实现差异（MIME 表与嗅探、ServeFile 条件请求细节、外部 `_ext` 标记的预览输出、
+整块读取的 Content-Length）登记为 C273（accepted）；实时 SSE 预览仍见 C192。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

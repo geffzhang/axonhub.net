@@ -934,6 +934,10 @@ app.MapClaudeCodeOAuthRoutes();
 // GitHub Copilot device flow (routes.go:127-128).
 app.MapCopilotOAuthRoutes();
 
+// Request detail helpers (routes.go:145-152): the binary content download and
+// the preview fallback.
+app.MapRequestDetailRoutes();
+
 // NewOIDCHandlers warns when providers are configured without a public URL
 // (api/oidc.go:36-41). An empty value still fails each flow at getBaseURL.
 if (oidcProviders.Count > 0 && oidcLoginOptions.PublicUrl.Length == 0)
@@ -1065,6 +1069,17 @@ app.UseWhen(
 // (routes.go:106,127-128).
 app.UseWhen(
     static context => context.Request.Path.StartsWithSegments("/admin/copilot"),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+    });
+
+// The request detail helpers (content download and preview) sit on the admin
+// group (routes.go:106,145-152): the same plain user-JWT gate and
+// WithProjectID.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/requests"),
     static branch =>
     {
         branch.UseMiddleware<AdminJwtAuthMiddleware>();
