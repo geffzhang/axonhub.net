@@ -219,7 +219,17 @@ public sealed class ChannelEndpointDetectService
         HttpRequestData httpRequest;
         try
         {
-            httpRequest = outbound.TransformRequest(BuildProbeRequest(apiFormat, model));
+            var probeRequest = BuildProbeRequest(apiFormat, model);
+            // channel_endpoint_detect.go:155 passes probeCtx to TransformRequest,
+            // so the probe deadline also bounds an OAuth token refresh (C094 (6)).
+            probeRequest.RequestCancellationToken = probeCts.Token;
+            httpRequest = outbound.TransformRequest(probeRequest);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The probe's own deadline fired inside TransformRequest; the
+            // reference turns any transform error into invalid.
+            return result with { Reason = ReasonInvalid };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

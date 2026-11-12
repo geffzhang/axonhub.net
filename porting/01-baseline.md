@@ -1000,6 +1000,18 @@ JSON 解码文案、日志与单飞原语差异；C094 登记 codex 的端点表
 持久化/自动刷新、代理感知 client、API 层 codex 响应头转发等真实缺口，并关闭 C091
 中的 codex `AllowPassThroughBody` 缺口。
 
+2026-11-12 更新（§183）：C094 (6) 关闭。管线把调用方的取消令牌放在统一请求的
+`LlmRequest.RequestCancellationToken`（port-only 接缝，镜像 C104 的
+`HttpRequestData.RequestCancellationToken`；`ShallowClone` 自动携带、`[JsonIgnore]`
+不序列化），`Pipeline.ProcessRequest` 在 outbound transform 前写入；
+`PersistentOutboundTransformer` 在 channel transform options 可能克隆请求后再次透传。
+codex / codex alpha search / claudecode / xai_subscription / antigravity 的
+`TokenProvider.Get` 改读该令牌（Go 的 `ctx`），客户端断开或刷新超时会中止刷新；
+端点探测按 `channel_endpoint_detect.go:155` 把 `probeCtx` 传给 `TransformRequest`，
+探测自身超时产生的 `OperationCanceledException` 归类为 invalid，外层取消仍传播。
+新增 7 + 2 例：`TransformRequestCancellationTests`（管线传递、五种 transformer 取令牌、
+令牌不序列化）与 `PersistentOutboundCancellationTests`（透传、克隆保留）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

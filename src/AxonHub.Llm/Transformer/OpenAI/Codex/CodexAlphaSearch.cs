@@ -22,7 +22,7 @@ public sealed partial class CodexOutboundTransformer
             throw new InvalidOperationException(ErrAlphaSearchRequest);
         }
 
-        var credentials = _tokens.Get(CancellationToken.None);
+        var credentials = _tokens.Get(llmRequest.RequestCancellationToken);
         if (_auditApiKey)
         {
             _selectedApiKey = credentials.AccessToken;

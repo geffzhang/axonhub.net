@@ -137,6 +137,12 @@ public sealed partial class Pipeline
         var originalWantStream = request.Stream is true;
         var metadata = CloneMetadata(request.TransformerMetadata);
 
+        // Go passes ctx to TransformRequest (pipeline.go); the port's transformer
+        // interface is synchronous, so the token rides on the unified request and
+        // OAuth token providers can cancel a refresh when the client goes away
+        // (C094 (6)).
+        request.RequestCancellationToken = cancellationToken;
+
         HttpRequestData httpReq;
         try
         {

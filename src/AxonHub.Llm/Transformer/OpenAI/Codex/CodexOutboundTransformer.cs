@@ -373,7 +373,9 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
             }
         }
 
-        var creds = _tokens.Get(CancellationToken.None);
+        // Go passes ctx to the token provider (outbound.go); the port carries it
+        // on the request (C094 (6)).
+        var creds = _tokens.Get(request.RequestCancellationToken);
         if (_auditApiKey)
         {
             _selectedApiKey = creds.AccessToken;

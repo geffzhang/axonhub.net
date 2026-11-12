@@ -228,6 +228,18 @@ public sealed class LlmRequest
     [JsonIgnore]
     public ProviderExtensions? ProviderExtensions { get; set; }
 
+    /// <summary>
+    /// Port-only seam (difference C094 (6)): the caller's cancellation token for
+    /// the synchronous outbound transform. Go passes <c>ctx</c> to
+    /// <c>TransformRequest</c>, so a client disconnect aborts an OAuth token
+    /// refresh; the port's transformer interface has no context parameter, so
+    /// the token rides on the unified request instead. Mirrors
+    /// <see cref="AxonHub.Llm.Http.HttpRequestData.RequestCancellationToken"/>
+    /// (C104) for the response stage. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public CancellationToken RequestCancellationToken { get; set; }
+
     /// <summary>Go: <c>req := *src</c> — a shallow copy that shares nested objects.</summary>
     public LlmRequest ShallowClone() => (LlmRequest)MemberwiseClone();
 }

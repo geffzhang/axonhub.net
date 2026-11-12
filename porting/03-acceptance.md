@@ -1262,6 +1262,37 @@ override 回退存储 key；override 命中存储列表时审计索引为 1-base
 补记 11 例；C097 (7) 关闭。lint 通过，`02-differences.md` 已重新生成；269 条
 （196 accepted / 6 gap / 67 resolved）。
 
+§183（2026-11-12）关闭 C094 (6)：取消令牌贯穿同步 outbound transform，客户端断开可中止
+OAuth 刷新。参照的 `TransformRequest(ctx, ...)` 把 `ctx` 传给 `TokenProvider.Get`，
+端口此前的 transformer 接口没有上下文参数，Codex / Codex alpha search / ClaudeCode /
+xai_subscription / antigravity 都以 `CancellationToken.None` 取令牌，刷新不会随请求取消。
+
+实现：`LlmRequest.RequestCancellationToken`（port-only 接缝，镜像 C104 的
+`HttpRequestData.RequestCancellationToken`；`[JsonIgnore]`，`ShallowClone` 携带）
+承载 transform 阶段的调用方令牌；`Pipeline.ProcessRequest` 在 outbound transform 前
+写入，`PersistentOutboundTransformer` 在 channel transform options 可能克隆请求后
+再次透传；上述五个 transformer 改读该令牌。端点探测按
+`channel_endpoint_detect.go:155` 把 `probeCtx` 传给 `TransformRequest`（此前只在
+`Do` 使用），探测自身超时在 transform 内抛出的 `OperationCanceledException` 归类为
+invalid，外层取消仍向上传播。
+
+测试：新增 `tests/AxonHub.Llm.Tests/TransformRequestCancellationTests.cs` 7 例
+（管线把 `Process` 的令牌交给 outbound、Codex / alpha search / ClaudeCode /
+xai_subscription / antigravity 的刷新收到请求令牌、令牌不进入 JSON）与
+`tests/AxonHub.Api.Tests/PersistentOutboundCancellationTests.cs` 2 例（无选项时透传
+同一请求、`forceArrayInputs` 克隆后仍保留令牌）。
+
+本轮实测：新增 9 例通过；定向 377 例（Llm：Codex / ClaudeCode / XaiSubscription /
+Antigravity / ChannelEndpoints / PipelineRetry / OAuthTokenProvider）与 143 例（Api：
+ChannelTransformOptions / Codex 与 ClaudeCode / OpenCode / XaiSubscription 接线 /
+ResponsesEndpointDispatch / 端点探测 / PersistentOutbound）通过。`AxonHub.Api.Tests`
+未跑全量，静态计数 6193 → 6202；四项目合计 9861 → 9870（Llm 3115 → 3122 /
+Persistence 376 / Grains 177 未重跑）。
+
+台账：C094 (6) 关闭并补记 9 例；C094 保持 gap（端点表、fenno / github_copilot /
+antigravity 的 provider 复用、模型拉取管理等残余未变）。lint 通过，
+`02-differences.md` 已重新生成；269 条（196 accepted / 6 gap / 67 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

@@ -240,7 +240,9 @@ public sealed class AntigravityTransformer : IOutboundTransformer, IChannelCusto
             OAuthCredentials creds;
             try
             {
-                creds = tokenProvider.Get(CancellationToken.None);
+                // Go passes ctx to the token provider (transformer.go); the port
+                // carries it on the request (C094 (6)).
+                creds = tokenProvider.Get(request.RequestCancellationToken);
             }
             catch (Exception ex)
             {

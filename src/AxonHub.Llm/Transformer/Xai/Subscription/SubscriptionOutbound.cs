@@ -69,9 +69,9 @@ public sealed class SubscriptionOutboundTransformer : IOutboundTransformer
             }
         }
 
-        // The port's transformer interface carries no context; the reference
-        // reads the token through ctx only for cancellation (C094-family).
-        var credentials = _tokens.Get(CancellationToken.None);
+        // Go passes ctx to the token provider (outbound.go); the port carries it
+        // on the request (C094 (6)). A nil request has no caller token.
+        var credentials = _tokens.Get(request?.RequestCancellationToken ?? CancellationToken.None);
 
         var httpRequest = _responses.TransformRequest(request);
 

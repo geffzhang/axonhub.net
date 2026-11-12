@@ -127,7 +127,9 @@ public sealed class ClaudeCodeOutboundTransformer : IOutboundTransformer, IApiKe
         OAuthCredentials credentials;
         try
         {
-            credentials = _tokens.Get(CancellationToken.None);
+            // Go passes ctx to the token provider (outbound.go); the port carries
+            // it on the request (C094 (6)).
+            credentials = _tokens.Get(request.RequestCancellationToken);
         }
         catch (Exception ex)
         {

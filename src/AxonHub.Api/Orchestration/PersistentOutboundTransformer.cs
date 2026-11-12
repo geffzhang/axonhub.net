@@ -301,6 +301,11 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             request.StreamOptions.IncludeUsage = true;
         }
 
+        // The options helpers may hand back a rebuilt request; the transform-stage
+        // token (Go's ctx, C094 (6)) travels with it so OAuth refreshes see the
+        // client's cancellation.
+        outboundRequest.RequestCancellationToken = request.RequestCancellationToken;
+
         return _current.TransformRequest(outboundRequest);
     }
 
