@@ -1361,6 +1361,34 @@ ClaudeCode / Codex / GithubCopilot / Antigravity）通过。`AxonHub.Api.Tests` 
 台账：C096 (8) 关闭，C096 全部条目关闭（resolved）；lint 通过，`02-differences.md`
 已重新生成；269 条（196 accepted / 5 gap / 68 resolved）。
 
+§186（2026-11-12）关闭 C094 (10)：codex `AllowPassThroughBody` 的 gjson 宽松探测。
+参照 `codex.OutboundTransformer.AllowPassThroughBody`（outbound.go:180-192）对
+`max_output_tokens` / `max_completion_tokens` / `max_tokens` 逐一调用
+`gjson.GetBytes(llmReq.RawRequest.Body, field).Exists()`；gjson 不做 JSON 校验，
+截断或畸形的 body 仍可能命中顶层键。端口此前用严格 `JsonDocument.Parse`，解析失败
+即放行。
+
+实现：新增 `src/AxonHub.Llm/Json/GjsonRootKeyProbe.cs`，逐字移植 gjson v1.18.0
+（MIT）的 `Get` / `parseObject` / key 扫描 / `unescape` / `parseString` /
+`parseSquash` / `parseNumber` / `parseLiteral`：扫描首个 `{` 或 `[`（数组根不命中）、
+key 的引号终止与反斜杠奇数/偶数规则、转义 key 经 `unescape` 后比较、值扫描跳过
+`:` 与 `,` 等任意非值字节（匹配 key 无值时越过 `}` 继续）、字符串值必须终止、
+对象/数组用 squash、`n`（非 `nu`）/`t`/`f` 与数字/`+`/`-`/`i`/`I`/`N` 字面量。
+`AllowPassThroughBody` 的三字段探测改用该实现，删去严格解析与 catch 放行。
+
+测试：`CodexOutboundExecutorTests` 新增 39 例：38 个差分语料行，语料由 Go +
+gjson v1.18.0 对 40 个 body 实跑 `gjson.GetBytes(...).Exists()` 录制（截断的对象/
+数组/数字、未终止字符串、未加引号 key、缺逗号/冒号、`{"max_tokens"} 5`、
+`max\u005ftokens` 转义 key、leading garbage、字符串根内的对象文本、null/true/false/
+NaN、数组根、嵌套 key、空 body 等），另 1 个 UTF-8 BOM 前置用例。
+
+本轮实测：新增 39 例通过；`AxonHub.Llm.Tests` 全量 3161 例通过；Api 定向 96 例
+（PassThroughTests / CodexChannelWiringTests 等）通过。
+
+台账：C094 (10) 关闭，C094 仍为 gap（保留 (11) DecodeAuthJson 消费方与 §146 的
+fenno / github_copilot / antigravity provider 复用残余）；lint 通过，
+`02-differences.md` 已重新生成；269 条（196 accepted / 5 gap / 68 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

@@ -1012,6 +1012,19 @@ codex / codex alpha search / claudecode / xai_subscription / antigravity 的
 新增 7 + 2 例：`TransformRequestCancellationTests`（管线传递、五种 transformer 取令牌、
 令牌不序列化）与 `PersistentOutboundCancellationTests`（透传、克隆保留）。
 
+2026-11-12 更新（§186）：C094 (10) 关闭。参照的 `AllowPassThroughBody`
+（codex/outbound.go:180-192）用 `gjson.GetBytes(body, field).Exists()` 探测
+`max_output_tokens` / `max_completion_tokens` / `max_tokens`；gjson 不校验 JSON，
+能在截断或畸形 body 中找到顶层键。端口新增 `AxonHub.Llm/Json/GjsonRootKeyProbe.cs`，
+逐字移植 gjson v1.18.0 的 `Get` / `parseObject` / key 扫描与 `unescape` /
+`parseString` / `parseSquash` / `parseNumber` / `parseLiteral`（首个 `{` 或 `[`
+定位、转义 key 解码后比较、值扫描跳过 `:` 与 `,`、截断字符串视为不存在而截断
+对象/数组/数字/字面量视为存在、数组根与嵌套 key 不命中）；
+`AllowPassThroughBody` 改用同一宽松探测，删去严格 `JsonDocument.Parse` 与 catch
+放行。`CodexOutboundExecutorTests` 新增 39 例（38 个用 gjson v1.18.0 实跑录制的
+差分语料行 + 1 个 UTF-8 BOM 用例），类内合计 80 例；Llm 全量 3161 例、Api 定向
+96 例通过。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

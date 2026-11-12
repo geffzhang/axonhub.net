@@ -128,6 +128,82 @@ public sealed class CodexOutboundExecutorTests
         Assert.True(outbound.AllowPassThroughBody(llmRequest, new HttpRequestData()));
     }
 
+    // Differential corpus recorded by running gjson v1.18.0 (the reference's
+    // dependency) over every body: gjson.GetBytes(body, field).Exists() for
+    // max_output_tokens, max_completion_tokens and max_tokens. The body is
+    // allowed through when none of the three probes hits. The expected value
+    // is the recorded reference result, not the port's behaviour.
+    [Theory]
+    [InlineData(
+        """{"model":"gpt-5.4-mini","input":"hi","stream":true,"max_tokens":12000}""",
+        false)]
+    [InlineData("""{"model":"gpt-5.4-mini","input":"hi","stream":true}""", true)]
+    [InlineData("""{"max_tokens":12000""", false)]
+    [InlineData("{\"max_tokens\"", true)]
+    [InlineData("""{"max_tokens":null}""", false)]
+    [InlineData("""{"max_tokens":{"a":1}}""", false)]
+    [InlineData("""{"max_tokens":"abc""", true)]
+    [InlineData("""{"prompt":"max_tokens"}""", true)]
+    [InlineData("""{"a":{"max_tokens":12000}}""", true)]
+    [InlineData("""oops {"max_tokens":12000}""", false)]
+    [InlineData("""[{"max_tokens":12000}]""", true)]
+    [InlineData("""{"a":1 "max_tokens":12000}""", false)]
+    [InlineData("""{"max_tokens" 12000}""", false)]
+    [InlineData("{\"max\\u005ftokens\":12000}", false)]
+    [InlineData("""{"a":"unterminated""", true)]
+    [InlineData("""{"max_tokens":true}""", false)]
+    [InlineData("""{max_tokens:12000}""", true)]
+    [InlineData("""{"max_tokens"} 5""", false)]
+    [InlineData("""{"max_tokens"}""", true)]
+    [InlineData("""{"x", "max_tokens": 1}""", true)]
+    [InlineData("{\"max_tokens\":\"", true)]
+    [InlineData("""{"max_tokens":""", true)]
+    [InlineData("""{"max_tokens":nul}""", false)]
+    [InlineData("\"text {\\\"max_tokens\\\": 1}\"", true)]
+    [InlineData("""{"a":1,"max_tokens":2}xyz""", false)]
+    [InlineData("""{"max_tokens":12000}{"x":1}""", false)]
+    [InlineData("""{"a": [1,2, "max_tokens": 3]}""", true)]
+    [InlineData("""{"a":1,""", true)]
+    [InlineData("""{"max_completion_tokens": 5, "max_tokens": 6}""", false)]
+    [InlineData("", true)]
+    [InlineData("""{}""", true)]
+    [InlineData("""{"max_output_tokens":1}""", false)]
+    [InlineData("""{"max_tokens": 1}x""", false)]
+    [InlineData("{\"max_tokens\": \"x\", \"a\"", false)]
+    [InlineData("""{"max_tokens": [1,2""", false)]
+    [InlineData("""{"max_tokens": false}""", false)]
+    [InlineData("""{"max_tokens": -3}""", false)]
+    [InlineData("""{"max_tokens": NaN}""", false)]
+    public void TestCodexOutbound_PassThroughBodyMatchesTheGjsonProbe(string body, bool allowed)
+    {
+        var outbound = NewPassThroughOutbound();
+        var llmRequest = new LlmRequest
+        {
+            ApiFormat = ApiFormats.OpenAIResponse,
+            RawRequest = new HttpRequestData { Body = Encoding.UTF8.GetBytes(body) },
+        };
+
+        Assert.Equal(allowed, outbound.AllowPassThroughBody(llmRequest, new HttpRequestData()));
+    }
+
+    [Fact]
+    public void TestCodexOutbound_PassThroughBodyFindsKeysAfterUtf8Bom()
+    {
+        // gjson scans for the first '{' anywhere in the bytes, so a UTF-8 BOM
+        // in front of the object does not hide the key.
+        var outbound = NewPassThroughOutbound();
+        var body = Encoding.UTF8.GetPreamble()
+            .Concat(Encoding.UTF8.GetBytes("""{"max_tokens":1}"""))
+            .ToArray();
+        var llmRequest = new LlmRequest
+        {
+            ApiFormat = ApiFormats.OpenAIResponse,
+            RawRequest = new HttpRequestData { Body = body },
+        };
+
+        Assert.False(outbound.AllowPassThroughBody(llmRequest, new HttpRequestData()));
+    }
+
     [Fact]
     public void TestCodexOutbound_StreamAllowsDownstreamIdentityOverrides()
     {

@@ -76,11 +76,11 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
 
     internal const string CodexApiUrl = "https://chatgpt.com/backend-api/codex/responses";
 
-    private static readonly string[] ResponsesBlockedPassThroughFields =
+    private static readonly ReadOnlyMemory<byte>[] ResponsesBlockedPassThroughFields =
     [
-        "max_output_tokens",
-        "max_completion_tokens",
-        "max_tokens",
+        "max_output_tokens"u8.ToArray(),
+        "max_completion_tokens"u8.ToArray(),
+        "max_tokens"u8.ToArray(),
     ];
 
     /// <summary>Ask the upstream for encrypted reasoning content (Codex CLI parity).</summary>
@@ -272,9 +272,9 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
 
     /// <summary>Port of <c>AllowPassThroughBody</c>.</summary>
     /// <remarks>
-    /// Go probes the raw body with gjson, which tolerates malformed documents;
-    /// the port parses strictly and allows malformed bodies through (difference
-    /// C094, matching the C033/C058/C060 convention).
+    /// The reference probes the raw body with gjson, which does not validate
+    /// JSON: a token-limit key is found even in truncated or malformed bodies.
+    /// <see cref="GjsonRootKeyProbe"/> reproduces that scan (difference C094).
     /// </remarks>
     public bool AllowPassThroughBody(LlmRequest? llmRequest, HttpRequestData? providerRequest)
     {
@@ -293,30 +293,15 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
             return true;
         }
 
-        try
+        foreach (var field in ResponsesBlockedPassThroughFields)
         {
-            using var document = JsonDocument.Parse(body);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            if (GjsonRootKeyProbe.Exists(body, field.Span))
             {
-                return true;
+                return false;
             }
-
-            foreach (var field in ResponsesBlockedPassThroughFields)
-            {
-                if (document.RootElement.TryGetProperty(field, out _))
-                {
-                    return false;
-                }
-            }
-
-            return true;
         }
-        catch (JsonException)
-        {
-            // gjson would still find a key inside some malformed objects; the
-            // strict parser cannot, so the body is not treated as blocked.
-            return true;
-        }
+
+        return true;
     }
 
     /// <summary>Port of <c>TransformError</c>.</summary>
