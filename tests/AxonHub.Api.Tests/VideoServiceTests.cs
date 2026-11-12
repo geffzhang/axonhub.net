@@ -31,15 +31,23 @@ public sealed class VideoServiceTests
         FakeChannelStore Channels,
         ScriptedExecutor Executor);
 
-    private static Harness NewHarness()
+    private static Harness NewHarness(
+        ScriptedExecutor? executor = null,
+        ChannelProxyExecutors? channelProxyExecutors = null)
     {
         var requests = new FakeRequestStore();
         var executions = new FakeRequestExecutionStore();
         var channels = new FakeChannelStore();
-        var executor = new ScriptedExecutor();
+        executor ??= new ScriptedExecutor();
 
         return new Harness(
-            new VideoService(requests, executions, channels, executor, TimeProvider.System),
+            new VideoService(
+                requests,
+                executions,
+                channels,
+                executor,
+                TimeProvider.System,
+                channelProxyExecutors: channelProxyExecutors),
             requests,
             executions,
             channels,
@@ -162,6 +170,51 @@ public sealed class VideoServiceTests
         }
 
         Assert.Equal("completed", harness.Requests.Rows[0].Status);
+    }
+
+    [Fact]
+    public async Task GetAndDeleteUseTheChannelSettingsProxy()
+    {
+        // biz/video.go:37,136: both provider task operations go through the
+        // channel's own HTTP client (ch.HTTPClient), so settings.proxy applies.
+        var shared = new ScriptedExecutor();
+        var proxied = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => VideoTaskJson(),
+        };
+        var factory = new ScriptedProxyExecutorFactory { Executor = proxied };
+        var proxies = new ChannelProxyExecutors(shared, factory);
+        var harness = NewHarness(shared, proxies);
+        var channel = OpenAiChannel();
+        channel.Settings = """{"proxy":{"type":"url","url":"http://channel.proxy:8080"}}""";
+        harness.Channels.Add(channel);
+        harness.Requests.Add(TaskRow());
+
+        await harness.Service.GetTaskAsync(1);
+        await harness.Service.DeleteTaskAsync(1);
+
+        Assert.Equal(2, proxied.Requests.Count);
+        Assert.Equal("GET", proxied.Requests[0].Method);
+        Assert.Equal("DELETE", proxied.Requests[1].Method);
+        Assert.Empty(shared.Requests);
+        Assert.Equal("http://channel.proxy:8080", Assert.Single(factory.Requests).Url);
+    }
+
+    [Fact]
+    public async Task AChannelWithoutProxyUsesTheSharedExecutor()
+    {
+        var shared = new ScriptedExecutor();
+        var factory = new ScriptedProxyExecutorFactory();
+        var proxies = new ChannelProxyExecutors(shared, factory);
+        var harness = NewHarness(shared, proxies);
+        harness.Channels.Add(OpenAiChannel());
+        harness.Requests.Add(TaskRow());
+        shared.OnDo = (_, _, _) => VideoTaskJson();
+
+        await harness.Service.GetTaskAsync(1);
+
+        Assert.Single(shared.Requests);
+        Assert.Empty(factory.Requests);
     }
 
     [Fact]

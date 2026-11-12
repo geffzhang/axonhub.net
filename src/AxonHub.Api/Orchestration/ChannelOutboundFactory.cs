@@ -238,12 +238,13 @@ public static class ChannelOutboundFactory
 
     public const string ZenmuxGeminiBaseUrl = "https://zenmux.ai/api/vertex-ai";
 
-    /// <param name="tokenRefreshExecutor">
-    /// HTTP executor used by an OAuth codex channel's token refresher. The
-    /// reference passes the channel's proxy-aware client; callers that hold the
-    /// per-channel executor (the orchestrator through
-    /// <see cref="ChannelProxyExecutors"/>) pass it here, while direct callers
-    /// fall back to their shared executor.
+    /// <param name="channelExecutor">
+    /// The channel's proxy-aware HTTP executor, the reference's
+    /// <c>channel.HTTPClient</c>. It serves the OAuth token refreshers and the
+    /// transformers that perform their own HTTP calls (Modelscope task polling
+    /// and image download). Callers that hold the per-channel executor (the
+    /// orchestrator through <see cref="ChannelProxyExecutors"/>) pass it here,
+    /// while direct callers fall back to their shared executor.
     /// </param>
     /// <param name="grainFactory">
     /// When present, the codex, claudecode and xai_subscription OAuth channels
@@ -260,7 +261,7 @@ public static class ChannelOutboundFactory
         ChannelCandidate candidate,
         LlmRequest request,
         DateTimeOffset now,
-        IExecutor? tokenRefreshExecutor = null,
+        IExecutor? channelExecutor = null,
         IGrainFactory? grainFactory = null,
         ChannelApiKeySelectionRegistry? apiKeySelection = null)
     {
@@ -425,7 +426,7 @@ public static class ChannelOutboundFactory
                     candidate,
                     request,
                     provider,
-                    tokenRefreshExecutor,
+                    channelExecutor,
                     grainFactory,
                     apiFormat,
                     selectedEndpoint),
@@ -437,7 +438,7 @@ public static class ChannelOutboundFactory
                     candidate,
                     request,
                     provider,
-                    tokenRefreshExecutor,
+                    channelExecutor,
                     grainFactory,
                     apiFormat,
                     selectedEndpoint),
@@ -533,7 +534,7 @@ public static class ChannelOutboundFactory
             // fallback used without a grain factory has neither.
             XaiSubscriptionChannelType => CreateXaiSubscriptionOutbound(
                 candidate,
-                tokenRefreshExecutor,
+                channelExecutor,
                 request,
                 grainFactory),
             // channel_llm.go:885-893: longcat_anthropic speaks Anthropic
@@ -608,7 +609,7 @@ public static class ChannelOutboundFactory
             ClaudeCodeChannelType => CreateClaudeCodeOutbound(
                 candidate,
                 provider,
-                tokenRefreshExecutor,
+                channelExecutor,
                 grainFactory),
             // channel_llm.go:1183-1194: one outbound dispatching by model family.
             OpenCodeGoChannelType => new OpenCodeOutboundTransformer(new OpenCodeOutboundConfig
@@ -871,16 +872,17 @@ public static class ChannelOutboundFactory
                     ChannelApiKeyIndex = provider.KeyIndex,
                 }),
             // channel_llm.go:1096-1108: chat plus the asynchronous image task
-            // protocol (channel_endpoint.go:309-312). The reference passes the
-            // channel's proxy-aware HTTP client for task polling and image
-            // download; the port does not wire that transformer-internal client
-            // yet (C104). The inference request itself follows the channel
-            // proxy through the pipeline executor (ChannelProxyExecutors).
+            // protocol (channel_endpoint.go:309-312). The reference puts the
+            // channel's proxy-aware HTTP client on the config, and the image
+            // task protocol uses it for polling and downloads; the inference
+            // request itself follows the same client through the pipeline
+            // executor (ChannelProxyExecutors, §177).
             ModelscopeChannelType => new ModelscopeOutboundTransformer(new ModelscopeOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
                 ApiKeyProvider = provider,
                 ChannelApiKeyIndex = provider.KeyIndex,
+                HttpClient = channelExecutor,
             }),
             // channel_llm.go:720-728: doubao/volcengine install the Doubao
             // outbound as the channel's primary transformer; every default
@@ -964,7 +966,7 @@ public static class ChannelOutboundFactory
             // internally, so no ApiFormat branching is needed here
             // (channel_endpoint.go:322).
             GithubCopilotChannelType
-                => CreateGithubCopilotOutbound(candidate, tokenRefreshExecutor, request),
+                => CreateGithubCopilotOutbound(candidate, channelExecutor, request),
             // channel_llm.go:1109-1118: Gemini's OpenAI-compatible endpoint;
             // the default endpoint set is chat only (channel_endpoint.go:253).
             GeminiOpenAiChannelType => CreateGeminiOpenAiOutbound(candidate, provider),
@@ -994,7 +996,7 @@ public static class ChannelOutboundFactory
             // outbound in the project envelope and authenticates exclusively
             // through OAuth tokens minted from the legacy refreshToken|projectID
             // key (channel_endpoint.go:325: a single Gemini-contents endpoint).
-            AntigravityChannelType => CreateAntigravityOutbound(candidate, tokenRefreshExecutor),
+            AntigravityChannelType => CreateAntigravityOutbound(candidate, channelExecutor),
             _ => throw new InvalidOperationException(
                 "unsupported channel type: " + candidate.Type + " for channel " + candidate.ChannelName),
         };
@@ -1393,7 +1395,7 @@ public static class ChannelOutboundFactory
     /// </summary>
     private static AntigravityTransformer CreateAntigravityOutbound(
         ChannelCandidate candidate,
-        IExecutor? tokenRefreshExecutor)
+        IExecutor? channelExecutor)
     {
         try
         {
@@ -1405,7 +1407,7 @@ public static class ChannelOutboundFactory
                 },
                 new AntigravityTransformerOptions
                 {
-                    HttpClient = tokenRefreshExecutor,
+                    HttpClient = channelExecutor,
                 });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -1420,7 +1422,7 @@ public static class ChannelOutboundFactory
     private static ClaudeCodeOutboundTransformer CreateClaudeCodeOutbound(
         ChannelCandidate candidate,
         ChannelApiKeyProvider apiKeyProvider,
-        IExecutor? tokenRefreshExecutor,
+        IExecutor? channelExecutor,
         IGrainFactory? grainFactory)
     {
         var baseUrl = candidate.BaseUrl ?? string.Empty;
@@ -1450,7 +1452,7 @@ public static class ChannelOutboundFactory
             : ClaudeCodeTokenProvider.Create(new TokenProviderParams
             {
                 Credentials = credentials,
-                HttpClient = tokenRefreshExecutor,
+                HttpClient = channelExecutor,
             });
 
         return new ClaudeCodeOutboundTransformer(new ClaudeCodeParams
@@ -1498,7 +1500,7 @@ public static class ChannelOutboundFactory
     /// </summary>
     private static CopilotOutboundTransformer CreateGithubCopilotOutbound(
         ChannelCandidate candidate,
-        IExecutor? tokenRefreshExecutor,
+        IExecutor? channelExecutor,
         LlmRequest request)
     {
         if (!ChannelCredentials.IsOAuth(candidate.Credentials))
@@ -1560,7 +1562,7 @@ public static class ChannelOutboundFactory
             tokenProvider = new CopilotTokenProvider(new CopilotTokenProviderParams
             {
                 Credentials = credentials,
-                HttpClient = tokenRefreshExecutor,
+                HttpClient = channelExecutor,
             });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -1600,7 +1602,7 @@ public static class ChannelOutboundFactory
     /// </summary>
     private static SubscriptionOutboundTransformer CreateXaiSubscriptionOutbound(
         ChannelCandidate candidate,
-        IExecutor? tokenRefreshExecutor,
+        IExecutor? channelExecutor,
         LlmRequest request,
         IGrainFactory? grainFactory)
     {
@@ -1622,7 +1624,7 @@ public static class ChannelOutboundFactory
             : SubscriptionToken.NewTokenProvider(new SubscriptionTokenProviderParams
             {
                 Credentials = credentials,
-                HttpClient = tokenRefreshExecutor,
+                HttpClient = channelExecutor,
             });
 
         try
@@ -1656,7 +1658,7 @@ public static class ChannelOutboundFactory
         ChannelCandidate candidate,
         LlmRequest request,
         ChannelApiKeyProvider apiKeyProvider,
-        IExecutor? tokenRefreshExecutor,
+        IExecutor? channelExecutor,
         IGrainFactory? grainFactory,
         string apiFormat,
         ChannelEndpoint? endpoint)
@@ -1692,7 +1694,7 @@ public static class ChannelOutboundFactory
             TokenProvider = CreateCodexTokenProvider(
                 candidate,
                 apiKeyProvider,
-                tokenRefreshExecutor,
+                channelExecutor,
                 grainFactory),
             BaseUrl = baseUrl,
             Transport = transport,
@@ -1749,7 +1751,7 @@ public static class ChannelOutboundFactory
     private static ITokenGetter CreateCodexTokenProvider(
         ChannelCandidate candidate,
         ChannelApiKeyProvider apiKeyProvider,
-        IExecutor? tokenRefreshExecutor,
+        IExecutor? channelExecutor,
         IGrainFactory? grainFactory)
     {
         if (!ChannelCredentials.IsOAuth(candidate.Credentials))
@@ -1769,7 +1771,7 @@ public static class ChannelOutboundFactory
         return new TokenProvider(new TokenProviderParams
         {
             Credentials = credentials,
-            HttpClient = tokenRefreshExecutor,
+            HttpClient = channelExecutor,
         });
     }
 

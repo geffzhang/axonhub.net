@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using AxonHub.Api.Management;
+using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Transformer.Antigravity;
@@ -78,6 +79,51 @@ public sealed class ModelFetcherAntigravityTests
 
         Assert.NotNull(changed.Error);
         Assert.Equal(1, catalogCalls);
+    }
+
+    [Fact]
+    public async Task AntigravityDiscoveryUsesTheChannelProxy()
+    {
+        // model_fetcher_antigravity.go:20-36: the stored channel's settings.proxy
+        // applies to the catalog request (and to any token refresh it needs).
+        var channels = new FakeChannelModelCatalogStore();
+        channels.Seed(new ChannelRecord
+        {
+            Id = 2,
+            Name = "proxied-antigravity",
+            Type = "antigravity",
+            BaseUrl = AntigravityConstants.EndpointDaily,
+            Credentials = OAuthCredentialsJson(
+                "saved-access",
+                string.Empty,
+                DateTimeOffset.UtcNow.AddHours(1)),
+            Settings = """{"proxy":{"type":"url","url":"http://antigravity.proxy:8080"}}""",
+        });
+        var shared = new ScriptedExecutor();
+        var proxied = new ScriptedExecutor
+        {
+            OnDo = (_, request, _) =>
+            {
+                Assert.Equal("Bearer saved-access", HeaderValue(request, "Authorization"));
+                return ModelFetchTestResponses.Json("""{"models":{"proxied-model":{}}}""");
+            },
+        };
+        var factory = new ScriptedProxyExecutorFactory { Executor = proxied };
+        var proxies = new ChannelProxyExecutors(shared, factory);
+        var fetcher = new ModelFetcher(shared, channels, TimeProvider.System, proxies);
+
+        var result = await fetcher.FetchModelsAsync(new FetchModelsInput
+        {
+            ChannelType = "antigravity",
+            BaseUrl = AntigravityConstants.EndpointDaily,
+            ChannelId = 2,
+        });
+
+        Assert.Null(result.Error);
+        Assert.Equal("proxied-model", Assert.Single(result.Models).Id);
+        Assert.Single(proxied.Requests);
+        Assert.Empty(shared.Requests);
+        Assert.Equal("http://antigravity.proxy:8080", Assert.Single(factory.Requests).Url);
     }
 
     [Fact]

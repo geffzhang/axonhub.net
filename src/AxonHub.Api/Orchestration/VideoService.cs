@@ -28,7 +28,10 @@ namespace AxonHub.Api.Orchestration;
 /// and <c>zenmux</c> channel types carry the <c>openai/video</c> key, the
 /// <c>doubao</c> type the <c>seedance/video</c> key, and any ZenMux type the
 /// <c>zenmux/video</c> key. ZenMux has no native delete, so those tasks are
-/// cancelled locally without an upstream call (C082).
+/// cancelled locally without an upstream call (C082). Task queries and deletes
+/// use the channel's proxy-aware client through
+/// <see cref="ChannelProxyExecutors"/> (the reference's <c>ch.HTTPClient</c>,
+/// biz/video.go:37,136; §179).
 /// </remarks>
 public sealed class VideoService(
     IRequestStore requestStore,
@@ -36,7 +39,8 @@ public sealed class VideoService(
     IChannelStore channelStore,
     IExecutor executor,
     TimeProvider timeProvider,
-    RequestPayloadStorage? payloads = null)
+    RequestPayloadStorage? payloads = null,
+    ChannelProxyExecutors? channelProxyExecutors = null)
 {
     // The reference's request.Status values (ent/request/request.go).
     private const string StatusProcessing = "processing";
@@ -49,10 +53,14 @@ public sealed class VideoService(
     /// <summary>Port of GetTask: fetch the provider task, then persist the snapshot.</summary>
     public async Task<LlmResponse> GetTaskAsync(long requestId, CancellationToken cancellationToken = default)
     {
-        var (task, outbound) = await LoadTaskAsync(requestId, cancellationToken).ConfigureAwait(false);
+        var (task, outbound, channelExecutor) = await LoadTaskWithExecutorAsync(
+            requestId,
+            cancellationToken).ConfigureAwait(false);
 
+        // biz/video.go:37: the provider task query goes through the channel's
+        // own HTTP client (ch.HTTPClient), so it follows settings.proxy (§179).
         var httpReq = outbound.BuildGetVideoTaskRequest(task.ExternalId!);
-        var httpResp = executor.Do(cancellationToken, httpReq);
+        var httpResp = channelExecutor.Do(cancellationToken, httpReq);
 
         var video = outbound.ParseGetVideoTaskResponse(httpResp);
         var videoResponse = video.Video
@@ -115,7 +123,9 @@ public sealed class VideoService(
     /// </summary>
     public async Task DeleteTaskAsync(long requestId, CancellationToken cancellationToken = default)
     {
-        var (task, outbound) = await LoadTaskAsync(requestId, cancellationToken).ConfigureAwait(false);
+        var (task, outbound, channelExecutor) = await LoadTaskWithExecutorAsync(
+            requestId,
+            cancellationToken).ConfigureAwait(false);
 
         HttpRequestData httpReq;
         try
@@ -144,7 +154,8 @@ public sealed class VideoService(
             return;
         }
 
-        _ = executor.Do(cancellationToken, httpReq);
+        // biz/video.go:136: the provider delete shares the channel's client.
+        _ = channelExecutor.Do(cancellationToken, httpReq);
 
         // Best effort: mark canceled locally.
         try
@@ -175,12 +186,29 @@ public sealed class VideoService(
     }
 
     /// <summary>
-    /// Port of loadTask: resolves the request row, its channel and the outbound
-    /// transformer that owns the provider task operations.
+    /// Port of loadTask: resolves the request row and the outbound transformer
+    /// that owns the provider task operations.
     /// </summary>
     internal async Task<(RequestRecord Task, IVideoTaskOutbound Outbound)> LoadTaskAsync(
         long requestId,
         CancellationToken cancellationToken = default)
+    {
+        var (task, outbound, _) = await LoadTaskWithExecutorAsync(requestId, cancellationToken)
+            .ConfigureAwait(false);
+        return (task, outbound);
+    }
+
+    /// <summary>
+    /// Port of loadTask with the channel's HTTP client. The reference's
+    /// loadTask builds the channel through <c>ChannelService</c>, so the
+    /// returned <c>ch.HTTPClient</c> is the shared client or the channel's
+    /// proxy-aware client; both the provider task query and delete use it
+    /// (biz/video.go:37,136).
+    /// </summary>
+    private async Task<(RequestRecord Task, IVideoTaskOutbound Outbound, IExecutor Executor)>
+        LoadTaskWithExecutorAsync(
+            long requestId,
+            CancellationToken cancellationToken = default)
     {
         var task = await requestStore.GetByIdAsync(requestId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("ent: request not found");
@@ -284,7 +312,10 @@ public sealed class VideoService(
             throw new InvalidOperationException(Internal("channel does not support video task operations"));
         }
 
-        return (task, outbound);
+        return (
+            task,
+            outbound,
+            channelProxyExecutors?.Resolve(channel.Id, channel.Settings) ?? executor);
     }
 
     /// <summary>Port of mapVideoStatusToRequestStatus.</summary>

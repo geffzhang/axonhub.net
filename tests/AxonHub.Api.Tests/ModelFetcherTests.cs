@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using AxonHub.Api.Management;
+using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer.Cline;
@@ -306,6 +307,84 @@ public sealed class ModelFetcherTests
 
         Assert.Null(result.Error);
         Assert.Equal("stored-model", Assert.Single(result.Models).Id);
+    }
+
+    [Fact]
+    public async Task FetchModelsForAStoredChannelUsesTheChannelProxy()
+    {
+        // model_fetcher.go:524-527: the saved channel's settings.proxy creates
+        // the client used for every discovery request.
+        var shared = new ScriptedExecutor();
+        var proxied = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => ModelFetchTestResponses.Json("""{"data":[{"id":"proxied-model"}]}"""),
+        };
+        var factory = new ScriptedProxyExecutorFactory { Executor = proxied };
+        var proxies = new ChannelProxyExecutors(shared, factory);
+        var channels = new FakeChannelModelCatalogStore();
+        channels.Seed(new ChannelRecord
+        {
+            Id = 7,
+            Name = "proxied-endpoint",
+            Type = "openai",
+            BaseUrl = "https://stored.example",
+            Credentials = """{"apiKey":"stored-secret"}""",
+            Settings = """{"proxy":{"type":"url","url":"http://channel.proxy:8080"}}""",
+        });
+        var fetcher = NewFetcher(shared, channels, channelProxyExecutors: proxies);
+
+        var result = await fetcher.FetchModelsAsync(new FetchModelsInput
+        {
+            ChannelType = "openai",
+            BaseUrl = "https://stored.example",
+            ChannelId = 7,
+        });
+
+        Assert.Null(result.Error);
+        Assert.Equal("proxied-model", Assert.Single(result.Models).Id);
+        Assert.Single(proxied.Requests);
+        Assert.Empty(shared.Requests);
+        Assert.Equal("http://channel.proxy:8080", Assert.Single(factory.Requests).Url);
+    }
+
+    [Fact]
+    public async Task ClineDiscoveryUsesTheStoredChannelProxy()
+    {
+        // model_fetcher.go:374-387: the Cline catalog request also follows the
+        // stored channel's proxy when a channel id is supplied.
+        var shared = new ScriptedExecutor();
+        var proxied = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => ModelFetchTestResponses.Json(
+                """{"clinePass":[{"id":"pass-1"}]}"""),
+        };
+        var factory = new ScriptedProxyExecutorFactory { Executor = proxied };
+        var proxies = new ChannelProxyExecutors(shared, factory);
+        var channels = new FakeChannelModelCatalogStore();
+        channels.Seed(new ChannelRecord
+        {
+            Id = 8,
+            Name = "cline-proxied",
+            Type = "cline",
+            BaseUrl = ClineTestUrl,
+            Credentials = "{}",
+            Settings = """{"proxy":{"type":"url","url":"http://cline.proxy:8080"}}""",
+        });
+        var fetcher = NewFetcher(shared, channels, channelProxyExecutors: proxies);
+        fetcher.ClineRecommendedModelsUrl = ClineTestUrl;
+
+        var result = await fetcher.FetchModelsAsync(new FetchModelsInput
+        {
+            ChannelType = "cline",
+            BaseUrl = ClineTestUrl,
+            ChannelId = 8,
+        });
+
+        Assert.Null(result.Error);
+        Assert.Equal("pass-1", Assert.Single(result.Models).Id);
+        Assert.Single(proxied.Requests);
+        Assert.Empty(shared.Requests);
+        Assert.Equal("http://cline.proxy:8080", Assert.Single(factory.Requests).Url);
     }
 
     [Fact]
@@ -830,8 +909,13 @@ public sealed class ModelFetcherTests
     private static ModelFetcher NewFetcher(
         IExecutor executor,
         FakeChannelModelCatalogStore? channels = null,
-        TimeProvider? time = null)
-        => new(executor, channels ?? new FakeChannelModelCatalogStore(), time ?? TimeProvider.System);
+        TimeProvider? time = null,
+        ChannelProxyExecutors? channelProxyExecutors = null)
+        => new(
+            executor,
+            channels ?? new FakeChannelModelCatalogStore(),
+            time ?? TimeProvider.System,
+            channelProxyExecutors);
 
     private static HttpResponseMessage RedirectTo(string location)
     {

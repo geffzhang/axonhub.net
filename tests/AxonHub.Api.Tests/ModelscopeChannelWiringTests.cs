@@ -1,3 +1,4 @@
+using System.Text;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
@@ -95,6 +96,44 @@ public sealed class ModelscopeChannelWiringTests
         Assert.Equal(
             "https://api.modelscope.cn/images/generations",
             transformer.TransformRequest(ImageRequest()).Url);
+    }
+
+    [Fact]
+    public void TheChannelExecutorServesImageTaskPolling()
+    {
+        // channel_llm.go:1096-1108: the reference puts ch.HTTPClient on the
+        // Modelscope config, so the async task poll follows the channel proxy.
+        var channelExecutor = new ScriptedExecutor
+        {
+            OnDo = (_, request, _) =>
+            {
+                Assert.Equal("https://api.modelscope.cn/v1/tasks/task-1", request.Url);
+                return new HttpResponseData
+                {
+                    StatusCode = 200,
+                    Body = Encoding.UTF8.GetBytes(
+                        """{"task_id":"task-1","task_status":"SUCCEED","output_images":["data:image/png;base64,QUJD"]}"""),
+                };
+            },
+        };
+
+        var transformer = ChannelOutboundFactory.Create(
+            Candidate(),
+            ImageRequest(),
+            DateTimeOffset.UnixEpoch,
+            channelExecutor);
+        var httpRequest = transformer.TransformRequest(ImageRequest());
+        var response = new HttpResponseData
+        {
+            StatusCode = 200,
+            Body = Encoding.UTF8.GetBytes("""{"task_id":"task-1","task_status":"PENDING"}"""),
+            Request = httpRequest,
+        };
+
+        var result = transformer.TransformResponse(response);
+
+        Assert.Equal("QUJD", Assert.Single(result.Image!.Data).B64JSON);
+        Assert.Single(channelExecutor.Requests);
     }
 
     [Fact]

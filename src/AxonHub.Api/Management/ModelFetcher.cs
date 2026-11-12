@@ -59,9 +59,11 @@ public sealed class FetchModelsResult
 /// </summary>
 /// <remarks>
 /// The reference builds a new fetcher per sync channel, so the provider-conf
-/// caches live on the instance. Per-channel proxies and the HTTPS-downgrade
-/// guard are not ported (C158); the live-only Vertex binding and third-party
-/// Codex catalog branches are not ported (C158).
+/// caches live on the instance. Requests for a saved channel use its
+/// settings.proxy through <see cref="ChannelProxyExecutors"/>, and the
+/// Command Code / Codex catalog clients additionally refuse HTTPS-to-HTTP
+/// redirects (§179). The live-only Vertex binding and third-party Codex
+/// catalog branches are not ported (C158).
 /// </remarks>
 public sealed class ModelFetcher
 {
@@ -93,6 +95,7 @@ public sealed class ModelFetcher
 
     private readonly IExecutor _executor;
     private readonly IChannelModelCatalogStore _channels;
+    private readonly ChannelProxyExecutors? _channelProxyExecutors;
     private readonly TimeProvider _time;
     private readonly ProviderConfFetcher _copilotFetcher;
     private readonly ProviderConfFetcher _geminiVertexFetcher;
@@ -100,10 +103,12 @@ public sealed class ModelFetcher
     public ModelFetcher(
         IExecutor executor,
         IChannelModelCatalogStore channels,
-        TimeProvider time)
+        TimeProvider time,
+        ChannelProxyExecutors? channelProxyExecutors = null)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _channels = channels ?? throw new ArgumentNullException(nameof(channels));
+        _channelProxyExecutors = channelProxyExecutors;
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _copilotFetcher = new ProviderConfFetcher(
             CopilotConstants.ProviderConfUrl,
@@ -116,6 +121,18 @@ public sealed class ModelFetcher
             executor,
             time);
     }
+
+    /// <summary>
+    /// The channel's proxy-aware HTTP client. The reference starts from its
+    /// shared client and swaps in <c>WithProxy(ch.Settings.Proxy)</c> for a
+    /// saved channel (model_fetcher.go:524-527, and the Cline / Antigravity
+    /// branches); the port asks <see cref="ChannelProxyExecutors"/>, whose
+    /// fallback is the same shared executor.
+    /// </summary>
+    private IExecutor ExecutorFor(ChannelRecord? channel)
+        => channel is null
+            ? _executor
+            : _channelProxyExecutors?.Resolve(channel.Id, channel.Settings) ?? _executor;
 
     /// <summary>
     /// Cline's discovery endpoint. The reference tests replace the private field;
@@ -155,17 +172,22 @@ public sealed class ModelFetcher
 
         if (channelType == "cline")
         {
+            ChannelRecord? clineChannel = null;
             if (input.ChannelId is { } clineChannelId)
             {
-                var (clineChannel, clineError) = await LoadChannelAsync(clineChannelId, cancellationToken)
+                var (loaded, clineError) = await LoadChannelAsync(clineChannelId, cancellationToken)
                     .ConfigureAwait(false);
                 if (clineError is not null)
                 {
                     return new FetchModelsResult { Models = [], Error = clineError };
                 }
+
+                clineChannel = loaded;
             }
 
-            var (clineModels, clineFallback) = FetchClineRecommendedModels(cancellationToken);
+            var (clineModels, clineFallback) = FetchClineRecommendedModels(
+                cancellationToken,
+                ExecutorFor(clineChannel));
             return new FetchModelsResult { Models = clineModels, Fallback = clineFallback };
         }
 
@@ -176,6 +198,7 @@ public sealed class ModelFetcher
 
         var apiKey = input.ApiKey is { Length: > 0 } keyOverride ? keyOverride : string.Empty;
         ChannelRecord? codexChannel = null;
+        ChannelRecord? proxyChannel = null;
         List<OverrideOperationDraft>? headerOverrideOps = null;
 
         if (input.ChannelId is { } channelId)
@@ -186,6 +209,10 @@ public sealed class ModelFetcher
             {
                 return new FetchModelsResult { Models = [], Error = loadError };
             }
+
+            // model_fetcher.go:440-442: every request for a saved channel uses
+            // its settings.proxy, whichever discovery branch runs below.
+            proxyChannel = channel;
 
             ChannelCredentialsDraft credentials;
             ChannelSettingsDraft? settings;
@@ -316,11 +343,10 @@ public sealed class ModelFetcher
             Headers = authHeaders,
         };
 
-        // model_fetcher.go:542-548: the channel proxy (still unported, C158) is
-        // followed by a client that refuses HTTPS-to-HTTP redirects, so the API
-        // key is never replayed over cleartext by a Command Code or Codex
-        // catalog request.
-        var executor = _executor;
+        // model_fetcher.go:524-530: the channel's proxy-aware client, then a
+        // client that refuses HTTPS-to-HTTP redirects, so the API key is never
+        // replayed over cleartext by a Command Code or Codex catalog request.
+        var executor = ExecutorFor(proxyChannel);
         if (IsCommandCodeChannelType(channelType) || codexChannel is not null)
         {
             executor = executor.WithRejectHttpsDowngrade();
@@ -642,7 +668,8 @@ public sealed class ModelFetcher
     }
 
     private (List<ModelIdentify> Models, bool Fallback) FetchClineRecommendedModels(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IExecutor executor)
     {
         var fallback = ClineFallbackModels();
         var request = new HttpRequestData
@@ -658,7 +685,7 @@ public sealed class ModelFetcher
         HttpResponseData response;
         try
         {
-            response = _executor.Do(cancellationToken, request);
+            response = executor.Do(cancellationToken, request);
         }
         catch (Exception)
         {
@@ -1496,7 +1523,6 @@ public sealed class ModelFetcher
                     "failed to get Antigravity channel: ent: channel not found");
             }
 
-            // The reference's per-channel proxy is not ported (C158).
             var legacyApiKey = ChannelCredentials.GetLegacyApiKey(channel.Credentials);
             if (raw.Length == 0)
             {
@@ -1529,6 +1555,10 @@ public sealed class ModelFetcher
                 }
             }
         }
+
+        // model_fetcher_antigravity.go:20-36: the saved channel's settings.proxy
+        // applies to both the token refresh and the catalog request.
+        var executor = ExecutorFor(channel);
 
         var projectId = string.Empty;
         if (raw.Trim().StartsWith('{'))
@@ -1605,7 +1635,7 @@ public sealed class ModelFetcher
         var tokens = AntigravityTokenProviderFactory.NewTokenProvider(new TokenProviderParams
         {
             Credentials = credentialsCopy,
-            HttpClient = _executor,
+            HttpClient = executor,
             OnRefreshed = onRefreshed,
         });
 
@@ -1638,7 +1668,7 @@ public sealed class ModelFetcher
         HttpResponseData response;
         try
         {
-            response = _executor.Do(cancellationToken, new HttpRequestData
+            response = executor.Do(cancellationToken, new HttpRequestData
             {
                 Method = "POST",
                 Url = AntigravityConstants.EndpointProd + "/v1internal:fetchAvailableModels",

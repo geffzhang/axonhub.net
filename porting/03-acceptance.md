@@ -1116,6 +1116,46 @@ ChannelProxyExecutorsTests 计数 8→10；台账卫生把已闭合的 C091 改�
 C014 / C158 的过期残余描述。269 条（196 accepted / 6 gap / 67 resolved），lint 通过，
 `02-differences.md` 已重新生成。
 
+§179（2026-11-12）关闭 C104 / C105 / C158 的按通道 HTTP client 残余：ModelScope 异步
+图片任务的轮询与下载、视频任务的查询 / 删除、模型抓取的常规 / Cline / Antigravity
+三条分支都与推理共用通道的代理感知 client（参照 channel_llm.go:1096-1108 的
+`Config.HTTPClient`、biz/video.go:37,136 的 `ch.HTTPClient`、model_fetcher.go:374-387 /
+524-530 与 model_fetcher_antigravity.go:20-36 的 `settings.proxy` 派生 client）。
+
+实现：`ChannelOutboundFactory.Create` 的 executor 参数由 `tokenRefreshExecutor` 更名为
+`channelExecutor`（同一引用，供 OAuth 刷新与 ModelScope transformer 内部 HTTP），
+Modelscope 分支把它填入 `ModelscopeOutboundConfig.HttpClient`。`VideoService` 注入
+`ChannelProxyExecutors`，`GetTaskAsync` / `DeleteTaskAsync` 经新增
+`LoadTaskWithExecutorAsync` 按 `channel.Id + settings` 解析 client（无 proxy 回退共享
+executor；`LoadTaskAsync` 保留 2-tuple 包装给既有测试）。`ModelFetcher` 注入同一注册表，
+新增 `ExecutorFor(channel)`：已保存通道按行 settings 解析，Cline 推荐目录、常规模型发现
+（先取按通道 client 再应用 `WithRejectHttpsDowngrade`）与 Antigravity 目录 / 令牌刷新都
+使用它；provider-conf 仍走共享 `_executor`，与参照一致。`PersistentOutboundTransformer`
+的默认工厂保持不解析 proxy，避免覆盖 testChannel 的 per-request 语义（C154）。
+
+残余（台账已注明）：端点探测仍走共享 executor（C158 残余）；C082/C094 的端点记录表与
+live-only 分支不变；C104/C105 的语言级差异不变。
+
+测试：新增 6 例。`ModelscopeChannelWiringTests` 5 例（原 4 + 按通道 executor 轮询与
+图片下载）；`VideoServiceTests` 新增 2 例（GET / DELETE 均走通道 proxy、无 proxy 回退
+共享），`ModelFetcherTests` 新增 2 例（常规发现与 Cline 发现走已保存通道的 proxy），
+`ModelFetcherAntigravityTests` 新增 1 例（Antigravity 目录与令牌刷新走通道 proxy）。
+
+本轮实测：`AxonHub.Api.Tests` 6151 通过 / 0 失败 / 0 跳过（24m18s，SDK 10.0.401，
+日志 `.agent/summary/_api_full_179g.log`，6151 = §178 的 6145 + 新增 6）；定向
+`ModelscopeChannelWiringTests`、`VideoServiceTests`、`ModelFetcherTests`、
+`ModelFetcherAntigravityTests` 等 91 例通过。此前五次全量尝试：三次 §103 记录的
+testhost 随机崩溃（5863 / 6004 / 5238 例，均 0 断言失败），一次 SDK 10.0.401 从
+Program Files 消失导致未启动（改用 dotnetup 安装的 dotnet.exe 解决），一次完整跑完但
+`SafeguardsEndpointTests.CompletedUpstreamStaysOpen` 因并行负载下 500ms 分类超时失败
+（单跑该类 21 例 11s 全通过，与 §178 记录的同类时序抖动一致）；一次按用户要求中止。
+日志 `_api_full_179.log` / `_api_full_179b.log` / `_api_full_179c.log` /
+`_api_full_179d.log` / `_api_full_179e.log` / `_api_safeguards_179.log`。Persistence /
+Grains / Llm 本轮未改动，沿用实测 376 / 177 / 3110，四项目合计 9814。
+
+台账：C104 / C105 / C158 的残余与 decision 更新（C158 ②关闭），C014 补记 §179 接线；
+269 条（196 accepted / 6 gap / 67 resolved），lint 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
