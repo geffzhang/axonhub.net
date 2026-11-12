@@ -1389,6 +1389,42 @@ NaN、数组根、嵌套 key、空 body 等），另 1 个 UTF-8 BOM 前置用�
 fenno / github_copilot / antigravity provider 复用残余）；lint 通过，
 `02-differences.md` 已重新生成；269 条（196 accepted / 5 gap / 68 resolved）。
 
+§187（2026-11-12）关闭 C094 (11)：codex 管理面 OAuth 端点。
+
+参照 routes.go:114-116 在 admin group 上挂载 POST /admin/codex/oauth/start、
+/oauth/exchange 与 /auth/decode（internal/server/api/codex.go）。端口此前只有 llm
+模块的令牌提供者与 `CodexToken.DecodeAuthJson`，没有管理面 HTTP 表面；本切片接入
+其消费方。
+
+实现：新增 `src/AxonHub.Api/Management/CodexOAuthService.cs`（PKCE 会话、回调解析、
+令牌交换、auth.json 规范化与错误映射）、`src/AxonHub.Api/Auth/CodexOAuthHandlers.cs`
+（ShouldBindJSON 等价绑定、gin JSONError 信封、三条路由）与
+`src/AxonHub.Api/Auth/CodexOAuthCache.cs`（go-cache 到期语义的进程内 typed 缓存，
+redis / two-level 见 C171）；Program.cs 注册 DI、`MapCodexOAuthRoutes()` 与
+`/admin/codex` 的 admin JWT + WithProjectID 门。start 用 `GenerateState(32)` 与
+`GenerateCodeVerifier(64)` 生成 S256 PKCE，按 `codex:oauth:<state>` 写入 10 分钟 TTL，
+授权 URL 按 `url.Values.Encode` 排序并含 `id_token_add_organizations=true`、
+`codex_cli_simplified_flow=true`、不含 `originator`。exchange 复刻参照次序：命中
+会话后立即删除（回调畸形或 state 不匹配也会消耗会话），再解析 `callback_url`、校验
+state；`proxy.type=url` 经 `HttpProxyExecutorFactory`，令牌交换失败 502、凭据序列化
+失败 500。decode 走 `CodexToken.DecodeAuthJson` + `ToJson`，失败 400。
+
+测试：`tests/AxonHub.Api.Tests/CodexOAuthServiceTests.cs`（32 例：PKCE 形状、授权 URL
+排序与 originator 缺席、TTL 边界、回调错误文案与先删会话次序、令牌请求形状、双层
+错误包装、代理分支、auth.json 规范化的精确 JSON / 零值 expiry / 一小时回退 / 空白
+access_token / 畸形 JSON）与 `tests/AxonHub.Api.Tests/AdminCodexOAuthEndpointTests.cs`
+（37 例：三条路由的 JWT 门、绑定失败、gin 信封、400/401/500/502、会话单次消费、
+代理路由）。
+
+本轮实测：新增 69 例通过（连同既有 CodexChannelWiringTests 的 4 个 CodexOAuth 用例，
+过滤跑 73 例通过）。`AxonHub.Api.Tests` 未跑全量，静态计数 6211 → 6280；四项目合计
+9925 → 9994（Llm 3161 / Persistence 376 / Grains 177 未重跑）。
+
+台账：C094 (11) 关闭，C094 仍为 gap（保留 §146 的 fenno / github_copilot /
+antigravity provider 复用）；新增 C270（gap：xai / claudecode / copilot 管理面 OAuth
+端点未移植）；lint 通过，`02-differences.md` 已重新生成；270 条（196 accepted /
+6 gap / 68 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

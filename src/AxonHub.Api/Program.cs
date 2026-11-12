@@ -338,6 +338,11 @@ builder.Services.AddSingleton<ChannelProxyExecutors>();
 builder.Services.AddSingleton<IAntigravityOAuthStateCache, AntigravityOAuthStateCache>();
 builder.Services.AddScoped<AntigravityOAuthService>();
 
+// Codex OAuth management (api/codex.go): the PKCE session cache is likewise
+// in-process; start/exchange/decode sit on the admin group (routes.go:114-116).
+builder.Services.AddSingleton<ICodexOAuthStateCache, CodexOAuthStateCache>();
+builder.Services.AddScoped<CodexOAuthService>();
+
 // Projects (biz.ProjectService): CRUD over the projects table plus the
 // project-level role presets and the creator's UserProject row. The project
 // cache is not ported (C174).
@@ -897,6 +902,10 @@ app.MapInvitationRoutes();
 // Antigravity OAuth (routes.go:124-125): both routes sit on the admin group.
 app.MapAntigravityOAuthRoutes();
 
+// Codex OAuth (routes.go:114-116): start, exchange and auth.json decode all
+// sit on the admin group.
+app.MapCodexOAuthRoutes();
+
 // NewOIDCHandlers warns when providers are configured without a public URL
 // (api/oidc.go:36-41). An empty value still fails each flow at getBaseURL.
 if (oidcProviders.Count > 0 && oidcLoginOptions.PublicUrl.Length == 0)
@@ -988,6 +997,17 @@ app.UseWhen(
 // the same plain user-JWT gate and WithProjectID.
 app.UseWhen(
     static context => context.Request.Path.StartsWithSegments("/admin/antigravity/oauth"),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
+    });
+
+// The Codex OAuth surface (start / exchange / auth decode) sits on the admin
+// group (routes.go:106,114-116): the same plain user-JWT gate and
+// WithProjectID.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/codex"),
     static branch =>
     {
         branch.UseMiddleware<AdminJwtAuthMiddleware>();

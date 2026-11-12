@@ -1025,6 +1025,20 @@ codex / codex alpha search / claudecode / xai_subscription / antigravity 的
 差分语料行 + 1 个 UTF-8 BOM 用例），类内合计 80 例；Llm 全量 3161 例、Api 定向
 96 例通过。
 
+2026-11-12 更新（§187）：C094 (11) 关闭。参照 `internal/server/api/codex.go`
+的管理面三端点已移植：`POST /admin/codex/oauth/start`（`oauth.GenerateState(32)`、
+`oauth.GenerateCodeVerifier(64)` 与 S256 challenge，`codex:oauth:<state>` 键写入
+10 分钟 TTL 的进程内缓存，`url.Values.Encode` 排序的授权 URL 含
+`id_token_add_organizations=true` 与 `codex_cli_simplified_flow=true`、不含
+`originator`）、`POST /admin/codex/oauth/exchange`（命中会话后立即删除，再解析
+`callback_url` 与校验 state；畸形回调或 state 不匹配同样消费会话；
+`proxy.type=url` 经 `HttpProxyExecutorFactory`；令牌交换失败 502、凭据编码失败
+500）与 `POST /admin/codex/auth/decode`（`CodexToken.DecodeAuthJson` + `ToJson`）。
+端口新增 `CodexOAuthService`（业务）、`CodexOAuthHandlers`（绑定与 gin 信封）、
+`CodexOAuthStateCache`（go-cache 到期语义），并挂到 admin JWT + WithProjectID
+路由组。`DecodeAuthJson` 本身此前已移植，其消费方至此接通；解码错误文案仍为
+System.Text.Json（与 C093 同类的已接受差异）。新增 69 例（服务 32、端点 37）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、
