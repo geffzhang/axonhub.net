@@ -30,5 +30,11 @@
     <!-- 默认 favicon 与 internal/server/assets/favicon.ico 逐字节一致（go:embed）。 -->
     <EmbeddedResource Include="Assets\favicon.ico"
                       LogicalName="AxonHub.Api.Assets.favicon.ico" />
+    <!-- gqlgen v0.17.86 playground/page.tmpl 对两个 endpoint 的渲染结果，
+         逐字节复刻（GraphiQL 4.1.2 / React 18.2.0）。 -->
+    <EmbeddedResource Include="Static\Playground\admin.html"
+                      LogicalName="AxonHub.Api.Static.Playground.admin.html" />
+    <EmbeddedResource Include="Static\Playground\openapi.html"
+                      LogicalName="AxonHub.Api.Static.Playground.openapi.html" />
   </ItemGroup>
 </Project>

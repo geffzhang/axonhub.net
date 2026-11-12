@@ -852,6 +852,11 @@ builder.Services.AddScoped<ManagementAuthService>();
 // WithAdminGraphqlAuth / WithProjectID gate is wired below.
 builder.Services.AddAxonHubGraphQL();
 
+// The OpenAPI GraphQL surface is a second, independent gqlgen server in the
+// reference (internal/server/gql/openapi/graphql.go); the port hosts it as a
+// named HotChocolate schema.
+builder.Services.AddAxonHubOpenApiGraphQL();
+
 builder.Host.UseOrleans(silo =>
 {
     silo.UseLocalhostClustering();
@@ -959,6 +964,22 @@ app.MapGraphQL("/admin/graphql")
     .WithOptions(static options => options.EnableGetRequests = false)
     .WithMetadata(new HttpMethodMetadata([HttpMethods.Post]));
 
+// The OpenAPI GraphQL endpoint (routes.go:164,175): a separate gqlgen schema
+// mounted POST-only on the openapi group. GET is never a transport in the
+// reference either.
+app.MapGraphQL("/openapi/v1/graphql", "openapi")
+    .WithOptions(static options => options.EnableGetRequests = false)
+    .WithMetadata(new HttpMethodMetadata([HttpMethods.Post]));
+
+// The admin UI's GraphiQL page (routes.go:157): the gqlgen playground handler
+// sits on the admin group.
+app.MapGet("/admin/playground", PlaygroundPages.ServeAdminAsync);
+
+// The OpenAPI playground and webhook echo (routes.go:171,176): both sit on the
+// openapi group.
+app.MapGet("/openapi/v1/playground", PlaygroundPages.ServeOpenApiAsync);
+app.MapPost("/openapi/webhook/echo", WebhookEchoEndpoint.HandleAsync);
+
 // The downstream Responses WebSocket mode (responses_websocket.go) upgrades
 // GET /v1/responses and GET /codex/responses. ASP.NET Core needs the WebSocket
 // middleware in the pipeline; the reference's 2.5 minute pings and 5 minute
@@ -1002,6 +1023,51 @@ app.UseWhen(
         branch.UseMiddleware<AdminGraphqlAuthMiddleware>();
         branch.UseMiddleware<ProjectIdMiddleware>();
         branch.UseMiddleware<ApiKeyReadOnlyMiddleware>();
+    });
+
+// routes.go:175 mounts POST only, so a non-POST /openapi/v1/graphql never
+// matches the route and gin's NoRoute hands it to static.Handler (C116).
+app.UseWhen(
+    static context => context.Request.Path.Value == "/openapi/v1/graphql"
+        && !HttpMethods.IsPost(context.Request.Method),
+    static branch => branch.Run(context =>
+        StaticHandler.WriteApiNotFoundAsync(context, context.Request.Path.Value ?? "/")));
+
+// The gqlgen playground handler is mounted only on GET (routes.go:157,171), so
+// a HEAD request falls through to gin's NoRoute instead of serving the page.
+// Endpoint routing matches HEAD against GET endpoints implicitly; restore the
+// reference's 404 envelope before any group gate runs.
+app.UseWhen(
+    static context => HttpMethods.IsHead(context.Request.Method)
+        && (context.Request.Path.Value == "/admin/playground"
+            || context.Request.Path.Value == "/openapi/v1/playground"),
+    static branch => branch.Run(context =>
+        StaticHandler.WriteApiNotFoundAsync(context, context.Request.Path.Value ?? "/")));
+
+// The openapi group gate (routes.go:169-178): WithIPBlocklist then
+// WithOpenAPIAuth. Like every gin group, it only runs for matched routes, so
+// the static fallback stays outside it (C116). The group's WithTimeout is not
+// ported (C115/C014 family).
+app.UseWhen(
+    static context => !IsStaticFallback(context)
+        && (context.Request.Path.Value == "/openapi/v1/graphql"
+            || context.Request.Path.Value == "/openapi/v1/playground"
+            || context.Request.Path.Value == "/openapi/webhook/echo"),
+    static branch =>
+    {
+        branch.UseMiddleware<IpBlocklistMiddleware>();
+        branch.UseMiddleware<OpenApiAuthMiddleware>();
+    });
+
+// The admin GraphiQL page sits on the admin group (routes.go:106,157): the
+// plain user-JWT gate then WithProjectID.
+app.UseWhen(
+    static context => context.Request.Path.Value == "/admin/playground"
+        && HttpMethods.IsGet(context.Request.Method),
+    static branch =>
+    {
+        branch.UseMiddleware<AdminJwtAuthMiddleware>();
+        branch.UseMiddleware<ProjectIdMiddleware>();
     });
 
 // The OIDC link flow sits on the admin group (routes.go:106,131): the plain

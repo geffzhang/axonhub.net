@@ -1519,6 +1519,38 @@ gcs 的后端 key 形状与响应头、后端构造 500 与读取 404、filename
 预览对 `_ext` 标记的折叠）；lint 通过，`02-differences.md` 已重新生成；273 条
 （198 accepted / 6 gap / 69 resolved）。
 
+§190（2026-11-12）收窄 C272：playground 与 openapi 组 4 条路由。
+
+参照 routes.go:157,164-176。端口新增：
+
+- `src/AxonHub.Api/Auth/OpenApiAuthMiddleware.cs`：WithOpenAPIAuth 的完整分支
+  （Authorization 首值、Bearer 前缀、TrimSpace、401/500 文案、service_account
+  类型门、AllowedIps 403、RequestIdentity 发布）。
+- `src/AxonHub.Api/GraphQL/OpenApiGraphQLSetup.cs` / `OpenApiRoots.cs` /
+  `OpenApiTypes.cs`：具名 HotChocolate schema "openapi"，POST-only，根类型
+  Query/Mutation，错误过滤器只保留 message（清空 code/extensions），内省拦截器，
+  Time/Decimal/DecimalInput/ChannelTagsMatchMode；解析器复刻 apiKey、
+  apiKeyQuotaUsages、createLLMAPIKey、updateAPIKeyProfiles、
+  loadApiKeyProfileTemplate。
+- `src/AxonHub.Api/Management/WebhookEchoEndpoint.cs`：1 MiB 读取、json.Valid、
+  Go 字段顺序、HTML 转义、尾随换行、ParseGoQuery / QueryUnescape、
+  CanonicalMIMEHeaderKey、UTF-8 字节序。
+- `src/AxonHub.Api/Static/PlaygroundPages.cs` + `Static/Playground/*.html`：
+  gqlgen v0.17.86 模板逐字节渲染，text/html; charset=UTF-8。
+- `ApiKeyManagementService`：CreateLlmApiKeyAsync 与 GetForReadAsync。
+- `Program.cs`：挂载 4 条路由，非 POST 的 graphql 与 HEAD playground 短路到
+  static 404；openapi 组 UseWhen 先 IP 黑名单后 OpenAPI 鉴权。
+- `AbortResponse`：改用 UnsafeRelaxedJsonEscaping + GoJson.Escape，单引号保持
+  原样输出、不再转义，与 Go encoding/json 对齐。
+
+测试：OpenApiEndpointTests.cs 29 例（鉴权 4、apiKey 6、createLLMAPIKey 4、
+updateProfiles 2、loadTemplate 2、quota 2、内省 1、playground 2、路由回退 1、
+webhook 4、解析器 1）。实测 29 通过 / 0 失败；既有 ApiKeyAuthMiddlewareTests /
+GeminiKeyAuthMiddlewareTests / AdminGraphqlAuthTests / AdminAuthEndpointTests
+54 例回归通过；`AxonHub.Api.Tests` 未跑全量。台账：C272 收窄为仅
+`POST /admin/playground/chat`（gap）；新增 C274–C277（accepted）；lint 通过，
+`02-differences.md` 已重新生成；277 条（202 accepted / 6 gap / 69 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

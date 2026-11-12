@@ -1,4 +1,6 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using AxonHub.Llm.Json;
 using Microsoft.AspNetCore.WebUtilities;
 
 namespace AxonHub.Api.Auth;
@@ -17,8 +19,17 @@ internal static class AbortResponse
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        // gin writes this envelope with encoding/json, which leaves characters
+        // such as ' alone and HTML-escapes <, > and &. The relaxed encoder plus
+        // GoJson.Escape reproduces those bytes; the default encoder would emit
+        // ' for the apostrophe in "must start with 'Bearer '".
         using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
+        using (var writer = new Utf8JsonWriter(
+            buffer,
+            new JsonWriterOptions
+            {
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            }))
         {
             writer.WriteStartObject();
             writer.WritePropertyName("error");
@@ -31,7 +42,7 @@ internal static class AbortResponse
 
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/json; charset=utf-8";
-        await context.Response.Body.WriteAsync(buffer.ToArray(), cancellationToken)
+        await context.Response.Body.WriteAsync(GoJson.Escape(buffer.ToArray()), cancellationToken)
             .ConfigureAwait(false);
     }
 }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using AxonHub.Api.Auth;
 using AxonHub.Api.GraphQL;
 using AxonHub.Llm.Json;
+using AxonHub.Llm.Transformer.Shared;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.Management;
@@ -47,8 +48,9 @@ public sealed record UpdateApiKeyCommand
 /// GraphQL Transactioner wraps every mutation operation in one transaction; the
 /// port starts a transaction per write method instead (C176). API-key cache
 /// invalidation and the deferred surfaces (quota usage, token stats, profile
-/// templates, requests edge, UpdateAPIKeyScopes, CreateLLMAPIKey, GetForRead)
-/// are not ported in this slice.
+/// templates, requests edge, UpdateAPIKeyScopes) are not ported in this slice.
+/// CreateLLMAPIKey and GetForRead back the OpenAPI GraphQL surface and are
+/// ported below.
 /// </summary>
 public sealed class ApiKeyManagementService(
     IApiKeyStore apiKeys,
@@ -63,6 +65,10 @@ public sealed class ApiKeyManagementService(
     private const string PersonalType = "personal";
     private const string ServiceAccountType = "service_account";
     private const string NoauthType = "noauth";
+
+    /// <summary>The ent create default for CreateLLMAPIKey (biz/api_key.go:246).</summary>
+    private static readonly string[] LlmApiKeyScopes =
+        ["read_channels", "write_requests"];
 
     /// <summary>Port of APIKeyService.CreateAPIKey (biz/api_key.go:291-354).</summary>
     public async Task<ApiKeyRecord> CreateAsync(
@@ -218,6 +224,190 @@ public sealed class ApiKeyManagementService(
         var record = await apiKeys.GetByIdAsync(id, access, cancellationToken)
             .ConfigureAwait(false);
         return record ?? throw new InvalidOperationException(ApiKeyNotFound);
+    }
+
+    /// <summary>
+    /// Port of APIKeyService.CreateLLMAPIKey (biz/api_key.go:224-288): creates a
+    /// user-type key owned by the calling service-account key's user, scoped to
+    /// its project. The privacy mutation policy runs during Save in the
+    /// reference, before the duplicate-name check, so unauthorized callers
+    /// cannot probe existing names.
+    /// </summary>
+    public async Task<ApiKeyRecord> CreateLlmApiKeyAsync(
+        ApiKeyRecord owner,
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+
+        var trimmedName = GoStrings.TrimSpace(name);
+        if (trimmedName.Length == 0)
+        {
+            throw new InvalidOperationException("api key name is required");
+        }
+
+        string generatedKey;
+        try
+        {
+            generatedKey = GenerateApiKey();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to generate api key: " + ex.Message,
+                ex);
+        }
+
+        return await apiKeys.RunInTransactionAsync(
+                async token =>
+                {
+                    try
+                    {
+                        await apiKeys.LockProjectForNameAsync(owner.ProjectId, token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        throw new InvalidOperationException(
+                            "failed to lock project for api key name uniqueness: " + ex.Message,
+                            ex);
+                    }
+
+                    try
+                    {
+                        await privacy.EvaluateMutationAsync(
+                                ApiKeyMutationOp.Create,
+                                owner.ProjectId,
+                                token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // The reference wraps the Save error in lowercase
+                        // (biz/api_key.go:261).
+                        throw new InvalidOperationException(
+                            "failed to create api key: " + ex.Message,
+                            ex);
+                    }
+
+                    var row = new ApiKeyRecord
+                    {
+                        Name = trimmedName,
+                        Key = generatedKey,
+                        UserId = owner.UserId ?? 0,
+                        ProjectId = owner.ProjectId,
+                        Type = UserType,
+                        Scopes = JsonSerializer.Serialize(LlmApiKeyScopes),
+                    };
+
+                    try
+                    {
+                        await apiKeys.CreateAsync(row, token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        throw new InvalidOperationException(
+                            "failed to create api key: " + ex.Message,
+                            ex);
+                    }
+
+                    // Service-account callers cannot read personal keys, so the
+                    // duplicate response only depends on non-personal keys in
+                    // their project (system bypass).
+                    int duplicateCount;
+                    try
+                    {
+                        duplicateCount = await apiKeys.CountAsync(
+                                new ApiKeyListFilter
+                                {
+                                    Name = trimmedName,
+                                    ProjectId = owner.ProjectId,
+                                    TypeNotIn = [PersonalType],
+                                },
+                                access: null,
+                                includeDeleted: false,
+                                token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        throw new InvalidOperationException(
+                            "failed to check API key name uniqueness: " + ex.Message,
+                            ex);
+                    }
+
+                    if (duplicateCount > 1)
+                    {
+                        throw DuplicateName(trimmedName);
+                    }
+
+                    return row;
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Port of APIKeyService.GetForRead (biz/api_key.go:968-1009): exactly one of
+    /// id, key or name identifies a key; the privacy query filter confines an
+    /// API-key principal to its own project and hides personal keys. Errors are
+    /// returned unwrapped, exactly like the reference.
+    /// </summary>
+    public async Task<ApiKeyRecord> GetForReadAsync(
+        long? id,
+        string? key,
+        string? name,
+        CancellationToken cancellationToken = default)
+    {
+        var provided = 0;
+        provided += id is null ? 0 : 1;
+        provided += key is null ? 0 : 1;
+        provided += name is null ? 0 : 1;
+
+        if (provided != 1)
+        {
+            throw new InvalidOperationException(
+                "exactly one of api key id, key, or name must be provided");
+        }
+
+        var access = await privacy.EvaluateQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (id is not null)
+        {
+            return await apiKeys.GetByIdAsync(id.Value, access, cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException(ApiKeyNotFound);
+        }
+
+        var rows = await apiKeys.ListAllAsync(
+                new ApiKeyListFilter
+                {
+                    Key = key,
+                    Name = name,
+                },
+                access,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (rows.Count == 0)
+        {
+            throw new InvalidOperationException(ApiKeyNotFound);
+        }
+
+        if (rows.Count > 1)
+        {
+            if (name is not null)
+            {
+                throw new InvalidOperationException(
+                    "multiple API keys are named " + GoCast.GoQuote(name)
+                    + " in this project; use id or key to identify the key");
+            }
+
+            throw new InvalidOperationException("ent: api_key not singular");
+        }
+
+        return rows[0];
     }
 
     /// <summary>Port of APIKeyService.UpdateAPIKey (biz/api_key.go:413-517).</summary>

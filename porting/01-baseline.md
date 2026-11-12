@@ -1079,6 +1079,26 @@ gin FileAttachment 的 Content-Disposition 规则）、`RequestContentHandlers`
 实现差异（MIME 表与嗅探、ServeFile 条件请求细节、外部 `_ext` 标记的预览输出、
 整块读取的 Content-Length）登记为 C273（accepted）；实时 SSE 预览仍见 C192。
 
+2026-11-12 更新（§190）：C272 收窄至单条路由。参照 routes.go:157,164-176 的
+playground 与 openapi 组已移植：`GET /admin/playground`（admin JWT + WithProjectID
+后由 gqlgen Playground.ServeHTTP 提供）、`POST /openapi/v1/graphql`（独立 gqlgen
+schema，openapi.graphql / openapi.resolvers.go）、`GET /openapi/v1/playground` 与
+`POST /openapi/webhook/echo`（openapi 组：WithIPBlocklist → WithOpenAPIAuth）。
+端口新增 `OpenApiAuthMiddleware`（Authorization 首值、仅 service_account、
+401/403/500 文案与判定顺序）、`OpenApiGraphQLSetup` / `OpenApiRoots` /
+`OpenApiTypes`（具名 HotChocolate schema、根类型命名 Query/Mutation、异常消息型
+错误呈现、内省放行、Time/Decimal/DecimalInput/ChannelTagsMatchMode 标量）、
+`WebhookEchoEndpoint`（1 MiB 读取、json.Valid 门、Go 字段顺序与 HTML 转义、
+ParseGoQuery / QueryUnescape / CanonicalMIMEHeaderKey）、`PlaygroundPages` 与两份
+gqlgen v0.17.86 模板的逐字节渲染 HTML；`ApiKeyManagementService` 补
+`CreateLlmApiKeyAsync`（owner 继承、名称唯一、事务内 privacy 与回滚）与
+`GetForReadAsync`（id/key/name 三选一、隐私过滤、Go 文案）。`Program.cs` 挂载
+4 条路由，非 POST 的 /openapi/v1/graphql 与 HEAD 的两个 playground 短路到
+static 404。新增 29 例 `tests/AxonHub.Api.Tests/OpenApiEndpointTests.cs`；
+实现差异登记为 C274–C277（accepted），C272 收窄为仅
+`POST /admin/playground/chat`（gap）；`AbortResponse` 改用 Go 兼容编码，
+单引号保持原样输出、不再转义。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

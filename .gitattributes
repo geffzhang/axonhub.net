@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# gqlgen playground pages are served byte-for-byte; keep their LF endings.
+src/AxonHub.Api/Static/Playground/*.html text eol=lf
