@@ -798,6 +798,11 @@ internal static class ProjectUserEdgeFilters
     public static UsageLogListFilter? And(UsageLogListFilter? where, UsageLogListFilter edge)
         => where is null ? edge : new UsageLogListFilter { And = [where, edge] };
 
+    public static RequestExecutionListFilter? And(
+        RequestExecutionListFilter? where,
+        RequestExecutionListFilter edge)
+        => where is null ? edge : new RequestExecutionListFilter { And = [where, edge] };
+
     public static ThreadListFilter? And(ThreadListFilter? where, ThreadListFilter edge)
         => where is null ? edge : new ThreadListFilter { And = [where, edge] };
 

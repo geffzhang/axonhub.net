@@ -2279,6 +2279,18 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
             return false;
         }
 
+        if (filter.HasRolesWith is { Count: > 0 } roleFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS: one linked role must satisfy all of them.
+            if (RolesSource is not FakeRoleStore fakeRoles
+                || !fakeRoles.UserRoleIds(row.Id).Any(roleId =>
+                    roleFilters.All(roleFilter => fakeRoles.MatchesRole(roleId, roleFilter))))
+            {
+                return false;
+            }
+        }
+
         if (filter.FirstNameContainsFold is not null
             && !row.FirstName.Contains(
                 filter.FirstNameContainsFold,
@@ -2403,6 +2415,23 @@ internal sealed class FakeRoleStore : IRoleStore
         CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<UserRoleRecord>>(
             _userRoleRows.Where(row => row.UserId == userId).ToList());
+
+    public Task<IReadOnlyList<UserRoleRecord>> ListUserRolesForRoleAsync(
+        long roleId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<UserRoleRecord>>(
+            _userRoleRows.Where(row => row.RoleId == roleId).ToList());
+
+    /// <summary>
+    /// Evaluates a nested Role predicate for the User.HasRolesWith edge. The
+    /// generated SQL joins roles without re-applying the soft-delete predicate,
+    /// so the fake does not filter deleted rows either.
+    /// </summary>
+    public bool MatchesRole(long roleId, RoleListFilter filter)
+    {
+        var row = _rows.FirstOrDefault(item => item.Id == roleId);
+        return row is not null && Matches(row, filter);
+    }
 
     public Task<T> RunInTransactionAsync<T>(
         Func<CancellationToken, Task<T>> action,

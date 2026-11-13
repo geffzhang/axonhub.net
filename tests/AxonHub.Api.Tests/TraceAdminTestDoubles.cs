@@ -742,6 +742,9 @@ internal sealed class FakeRequestSegmentStore : IRequestSegmentStore
             && (filter.UpdatedAtLTE is null || row.UpdatedAt <= filter.UpdatedAtLTE.Value)
             && (filter.ProjectId is null || row.ProjectId == filter.ProjectId.Value)
             && (filter.ProjectIdNEQ is null || row.ProjectId != filter.ProjectIdNEQ.Value)
+            && (filter.ApiKeyId is null || row.ApiKeyId == filter.ApiKeyId.Value)
+            && (filter.ChannelId is null || row.ChannelId == filter.ChannelId.Value)
+            && (filter.DataStorageId is null || row.DataStorageId == filter.DataStorageId.Value)
             && (filter.Status is null || row.Status == filter.Status)
             && (filter.StatusNEQ is null || row.Status != filter.StatusNEQ)
             && (filter.StatusIn is null

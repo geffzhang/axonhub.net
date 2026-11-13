@@ -943,6 +943,10 @@ public sealed class RoleType : INode
     [GraphQLIgnore]
     public long DbId { get; init; }
 
+    /// <summary>Raw <c>project_id</c> column (null for system roles).</summary>
+    [GraphQLIgnore]
+    public long? ProjectDbId { get; init; }
+
     [GraphQLType(typeof(IdType))]
     public string Id { get; init; } = string.Empty;
 
@@ -961,6 +965,106 @@ public sealed class RoleType : INode
     public string? ProjectId { get; init; }
 
     public IReadOnlyList<string>? Scopes { get; init; }
+}
+
+/// <summary>
+/// Port of the entgql Role edges (ent.graphql:5419-5520; gql_edge.go:577-625):
+/// <c>users</c> through the User query policy, <c>project</c> through the
+/// Project query policy with MaskNotFound, and <c>userRoles</c> as the SDL list
+/// the reference resolves with <c>obj.QueryUserRoles().All(ctx)</c>
+/// (ent.resolvers.go:832-834).
+/// </summary>
+[ExtendObjectType(typeof(RoleType))]
+public sealed class RoleTypeExtensions
+{
+    /// <summary>Port of Role.users (gql_edge.go:577-596).</summary>
+    [GraphQLName("users")]
+    public async Task<UserConnectionType> GetUsersAsync(
+        [Parent] RoleType role,
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        UserOrder? orderBy,
+        UserWhereInput? where,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        // The edge predicate is user_roles.role_id = X; UserStore renders
+        // HasRolesWith as an EXISTS over user_roles JOIN roles.
+        var filter = ProjectUserEdgeFilters.And(
+            ManagementMapping.ToFilter(where),
+            new UserListFilter { HasRolesWith = [new RoleListFilter { Id = role.DbId }] });
+
+        var sortField = ManagementMapping.ToUserEdgeSortField(orderBy);
+        var page = await users.ListAsync(
+                new UserListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = ManagementMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>
+    /// Port of Role.project (gql_edge.go:598-604): the Project query policy
+    /// runs, then <c>MaskNotFound</c> turns a missing row (including a system
+    /// role's nil edge) into null; a privacy deny still propagates.
+    /// </summary>
+    [GraphQLName("project")]
+    public async Task<ProjectType?> GetProjectAsync(
+        [Parent] RoleType role,
+        [Service] ProjectPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        // The generated Project edge join matches nothing when project_id is
+        // null (system roles), so MaskNotFound yields null.
+        var project = role.ProjectDbId is { } projectId
+            ? await privacy.GetVisibleProjectAsync(projectId, cancellationToken)
+                .ConfigureAwait(false)
+            : await EvaluateProjectQueryAsync(privacy, cancellationToken)
+                .ConfigureAwait(false);
+        return project is null ? null : UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>
+    /// Port of Role.userRoles (ent.graphql: Role.userRoles is a plain list;
+    /// ent.resolvers.go:832-834 runs <c>obj.QueryUserRoles().All(ctx)</c>): no
+    /// ordering, no privacy policy.
+    /// </summary>
+    [GraphQLName("userRoles")]
+    public async Task<IReadOnlyList<UserRoleType>?> GetUserRolesAsync(
+        [Parent] RoleType role,
+        [Service] IRoleStore roles,
+        CancellationToken cancellationToken)
+    {
+        var rows = await roles.ListUserRolesForRoleAsync(role.DbId, cancellationToken)
+            .ConfigureAwait(false);
+        return [.. rows.Select(UserRoleMapping.ToGraphQL)];
+    }
+
+    /// <summary>
+    /// Runs the Project query policy for a role with no project edge: the
+    /// reference's <c>QueryProject().Only(ctx)</c> evaluates the policy before
+    /// the join reports NotFound, so a deny must still surface.
+    /// </summary>
+    private static async Task<ProjectRecord?> EvaluateProjectQueryAsync(
+        ProjectPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        _ = await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+        return null;
+    }
 }
 
 /// <summary>Port of <c>UserEdge</c> (ent.graphql).</summary>
@@ -1117,6 +1221,7 @@ public static class ManagementMapping
         UpdatedAt = record.UpdatedAt,
         Name = record.Name,
         Level = ToGraphQLLevel(record.Level),
+        ProjectDbId = record.ProjectId,
         ProjectId = record.ProjectId is null
             ? null
             : new GidValue("Project", record.ProjectId.Value).ToString(),

@@ -1799,6 +1799,148 @@ public sealed class ChannelType : INode
     }
 }
 
+/// <summary>
+/// Port of the entgql Channel edges (ent.graphql:407-543; gql_edge.go:56-129):
+/// the three connections plus the channelProbes list. Each connection runs
+/// through its own entity's query policy (Request / UsageLog; RequestExecution
+/// has none), so the port ANDs the edge's <c>channel_id</c> predicate into the
+/// caller's where filter and routes privacy through the management services.
+/// </summary>
+[ExtendObjectType(typeof(ChannelType))]
+public sealed class ChannelTypeExtensions
+{
+    /// <summary>Port of Channel.requests (gql_edge.go:56-75).</summary>
+    [GraphQLName("requests")]
+    public async Task<RequestConnectionType> GetRequestsAsync(
+        [Parent] ChannelType channel,
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RequestOrder? orderBy,
+        RequestWhereInput? where,
+        [Service] RequestManagementService requests,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var filter = ProjectUserEdgeFilters.And(
+            TraceMapping.ToFilter(where),
+            new RequestListFilter { ChannelId = channel.DbId });
+
+        var sortField = TraceMapping.ToEdgeRequestSortField(orderBy);
+        var page = await requests.ListAsync(
+                new RequestListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>
+    /// Port of Channel.executions (gql_edge.go:77-96). The RequestExecution
+    /// schema has no mixins and no privacy policy, like node(RequestExecution).
+    /// </summary>
+    [GraphQLName("executions")]
+    public async Task<RequestExecutionConnectionType> GetExecutionsAsync(
+        [Parent] ChannelType channel,
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RequestExecutionOrder? orderBy,
+        RequestExecutionWhereInput? where,
+        [Service] IRequestExecutionStore executions,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var filter = ProjectUserEdgeFilters.And(
+            RequestMapping.ToFilter(where),
+            new RequestExecutionListFilter { ChannelId = channel.DbId });
+
+        var sortField = RequestMapping.ToEdgeExecutionSortField(orderBy);
+        var page = await executions.ListAsync(
+                new RequestExecutionListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = RequestMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return RequestMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of Channel.usageLogs (gql_edge.go:98-117).</summary>
+    [GraphQLName("usageLogs")]
+    public async Task<UsageLogConnectionType> GetUsageLogsAsync(
+        [Parent] ChannelType channel,
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        UsageLogOrder? orderBy,
+        UsageLogWhereInput? where,
+        [Service] UsageLogManagementService usageLogs,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var filter = ProjectUserEdgeFilters.And(
+            RequestMapping.ToFilter(where),
+            new UsageLogListFilter { ChannelId = channel.DbId });
+
+        var sortField = RequestMapping.ToEdgeUsageLogSortField(orderBy);
+        var page = await usageLogs.ListAsync(
+                new UsageLogListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = RequestMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return RequestMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>
+    /// Port of Channel.channelProbes (ent.graphql; gql_edge.go:119-129). The
+    /// reference runs <c>obj.QueryChannelProbes().All(ctx)</c>: the probe schema
+    /// has no policy, the SDL narrows the connection to a plain list, and the
+    /// order is unspecified; the port pins id ascending (C164).
+    /// </summary>
+    [GraphQLName("channelProbes")]
+    public async Task<IReadOnlyList<ChannelProbeType>?> GetChannelProbesAsync(
+        [Parent] ChannelType channel,
+        [Service] IChannelProbeStore probes,
+        CancellationToken cancellationToken)
+    {
+        var rows = await probes.ListByChannelIdAsync(channel.DbId, cancellationToken)
+            .ConfigureAwait(false);
+        return [.. rows.Select(ChannelProbeMapping.ToGraphQL)];
+    }
+}
+
 /// <summary>Port of <c>ChannelEdge</c> (ent.graphql:564-573).</summary>
 [GraphQLName("ChannelEdge")]
 public sealed class ChannelEdgeType

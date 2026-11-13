@@ -1021,7 +1021,9 @@ internal sealed class RequestsSliceExecutionStore : IRequestExecutionStore
         _ = cancellationToken;
         Queries.Add(query);
 
-        var filtered = _rows.Where(row => row.RequestId == query.RequestScope).ToList();
+        var filtered = _rows
+            .Where(row => query.RequestScope is null || row.RequestId == query.RequestScope.Value)
+            .ToList();
         var page = FakePagination.Paginate(
             filtered,
             query.SortField != RequestExecutionSortField.Id,

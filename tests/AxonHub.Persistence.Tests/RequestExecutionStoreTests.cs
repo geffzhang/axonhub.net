@@ -680,6 +680,51 @@ public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
                 201));
     }
 
+    [Fact]
+    public async Task ListWithoutRequestScopeFiltersByChannelAndDataStorage()
+    {
+        // Channel.executions and DataStorage.executions resolve the reverse
+        // edge with a foreign-key predicate and no parent request, so the
+        // nullable RequestScope must render no request_id condition.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var onChannel = NewExecution(101);
+        onChannel.ChannelId = 7;
+        onChannel.DataStorageId = 3;
+        var onChannelId = await store.CreateAsync(onChannel);
+
+        var onChannelOtherStorage = NewExecution(202);
+        onChannelOtherStorage.ChannelId = 7;
+        onChannelOtherStorage.DataStorageId = 4;
+        var onChannelOtherStorageId = await store.CreateAsync(onChannelOtherStorage);
+
+        var onOtherChannel = NewExecution(303);
+        onOtherChannel.ChannelId = 8;
+        onOtherChannel.DataStorageId = 3;
+        var onOtherChannelId = await store.CreateAsync(onOtherChannel);
+
+        async Task<long[]> IdsAsync(RequestExecutionListFilter where)
+            => (await store.ListAsync(new RequestExecutionListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal(
+            [onChannelId, onChannelOtherStorageId],
+            await IdsAsync(new RequestExecutionListFilter { ChannelId = 7 }));
+        Assert.Equal(
+            [onChannelId, onOtherChannelId],
+            await IdsAsync(new RequestExecutionListFilter { DataStorageId = 3 }));
+        Assert.Equal(
+            [onChannelId],
+            await IdsAsync(new RequestExecutionListFilter
+            {
+                ChannelId = 7,
+                DataStorageId = 3,
+            }));
+    }
+
     private static RequestExecutionRecord NewExecution(long requestId) => new()
     {
         CreatedAt = CreatedAt,

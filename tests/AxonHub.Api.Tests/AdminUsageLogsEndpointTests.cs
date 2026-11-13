@@ -518,6 +518,11 @@ internal sealed class UsageLogSliceStore : IUsageLogStore
             return false;
         }
 
+        if (filter.ChannelId is not null && row.ChannelId != filter.ChannelId.Value)
+        {
+            return false;
+        }
+
         if (filter.Not is not null && Matches(row, filter.Not))
         {
             return false;

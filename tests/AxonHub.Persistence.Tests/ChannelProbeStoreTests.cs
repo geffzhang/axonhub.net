@@ -255,6 +255,30 @@ public sealed class ChannelProbeStoreTests(PostgresFixture fixture)
             RequestId = requestId,
         };
 
+    [Fact]
+    public async Task ListByChannelIdReturnsTheChannelsBucketsInIdOrder()
+    {
+        // Channel.channelProbes runs All(ctx): no time window, no policy and
+        // no declared ordering; the port pins id ascending (C164).
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await SeedAsync(
+            db,
+            Row(2, End - 10, 1, 1),
+            Row(1, End, 2, 2),
+            Row(2, End - 20, 3, 3),
+            Row(1, End - 30, 4, 4));
+
+        await using var context = db.Factory.CreateDbContext();
+        var rows = await new ChannelProbeStore(context).ListByChannelIdAsync(1);
+
+        Assert.Equal(
+            [End, End - 30],
+            rows.Select(static row => row.Timestamp).ToArray());
+        Assert.All(rows, static row => Assert.Equal(1, row.ChannelId));
+        Assert.Empty(await new ChannelProbeStore(context).ListByChannelIdAsync(99));
+    }
+
     private static ChannelProbeRecord Row(
         long channelId,
         long timestamp,

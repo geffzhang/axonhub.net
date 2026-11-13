@@ -436,6 +436,16 @@ public interface IChannelProbeStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of <c>Channel.channelProbes</c> (ent.graphql, gql_edge.go:119-129):
+    /// the reference runs <c>obj.QueryChannelProbes().All(ctx)</c>, so no
+    /// privacy policy applies and the order is unspecified; the port pins id
+    /// ascending like the other un-ordered list edges (C164).
+    /// </summary>
+    Task<IReadOnlyList<ChannelProbeRecord>> ListByChannelIdAsync(
+        long channelId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of <c>client.ChannelProbe.Query().Where(ChannelIDIn(...),
     /// TimestampGTE(start), TimestampLTE(end)).Order(ent.Asc(Timestamp))</c>
     /// (channel_probe.go:375-382): inclusive bounds, ascending timestamp and no
@@ -496,6 +506,24 @@ public sealed class ChannelProbeStore(AxonHubDbContext db) : IChannelProbeStore
                 new { Id = id },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<ChannelProbeRecord>> ListByChannelIdAsync(
+        long channelId,
+        CancellationToken cancellationToken = default)
+    {
+        var sql = "SELECT " + Columns
+            + " FROM \"channel_probes\" WHERE \"channel_id\" = @ChannelId"
+            + " ORDER BY \"id\";";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<ChannelProbeRecord>(
+            new CommandDefinition(
+                sql,
+                new { ChannelId = channelId },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.AsList();
     }
 
     public async Task<IReadOnlyList<ChannelProbeRecord>> QueryAsync(

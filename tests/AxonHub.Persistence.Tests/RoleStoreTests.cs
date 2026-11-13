@@ -697,6 +697,56 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
 
     private static T[] Expected<T>(params T[] values) => values;
 
+    [Fact]
+    public async Task ListUserRolesForRoleReturnsOnlyThatRolesLinksInIdOrder()
+    {
+        // Role.userRoles is the entgql list form of the user_roles edge
+        // (ent.resolvers.go:832-834 runs All(ctx)); the port reads the join
+        // table by role_id (C164).
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RoleStore(context);
+
+        var alice = NewUser("alice@example.com");
+        var bob = NewUser("bob@example.com");
+        context.Users.AddRange(alice, bob);
+        await context.SaveChangesAsync();
+
+        var alphaId = await store.CreateAsync(NewRole("alpha", "system", 0));
+        var betaId = await store.CreateAsync(NewRole("beta", "system", 0));
+
+        context.UserRoles.AddRange(
+            new UserRoleRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                UserId = alice.Id,
+                RoleId = alphaId,
+            },
+            new UserRoleRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                UserId = bob.Id,
+                RoleId = betaId,
+            },
+            new UserRoleRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                UserId = bob.Id,
+                RoleId = alphaId,
+            });
+        await context.SaveChangesAsync();
+
+        var links = await store.ListUserRolesForRoleAsync(alphaId);
+
+        Assert.Equal([alice.Id, bob.Id], links.Select(static link => link.UserId).ToArray());
+        Assert.All(links, link => Assert.Equal(alphaId, link.RoleId));
+        Assert.Empty(await store.ListUserRolesForRoleAsync(betaId + 1));
+    }
+
     private static UserRecord NewUser(string email) => new()
     {
         CreatedAt = CreatedAt,

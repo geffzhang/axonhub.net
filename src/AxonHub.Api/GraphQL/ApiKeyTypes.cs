@@ -703,6 +703,54 @@ public sealed class ApiKeyType : INode
     }
 }
 
+/// <summary>
+/// Port of the entgql APIKey edges (ent.graphql:55-75; gql_edge.go:27-46).
+/// <c>requests</c> runs through the Request query policy, so the edge ANDs its
+/// <c>api_key_id</c> predicate into the caller's where filter — the management
+/// service overwrites its own ProjectScope with the privacy result, so the
+/// foreign key must not travel there.
+/// </summary>
+[ExtendObjectType(typeof(ApiKeyType))]
+public sealed class ApiKeyTypeExtensions
+{
+    /// <summary>Port of APIKey.requests (gql_edge.go:27-46).</summary>
+    [GraphQLName("requests")]
+    public async Task<RequestConnectionType> GetRequestsAsync(
+        [Parent] ApiKeyType apiKey,
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RequestOrder? orderBy,
+        RequestWhereInput? where,
+        [Service] RequestManagementService requests,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var filter = ProjectUserEdgeFilters.And(
+            TraceMapping.ToFilter(where),
+            new RequestListFilter { ApiKeyId = apiKey.DbId });
+
+        var sortField = TraceMapping.ToEdgeRequestSortField(orderBy);
+        var page = await requests.ListAsync(
+                new RequestListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+}
+
 /// <summary>Port of APIKeyEdge (ent.graphql).</summary>
 [GraphQLName("APIKeyEdge")]
 public sealed class ApiKeyEdgeType

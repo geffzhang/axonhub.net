@@ -1514,6 +1514,35 @@ AdminProjectUserEdgesEndpointTests 四例（14 条边解析器接线、where AND
 测试类 189 通过；未跑 Api 全量回归。台账：C165 由 accepted 转 resolved；283 条
 （203 accepted / 0 gap / 80 resolved）。
 
+2026-11-13 更新（§210）：APIKey / Channel / DataStorage / Role 的十条残余边接线（已知未接线边字段闭合）。
+参照 `internal/server/gql/ent.graphql` 的 APIKey.requests；Channel.requests / executions / usageLogs /
+channelProbes；DataStorage.requests / executions；Role.users / project / userRoles，以及
+`internal/ent/gql_edge.go:27-46`（APIKey.requests）、`:56-117`（Channel 的三条连接边）、`:119-129`
+（channelProbes 列表）、`:195-235`（DataStorage 的两条连接边）、`:577-604`（Role.users / project）与
+`internal/server/gql/ent.resolvers.go:832-834`（Role.userRoles 列表）。连接边按
+`obj.QueryX().Paginate(ctx, after, first, before, last, WithXOrder(orderBy), WithXFilter(where.Filter))`，
+不做根解析器的 CREATED_AT→id 改写，不排序时为 id（C164）；channelProbes 与 userRoles 在 SDL 是
+没有参数的列表，参照用 `All(ctx)`（不分页、不排序、无隐私），端口按父行 id 升序（C164）。
+Role.project 是 eager edge + MaskNotFound：project_id 为 null、行缺失或软删时返回 null，但 Project
+查询策略仍先求值，deny 即使外键为空也传播。端口新增 `ApiKeyTypeExtensions` / `ChannelTypeExtensions`
+/ `DataStorageTypeExtensions` / `RoleTypeExtensions` 并在 `GraphQLSetup` 显式 `AddTypeExtension`；
+外键谓词一律 AND 进调用方 where（管理服务会用隐私结果覆盖 ProjectScope，外键不能走 Scope）：
+Request 用 ApiKeyId / ChannelId / DataStorageId，RequestExecution 用 ChannelId / DataStorageId，
+UsageLog 用 ChannelId，Role.users 用 `UserListFilter.HasRolesWith = [RoleListFilter{Id}]`（单 EXISTS
+语义），Role.project 读取记录的 project_id；`RequestExecutionListQuery.RequestScope` 改为 `long?`
+（Request.executions 仍传父 id，Channel / DataStorage 反向边不传），
+`IRequestExecutionStore.ListAsync` 在 null 时不渲染 request_id 条件；`ChannelProbeStore.ListByChannelIdAsync`
+/ `RoleStore.ListUserRolesForRoleAsync` 按父行读取。连接边复用 `ToEdgeRequestSortField` /
+`ToEdgeExecutionSortField` / `ToEdgeUsageLogSortField` / `ToUserEdgeSortField` 与对应
+`BuildConnection`（CREATED_AT / UPDATED_AT 保持时间列 + id 平局游标）。测试：新增
+AdminResidualEdgesEndpointTests 五例（APIKey 边作用域与 CREATED_AT 边序 + where AND、Channel 四条
+反向边、DataStorage 两条反向边、Role.users / project / userRoles 与空外键 null、连接边的 orderBy
+缺 field 同被拒）与 RequestExecutionStoreTests / RoleStoreTests / ChannelProbeStoreTests 各一例
+（无 RequestScope 的 channel / dataStorage 过滤、按 role 的 user_roles、按 channel 的探针）；定向
+运行：API 新类 5 通过、Persistence 新例 3 通过、受影响 8 个 API 测试类 147 通过；未跑 Api 全量回归。
+台账：新增 C284（resolved），更新 C196 (4)、C176 (6) 与 C014 的过时表述；284 条
+（203 accepted / 0 gap / 81 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

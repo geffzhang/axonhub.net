@@ -398,7 +398,8 @@ public sealed class WebDavType
 /// <summary>Port of the <c>DataStorage</c> object type (ent.graphql:2052-2110).</summary>
 /// <remarks>
 /// The reference also exposes <c>requests</c> and <c>executions</c> relay
-/// connections; they are not part of this slice (C196).
+/// connections; they are wired by <see cref="DataStorageTypeExtensions"/>
+/// (§210).
 /// </remarks>
 [GraphQLName("DataStorage")]
 public sealed class DataStorageType : INode
@@ -438,6 +439,90 @@ public sealed class DataStorageType : INode
                 "the requested element is null which the schema does not allow");
 
     public DataStorageStatusValue Status => DataStorageMapping.ToGraphQLStatus(Record.Status);
+}
+
+/// <summary>
+/// Port of the entgql DataStorage edges (ent.graphql:2111-2134;
+/// gql_edge.go:195-235): <c>requests</c> runs through the Request query policy
+/// and <c>executions</c> through RequestExecution (no policy). Both AND their
+/// <c>data_storage_id</c> predicate into the caller's where filter.
+/// </summary>
+[ExtendObjectType(typeof(DataStorageType))]
+public sealed class DataStorageTypeExtensions
+{
+    /// <summary>Port of DataStorage.requests (gql_edge.go:195-214).</summary>
+    [GraphQLName("requests")]
+    public async Task<RequestConnectionType> GetRequestsAsync(
+        [Parent] DataStorageType storage,
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RequestOrder? orderBy,
+        RequestWhereInput? where,
+        [Service] RequestManagementService requests,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var filter = ProjectUserEdgeFilters.And(
+            TraceMapping.ToFilter(where),
+            new RequestListFilter { DataStorageId = storage.DbId });
+
+        var sortField = TraceMapping.ToEdgeRequestSortField(orderBy);
+        var page = await requests.ListAsync(
+                new RequestListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of DataStorage.executions (gql_edge.go:216-235).</summary>
+    [GraphQLName("executions")]
+    public async Task<RequestExecutionConnectionType> GetExecutionsAsync(
+        [Parent] DataStorageType storage,
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RequestExecutionOrder? orderBy,
+        RequestExecutionWhereInput? where,
+        [Service] IRequestExecutionStore executions,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var filter = ProjectUserEdgeFilters.And(
+            RequestMapping.ToFilter(where),
+            new RequestExecutionListFilter { DataStorageId = storage.DbId });
+
+        var sortField = RequestMapping.ToEdgeExecutionSortField(orderBy);
+        var page = await executions.ListAsync(
+                new RequestExecutionListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = RequestMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return RequestMapping.BuildConnection(page, sortField);
+    }
 }
 
 /// <summary>Port of <c>DataStorageEdge</c> (ent.graphql:2154-2163).</summary>

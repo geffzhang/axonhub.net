@@ -425,10 +425,14 @@ public sealed record RequestExecutionListFilter
     public IReadOnlyList<DataStorageListFilter>? HasDataStorageWith { get; init; }
 }
 
-/// <summary>Execution connection query scoped by its parent request.</summary>
+/// <summary>
+/// Execution connection query. <see cref="RequestScope"/> is set by
+/// Request.executions; the Channel.executions / DataStorage.executions edges
+/// leave it null and carry the foreign key in <see cref="Where"/>.
+/// </summary>
 public sealed record RequestExecutionListQuery
 {
-    public long RequestScope { get; init; }
+    public long? RequestScope { get; init; }
 
     public RequestExecutionListFilter? Where { get; init; }
 
@@ -548,8 +552,13 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
         ArgumentNullException.ThrowIfNull(query);
 
         var args = new SqlArguments();
-        var conditions = new StringBuilder(" WHERE m.\"request_id\" = ")
-            .Append(args.Add(query.RequestScope));
+        var conditions = new StringBuilder(" WHERE TRUE");
+        if (query.RequestScope is not null)
+        {
+            conditions.Append(" AND m.\"request_id\" = ")
+                .Append(args.Add(query.RequestScope.Value));
+        }
+
         if (BuildFilter(query.Where, "m", args) is { } where)
         {
             conditions.Append(" AND ").Append(where);

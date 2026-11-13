@@ -1969,6 +1969,21 @@ orderBy 缺 field 与参照同被拒），补注册 §208 引入的 IDataStorage
 AdminUsageLogsEndpointTests；12 个受影响测试类 189 通过；未跑 Api 全量回归。台账：C165 转
 resolved；lint 通过；02-differences.md 已重新生成；283 条（203 accepted / 0 gap / 80 resolved）。
 
+§210（2026-11-13）APIKey / Channel / DataStorage / Role 的十条残余边接线。参照 ent.graphql 与
+gql_edge.go（连接边走 QueryX().Paginate + WithXOrder / WithXFilter，不排序时为 id；Role.project 为
+eager edge + MaskNotFound），channelProbes / userRoles 在 SDL 是列表，按 All(ctx) 不分页不排序，
+端口按父行 id 升序（C164）。外键谓词一律 AND 进调用方 where（管理服务会用隐私结果覆盖
+ProjectScope）：Request 用 ApiKeyId / ChannelId / DataStorageId，RequestExecution 用 ChannelId /
+DataStorageId，UsageLog 用 ChannelId，Role.users 用 HasRolesWith；RequestExecutionListQuery.RequestScope
+改为 long?，null 时不渲染 request_id；ChannelProbeStore.ListByChannelIdAsync /
+RoleStore.ListUserRolesForRoleAsync 按父行读取；Role.project 的空外键分支仍先求值 Project 查询策略
+再返回 null。新增四个 TypeExtensions 并在 GraphQLSetup 显式注册。测试：新增
+AdminResidualEdgesEndpointTests 五例（十条边、FK 隔离、CREATED_AT 边序与 where AND、Role 的 project
+null 与 userRoles、连接边 orderBy 缺 field 被拒）与三个 Persistence 新例；定向运行 API 新类 5、
+Persistence 3、受影响 8 类 147 通过；未跑 Api 全量回归。台账：C284 新增 resolved；C196 (4) /
+C176 (6) / C014 更新；lint 通过；02-differences.md 已重新生成；284 条
+（203 accepted / 0 gap / 81 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

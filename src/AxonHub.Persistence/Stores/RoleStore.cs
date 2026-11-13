@@ -199,6 +199,16 @@ public interface IRoleStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of <c>Role.userRoles</c> (ent.graphql: the field is narrowed to a
+    /// plain list, ent.resolvers.go runs <c>obj.QueryUserRoles().All(ctx)</c>):
+    /// the rows keep the database's natural order and no privacy policy
+    /// applies.
+    /// </summary>
+    Task<IReadOnlyList<UserRoleRecord>> ListUserRolesForRoleAsync(
+        long roleId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Runs <paramref name="action"/> in a transaction, joining the ambient one
     /// when the caller (RoleManagementService.DeleteRole/BulkDeleteRoles)
     /// already opened it. The reference's RoleService.RunInTransaction.
@@ -329,6 +339,25 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
             new CommandDefinition(
                 sql,
                 new { UserId = userId },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.AsList();
+    }
+
+    public async Task<IReadOnlyList<UserRoleRecord>> ListUserRolesForRoleAsync(
+        long roleId,
+        CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            SELECT "id", "created_at", "updated_at", "user_id", "role_id"
+            FROM "user_roles" WHERE "role_id" = @RoleId;
+            """;
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<UserRoleRecord>(
+            new CommandDefinition(
+                sql,
+                new { RoleId = roleId },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
         return rows.AsList();
