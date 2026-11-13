@@ -1563,6 +1563,20 @@ ChannelWriteStoreTests 三例；定向运行 Persistence ChannelWriteStoreTests 
 6 通过；未跑 Api 全量回归。台账：新增 C285（resolved），更新 C132 的过时表述（GcCronSchedule 已实现
 Next，恢复运行时由 §211 接线）；285 条（203 accepted / 0 gap / 82 resolved）。
 
+2026-11-14 更新（§212）：端点探测使用按通道代理 client（C286）。
+参照 `channel_endpoint_detect.go:166` 的三个 probe 统一调用 `ch.HTTPClient.Do`；该 client 由
+`buildChannelWithTransformer` 的 `getHttpClient(c.Settings)` 构建（`channel_llm.go:121-127`、`:707`）
+——无 settings 或 proxy 时为进程共享 client，否则 `WithProxy(settings.Proxy)` 新建按通道 client，
+`commandcode` / `commandcode_anthropic` 另加 `WithRejectHTTPSDowngrade`（`:708-713`）。端口此前
+probe 一律走共享 `IExecutor`（C150 / C158 残余）。`ChannelEndpointDetectService` 现注入可选的
+`ChannelProxyExecutors`，在 `DetectAsync` 按候选 settings 解析一次 executor（复用推理 / token 刷新
+同一缓存条目），对两个 Command Code 类型应用 `WithRejectHttpsDowngrade`，再把该 executor 传给三个
+并发 probe。实现差异：参照每次检测新建 client，端口复用按 channelId + proxy 指纹缓存的代理
+executor（同一 proxy 配置，不影响请求或结果）；代理配置错误与参照一样在请求时报告（C202）。
+测试：`AdminChannelEndpointDetectEndpointTests` 新增三例（经代理 executor 探测、无 proxy 保持共享
+executor、Command Code 拒绝 HTTPS→HTTP 跳转）；定向运行该类 31 通过；未跑 Api 全量回归。台账：
+新增 C286（resolved），更新 C150 与 C158 的过时表述；286 条（203 accepted / 0 gap / 83 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

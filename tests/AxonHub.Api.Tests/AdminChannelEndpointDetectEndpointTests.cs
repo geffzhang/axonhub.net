@@ -49,6 +49,8 @@ public sealed class AdminChannelEndpointDetectEndpointTests : IAsyncLifetime
 
     private readonly FakeChannelWriteStore _channels = new();
     private readonly DetectExecutor _executor = new();
+    private readonly DetectExecutor _proxyExecutor = new();
+    private readonly ScriptedProxyExecutorFactory _proxyFactory = new();
 
     private readonly AdminGraphqlGateServices _gate = new();
 
@@ -63,6 +65,9 @@ public sealed class AdminChannelEndpointDetectEndpointTests : IAsyncLifetime
         _gate.Register(builder.Services);
         builder.Services.AddSingleton<IChannelWriteStore>(_channels);
         builder.Services.AddSingleton<IExecutor>(_executor);
+        _proxyFactory.Executor = _proxyExecutor;
+        builder.Services.AddSingleton<IProxyExecutorFactory>(_proxyFactory);
+        builder.Services.AddSingleton<ChannelProxyExecutors>();
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddScoped<ChannelEndpointDetectService>();
 
@@ -126,6 +131,45 @@ public sealed class AdminChannelEndpointDetectEndpointTests : IAsyncLifetime
         Assert.Empty(_channels.UpdateCalls);
         Assert.Empty(_channels.SaveEndpointsCalls);
         Assert.Empty(_channels.CreatedChannels);
+    }
+
+    [Fact]
+    public async Task DetectChannelEndpointsProbesThroughTheChannelProxyClient()
+    {
+        // channel_endpoint_detect.go:166 probes with ch.HTTPClient, which
+        // buildChannelWithTransformer builds from settings.proxy
+        // (channel_llm.go:121-127, 707). All three probes share that client.
+        var channel = SeedChannel(
+            settings: """
+                {"proxy":{"type":"url","url":"http://proxy.test:8080","username":"u","password":"p"}}
+                """);
+        _proxyExecutor.OnDo = _ => Ok(200);
+
+        var data = await QueryDataAsync(DetectMutation, Input(channel.Id));
+
+        Assert.Equal(3, Endpoints(data).Length);
+        Assert.Equal(3, _proxyExecutor.Requests.Length);
+        Assert.Empty(_executor.Requests);
+
+        var proxy = Assert.Single(_proxyFactory.Requests);
+        Assert.Equal(ProxyType.Url, proxy.Type);
+        Assert.Equal("http://proxy.test:8080", proxy.Url);
+        Assert.Equal("u", proxy.Username);
+        Assert.Equal("p", proxy.Password);
+    }
+
+    [Fact]
+    public async Task DetectChannelEndpointsWithoutAChannelProxyKeepsTheSharedExecutor()
+    {
+        var channel = SeedChannel();
+        _executor.OnDo = _ => Ok(200);
+
+        var data = await QueryDataAsync(DetectMutation, Input(channel.Id));
+
+        Assert.Equal(3, Endpoints(data).Length);
+        Assert.Equal(3, _executor.Requests.Length);
+        Assert.Empty(_proxyExecutor.Requests);
+        Assert.Empty(_proxyFactory.Requests);
     }
 
     [Theory]
@@ -357,6 +401,39 @@ public sealed class AdminChannelEndpointDetectEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DetectChannelEndpointsRefusesHttpsDowngradeRedirectsForCommandCodeChannels()
+    {
+        // channel_llm.go:708-713 hands Command Code channels a client that
+        // refuses HTTPS-to-HTTP redirects; detection probes with ch.HTTPClient,
+        // so the cleartext hop must never be sent.
+        var handler = new HttpsDowngradeRedirectHandler();
+        var executor = new HttpExecutor(handler);
+        var service = new ChannelEndpointDetectService(
+            _channels,
+            executor,
+            TimeProvider.System,
+            channelProxyExecutors: new ChannelProxyExecutors(executor, _proxyFactory));
+        var channel = SeedChannel(
+            type: ChannelOutboundFactory.CommandcodeChannelType,
+            baseUrl: "https://api.commandcode.test");
+
+        var result = await service.DetectAsync(new DetectChannelEndpointsCommand(channel.Id, null));
+
+        // A refused redirect is a transport failure to the detector: every
+        // format stays unreachable with no status code.
+        Assert.All(result.Endpoints, endpoint =>
+        {
+            Assert.False(endpoint.Supported);
+            Assert.Equal(0, endpoint.StatusCode);
+            Assert.Equal(ChannelEndpointDetectService.ReasonUnreachable, endpoint.Reason);
+        });
+
+        // One HTTPS request per probe; the HTTP hop is never attempted.
+        Assert.Equal(3, handler.Requests.Length);
+        Assert.All(handler.Requests, uri => Assert.Equal(Uri.UriSchemeHttps, uri.Scheme));
+    }
+
+    [Fact]
     public async Task DetectChannelEndpointsProbesATypeSafeChannelGenerically()
     {
         var channel = SeedChannel(
@@ -524,7 +601,8 @@ public sealed class AdminChannelEndpointDetectEndpointTests : IAsyncLifetime
         string credentials = """{"apiKey":"sk-test"}""",
         string supportedModels = """["gpt-4o"]""",
         string defaultTestModel = "",
-        string name = "Alpha")
+        string name = "Alpha",
+        string? settings = null)
     {
         var record = new ChannelRecord
         {
@@ -534,6 +612,7 @@ public sealed class AdminChannelEndpointDetectEndpointTests : IAsyncLifetime
             Credentials = credentials,
             SupportedModels = supportedModels,
             DefaultTestModel = defaultTestModel,
+            Settings = settings,
         };
 
         _channels.Seed(record);
@@ -651,5 +730,43 @@ public sealed class AdminChannelEndpointDetectEndpointTests : IAsyncLifetime
 
         public IStream<StreamEvent> DoStream(CancellationToken cancellationToken, HttpRequestData request)
             => throw new NotSupportedException("endpoint detection never streams");
+    }
+
+    /// <summary>
+    /// Answers every request with an HTTPS-to-HTTP redirect, so the redirect
+    /// policy installed by the detector decides whether the hop is sent.
+    /// </summary>
+    private sealed class HttpsDowngradeRedirectHandler : HttpMessageHandler
+    {
+        private readonly object _gate = new();
+        private readonly List<Uri> _requests = [];
+
+        public Uri[] Requests
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _requests.ToArray();
+                }
+            }
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            lock (_gate)
+            {
+                _requests.Add(request.RequestUri!);
+            }
+
+            var response = new HttpResponseMessage(HttpStatusCode.Found)
+            {
+                Content = new StringContent(string.Empty),
+            };
+            response.Headers.Location = new Uri("http://api.commandcode.test/redirected");
+            return Task.FromResult(response);
+        }
     }
 }

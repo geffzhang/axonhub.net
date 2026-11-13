@@ -346,9 +346,10 @@ public static class ChannelOutboundFactory
 
         // channel_llm.go:640-647, 705-711: both Command Code channel types
         // require an HTTPS base URL. The reference also hands them an
-        // HTTPS-downgrade-rejecting client; the port applies that policy in
-        // PersistentOutboundTransformer.CustomizeExecutor instead, since the
-        // channel here carries no client.
+        // HTTPS-downgrade-rejecting client; the port applies that policy where
+        // the executor is selected instead — PersistentOutboundTransformer for
+        // inference, ChannelEndpointDetectService for endpoint detection —
+        // since the channel here carries no client.
         var commandCodeChannel = candidate.Type is CommandcodeChannelType or CommandcodeAnthropicChannelType;
         if (commandCodeChannel)
         {

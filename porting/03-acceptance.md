@@ -1998,6 +1998,16 @@ IChannelWriteStore 的三个 EF 方法；启动时由 GrainSchedulerActivator �
 新类 6 通过；未跑 Api 全量回归。台账：C285 新增 resolved；C132 更新；lint 通过；
 02-differences.md 已重新生成；285 条（203 accepted / 0 gap / 82 resolved）。
 
+§212（2026-11-14）端点探测使用按通道代理 client（C286）。参照 channel_endpoint_detect.go:166 的三个
+probe 统一用 `ch.HTTPClient`，该 client 由 channel_llm.go:121-127、707 的 getHttpClient 按
+settings.proxy 构建，Command Code 类型另加 HTTPS 降级拒绝（:708-713）。端口为
+ChannelEndpointDetectService 注入可选 ChannelProxyExecutors，检测开始时解析一次 executor（有 proxy
+经代理、无 proxy 共享，复用推理路径的缓存条目），Command Code 应用 WithRejectHttpsDowngrade 后交给
+三个并发 probe。差异：端口复用缓存 client 而参照每次新建（同一 proxy 配置，无可观察差别）。测试：
+新增 3 例（代理 executor 三条探测、无 proxy 共享 executor、Command Code 302 降级被拒）；定向运行
+该类 31 通过；未跑 Api 全量回归。台账：C286 新增 resolved；C150 / C158 更新；lint 通过；
+02-differences.md 已重新生成；286 条（203 accepted / 0 gap / 83 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

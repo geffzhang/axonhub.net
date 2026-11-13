@@ -32,8 +32,12 @@ public sealed record DetectChannelEndpointsResult(IReadOnlyList<DetectedChannelE
 /// The reference probes with the channel's resolved outbound map; the port has
 /// no stored endpoint records yet (C082), so it reuses the primary outbound for
 /// the channel type's primary format and builds the reference's generic
-/// non-default outbound for the other two. The per-channel proxy client is not
-/// modelled (C104/C150); the shared pipeline executor issues the probes.
+/// non-default outbound for the other two. All three probes ride the client
+/// built for the channel (<c>ch.HTTPClient</c>, channel_endpoint_detect.go:166):
+/// <see cref="ChannelProxyExecutors"/> resolves the channel's settings.proxy
+/// client once per detection, and Command Code channels additionally refuse
+/// HTTPS-to-HTTP redirects, exactly like the reference's
+/// <c>buildChannelWithTransformer</c> (C158).
 /// </remarks>
 public sealed class ChannelEndpointDetectService
 {
@@ -64,6 +68,7 @@ public sealed class ChannelEndpointDetectService
     private readonly IChannelWriteStore channels;
     private readonly IExecutor executor;
     private readonly TimeProvider timeProvider;
+    private readonly ChannelProxyExecutors? channelProxyExecutors;
 
     /// <summary>
     /// The shared key-selection state. Detection reads the current cursors (the
@@ -77,7 +82,8 @@ public sealed class ChannelEndpointDetectService
         IChannelWriteStore channels,
         IExecutor executor,
         TimeProvider timeProvider,
-        ChannelApiKeySelectionRegistry? apiKeySelection = null)
+        ChannelApiKeySelectionRegistry? apiKeySelection = null,
+        ChannelProxyExecutors? channelProxyExecutors = null)
     {
         ArgumentNullException.ThrowIfNull(channels);
         ArgumentNullException.ThrowIfNull(executor);
@@ -87,6 +93,7 @@ public sealed class ChannelEndpointDetectService
         this.executor = executor;
         this.timeProvider = timeProvider;
         this.apiKeySelection = apiKeySelection;
+        this.channelProxyExecutors = channelProxyExecutors;
     }
 
     public async Task<DetectChannelEndpointsResult> DetectAsync(
@@ -137,6 +144,19 @@ public sealed class ChannelEndpointDetectService
         var model = ResolveModel(entity, command.Model);
         var results = new DetectedChannelEndpointResult[DetectableApiFormats.Count];
 
+        // channel_endpoint_detect.go:166: every probe uses ch.HTTPClient, the
+        // client built from the channel's settings.proxy (channel_llm.go:707).
+        // Resolving once per detection mirrors the reference's single client and
+        // keeps the three concurrent probes on the same transport.
+        var probeExecutor = channelProxyExecutors?.Resolve(candidate) ?? executor;
+        if (entity.Type is ChannelOutboundFactory.CommandcodeChannelType
+            or ChannelOutboundFactory.CommandcodeAnthropicChannelType)
+        {
+            // channel_llm.go:708-713: Command Code channels get a client that
+            // refuses HTTPS-to-HTTP redirects; detection probes with it too.
+            probeExecutor = probeExecutor.WithRejectHttpsDowngrade();
+        }
+
         // The reference probes the three formats in parallel goroutines and
         // writes each result by index (channel_endpoint_detect.go:99-112), so
         // the payload order is fixed regardless of completion order.
@@ -148,6 +168,7 @@ public sealed class ChannelEndpointDetectService
                     format,
                     model,
                     now,
+                    probeExecutor,
                     cancellationToken),
                 CancellationToken.None)))
             .ConfigureAwait(false);
@@ -185,6 +206,7 @@ public sealed class ChannelEndpointDetectService
         string apiFormat,
         string model,
         DateTimeOffset now,
+        IExecutor probeExecutor,
         CancellationToken cancellationToken)
     {
         var result = new DetectedChannelEndpointResult(apiFormat, false, 0, ReasonUnreachable);
@@ -238,7 +260,7 @@ public sealed class ChannelEndpointDetectService
 
         try
         {
-            var response = executor.Do(probeCts.Token, httpRequest);
+            var response = probeExecutor.Do(probeCts.Token, httpRequest);
             return result with
             {
                 Supported = true,
