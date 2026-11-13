@@ -1227,6 +1227,23 @@ AdminUsersRolesProjectPrivacyEndpointTests 9），定向 39 通过，相关管�
 Role.users 等反向边归 C165；AddUserToProject 的策略求值在端口早于存储事务（参照在事务内），
 多步骤同时失败时错误优先级可能不同，登记在 C014。
 
+2026-11-13 更新（§198）：C014 收口——AddUserToProject 的 schema 策略求值移入存储事务
+（C014 最后一项残余）。参照 `internal/server/biz/user.go:420-452` 在 `RunInTransaction` 内依次运行
+`UserProject.Create().SetUserID().SetProjectID()...Save(ctx)`（UserProject 变更策略）、
+`client.User.Get(ctx, userID)`（User 查询策略，仅 roleIDs 非空时）与
+`user.Update().AddRoleIDs(...).Exec(ctx)`（User 变更策略），每步失败按
+"failed to add user to project: %w" / "failed to get user: %w" / "failed to add roles to user: %w"
+包装。端口此前在调用存储前求值这三条策略，事务回滚虽仍以整体为单位，但插入失败的优先级与参照
+不同：例如重复成员关系（`user_projects_by_user_id_project_id` 唯一索引）在参照中先于 User 读策略
+报告，端口却先报告读策略拒绝。§198 给 `IUserAdminStore.AddProjectUserAsync` 增加
+`beforeCreate` / `beforeUserRead` / `beforeUserRoleUpdate` 三个回调，存储在自己的事务内按参照
+位置求值并以相同的 `%w` 文案包装（与 §176 为 Remove/UpdateProjectUser 建立的接缝一致），
+`UserManagementService.AddUserToProjectAsync` 只负责传入策略委托。行为变化：唯一索引失败现在
+先于 User 读策略；插入成功后的读 / 写策略拒绝仍在事务内回滚已插入的 user_project 行。
+新增 6 例（UserAdminStoreTests 3、AdminUsersRolesProjectPrivacyEndpointTests 3），
+UserAdminStoreTests 19 通过、两个 GraphQL fixture 34 通过、管理面回归 182 通过。C014 至此
+resolved；剩余反向边（Role.users 等）继续由 C165 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

@@ -374,6 +374,102 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task AddProjectUserRunsTheCreatePolicyBeforeTheInsert()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+        var roleIds = await SeedRolesAsync(context, 1);
+
+        // A deny at mut.Save rolls the transaction back before the insert
+        // (user.go:434-437).
+        var denied = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.AddProjectUserAsync(
+                userId,
+                7,
+                null,
+                null,
+                [roleIds[0]],
+                beforeCreate: _ => throw new InvalidOperationException("create denied")));
+        Assert.Equal("failed to add user to project: create denied", denied.Message);
+        Assert.Empty(await store.ListProjectUsersForUserAsync(userId));
+
+        // The insert's unique-index failure precedes client.User.Get, so the
+        // User read policy never runs (user.go:434-443).
+        await store.AddProjectUserAsync(userId, 7, null, null, []);
+        var duplicate = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.AddProjectUserAsync(
+                userId,
+                7,
+                null,
+                null,
+                [roleIds[0]],
+                beforeCreate: _ => Task.CompletedTask,
+                beforeUserRead: _ => throw new InvalidOperationException("read denied")));
+        Assert.StartsWith("failed to add user to project: ", duplicate.Message);
+        Assert.DoesNotContain("read denied", duplicate.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AddProjectUserRunsTheUserReadPolicyBeforeTheRead()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+        var roleIds = await SeedRolesAsync(context, 1);
+
+        // client.User.Get runs the User query policy (user.go:443-446).
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.AddProjectUserAsync(
+                userId,
+                7,
+                null,
+                null,
+                [roleIds[0]],
+                beforeUserRead: _ => throw new InvalidOperationException("read denied")));
+        Assert.Equal("failed to get user: read denied", error.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.Equal(0, await verify.UserProjects.CountAsync());
+        Assert.Equal(0, await verify.UserRoles.CountAsync());
+    }
+
+    [Fact]
+    public async Task AddProjectUserRunsTheUserMutationPolicyBeforeTheRoleLinks()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var userId = await store.CreateAsync(NewUser("alice@example.com"), null);
+        var roleIds = await SeedRolesAsync(context, 1);
+
+        // user.Update().AddRoleIDs runs the User mutation policy
+        // (user.go:447-449).
+        var error = await Assert.ThrowsAsync<StoreFailureException>(
+            () => store.AddProjectUserAsync(
+                userId,
+                7,
+                null,
+                null,
+                [roleIds[0]],
+                beforeUserRoleUpdate: _ => throw new InvalidOperationException(
+                    "role update denied")));
+        Assert.Equal("failed to add roles to user: role update denied", error.Message);
+
+        await using var verify = db.Factory.CreateDbContext();
+        Assert.Equal(0, await verify.UserProjects.CountAsync());
+        Assert.Equal(0, await verify.UserRoles.CountAsync());
+    }
+
+    [Fact]
     public async Task RemoveProjectUserDeletesTheRelationshipAndProjectRoleLinksOnly()
     {
         await using var db = new TestDatabase(fixture);

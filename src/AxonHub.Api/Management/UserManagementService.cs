@@ -390,49 +390,10 @@ public sealed class UserManagementService(
 
         // The reference evaluates these policies inside its transaction, in
         // this order: UserProject.Create → (when roles are added) User.Get →
-        // User.Update().AddRoleIDs. The port evaluates them before the store
-        // call; the store's transaction still rolls back as a unit, so only the
-        // error precedence differs when several steps would fail at once.
-        try
-        {
-            await userProjectPrivacy
-                .EvaluateMutationAsync(
-                    UserProjectMutationOp.Create,
-                    command.ProjectId,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            throw new InvalidOperationException(
-                "failed to add user to project: " + ex.Message,
-                ex);
-        }
-
-        if (command.RoleIds.Count > 0)
-        {
-            try
-            {
-                await privacy.GetVisibleUserOrThrowAsync(command.UserId, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                throw new InvalidOperationException("failed to get user: " + ex.Message, ex);
-            }
-
-            try
-            {
-                await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                throw new InvalidOperationException(
-                    "failed to add roles to user: " + ex.Message,
-                    ex);
-            }
-        }
-
+        // User.Update().AddRoleIDs (user.go:420-452). The store runs each
+        // callback at that position, so a policy deny and a store failure keep
+        // the reference's precedence (for example, a duplicate membership
+        // fails at the insert before the User read policy runs).
         UserProjectRecord? created;
         try
         {
@@ -442,7 +403,15 @@ public sealed class UserManagementService(
                     command.IsOwner,
                     command.Scopes,
                     command.RoleIds,
-                    cancellationToken)
+                    cancellationToken,
+                    beforeCreate: ct => userProjectPrivacy.EvaluateMutationAsync(
+                        UserProjectMutationOp.Create,
+                        command.ProjectId,
+                        ct),
+                    beforeUserRead: ct => privacy.GetVisibleUserOrThrowAsync(
+                        command.UserId,
+                        ct),
+                    beforeUserRoleUpdate: privacy.EvaluateMutationAsync)
                 .ConfigureAwait(false);
         }
         catch (StoreFailureException ex)

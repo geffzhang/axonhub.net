@@ -1153,14 +1153,33 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
     /// <summary>When set, AddProjectUserAsync throws it like a failed insert would.</summary>
     public Exception? AddProjectUserFailure { get; set; }
 
-    public Task<UserProjectRecord> AddProjectUserAsync(
+    public async Task<UserProjectRecord> AddProjectUserAsync(
         long userId,
         long projectId,
         bool? isOwner,
         IReadOnlyList<string>? scopes,
         IReadOnlyList<long> roleIds,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? beforeCreate = null,
+        Func<CancellationToken, Task>? beforeUserRead = null,
+        Func<CancellationToken, Task>? beforeUserRoleUpdate = null)
     {
+        // UserProject mutation policy at mut.Save (user.go:434), before the
+        // insert so a deny precedes the unique-index violation.
+        if (beforeCreate is not null)
+        {
+            try
+            {
+                await beforeCreate(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to add user to project: " + ex.Message,
+                    ex);
+            }
+        }
+
         if (AddProjectUserFailure is not null)
         {
             throw AddProjectUserFailure;
@@ -1192,6 +1211,24 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
 
         if (roleIds.Count > 0)
         {
+            // User query policy at client.User.Get (user.go:443).
+            if (beforeUserRead is not null)
+            {
+                try
+                {
+                    await beforeUserRead(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // The reference runs the whole mutation in one
+                    // transaction, so the created row rolls back.
+                    _userProjects.Remove(row);
+                    throw new StoreFailureException(
+                        "failed to get user: " + ex.Message,
+                        ex);
+                }
+            }
+
             if (Live(userId) is null)
             {
                 // The reference runs the whole mutation in one transaction, so
@@ -1200,6 +1237,22 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
                 throw new StoreFailureException(
                     "failed to get user: ent: user not found",
                     new InvalidOperationException("ent: user not found"));
+            }
+
+            // User mutation policy at user.Update().AddRoleIDs (user.go:447).
+            if (beforeUserRoleUpdate is not null)
+            {
+                try
+                {
+                    await beforeUserRoleUpdate(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _userProjects.Remove(row);
+                    throw new StoreFailureException(
+                        "failed to add roles to user: " + ex.Message,
+                        ex);
+                }
             }
 
             if (RolesSource is FakeRoleStore fakeRoles)
@@ -1211,7 +1264,7 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
             }
         }
 
-        return Task.FromResult(row);
+        return row;
     }
 
     public async Task RemoveProjectUserAsync(

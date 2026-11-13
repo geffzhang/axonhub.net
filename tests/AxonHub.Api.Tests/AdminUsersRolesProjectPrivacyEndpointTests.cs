@@ -363,6 +363,108 @@ public sealed class AdminUsersRolesProjectPrivacyEndpointTests : IAsyncLifetime
             data.GetProperty("updateProject").GetProperty("name").GetString());
     }
 
+    [Fact]
+    public async Task AddUserToProjectReportsTheInsertFailureBeforeTheUserReadPolicy()
+    {
+        // user.go:420-452: UserProject.Create().Save runs inside the
+        // transaction before client.User.Get. A duplicate membership therefore
+        // surfaces the unique-index failure even though the same caller would
+        // also be denied by the User query policy afterwards.
+        var member = SeedUserAsync(77, scopes: """["write_users"]""");
+        SeedUserAsync(78, scopes: null);
+        _users.AssignProject(78, projectId: 5);
+        var role = SeedRole("Member", projectId: 5, level: "project");
+        var jwt = _gate.IssueJwt(member);
+
+        var errors = await QueryErrorsAsync(
+            """
+            mutation AddUserToProject($input: AddUserToProjectInput!) {
+              addUserToProject(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/5",
+                    userId = "gid://axonhub/User/78",
+                    roleIDs = new[] { "gid://axonhub/Role/" + role.Id },
+                },
+            },
+            token: jwt);
+
+        var message = errors[0].GetProperty("message").GetString();
+        Assert.StartsWith(
+            "failed to add user to project: ent: constraint failed: insert node to table",
+            message);
+        Assert.Contains("UNIQUE constraint failed", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AddUserToProjectStillDeniesAtTheUserReadWhenTheInsertSucceeds()
+    {
+        // Same caller and targets, but user 79 is not a member yet: the insert
+        // succeeds and the failure moves to client.User.Get, whose User query
+        // policy denies a caller with no read_users.
+        var member = SeedUserAsync(77, scopes: """["write_users"]""");
+        SeedUserAsync(79, scopes: null);
+        var role = SeedRole("Member", projectId: 5, level: "project");
+        var jwt = _gate.IssueJwt(member);
+
+        var errors = await QueryErrorsAsync(
+            """
+            mutation AddUserToProject($input: AddUserToProjectInput!) {
+              addUserToProject(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/5",
+                    userId = "gid://axonhub/User/79",
+                    roleIDs = new[] { "gid://axonhub/Role/" + role.Id },
+                },
+            },
+            token: jwt);
+
+        // The deny wraps the User query policy at client.User.Get; the error
+        // presenter reports every privacy-denied chain as "permission denied".
+        AssertDenied(errors);
+        // The transaction rolled back: no relationship and no role link.
+        Assert.Empty(await _users.ListProjectUsersForUserAsync(79));
+        Assert.Empty(_roles.UserRoleIds(79));
+    }
+
+    [Fact]
+    public async Task AddUserToProjectDeniesAtTheCreatePolicyBeforeAnyInsert()
+    {
+        // A caller without write_users on the project is denied by the
+        // UserProject mutation policy at mut.Save, before the insert.
+        var member = SeedUserAsync(77, scopes: null);
+        SeedUserAsync(78, scopes: null);
+        var jwt = _gate.IssueJwt(member);
+
+        var errors = await QueryErrorsAsync(
+            """
+            mutation AddUserToProject($input: AddUserToProjectInput!) {
+              addUserToProject(input: $input) { id }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    projectId = "gid://axonhub/Project/5",
+                    userId = "gid://axonhub/User/78",
+                },
+            },
+            token: jwt);
+
+        AssertDenied(errors);
+        Assert.Empty(await _users.ListProjectUsersForUserAsync(78));
+    }
+
     private UserRecord SeedUserAsync(long id, string? scopes, bool isOwner = false)
     {
         var user = _gate.Users.Add(row =>

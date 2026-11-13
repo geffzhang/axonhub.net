@@ -158,13 +158,29 @@ public interface IUserAdminStore
     /// user: %w", "failed to add roles to user: %w") as
     /// <see cref="StoreFailureException"/>; the service forwards them unchanged.
     /// </summary>
+    /// <param name="beforeCreate">
+    /// Evaluates the UserProject mutation policy at <c>mut.Save</c>
+    /// (user.go:434). It runs inside the transaction before the insert, so a
+    /// policy deny wins over a unique-index violation exactly as it does in the
+    /// reference.
+    /// </param>
+    /// <param name="beforeUserRead">
+    /// Evaluates the User query policy at <c>client.User.Get</c> (user.go:443).
+    /// </param>
+    /// <param name="beforeUserRoleUpdate">
+    /// Evaluates the User mutation policy at
+    /// <c>user.Update().AddRoleIDs(...).Exec</c> (user.go:447).
+    /// </param>
     Task<UserProjectRecord> AddProjectUserAsync(
         long userId,
         long projectId,
         bool? isOwner,
         IReadOnlyList<string>? scopes,
         IReadOnlyList<long> roleIds,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? beforeCreate = null,
+        Func<CancellationToken, Task>? beforeUserRead = null,
+        Func<CancellationToken, Task>? beforeUserRoleUpdate = null);
 
     /// <summary>
     /// Port of UserService.RemoveUserFromProject's store steps (user.go:465-494):
@@ -646,11 +662,31 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
         bool? isOwner,
         IReadOnlyList<string>? scopes,
         IReadOnlyList<long> roleIds,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? beforeCreate = null,
+        Func<CancellationToken, Task>? beforeUserRead = null,
+        Func<CancellationToken, Task>? beforeUserRoleUpdate = null)
     {
         await using var transaction = await db.Database
             .BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        // UserProject mutation policy at mut.Save (user.go:434). It runs
+        // before the insert so a policy deny precedes the unique-index
+        // violation, matching the reference's in-transaction order.
+        if (beforeCreate is not null)
+        {
+            try
+            {
+                await beforeCreate(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to add user to project: " + ex.Message,
+                    ex);
+            }
+        }
 
         var now = DateTime.UtcNow;
         var row = new UserProjectRecord
@@ -678,6 +714,21 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
 
         if (roleIds.Count > 0)
         {
+            // User query policy at client.User.Get (user.go:443).
+            if (beforeUserRead is not null)
+            {
+                try
+                {
+                    await beforeUserRead(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new StoreFailureException(
+                        "failed to get user: " + ex.Message,
+                        ex);
+                }
+            }
+
             var user = await db.Users
                 .SingleOrDefaultAsync(
                     row => row.Id == userId && row.DeletedAt == 0,
@@ -688,6 +739,21 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
                 throw new StoreFailureException(
                     "failed to get user: ent: user not found",
                     new InvalidOperationException("ent: user not found"));
+            }
+
+            // User mutation policy at user.Update().AddRoleIDs (user.go:447).
+            if (beforeUserRoleUpdate is not null)
+            {
+                try
+                {
+                    await beforeUserRoleUpdate(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new StoreFailureException(
+                        "failed to add roles to user: " + ex.Message,
+                        ex);
+                }
             }
 
             await AddUserRolesAsync(userId, roleIds, now, cancellationToken)
