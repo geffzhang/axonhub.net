@@ -441,7 +441,9 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         TryPersist(() =>
         {
             var now = _timeProvider.GetUtcNow();
-            var status = StreamOutcome.IsContextCancellation(error) ? StatusCanceled : StatusFailed;
+            var status = RequestDeadlineExpired() || !StreamOutcome.IsContextCancellation(error)
+                ? StatusFailed
+                : StatusCanceled;
             var classified = UpstreamTransportErrors.Classify(error);
 
             if (_attempt is { ExecutionId: not 0 } attempt)
@@ -466,6 +468,28 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
             }
         });
     }
+
+    /// <summary>
+    /// Go distinguishes client cancellation from the server deadline through
+    /// <c>ctx.Err()</c>. .NET cancels the token for both, so the timeout feature
+    /// supplies the deadline bit and the synthesized error becomes Go's
+    /// <c>context.DeadlineExceeded</c> (a <see cref="TimeoutException"/>, which
+    /// <see cref="StreamOutcome"/> maps to the failed state).
+    /// </summary>
+    private Exception? ContextCancellationError()
+    {
+        if (!_cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+
+        return RequestDeadlineExpired()
+            ? new TimeoutException("context deadline exceeded")
+            : new OperationCanceledException(_cancellationToken);
+    }
+
+    private bool RequestDeadlineExpired()
+        => _identity.RequestDeadlineExpired?.Invoke() == true;
 
     private void ObserveExecutionHeaders(
         ExecutionAttempt attempt,
@@ -542,9 +566,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
         attempt.Closed = true;
 
-        var contextError = _cancellationToken.IsCancellationRequested
-            ? new OperationCanceledException(_cancellationToken)
-            : null;
+        var contextError = ContextCancellationError();
         var outcome = attempt.Outcome;
 
         outcome.ObserveTransportError(streamError);
@@ -797,9 +819,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
         _requestFinalized = true;
 
-        var contextError = _cancellationToken.IsCancellationRequested
-            ? new OperationCanceledException(_cancellationToken)
-            : null;
+        var contextError = ContextCancellationError();
         var outcome = _requestOutcome;
 
         outcome.ObserveTransportError(streamError);

@@ -67,7 +67,8 @@ public static class ResponsesWebSocketEndpoint
     /// <summary>Port of <c>serveResponsesWebSocket</c>.</summary>
     public static Task HandleAsync(
         HttpContext context,
-        ChatCompletionOrchestrator orchestrator)
+        ChatCompletionOrchestrator orchestrator,
+        TimeSpan requestTimeout = default)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(orchestrator);
@@ -79,7 +80,8 @@ public static class ResponsesWebSocketEndpoint
                 identity,
                 onRequestCreated: null,
                 cancellationToken),
-            orchestrator.TransformErrorAsync);
+            orchestrator.TransformErrorAsync,
+            requestTimeout);
     }
 
     /// <summary>
@@ -91,7 +93,8 @@ public static class ResponsesWebSocketEndpoint
     internal static async Task HandleAsync(
         HttpContext context,
         Func<HttpRequestData, RequestIdentity, CancellationToken, Task<ChatCompletionResult>> process,
-        Func<Exception, CancellationToken, Task<HttpResponseData>> transformError)
+        Func<Exception, CancellationToken, Task<HttpResponseData>> transformError,
+        TimeSpan requestTimeout = default)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(process);
@@ -137,7 +140,8 @@ public static class ResponsesWebSocketEndpoint
                 process,
                 transformError,
                 sessionId,
-                sessionCts);
+                sessionCts,
+                requestTimeout);
 
             await connection.RunAsync(sessionToken).ConfigureAwait(false);
         }
@@ -161,6 +165,7 @@ public static class ResponsesWebSocketEndpoint
         private readonly Func<HttpRequestData, RequestIdentity, CancellationToken, Task<ChatCompletionResult>> _process;
         private readonly Func<Exception, CancellationToken, Task<HttpResponseData>> _transformError;
         private readonly CancellationTokenSource _sessionCts;
+        private readonly TimeSpan _requestTimeout;
         private readonly RequestInfo _request;
         private readonly RequestIdentity _identity;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -180,12 +185,14 @@ public static class ResponsesWebSocketEndpoint
             Func<HttpRequestData, RequestIdentity, CancellationToken, Task<ChatCompletionResult>> process,
             Func<Exception, CancellationToken, Task<HttpResponseData>> transformError,
             string sessionId,
-            CancellationTokenSource sessionCts)
+            CancellationTokenSource sessionCts,
+            TimeSpan requestTimeout)
         {
             _socket = socket;
             _process = process;
             _transformError = transformError;
             _sessionCts = sessionCts;
+            _requestTimeout = requestTimeout;
             _identity = RequestIdentity.FromHttpContext(context);
 
             var headers = HttpRequestReader.CanonicalizeHeaders(context.Request.Headers);
@@ -420,18 +427,32 @@ public static class ResponsesWebSocketEndpoint
 
                 var request = prepared.Request!;
 
+                // responses_websocket.go:267-283: the per-event deadline covers
+                // both processing and writing the result, not the whole socket.
+                using var requestCts = _requestTimeout > TimeSpan.Zero
+                    ? CancellationTokenSource.CreateLinkedTokenSource(_sessionCts.Token)
+                    : null;
+                if (requestCts is not null)
+                {
+                    requestCts.CancelAfter(_requestTimeout);
+                }
+
+                var requestToken = requestCts?.Token ?? _sessionCts.Token;
+
                 ChatCompletionResult result;
                 try
                 {
-                    result = await _process(request, _identity, _sessionCts.Token)
+                    result = await _process(request, _identity, requestToken)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    return await WriteTransformedErrorAsync(ex, streamId).ConfigureAwait(false);
+                    return await WriteTransformedErrorAsync(ex, streamId, requestToken)
+                        .ConfigureAwait(false);
                 }
 
-                return await WriteResultAsync(request, result, streamId).ConfigureAwait(false);
+                return await WriteResultAsync(request, result, streamId, requestToken)
+                    .ConfigureAwait(false);
             }
             finally
             {
@@ -442,7 +463,8 @@ public static class ResponsesWebSocketEndpoint
         private async Task<bool> WriteResultAsync(
             HttpRequestData request,
             ChatCompletionResult result,
-            string streamId)
+            string streamId,
+            CancellationToken requestToken)
         {
             if (result.Stream is { } stream)
             {
@@ -453,12 +475,20 @@ public static class ResponsesWebSocketEndpoint
                         ExpectedStreamChoices.FromRequestBody(request.Body));
                     while (stream.Next())
                     {
-                        if (_sessionCts.IsCancellationRequested)
+                        if (requestToken.IsCancellationRequested)
                         {
-                            // ctx.Err() with context.Canceled returns nil; a
-                            // deadline would write an error, but the port has
-                            // no per-event timeout (C115).
-                            return true;
+                            if (_sessionCts.IsCancellationRequested)
+                            {
+                                // The connection is gone; like the reference's
+                                // ctx.Err() == context.Canceled branch there is
+                                // nothing left to report.
+                                return true;
+                            }
+
+                            // The per-event deadline fired. The reference lets
+                            // the context-bound stream end and reports its
+                            // error below.
+                            break;
                         }
 
                         var streamEvent = stream.Current;
@@ -510,7 +540,7 @@ public static class ResponsesWebSocketEndpoint
 
                     if (stream.Err is { } streamError && !terminalSeen)
                     {
-                        return await WriteTransformedErrorAsync(streamError, streamId)
+                        return await WriteTransformedErrorAsync(streamError, streamId, requestToken)
                             .ConfigureAwait(false);
                     }
 
@@ -595,12 +625,15 @@ public static class ResponsesWebSocketEndpoint
             return await WriteEventAsync(completedEvent, streamId).ConfigureAwait(false);
         }
 
-        private async Task<bool> WriteTransformedErrorAsync(Exception error, string streamId)
+        private async Task<bool> WriteTransformedErrorAsync(
+            Exception error,
+            string streamId,
+            CancellationToken? requestToken = null)
         {
             HttpResponseData? transformed = null;
             try
             {
-                transformed = await _transformError(error, _sessionCts.Token)
+                transformed = await _transformError(error, requestToken ?? _sessionCts.Token)
                     .ConfigureAwait(false);
             }
             catch (Exception)

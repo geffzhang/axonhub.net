@@ -20,6 +20,13 @@ public static class SseStreamWriter
     /// <summary>Bounds how many events are drained after cancellation.</summary>
     public const int MaxEventsAfterCancel = 256;
 
+    /// <summary>
+    /// chat.go:605-618: every SSE write refreshes a 30 second response write
+    /// deadline. It is deliberately not tied to the request context, so the
+    /// client still receives the deadline error after the request ctx expired.
+    /// </summary>
+    public static readonly TimeSpan SseWriteTimeout = TimeSpan.FromSeconds(30);
+
     public static async Task WriteAsync(
         HttpContext context,
         IStream<StreamEvent> stream,
@@ -34,7 +41,7 @@ public static class SseStreamWriter
 
         try
         {
-            await context.Response.Body.FlushAsync(cancellationToken);
+            await FlushWithWriteDeadlineAsync(context);
         }
         catch (Exception ex) when (IsClientWriteFailure(ex))
         {
@@ -85,7 +92,7 @@ public static class SseStreamWriter
 
             try
             {
-                await WriteEventAsync(context, streamEvent, cancellationToken);
+                await WriteEventAsync(context, streamEvent);
             }
             catch (Exception ex) when (IsClientWriteFailure(ex))
             {
@@ -116,15 +123,30 @@ public static class SseStreamWriter
             return;
         }
 
+        // chat.go:474-481: the server deadline wins over a missing/cancellation
+        // stream error and is reported to the client as context.DeadlineExceeded.
+        // The write uses its own 30 second deadline because the request token is
+        // already canceled at this point.
+        var timedOut = context.Features.Get<IRequestTimeoutFeature>()?.IsTimedOut == true;
+        if (timedOut && (streamError is null || IsCancellation(streamError)))
+        {
+            await TryWriteErrorEventAsync(
+                context,
+                new TimeoutException("context deadline exceeded"));
+            return;
+        }
+
         // writeSSEErrorEvent always classifies first: a broken upstream
         // connection reaches the client as a 502 upstream_stream_interrupted
         // error object, never as a bare exception message.
         if (streamError is not null)
         {
-            // The reference suppresses the event when the error is
-            // context.Canceled or the request context is already canceled
-            // (client disconnected).
-            if (IsCancellation(streamError) || cancellationToken.IsCancellationRequested)
+            // chat.go:482-488 suppresses the event for context.Canceled or a
+            // canceled request ctx (client disconnected). A deadline that left
+            // a real stream error is not a client disconnect, so it falls
+            // through to the error event.
+            if (IsCancellation(streamError)
+                || (cancellationToken.IsCancellationRequested && !timedOut))
             {
                 return;
             }
@@ -139,12 +161,13 @@ public static class SseStreamWriter
 
             await TryWriteErrorEventAsync(
                 context,
-                UpstreamTransportErrors.Classify(reported),
-                cancellationToken);
+                UpstreamTransportErrors.Classify(reported));
             return;
         }
 
-        if (cancellationToken.IsCancellationRequested)
+        // chat.go:496-497: ctx.Err() == context.Canceled means the client is
+        // gone; a deadline already returned through the branch above.
+        if (cancellationToken.IsCancellationRequested && !timedOut)
         {
             return;
         }
@@ -154,22 +177,19 @@ public static class SseStreamWriter
         // completed aggregated response.
         await TryWriteErrorEventAsync(
             context,
-            UpstreamTransportErrors.Classify(StreamOutcome.ErrStreamIncomplete),
-            cancellationToken);
+            UpstreamTransportErrors.Classify(StreamOutcome.ErrStreamIncomplete));
     }
 
     /// <summary>Port of writeSSEErrorEvent + encodeStreamError.</summary>
     private static async Task TryWriteErrorEventAsync(
         HttpContext context,
-        Exception error,
-        CancellationToken cancellationToken)
+        Exception error)
     {
         try
         {
             await WriteEventAsync(
                 context,
-                new StreamEvent { Type = "error", Data = StreamErrorFormatter.Format(error) },
-                cancellationToken);
+                new StreamEvent { Type = "error", Data = StreamErrorFormatter.Format(error) });
         }
         catch (Exception ex) when (IsClientWriteFailure(ex))
         {
@@ -180,8 +200,7 @@ public static class SseStreamWriter
     /// <summary>Port of writeSSEEvent + gin-contrib/sse Encode for a byte payload.</summary>
     private static async Task WriteEventAsync(
         HttpContext context,
-        StreamEvent streamEvent,
-        CancellationToken cancellationToken)
+        StreamEvent streamEvent)
     {
         using var buffer = new MemoryStream();
 
@@ -196,8 +215,21 @@ public static class SseStreamWriter
         WriteData(buffer, streamEvent.Data);
         WriteString(buffer, "\n\n");
 
-        await context.Response.Body.WriteAsync(buffer.ToArray(), cancellationToken);
-        await context.Response.Body.FlushAsync(cancellationToken);
+        await WriteWithDeadlineAsync(context, buffer.ToArray());
+    }
+
+    /// <summary>writeAndFlushSSE: one 30 second response write deadline per flush.</summary>
+    private static async Task WriteWithDeadlineAsync(HttpContext context, byte[] payload)
+    {
+        using var writeCts = new CancellationTokenSource(SseWriteTimeout);
+        await context.Response.Body.WriteAsync(payload, writeCts.Token);
+        await context.Response.Body.FlushAsync(writeCts.Token);
+    }
+
+    private static async Task FlushWithWriteDeadlineAsync(HttpContext context)
+    {
+        using var writeCts = new CancellationTokenSource(SseWriteTimeout);
+        await context.Response.Body.FlushAsync(writeCts.Token);
     }
 
     /// <summary>Go dataReplacer: <c>\n</c> becomes <c>\ndata:</c>, <c>\r</c> becomes <c>\r</c>.</summary>

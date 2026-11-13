@@ -19,8 +19,9 @@ namespace AxonHub.Api.Tests;
 /// (internal/server/api/responses_websocket.go at f272549f, §160/C244):
 /// per-lane FIFO, cross-lane concurrency, named/active/pending limits, the
 /// warmup continuation merge, error envelopes and the upgrade guard. The
-/// reference's per-event context markers (session id, Responses marker, request
-/// deadline) have no analogue in the port and are registered with C244.
+/// reference's per-event LLMRequestTimeout (responses_websocket.go:267-283) is
+/// ported in §214; the session id and Responses context markers still ride the
+/// request record instead of the wire.
 /// </summary>
 public sealed class ResponsesWebSocketEndpointTests
 {
@@ -168,6 +169,47 @@ public sealed class ResponsesWebSocketEndpointTests
             Assert.Equal("lane-a", Text(envelope, "stream_id"));
             Assert.Equal(responseId, Text(envelope, "response", "id"));
         }
+    }
+
+    [Fact]
+    public async Task AppliesPerEventTimeoutWithoutClosingTheConnection()
+    {
+        await using var host = await TestHost.StartAsync(
+            async (request, _, cancellationToken) =>
+            {
+                var input = Text(Parse(request.Body!), "input");
+                if (input == "slow")
+                {
+                    await Task.Delay(
+                        System.Threading.Timeout.InfiniteTimeSpan,
+                        cancellationToken);
+                }
+
+                return StreamResult(CompletedFor(input));
+            },
+            (_, _) => Task.FromResult<HttpResponseData>(null!),
+            TimeSpan.FromMilliseconds(200));
+
+        using var socket = await host.ConnectAsync();
+        await SendTextAsync(
+            socket,
+            """{"type":"response.create","stream_id":"lane-a","model":"gpt-test","input":"slow"}""");
+
+        // transformResponsesWebSocketError's fixed 500 envelope when the
+        // transformer declines the deadline error.
+        var error = Parse(await ReadTextAsync(socket));
+        Assert.Equal("error", Text(error, "type"));
+        Assert.Equal(500, error.GetProperty("status").GetInt32());
+        Assert.Equal("internal server error", Text(error, "error", "message"));
+        Assert.Equal("server_error", Text(error, "error", "type"));
+
+        // The deadline is per response.create event; the socket stays usable.
+        await SendTextAsync(
+            socket,
+            """{"type":"response.create","stream_id":"lane-a","model":"gpt-test","input":"fast"}""");
+        var completed = Parse(await ReadTextAsync(socket));
+        Assert.Equal("response.completed", Text(completed, "type"));
+        Assert.Equal("resp_fast", Text(completed, "response", "id"));
     }
 
     [Fact]
@@ -632,7 +674,8 @@ public sealed class ResponsesWebSocketEndpointTests
 
         public static async Task<TestHost> StartAsync(
             Func<HttpRequestData, RequestIdentity, CancellationToken, Task<ChatCompletionResult>>? process = null,
-            Func<Exception, CancellationToken, Task<HttpResponseData>>? transformError = null)
+            Func<Exception, CancellationToken, Task<HttpResponseData>>? transformError = null,
+            TimeSpan requestTimeout = default)
         {
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseTestServer();
@@ -649,7 +692,8 @@ public sealed class ResponsesWebSocketEndpointTests
                 context => ResponsesWebSocketEndpoint.HandleAsync(
                     context,
                     processFunc,
-                    errorFunc));
+                    errorFunc,
+                    requestTimeout));
 
             await app.StartAsync();
             return new TestHost(app);

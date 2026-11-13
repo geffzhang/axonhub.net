@@ -134,6 +134,50 @@ public sealed class SseStreamWriterTests
         Assert.Equal(string.Empty, Encoding.UTF8.GetString(body.ToArray()));
     }
 
+    [Fact]
+    public async Task WritesDeadlineErrorWhenTheRequestDeadlineExpired()
+    {
+        var (context, body) = NewContext();
+        using var request = new CancellationTokenSource();
+        await request.CancelAsync();
+        context.Features.Set<IRequestTimeoutFeature>(new TimedOutFeature(request.Token));
+
+        // The request token is already canceled, but a deadline is not a client
+        // disconnect: the client still receives context.DeadlineExceeded.
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new OperationCanceledException(request.Token));
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, request.Token);
+
+        Assert.Equal(
+            "event:error\ndata:{\"error\":{\"code\":\"\",\"message\":\"context deadline exceeded\","
+            + "\"type\":\"server_error\"},\"request_id\":\"\"}\n\n",
+            Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task KeepsRealStreamErrorsWhenTheDeadlineExpired()
+    {
+        var (context, body) = NewContext();
+        using var request = new CancellationTokenSource();
+        await request.CancelAsync();
+        context.Features.Set<IRequestTimeoutFeature>(new TimedOutFeature(request.Token));
+
+        // chat.go:482-488 only suppresses context.Canceled (or a canceled ctx
+        // without a deadline); a genuine stream error after the deadline is
+        // still reported.
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new IOException("connection reset"));
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, request.Token);
+
+        var text = Encoding.UTF8.GetString(body.ToArray());
+        Assert.Contains("upstream_stream_interrupted", text, StringComparison.Ordinal);
+        Assert.Contains("connection reset", text, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The synthesized incomplete-stream error never passes through the
     /// upstream error policy in the reference: only stream.Err() does
@@ -196,5 +240,12 @@ public sealed class SseStreamWriterTests
             + "\"type\":\"upstream_error\"},\"request_id\":\"\"}",
             Encoding.UTF8.GetString(body.ToArray()),
             StringComparison.Ordinal);
+    }
+
+    private sealed class TimedOutFeature(CancellationToken token) : IRequestTimeoutFeature
+    {
+        public CancellationToken Token { get; } = token;
+
+        public bool IsTimedOut => true;
     }
 }

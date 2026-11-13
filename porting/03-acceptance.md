@@ -621,8 +621,8 @@ retained/warmup 预算（400 `websocket_context_limit_reached`）、`generate=fa
 response.created / in_progress / completed 三事件与本地 continuation 合并、`{error,status,type}`
 错误信封与 stream_id 回显、协议 / 处理器错误不关闭连接、非升级 GET 400
 `websocket upgrade required`。参照的 2.5 分钟协议 ping / 5 分钟 read deadline 由 ASP.NET
-keep-alive 代替（C252），per-event `LLMRequestTimeout` 缺席（C253，C115），
-`shared.ResponsesLane` continuation lease 未移植（C254），`writeStreamDelivery` 交付边界未移植
+keep-alive 代替（C252），per-event `LLMRequestTimeout` 由每个 response.create 事件施加
+（C253 于 §214 resolved），`shared.ResponsesLane` continuation lease 未移植（C254），`writeStreamDelivery` 交付边界未移植
 （C255），均登记为 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
 实现按 gorilla `SetReadLimit` 语义以 CloseMessageTooBig 关闭。
 
@@ -2019,6 +2019,18 @@ IEnabledChannelProvider，并把 descriptor 映射回 ChannelRecord；新增 Bui
 resolved；C178 / C226 更新；lint 通过；02-differences.md 已重新生成；287 条
 （203 accepted / 0 gap / 84 resolved）。
 
+§214（2026-11-14）请求超时面（C115 / C253 / C037）。参照 conf/conf.go:223-224 的 30s/600s 默认值与
+middleware.WithTimeout 的 context.WithTimeout 替换；routes.go 的分组位置（public / unsecure admin /
+oauth / admin GraphQL / playground / request detail 30s；playground chat 与 api / codex / gemini HTTP
+组 600s；Responses WS 不挂组超时）。端口新增 RequestTimeoutSettings（Go time.ParseDuration 子集与错误
+文案、Server:* 键 + AXONHUB_* 别名、默认 30s/600s、空串按 0）、RequestTimeoutMiddleware /
+IRequestTimeoutFeature、RequestIdentity.RequestDeadlineExpired、终态分类（deadline → failed，父取消 →
+canceled）、SSE 五分支截止与固定 30s 写截止、以及 Responses WS per-event 预算（linked CTS，>0 才施加，
+超时不关闭连接）。差异：OCE 与 deadline 用 feature 标志区分并合成 TimeoutException（C115）。测试：新增
+34 例（RequestTimeoutTests 31、SseStreamWriterTests 2、ResponsesWebSocketEndpointTests 1）；定向运行三类
+54 通过；未跑 Api 全量回归。台账：C115 / C253 / C037 resolved，C027 更新；lint 通过；
+02-differences.md 已重新生成；287 条（200 accepted / 0 gap / 87 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
@@ -2137,7 +2149,7 @@ resolved；C178 / C226 更新；lint 通过；02-differences.md 已重新生成�
   观察 3xx 响应头、DoStream 前缀与不可解析 Location 的 uerr 形状；命令码 / codex / Ollama /
   Zenmux 四条上游接线由 8 例锁定（C124 resolved、C158、C207、C221；残差 C222）
 - [x] 通道级请求改写的应用顺序与落库时机由 134 例锁定（body/header 中间件、Go 模板子集、
-  数组与头操作、非 JSON 门槛、设置解析；残余差异 C037–C041 已登记）
+  数组与头操作、非 JSON 门槛、设置解析；残余差异 C038–C041 已登记，C037 经 §214 核对为已实现并 resolved）
 - [x] pass-through 通道重放（请求与响应/流半程）由 121 例锁定：通道 `settings.passThroughBody` /
   `passThroughUserAgent` 覆盖全局 `system_pass_through` / `system_user_agent_pass_through`、
   `passThroughStreamAligned` 的 Go 真值相等、原始 body 重放与 sjson 语义的顶层 model 补丁

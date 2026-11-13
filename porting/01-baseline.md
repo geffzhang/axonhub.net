@@ -1592,6 +1592,28 @@ ModelServiceTests 新增快照来源 1 例；定向运行 EnabledChannelBuildFil
 通过、ModelsEndpointTests + GeminiEndpointTests + CodexEndpointTests 51 通过；未跑 Api 全量回归。
 台账：新增 C287（resolved），更新 C178 / C226 的过时表述；287 条（203 accepted / 0 gap / 84 resolved）。
 
+2026-11-14 更新（§214）：请求超时面（C115 / C253 / C037）。
+参照 `conf/conf.go:223-224` 默认 `server.request_timeout=30s`、`server.llm_request_timeout=600s`；
+`middleware.WithTimeout`（internal/server/middleware/timeout.go:10-18）用
+`context.WithTimeout(c.Request.Context(), ts)` 替换请求上下文、不自行写响应。`routes.go` 把 30s 挂在
+publicGroup、unSecureAdminGroup、oauthGroup、adminGroup 的 playground/request detail、admin GraphQL 上，
+600s 挂在 playground chat、apiGroup、geminiGroup 与 codex HTTP 组的最前；Responses WebSocket 组不挂组超时，
+per-event 预算在 `responses_websocket.go:267-283` 由每个 response.create 事件派生。SSE 截止分支
+（chat.go:461-506）严格按 terminalSeen → deadline → streamErr → canceled → incomplete 顺序写出错误事件，
+写截止固定 30s 且不随请求 ctx 取消（chat.go:605-618）。端口新增 `RequestTimeoutSettings`
+（`Server:RequestTimeout` / `Server:LlmRequestTimeout` 与 `AXONHUB_SERVER_*` 别名，完整 Go
+`time.ParseDuration` 子集含错误文案，默认 30s / 600s，空串按 0）、`RequestTimeoutMiddleware` 与
+`IRequestTimeoutFeature`（deadline 与父取消互斥、非正超时立即到期），按参照分组顺序注册在全局
+tracing/metrics 之后；`RequestIdentity.RequestDeadlineExpired` 把 deadline 传给持久化终态，
+`RequestChainPersistenceMiddleware` 以合成的 `TimeoutException("context deadline exceeded")` 表示 Go 的
+`context.DeadlineExceeded`，请求/执行归 failed，父取消保持 canceled；`SseStreamWriter` 照搬五分支顺序并以
+固定 30s 写截止发送 deadline 错误事件；`ResponsesWebSocketEndpoint` 新增 per-event 预算（linked CTS，
+>0 才施加），超时只结束当前事件、连接保持。实现差异：.NET 的取消与截止同为 OCE，端口用 feature 标志区分
+（C115）；配置值按 Go duration 解析并保留原始错误文案。测试：`RequestTimeoutTests` 31 例、
+`SseStreamWriterTests` 新增 2 例、`ResponsesWebSocketEndpointTests` 新增 1 例；定向运行
+RequestTimeoutTests + SseStreamWriterTests + ResponsesWebSocketEndpointTests 54 通过；未跑 Api 全量回归。
+台账：C115 / C253 / C037 转 resolved，C027 补两个超时键；287 条（200 accepted / 0 gap / 87 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、
@@ -2781,8 +2803,8 @@ Candidate.finishReason 空值省略（Go omitempty 语义，`NullIfEmpty` 赋值
 测试 `tests/AxonHub.Llm.Tests/GeminiInboundTransformerTests.cs`（25）、
 `GeminiIntegrationTests.cs`（19）、`GeminiOutboundConvertParametersTests.cs`
 （1）与 `tests/AxonHub.Api.Tests/GeminiKeyAuthMiddlewareTests.cs`（6）、
-`GeminiEndpointTests.cs`（6）。已接受差异见 C115（超时/来源/响应头中间件
-省略）、C116（未匹配路由的框架默认 404 体）、C117（入站解码错误文案）。
+`GeminiEndpointTests.cs`（6）。已接受差异见 C116（未匹配路由的框架默认 404 体）、
+C117（入站解码错误文案）；C115（超时/来源/响应头中间件）已于 §214 resolved。
 
 | 守护对象 | 测试位置 | 用例数 |
 |---|---|---|
@@ -2794,7 +2816,7 @@ Candidate.finishReason 空值省略（Go omitempty 语义，`NullIfEmpty` 赋值
 
 `AxonHub.Llm.Tests` 由 2773 增至 2818，`AxonHub.Api.Tests` 由 1103 增至
 1115，其余两个项目不变；四个项目合计 4038 增至 4095。差异条目新增
-C115–C117（均已接受）。
+C115（后于 §214 resolved）、C116–C117（均已接受）。
 
 ## 55. Antigravity Llm 层切片（router/executor/health/version/sanitizer/envelope/transformer + 129 例测试，2026-11-02）
 

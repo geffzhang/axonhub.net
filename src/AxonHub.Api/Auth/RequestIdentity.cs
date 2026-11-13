@@ -79,6 +79,13 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     public long? UserId { get; init; }
 
     /// <summary>
+    /// Port of <c>ctx.Err() == context.DeadlineExceeded</c> for the request the
+    /// persistence middleware is finalizing. Null when no timeout middleware
+    /// installed a feature (direct calls and tests).
+    /// </summary>
+    public Func<bool>? RequestDeadlineExpired { get; init; }
+
+    /// <summary>
     /// Identity used when no authentication middleware ran (internal callers and
     /// the slice's tests). The HTTP path always supplies the API key's project.
     /// </summary>
@@ -92,10 +99,12 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        return context.Items.TryGetValue(HttpContextItemKey, out var item)
-            && item is RequestIdentity identity
-                ? WithRequestId(identity, RequestIds.FromHttpContext(context))
+        var identity = context.Items.TryGetValue(HttpContextItemKey, out var item)
+            && item is RequestIdentity found
+                ? WithRequestId(found, RequestIds.FromHttpContext(context))
                 : Default;
+
+        return WithRequestDeadline(identity, context);
     }
 
     /// <summary>
@@ -111,11 +120,13 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
         if (context.Items.TryGetValue(HttpContextItemKey, out var item)
             && item is RequestIdentity found)
         {
-            identity = WithRequestId(found, RequestIds.FromHttpContext(context));
+            identity = WithRequestDeadline(
+                WithRequestId(found, RequestIds.FromHttpContext(context)),
+                context);
             return true;
         }
 
-        identity = Default;
+        identity = WithRequestDeadline(Default, context);
         return false;
     }
 
@@ -123,4 +134,16 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
         => string.IsNullOrEmpty(requestId) || !string.IsNullOrEmpty(identity.RequestId)
             ? identity
             : identity with { RequestId = requestId };
+
+    private static RequestIdentity WithRequestDeadline(
+        RequestIdentity identity,
+        HttpContext context)
+    {
+        if (context.Features.Get<IRequestTimeoutFeature>() is { } feature)
+        {
+            return identity with { RequestDeadlineExpired = () => feature.IsTimedOut };
+        }
+
+        return identity;
+    }
 }

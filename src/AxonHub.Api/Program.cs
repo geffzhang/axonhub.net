@@ -918,6 +918,10 @@ builder.Services.AddHostedService<GrainSchedulerActivator>();
 
 var app = builder.Build();
 
+// server.request_timeout / server.llm_request_timeout (conf/conf.go:223-224),
+// read once at startup like the reference's immutable server.Config.
+var requestTimeouts = RequestTimeoutSettings.FromConfiguration(app.Configuration);
+
 // The reference builds the MeterProvider in fx at startup and calls Shutdown
 // from OnStop; resolving the singleton here starts the periodic reader (when
 // enabled) and leaves the final flush to the host's disposal.
@@ -1047,6 +1051,43 @@ app.UseMiddleware<RequestTracingMiddleware>();
 // (no gin route) records the empty path.
 app.UseMiddleware<HttpMetricsMiddleware>();
 
+// Group timeouts (routes.go:81-104). They are registered after the global
+// middlewares, matching gin: the globals run before the group's
+// WithTimeout(context.WithTimeout) hook replaces the request context.
+// publicGroup: favicon, health and the two invitation routes.
+app.UseWhen(
+    static context =>
+    {
+        var path = context.Request.Path;
+        return (HttpMethods.IsGet(context.Request.Method)
+                && (path.Value == "/favicon"
+                    || path.Value == "/health"
+                    || path.StartsWithSegments("/auth/invitations")))
+            || (HttpMethods.IsPost(context.Request.Method)
+                && path.StartsWithSegments("/auth/invitations"));
+    },
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.RequestTimeout));
+
+// unSecureAdminGroup: status/initialize/signin/refresh carry
+// server.request_timeout and stay outside every auth middleware.
+app.UseWhen(
+    static context =>
+    {
+        var path = context.Request.Path;
+        return (HttpMethods.IsGet(context.Request.Method)
+                && path.Value == "/admin/system/status")
+            || (HttpMethods.IsPost(context.Request.Method)
+                && (path.Value == "/admin/system/initialize"
+                    || path.Value == "/admin/auth/signin"
+                    || path.Value == "/admin/auth/refresh"));
+    },
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.RequestTimeout));
+
+// oauthGroup: every OIDC login route carries server.request_timeout.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/oauth"),
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.RequestTimeout));
+
 // routes.go:163 mounts POST only, so a non-POST /admin/graphql never matches
 // the route and gin's NoRoute hands it to static.Handler, whose API-prefix
 // branch answers the JSON 404 envelope. HotChocolate's endpoint would match
@@ -1071,6 +1112,13 @@ app.UseWhen(
         branch.UseMiddleware<ProjectIdMiddleware>();
         branch.UseMiddleware<ApiKeyReadOnlyMiddleware>();
     });
+
+// routes.go:163: WithTimeout(server.request_timeout) follows the two auth
+// middlewares on the POST route.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/graphql")
+        && HttpMethods.IsPost(context.Request.Method),
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.RequestTimeout));
 
 // routes.go:175 mounts POST only, so a non-POST /openapi/v1/graphql never
 // matches the route and gin's NoRoute hands it to static.Handler (C116).
@@ -1117,6 +1165,13 @@ app.UseWhen(
         branch.UseMiddleware<ProjectIdMiddleware>();
     });
 
+// routes.go:109: GET /admin/playground appends WithTimeout(request_timeout)
+// after the admin group middlewares.
+app.UseWhen(
+    static context => context.Request.Path.Value == "/admin/playground"
+        && HttpMethods.IsGet(context.Request.Method),
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.RequestTimeout));
+
 // The playground chat also sits on the admin group (routes.go:106,134): the
 // same plain user-JWT gate and WithProjectID. Like every gin group middleware,
 // it only runs for the matched POST route (C116).
@@ -1128,6 +1183,13 @@ app.UseWhen(
         branch.UseMiddleware<AdminJwtAuthMiddleware>();
         branch.UseMiddleware<ProjectIdMiddleware>();
     });
+
+// routes.go:134-140: the playground chat uses WithTimeout(llm_request_timeout)
+// (plus WithSource/WithResponseHeaders, already handled by the endpoint).
+app.UseWhen(
+    static context => context.Request.Path.Value == "/admin/playground/chat"
+        && HttpMethods.IsPost(context.Request.Method),
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.LlmRequestTimeout));
 
 // The OIDC link flow sits on the admin group (routes.go:106,131): the plain
 // user-JWT gate then WithProjectID, with no API-key fallback.
@@ -1211,6 +1273,36 @@ app.UseWhen(
         branch.UseMiddleware<ProjectIdMiddleware>();
     });
 
+// routes.go:142-151: the content download and preview append
+// WithTimeout(request_timeout) after the admin group middlewares.
+app.UseWhen(
+    static context => context.Request.Path.StartsWithSegments("/admin/requests")
+        && HttpMethods.IsGet(context.Request.Method),
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.RequestTimeout));
+
+// routes.go:193-195: WithTimeout(llm_request_timeout) is the first apiGroup
+// middleware. routes.go:197-201 keeps GET /v1/responses on a group without the
+// single-request timeout; the WebSocket handler applies it per event instead.
+app.UseWhen(
+    static context =>
+    {
+        if (IsStaticFallback(context))
+        {
+            return false;
+        }
+
+        var path = context.Request.Path;
+        var inApiGroup = path.StartsWithSegments("/v1")
+            || path.StartsWithSegments("/anthropic/v1")
+            || path.StartsWithSegments("/jina/v1")
+            || path.StartsWithSegments("/typesafe/v1")
+            || path.StartsWithSegments("/doubao/v3");
+        return inApiGroup
+            && !(HttpMethods.IsGet(context.Request.Method)
+                && path.Value == "/v1/responses");
+    },
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.LlmRequestTimeout));
+
 // The reference mounts WithIPBlocklist + WithAPIKeyConfig on its API group, in
 // that order. The slice applies both to every ported API surface: the openai,
 // jina, typesafe and anthropic groups all hang off the same apiGroup.
@@ -1234,8 +1326,9 @@ app.UseWhen(
 // The Codex compatibility surface (codex_routes.go:10-29): IP blocklist,
 // the Enabled gate (system bypass), strict API key auth (no no-auth fallback),
 // then the thread/trace pair. WithSource/WithResponseHeaders stay unregistered
-// like the rest of the port (C115); the group timeout rides the orchestrator's
-// own budget.
+// like the rest of the port; the reference's HTTP group appends
+// WithTimeout(llm_request_timeout) after the common middlewares (the WebSocket
+// group below has none).
 app.UseWhen(
     static context => !IsStaticFallback(context)
         && context.Request.Path.StartsWithSegments("/codex"),
@@ -1248,11 +1341,28 @@ app.UseWhen(
         branch.UseMiddleware<TraceMiddleware>();
     });
 
+// codex_routes.go:20,27-28: the HTTP group gets the LLM deadline; GET
+// /codex/responses stays on the websocket group without it.
+app.UseWhen(
+    static context => !IsStaticFallback(context)
+        && context.Request.Path.StartsWithSegments("/codex")
+        && !(HttpMethods.IsGet(context.Request.Method)
+            && context.Request.Path.Value == "/codex/responses"),
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.LlmRequestTimeout));
+
+// routes.go:266-289: WithTimeout(llm_request_timeout) is the first middleware
+// on both the /gemini/:version group and the /v1beta alias.
+app.UseWhen(
+    static context => !IsStaticFallback(context)
+        && (context.Request.Path.StartsWithSegments("/v1beta")
+            || context.Request.Path.StartsWithSegments("/gemini")),
+    branch => branch.UseMiddleware<RequestTimeoutMiddleware>(requestTimeouts.LlmRequestTimeout));
+
 // The native Gemini surface (routes.go:266-289): the /gemini/:version group
 // and the /v1beta alias run IP blocklist + Gemini key auth (query `key` or
 // the regular header extractor) instead of WithAPIKeyConfig, then the same
-// thread/trace pair. WithTimeout/WithSource/WithResponseHeaders stay
-// unregistered like the rest of the port (C115).
+// thread/trace pair. WithSource/WithResponseHeaders stay unregistered like the
+// rest of the port.
 app.UseWhen(
     static context => !IsStaticFallback(context)
         && (context.Request.Path.StartsWithSegments("/v1beta")
@@ -1331,12 +1441,16 @@ static Task HandleResponsesCompactAsync(
 
 // The WebSocket sibling owns a long-lived connection and applies no group
 // timeout (routes.go:200-204); each frame's response.create event is processed
-// through the same orchestrator. A plain GET answers the gin 400 envelope.
-static Task HandleResponsesWebSocketAsync(
+// with server.llm_request_timeout (responses_websocket.go:267-283). A plain GET
+// answers the gin 400 envelope.
+Task HandleResponsesWebSocketAsync(
     HttpContext context,
     ChatCompletionOrchestrator orchestrator,
     ResponsesInboundTransformer responses)
-    => ResponsesWebSocketEndpoint.HandleAsync(context, orchestrator.WithInbound(responses));
+    => ResponsesWebSocketEndpoint.HandleAsync(
+        context,
+        orchestrator.WithInbound(responses),
+        requestTimeouts.LlmRequestTimeout);
 
 app.MapPost("/v1/responses", HandleResponsesAsync);
 app.MapPost("/v1/responses/compact", HandleResponsesCompactAsync);
