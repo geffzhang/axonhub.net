@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
+using static AxonHub.Persistence.ConnectionSql;
 
 namespace AxonHub.Persistence;
 
@@ -12,18 +13,209 @@ public enum UserSortField
     UpdatedAt,
 }
 
-/// <summary>Subset of ent.UserWhereInput used by the management frontend.</summary>
+/// <summary>
+/// Port of <c>UserWhereInput</c> (ent.graphql:7506-7672). All scalar field
+/// predicates are modeled; the seven edge predicates remain a registered gap
+/// (C135). <see cref="HasProjectUsersWithProjectId"/> is the
+/// <c>hasProjectUsersWith</c> predicate the User query policy installs.
+/// </summary>
 public sealed record UserListFilter
 {
     public long? Id { get; init; }
 
+    public long? IdNEQ { get; init; }
+
     public IReadOnlyList<long>? IdIn { get; init; }
 
-    public string? FirstNameContainsFold { get; init; }
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
+
+    public string? Email { get; init; }
+
+    public string? EmailNEQ { get; init; }
+
+    public IReadOnlyList<string>? EmailIn { get; init; }
+
+    public IReadOnlyList<string>? EmailNotIn { get; init; }
+
+    public string? EmailGT { get; init; }
+
+    public string? EmailGTE { get; init; }
+
+    public string? EmailLT { get; init; }
+
+    public string? EmailLTE { get; init; }
+
+    public string? EmailContains { get; init; }
+
+    public string? EmailHasPrefix { get; init; }
+
+    public string? EmailHasSuffix { get; init; }
+
+    public string? EmailEqualFold { get; init; }
 
     public string? EmailContainsFold { get; init; }
 
+    public string? Status { get; init; }
+
+    public string? StatusNEQ { get; init; }
+
     public IReadOnlyList<string>? StatusIn { get; init; }
+
+    public IReadOnlyList<string>? StatusNotIn { get; init; }
+
+    public string? PreferLanguage { get; init; }
+
+    public string? PreferLanguageNEQ { get; init; }
+
+    public IReadOnlyList<string>? PreferLanguageIn { get; init; }
+
+    public IReadOnlyList<string>? PreferLanguageNotIn { get; init; }
+
+    public string? PreferLanguageGT { get; init; }
+
+    public string? PreferLanguageGTE { get; init; }
+
+    public string? PreferLanguageLT { get; init; }
+
+    public string? PreferLanguageLTE { get; init; }
+
+    public string? PreferLanguageContains { get; init; }
+
+    public string? PreferLanguageHasPrefix { get; init; }
+
+    public string? PreferLanguageHasSuffix { get; init; }
+
+    public string? PreferLanguageEqualFold { get; init; }
+
+    public string? PreferLanguageContainsFold { get; init; }
+
+    public string? FirstName { get; init; }
+
+    public string? FirstNameNEQ { get; init; }
+
+    public IReadOnlyList<string>? FirstNameIn { get; init; }
+
+    public IReadOnlyList<string>? FirstNameNotIn { get; init; }
+
+    public string? FirstNameGT { get; init; }
+
+    public string? FirstNameGTE { get; init; }
+
+    public string? FirstNameLT { get; init; }
+
+    public string? FirstNameLTE { get; init; }
+
+    public string? FirstNameContains { get; init; }
+
+    public string? FirstNameHasPrefix { get; init; }
+
+    public string? FirstNameHasSuffix { get; init; }
+
+    public string? FirstNameEqualFold { get; init; }
+
+    public string? FirstNameContainsFold { get; init; }
+
+    public string? LastName { get; init; }
+
+    public string? LastNameNEQ { get; init; }
+
+    public IReadOnlyList<string>? LastNameIn { get; init; }
+
+    public IReadOnlyList<string>? LastNameNotIn { get; init; }
+
+    public string? LastNameGT { get; init; }
+
+    public string? LastNameGTE { get; init; }
+
+    public string? LastNameLT { get; init; }
+
+    public string? LastNameLTE { get; init; }
+
+    public string? LastNameContains { get; init; }
+
+    public string? LastNameHasPrefix { get; init; }
+
+    public string? LastNameHasSuffix { get; init; }
+
+    public string? LastNameEqualFold { get; init; }
+
+    public string? LastNameContainsFold { get; init; }
+
+    public string? Avatar { get; init; }
+
+    public string? AvatarNEQ { get; init; }
+
+    public IReadOnlyList<string>? AvatarIn { get; init; }
+
+    public IReadOnlyList<string>? AvatarNotIn { get; init; }
+
+    public string? AvatarGT { get; init; }
+
+    public string? AvatarGTE { get; init; }
+
+    public string? AvatarLT { get; init; }
+
+    public string? AvatarLTE { get; init; }
+
+    public string? AvatarContains { get; init; }
+
+    public string? AvatarHasPrefix { get; init; }
+
+    public string? AvatarHasSuffix { get; init; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool AvatarIsNil { get; init; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool AvatarNotNil { get; init; }
+
+    public string? AvatarEqualFold { get; init; }
+
+    public string? AvatarContainsFold { get; init; }
+
+    public bool? IsOwner { get; init; }
+
+    public bool? IsOwnerNEQ { get; init; }
 
     /// <summary>
     /// Ent's <c>WhereHasProjectUsersWith(project_id = ?)</c> predicate the
@@ -1263,42 +1455,159 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
 
         var predicates = new List<string?>();
 
-        if (filter.Id is not null)
-        {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
-        }
-
+        AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
         if (filter.IdIn is not null)
         {
-            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+            AppendIdIn(predicates, alias, "id", filter.IdIn, args);
         }
 
-        if (filter.FirstNameContainsFold is not null)
+        if (filter.IdNotIn is not null)
         {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "first_name",
-                "LIKE",
-                filter.FirstNameContainsFold,
-                args);
+            AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
         }
 
-        if (filter.EmailContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "email",
-                "LIKE",
-                filter.EmailContainsFold,
-                args);
-        }
+        AppendComparison(predicates, alias, "id", filter.IdGT, ">", args);
+        AppendComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
+        AppendComparison(predicates, alias, "id", filter.IdLT, "<", args);
+        AppendComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
 
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAt, "=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtIn, args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAt, "=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtIn, args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLTE, "<=", args);
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "email",
+            filter.Email,
+            filter.EmailNEQ,
+            filter.EmailIn,
+            filter.EmailNotIn,
+            filter.EmailGT,
+            filter.EmailGTE,
+            filter.EmailLT,
+            filter.EmailLTE,
+            filter.EmailContains,
+            filter.EmailHasPrefix,
+            filter.EmailHasSuffix,
+            filter.EmailEqualFold,
+            filter.EmailContainsFold,
+            args);
+
+        AppendComparison(predicates, alias, "status", filter.Status, "=", args);
+        AppendComparison(predicates, alias, "status", filter.StatusNEQ, "<>", args);
         if (filter.StatusIn is not null)
         {
-            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+            AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
         }
+
+        if (filter.StatusNotIn is not null)
+        {
+            AppendStringIn(predicates, alias, "status", filter.StatusNotIn, args, negate: true);
+        }
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "prefer_language",
+            filter.PreferLanguage,
+            filter.PreferLanguageNEQ,
+            filter.PreferLanguageIn,
+            filter.PreferLanguageNotIn,
+            filter.PreferLanguageGT,
+            filter.PreferLanguageGTE,
+            filter.PreferLanguageLT,
+            filter.PreferLanguageLTE,
+            filter.PreferLanguageContains,
+            filter.PreferLanguageHasPrefix,
+            filter.PreferLanguageHasSuffix,
+            filter.PreferLanguageEqualFold,
+            filter.PreferLanguageContainsFold,
+            args);
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "first_name",
+            filter.FirstName,
+            filter.FirstNameNEQ,
+            filter.FirstNameIn,
+            filter.FirstNameNotIn,
+            filter.FirstNameGT,
+            filter.FirstNameGTE,
+            filter.FirstNameLT,
+            filter.FirstNameLTE,
+            filter.FirstNameContains,
+            filter.FirstNameHasPrefix,
+            filter.FirstNameHasSuffix,
+            filter.FirstNameEqualFold,
+            filter.FirstNameContainsFold,
+            args);
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "last_name",
+            filter.LastName,
+            filter.LastNameNEQ,
+            filter.LastNameIn,
+            filter.LastNameNotIn,
+            filter.LastNameGT,
+            filter.LastNameGTE,
+            filter.LastNameLT,
+            filter.LastNameLTE,
+            filter.LastNameContains,
+            filter.LastNameHasPrefix,
+            filter.LastNameHasSuffix,
+            filter.LastNameEqualFold,
+            filter.LastNameContainsFold,
+            args);
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "avatar",
+            filter.Avatar,
+            filter.AvatarNEQ,
+            filter.AvatarIn,
+            filter.AvatarNotIn,
+            filter.AvatarGT,
+            filter.AvatarGTE,
+            filter.AvatarLT,
+            filter.AvatarLTE,
+            filter.AvatarContains,
+            filter.AvatarHasPrefix,
+            filter.AvatarHasSuffix,
+            filter.AvatarEqualFold,
+            filter.AvatarContainsFold,
+            args);
+        if (filter.AvatarIsNil)
+        {
+            predicates.Add(alias + ".\"avatar\" IS NULL");
+        }
+
+        if (filter.AvatarNotNil)
+        {
+            predicates.Add(alias + ".\"avatar\" IS NOT NULL");
+        }
+
+        AppendComparison(predicates, alias, "is_owner", filter.IsOwner, "=", args);
+        AppendComparison(predicates, alias, "is_owner", filter.IsOwnerNEQ, "<>", args);
 
         if (filter.HasProjectUsersWithProjectId is not null)
         {

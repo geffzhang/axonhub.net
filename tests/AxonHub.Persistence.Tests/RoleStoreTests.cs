@@ -201,6 +201,195 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesIdAndTimePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RoleStore(context);
+
+        var alpha = NewRole("Alpha", "system", 0);
+        alpha.CreatedAt = CreatedAt;
+        alpha.UpdatedAt = CreatedAt.AddHours(3);
+        var alphaId = await store.CreateAsync(alpha);
+
+        var beta = NewRole("Beta", "project", 7);
+        beta.CreatedAt = CreatedAt.AddMinutes(1);
+        beta.UpdatedAt = CreatedAt.AddHours(1);
+        var betaId = await store.CreateAsync(beta);
+
+        var gamma = NewRole("gamma", "system", null);
+        gamma.CreatedAt = CreatedAt.AddMinutes(2);
+        gamma.UpdatedAt = CreatedAt.AddHours(2);
+        var gammaId = await store.CreateAsync(gamma);
+
+        async Task<string[]> Names(RoleListFilter where)
+        {
+            var page = await store.ListAsync(new RoleListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        Assert.Equal(Expected("Beta", "gamma"), await Names(new RoleListFilter { IdNEQ = alphaId }));
+        Assert.Equal(
+            Expected("Alpha", "gamma"),
+            await Names(new RoleListFilter { IdIn = [alphaId, gammaId] }));
+        Assert.Empty(await Names(new RoleListFilter { IdIn = [] }));
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { IdNotIn = [] }));
+        Assert.Equal(Expected("Beta", "gamma"), await Names(new RoleListFilter { IdGT = alphaId }));
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { IdGTE = alphaId }));
+        Assert.Equal(Expected("Alpha"), await Names(new RoleListFilter { IdLT = betaId }));
+        Assert.Equal(
+            Expected("Alpha", "Beta"),
+            await Names(new RoleListFilter { IdLTE = betaId }));
+
+        Assert.Equal(Expected("Alpha"), await Names(new RoleListFilter { CreatedAt = CreatedAt }));
+        Assert.Equal(
+            Expected("Beta", "gamma"),
+            await Names(new RoleListFilter { CreatedAtNEQ = CreatedAt }));
+        Assert.Equal(
+            Expected("Alpha", "gamma"),
+            await Names(new RoleListFilter { CreatedAtIn = [CreatedAt, CreatedAt.AddMinutes(2)] }));
+        Assert.Equal(
+            Expected("Beta", "gamma"),
+            await Names(new RoleListFilter { CreatedAtNotIn = [CreatedAt] }));
+        Assert.Equal(
+            Expected("Beta", "gamma"),
+            await Names(new RoleListFilter { CreatedAtGT = CreatedAt }));
+        Assert.Equal(
+            Expected("Beta", "gamma"),
+            await Names(new RoleListFilter { CreatedAtGTE = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            Expected("Alpha"),
+            await Names(new RoleListFilter { CreatedAtLT = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            Expected("Alpha", "Beta"),
+            await Names(new RoleListFilter { CreatedAtLTE = CreatedAt.AddMinutes(1) }));
+
+        Assert.Equal(
+            Expected("gamma"),
+            await Names(new RoleListFilter { UpdatedAt = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            Expected("Alpha", "Beta"),
+            await Names(new RoleListFilter { UpdatedAtNEQ = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            Expected("Alpha", "Beta"),
+            await Names(new RoleListFilter
+            {
+                UpdatedAtIn = [CreatedAt.AddHours(1), CreatedAt.AddHours(3)],
+            }));
+        Assert.Equal(
+            Expected("Alpha", "gamma"),
+            await Names(new RoleListFilter { UpdatedAtNotIn = [CreatedAt.AddHours(1)] }));
+        Assert.Equal(
+            Expected("Alpha", "gamma"),
+            await Names(new RoleListFilter { UpdatedAtGT = CreatedAt.AddHours(1) }));
+        Assert.Equal(
+            Expected("Alpha", "gamma"),
+            await Names(new RoleListFilter { UpdatedAtGTE = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            Expected("Beta"),
+            await Names(new RoleListFilter { UpdatedAtLT = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            Expected("Beta", "gamma"),
+            await Names(new RoleListFilter { UpdatedAtLTE = CreatedAt.AddHours(2) }));
+    }
+
+    [Fact]
+    public async Task ListAppliesNameLevelAndProjectPredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RoleStore(context);
+
+        await store.CreateAsync(NewRole("Alpha", "system", 0));
+        await store.CreateAsync(NewRole("Beta", "project", 7));
+        var gammaId = await store.CreateAsync(NewRole("gamma", "system", null));
+
+        async Task<string[]> Names(RoleListFilter where)
+        {
+            var page = await store.ListAsync(new RoleListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        Assert.Equal(Expected("Alpha"), await Names(new RoleListFilter { Name = "Alpha" }));
+        Assert.Equal(
+            Expected("Beta", "gamma"),
+            await Names(new RoleListFilter { NameNEQ = "Alpha" }));
+        Assert.Equal(
+            Expected("Alpha", "Beta"),
+            await Names(new RoleListFilter { NameIn = ["Alpha", "Beta"] }));
+        Assert.Equal(
+            Expected("Beta", "gamma"),
+            await Names(new RoleListFilter { NameNotIn = ["Alpha"] }));
+        Assert.Equal(Expected("gamma"), await Names(new RoleListFilter { NameGT = "Beta" }));
+        Assert.Equal(
+            Expected("Beta", "gamma"),
+            await Names(new RoleListFilter { NameGTE = "Beta" }));
+        Assert.Equal(Expected("Alpha"), await Names(new RoleListFilter { NameLT = "Beta" }));
+        Assert.Equal(
+            Expected("Alpha", "Beta"),
+            await Names(new RoleListFilter { NameLTE = "Beta" }));
+        Assert.Equal(Expected("gamma"), await Names(new RoleListFilter { NameContains = "amm" }));
+        Assert.Equal(Expected("Alpha"), await Names(new RoleListFilter { NameHasPrefix = "Al" }));
+        Assert.Equal(Expected("Beta"), await Names(new RoleListFilter { NameHasSuffix = "ta" }));
+        Assert.Equal(Expected("Alpha"), await Names(new RoleListFilter { NameEqualFold = "ALPHA" }));
+        Assert.Equal(
+            Expected("gamma"),
+            await Names(new RoleListFilter { NameContainsFold = "AMM" }));
+
+        Assert.Equal(
+            Expected("Alpha", "gamma"),
+            await Names(new RoleListFilter { Level = "system" }));
+        Assert.Equal(Expected("Beta"), await Names(new RoleListFilter { LevelNEQ = "system" }));
+        Assert.Equal(Expected("Beta"), await Names(new RoleListFilter { LevelIn = ["project"] }));
+        Assert.Equal(
+            Expected("Beta"),
+            await Names(new RoleListFilter { LevelNotIn = ["system"] }));
+        Assert.Empty(await Names(new RoleListFilter { LevelIn = [] }));
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { LevelNotIn = [] }));
+
+        Assert.Equal(Expected("Alpha"), await Names(new RoleListFilter { ProjectId = 0 }));
+        Assert.Equal(Expected("Beta"), await Names(new RoleListFilter { ProjectId = 7 }));
+        // "project_id <> 7" and "NOT IN" exclude the NULL row, like SQL and ent.
+        Assert.Equal(Expected("Alpha"), await Names(new RoleListFilter { ProjectIdNEQ = 7 }));
+        Assert.Equal(
+            Expected("Alpha", "Beta"),
+            await Names(new RoleListFilter { ProjectIdIn = [0, 7] }));
+        Assert.Equal(
+            Expected("Beta"),
+            await Names(new RoleListFilter { ProjectIdNotIn = [0] }));
+        Assert.Empty(await Names(new RoleListFilter { ProjectIdIn = [] }));
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { ProjectIdNotIn = [] }));
+
+        Assert.Equal(
+            Expected("gamma"),
+            await Names(new RoleListFilter { ProjectIdIsNil = true }));
+        Assert.Equal(
+            Expected("Alpha", "Beta"),
+            await Names(new RoleListFilter { ProjectIdNotNil = true }));
+        // Ent reads these as plain bools: false is ignored, not inverted.
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { ProjectIdIsNil = false }));
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { ProjectIdNotNil = false }));
+
+        Assert.Equal(
+            Expected("gamma"),
+            await Names(new RoleListFilter { Id = gammaId }));
+    }
+
+    [Fact]
     public async Task LastReturnsTheTailInAscendingOrder()
     {
         await using var db = new TestDatabase(fixture);

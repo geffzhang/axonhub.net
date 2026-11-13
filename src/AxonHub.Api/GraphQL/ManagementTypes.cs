@@ -84,22 +84,240 @@ public sealed class RoleOrder
 }
 
 /// <summary>
-/// Port of the subset of <c>UserWhereInput</c> used by the management frontend
-/// (firstNameContainsFold, emailContainsFold, statusIn, id, and/or/not).
+/// Port of <c>UserWhereInput</c> (ent.graphql:7506-7672). All scalar field
+/// predicates are modeled; the seven edge predicates (hasProjects, hasAPIKeys,
+/// hasRoles, hasChannelOverrideTemplates, hasOidcIdentities, hasProjectUsers,
+/// hasUserRoles) remain a registered gap (C135).
 /// </summary>
 public sealed class UserWhereInput
 {
+    [GraphQLName("id")]
     [GraphQLType(typeof(IdType))]
     public string? Id { get; set; }
 
+    [GraphQLName("idNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLName("idIn")]
     [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
     public IReadOnlyList<string>? IdIn { get; set; }
 
-    public string? FirstNameContainsFold { get; set; }
+    [GraphQLName("idNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLName("idGT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLName("idGTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLName("idLT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLName("idLTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    public string? Email { get; set; }
+
+    public string? EmailNEQ { get; set; }
+
+    public IReadOnlyList<string>? EmailIn { get; set; }
+
+    public IReadOnlyList<string>? EmailNotIn { get; set; }
+
+    public string? EmailGT { get; set; }
+
+    public string? EmailGTE { get; set; }
+
+    public string? EmailLT { get; set; }
+
+    public string? EmailLTE { get; set; }
+
+    public string? EmailContains { get; set; }
+
+    public string? EmailHasPrefix { get; set; }
+
+    public string? EmailHasSuffix { get; set; }
+
+    public string? EmailEqualFold { get; set; }
 
     public string? EmailContainsFold { get; set; }
 
+    public UserStatusValue? Status { get; set; }
+
+    public UserStatusValue? StatusNEQ { get; set; }
+
     public IReadOnlyList<UserStatusValue>? StatusIn { get; set; }
+
+    public IReadOnlyList<UserStatusValue>? StatusNotIn { get; set; }
+
+    public string? PreferLanguage { get; set; }
+
+    public string? PreferLanguageNEQ { get; set; }
+
+    public IReadOnlyList<string>? PreferLanguageIn { get; set; }
+
+    public IReadOnlyList<string>? PreferLanguageNotIn { get; set; }
+
+    public string? PreferLanguageGT { get; set; }
+
+    public string? PreferLanguageGTE { get; set; }
+
+    public string? PreferLanguageLT { get; set; }
+
+    public string? PreferLanguageLTE { get; set; }
+
+    public string? PreferLanguageContains { get; set; }
+
+    public string? PreferLanguageHasPrefix { get; set; }
+
+    public string? PreferLanguageHasSuffix { get; set; }
+
+    public string? PreferLanguageEqualFold { get; set; }
+
+    public string? PreferLanguageContainsFold { get; set; }
+
+    public string? FirstName { get; set; }
+
+    public string? FirstNameNEQ { get; set; }
+
+    public IReadOnlyList<string>? FirstNameIn { get; set; }
+
+    public IReadOnlyList<string>? FirstNameNotIn { get; set; }
+
+    public string? FirstNameGT { get; set; }
+
+    public string? FirstNameGTE { get; set; }
+
+    public string? FirstNameLT { get; set; }
+
+    public string? FirstNameLTE { get; set; }
+
+    public string? FirstNameContains { get; set; }
+
+    public string? FirstNameHasPrefix { get; set; }
+
+    public string? FirstNameHasSuffix { get; set; }
+
+    public string? FirstNameEqualFold { get; set; }
+
+    public string? FirstNameContainsFold { get; set; }
+
+    public string? LastName { get; set; }
+
+    public string? LastNameNEQ { get; set; }
+
+    public IReadOnlyList<string>? LastNameIn { get; set; }
+
+    public IReadOnlyList<string>? LastNameNotIn { get; set; }
+
+    public string? LastNameGT { get; set; }
+
+    public string? LastNameGTE { get; set; }
+
+    public string? LastNameLT { get; set; }
+
+    public string? LastNameLTE { get; set; }
+
+    public string? LastNameContains { get; set; }
+
+    public string? LastNameHasPrefix { get; set; }
+
+    public string? LastNameHasSuffix { get; set; }
+
+    public string? LastNameEqualFold { get; set; }
+
+    public string? LastNameContainsFold { get; set; }
+
+    public string? Avatar { get; set; }
+
+    public string? AvatarNEQ { get; set; }
+
+    public IReadOnlyList<string>? AvatarIn { get; set; }
+
+    public IReadOnlyList<string>? AvatarNotIn { get; set; }
+
+    public string? AvatarGT { get; set; }
+
+    public string? AvatarGTE { get; set; }
+
+    public string? AvatarLT { get; set; }
+
+    public string? AvatarLTE { get; set; }
+
+    public string? AvatarContains { get; set; }
+
+    public string? AvatarHasPrefix { get; set; }
+
+    public string? AvatarHasSuffix { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? AvatarIsNil { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? AvatarNotNil { get; set; }
+
+    public string? AvatarEqualFold { get; set; }
+
+    public string? AvatarContainsFold { get; set; }
+
+    public bool? IsOwner { get; set; }
+
+    public bool? IsOwnerNEQ { get; set; }
 
     public UserWhereInput? Not { get; set; }
 
@@ -109,24 +327,149 @@ public sealed class UserWhereInput
 }
 
 /// <summary>
-/// Port of the subset of <c>RoleWhereInput</c> used by the management frontend
-/// (nameContainsFold, level, projectID, id, and/or/not).
+/// Port of <c>RoleWhereInput</c> (ent.graphql:5531-5615). All scalar field
+/// predicates are modeled; the three edge predicates (hasUsers, hasProject,
+/// hasUserRoles) remain a registered gap (C135).
 /// </summary>
 public sealed class RoleWhereInput
 {
+    [GraphQLName("id")]
     [GraphQLType(typeof(IdType))]
     public string? Id { get; set; }
 
+    [GraphQLName("idNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLName("idIn")]
     [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
     public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLName("idNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLName("idGT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLName("idGTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLName("idLT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLName("idLTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    public string? Name { get; set; }
+
+    public string? NameNEQ { get; set; }
+
+    public IReadOnlyList<string>? NameIn { get; set; }
+
+    public IReadOnlyList<string>? NameNotIn { get; set; }
+
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
+    public string? NameContains { get; set; }
+
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
 
     public string? NameContainsFold { get; set; }
 
     public RoleLevelValue? Level { get; set; }
 
+    public RoleLevelValue? LevelNEQ { get; set; }
+
+    public IReadOnlyList<RoleLevelValue>? LevelIn { get; set; }
+
+    public IReadOnlyList<RoleLevelValue>? LevelNotIn { get; set; }
+
     [GraphQLName("projectID")]
     [GraphQLType(typeof(IdType))]
-    public string? ProjectId { get; set; }
+    public string? ProjectID { get; set; }
+
+    [GraphQLName("projectIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? ProjectIDNEQ { get; set; }
+
+    [GraphQLName("projectIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ProjectIDIn { get; set; }
+
+    [GraphQLName("projectIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ProjectIDNotIn { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    [GraphQLName("projectIDIsNil")]
+    public bool? ProjectIDIsNil { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    [GraphQLName("projectIDNotNil")]
+    public bool? ProjectIDNotNil { get; set; }
 
     public RoleWhereInput? Not { get; set; }
 
@@ -589,14 +932,106 @@ public static class ManagementMapping
         return new UserListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
-            FirstNameContainsFold = where.FirstNameContainsFold,
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
+            Email = where.Email,
+            EmailNEQ = where.EmailNEQ,
+            EmailIn = where.EmailIn,
+            EmailNotIn = where.EmailNotIn,
+            EmailGT = where.EmailGT,
+            EmailGTE = where.EmailGTE,
+            EmailLT = where.EmailLT,
+            EmailLTE = where.EmailLTE,
+            EmailContains = where.EmailContains,
+            EmailHasPrefix = where.EmailHasPrefix,
+            EmailHasSuffix = where.EmailHasSuffix,
+            EmailEqualFold = where.EmailEqualFold,
             EmailContainsFold = where.EmailContainsFold,
+            Status = where.Status is null ? null : ToWire(where.Status.Value),
+            StatusNEQ = where.StatusNEQ is null ? null : ToWire(where.StatusNEQ.Value),
             StatusIn = where.StatusIn?
-                .Select(static status => status == UserStatusValue.Activated
-                    ? "activated"
-                    : "deactivated")
+                .Select(static status => ToWire(status))
                 .ToList(),
+            StatusNotIn = where.StatusNotIn?
+                .Select(static status => ToWire(status))
+                .ToList(),
+            PreferLanguage = where.PreferLanguage,
+            PreferLanguageNEQ = where.PreferLanguageNEQ,
+            PreferLanguageIn = where.PreferLanguageIn,
+            PreferLanguageNotIn = where.PreferLanguageNotIn,
+            PreferLanguageGT = where.PreferLanguageGT,
+            PreferLanguageGTE = where.PreferLanguageGTE,
+            PreferLanguageLT = where.PreferLanguageLT,
+            PreferLanguageLTE = where.PreferLanguageLTE,
+            PreferLanguageContains = where.PreferLanguageContains,
+            PreferLanguageHasPrefix = where.PreferLanguageHasPrefix,
+            PreferLanguageHasSuffix = where.PreferLanguageHasSuffix,
+            PreferLanguageEqualFold = where.PreferLanguageEqualFold,
+            PreferLanguageContainsFold = where.PreferLanguageContainsFold,
+            FirstName = where.FirstName,
+            FirstNameNEQ = where.FirstNameNEQ,
+            FirstNameIn = where.FirstNameIn,
+            FirstNameNotIn = where.FirstNameNotIn,
+            FirstNameGT = where.FirstNameGT,
+            FirstNameGTE = where.FirstNameGTE,
+            FirstNameLT = where.FirstNameLT,
+            FirstNameLTE = where.FirstNameLTE,
+            FirstNameContains = where.FirstNameContains,
+            FirstNameHasPrefix = where.FirstNameHasPrefix,
+            FirstNameHasSuffix = where.FirstNameHasSuffix,
+            FirstNameEqualFold = where.FirstNameEqualFold,
+            FirstNameContainsFold = where.FirstNameContainsFold,
+            LastName = where.LastName,
+            LastNameNEQ = where.LastNameNEQ,
+            LastNameIn = where.LastNameIn,
+            LastNameNotIn = where.LastNameNotIn,
+            LastNameGT = where.LastNameGT,
+            LastNameGTE = where.LastNameGTE,
+            LastNameLT = where.LastNameLT,
+            LastNameLTE = where.LastNameLTE,
+            LastNameContains = where.LastNameContains,
+            LastNameHasPrefix = where.LastNameHasPrefix,
+            LastNameHasSuffix = where.LastNameHasSuffix,
+            LastNameEqualFold = where.LastNameEqualFold,
+            LastNameContainsFold = where.LastNameContainsFold,
+            Avatar = where.Avatar,
+            AvatarNEQ = where.AvatarNEQ,
+            AvatarIn = where.AvatarIn,
+            AvatarNotIn = where.AvatarNotIn,
+            AvatarGT = where.AvatarGT,
+            AvatarGTE = where.AvatarGTE,
+            AvatarLT = where.AvatarLT,
+            AvatarLTE = where.AvatarLTE,
+            AvatarContains = where.AvatarContains,
+            AvatarHasPrefix = where.AvatarHasPrefix,
+            AvatarHasSuffix = where.AvatarHasSuffix,
+            AvatarIsNil = where.AvatarIsNil == true,
+            AvatarNotNil = where.AvatarNotNil == true,
+            AvatarEqualFold = where.AvatarEqualFold,
+            AvatarContainsFold = where.AvatarContainsFold,
+            IsOwner = where.IsOwner,
+            IsOwnerNEQ = where.IsOwnerNEQ,
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<UserListFilter>().ToList(),
             Or = where.Or?.Select(ToFilter).OfType<UserListFilter>().ToList(),
@@ -613,16 +1048,64 @@ public static class ManagementMapping
         return new RoleListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
+            Name = where.Name,
+            NameNEQ = where.NameNEQ,
+            NameIn = where.NameIn,
+            NameNotIn = where.NameNotIn,
+            NameGT = where.NameGT,
+            NameGTE = where.NameGTE,
+            NameLT = where.NameLT,
+            NameLTE = where.NameLTE,
+            NameContains = where.NameContains,
+            NameHasPrefix = where.NameHasPrefix,
+            NameHasSuffix = where.NameHasSuffix,
+            NameEqualFold = where.NameEqualFold,
             NameContainsFold = where.NameContainsFold,
-            Level = where.Level is null
+            Level = where.Level is null ? null : ToWire(where.Level.Value),
+            LevelNEQ = where.LevelNEQ is null ? null : ToWire(where.LevelNEQ.Value),
+            LevelIn = where.LevelIn?
+                .Select(static level => ToWire(level))
+                .ToList(),
+            LevelNotIn = where.LevelNotIn?
+                .Select(static level => ToWire(level))
+                .ToList(),
+            ProjectId = where.ProjectID is null
                 ? null
-                : where.Level == RoleLevelValue.System
-                    ? RoleManagementService.LevelSystem
-                    : RoleManagementService.LevelProject,
-            ProjectId = where.ProjectId is null
+                : GidValue.Parse(where.ProjectID).Id,
+            ProjectIdNEQ = where.ProjectIDNEQ is null
                 ? null
-                : GidValue.Parse(where.ProjectId).Id,
+                : GidValue.Parse(where.ProjectIDNEQ).Id,
+            ProjectIdIn = where.ProjectIDIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            ProjectIdNotIn = where.ProjectIDNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            ProjectIdIsNil = where.ProjectIDIsNil == true,
+            ProjectIdNotNil = where.ProjectIDNotNil == true,
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<RoleListFilter>().ToList(),
             Or = where.Or?.Select(ToFilter).OfType<RoleListFilter>().ToList(),
@@ -681,6 +1164,14 @@ public static class ManagementMapping
         _ => throw new GraphQLException(
             "Enum \"RoleLevel\" cannot represent value: \"" + level + "\""),
     };
+
+    private static string ToWire(UserStatusValue status)
+        => status == UserStatusValue.Activated ? "activated" : "deactivated";
+
+    private static string ToWire(RoleLevelValue level)
+        => level == RoleLevelValue.System
+            ? RoleManagementService.LevelSystem
+            : RoleManagementService.LevelProject;
 
     private static PageInfoType BuildPageInfo(
         List<CursorValue> cursors,

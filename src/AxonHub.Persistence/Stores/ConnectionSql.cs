@@ -260,6 +260,21 @@ internal static class ConnectionSql
         }
     }
 
+    public static void AppendComparison(
+        List<string?> predicates,
+        string alias,
+        string column,
+        bool? value,
+        string op,
+        SqlArguments args)
+    {
+        if (value is not null)
+        {
+            predicates.Add(
+                alias + ".\"" + column + "\" " + op + " " + args.Add(value.Value));
+        }
+    }
+
     /// <summary>
     /// The full ent string predicate set for one nullable string column:
     /// equality/ordering comparisons, IN/NOT IN, Contains/HasPrefix/HasSuffix,

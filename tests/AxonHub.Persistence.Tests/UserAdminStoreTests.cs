@@ -117,6 +117,348 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesIdAndTimePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var alice = NewUser("alice@example.com");
+        alice.CreatedAt = CreatedAt;
+        alice.UpdatedAt = CreatedAt.AddHours(3);
+        var aliceId = await store.CreateAsync(alice, null);
+
+        var bob = NewUser("bob@example.com");
+        bob.CreatedAt = CreatedAt.AddMinutes(1);
+        bob.UpdatedAt = CreatedAt.AddHours(1);
+        var bobId = await store.CreateAsync(bob, null);
+
+        var carol = NewUser("carol@example.com");
+        carol.CreatedAt = CreatedAt.AddMinutes(2);
+        carol.UpdatedAt = CreatedAt.AddHours(2);
+        var carolId = await store.CreateAsync(carol, null);
+
+        async Task<string[]> Emails(UserListFilter where)
+        {
+            var page = await store.ListAsync(new UserListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Email).ToArray();
+        }
+
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { IdNEQ = aliceId }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { IdIn = [aliceId, carolId] }));
+        Assert.Empty(await Emails(new UserListFilter { IdIn = [] }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { IdNotIn = [] }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { IdGT = aliceId }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { IdGTE = aliceId }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { IdLT = bobId }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { IdLTE = bobId }));
+
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { CreatedAt = CreatedAt }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { CreatedAtNEQ = CreatedAt }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { CreatedAtIn = [CreatedAt, CreatedAt.AddMinutes(2)] }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { CreatedAtNotIn = [CreatedAt] }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { CreatedAtGT = CreatedAt }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { CreatedAtGTE = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { CreatedAtLT = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { CreatedAtLTE = CreatedAt.AddMinutes(1) }));
+
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { UpdatedAtLT = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { UpdatedAtGTE = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { UpdatedAtNEQ = CreatedAt.AddHours(1) }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { UpdatedAtNotIn = [CreatedAt.AddHours(1)] }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { UpdatedAtLTE = CreatedAt.AddHours(2) }));
+    }
+
+    [Fact]
+    public async Task ListAppliesEveryStringAndBooleanPredicate()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var alice = NewUser("alice@example.com");
+        alice.FirstName = "Alice";
+        alice.LastName = "Anderson";
+        alice.Status = "activated";
+        alice.PreferLanguage = "en";
+        alice.Avatar = "https://cdn/a.png";
+        alice.IsOwner = false;
+        await store.CreateAsync(alice, null);
+
+        var bob = NewUser("bob@example.com");
+        bob.FirstName = "Bob";
+        bob.LastName = "Brown";
+        bob.Status = "deactivated";
+        bob.PreferLanguage = "zh";
+        bob.Avatar = null;
+        bob.IsOwner = true;
+        await store.CreateAsync(bob, null);
+
+        var carol = NewUser("carol@example.com");
+        carol.FirstName = "Carol";
+        carol.LastName = "Clark";
+        carol.Status = "activated";
+        carol.PreferLanguage = "en";
+        carol.Avatar = "https://cdn/c.png";
+        carol.IsOwner = false;
+        await store.CreateAsync(carol, null);
+
+        async Task<string[]> Emails(UserListFilter where)
+        {
+            var page = await store.ListAsync(new UserListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Email).ToArray();
+        }
+
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { Email = "alice@example.com" }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { EmailNEQ = "alice@example.com" }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { EmailIn = ["alice@example.com", "carol@example.com"] }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { EmailNotIn = ["alice@example.com"] }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { EmailGT = "bob@example.com" }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { EmailGTE = "bob@example.com" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { EmailLT = "bob@example.com" }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { EmailLTE = "bob@example.com" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { EmailContains = "carol" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { EmailHasPrefix = "bob@" }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { EmailHasSuffix = "@example.com" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { EmailEqualFold = "BOB@EXAMPLE.COM" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { EmailContainsFold = "AROL" }));
+
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { Status = "deactivated" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { StatusNEQ = "activated" }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { StatusIn = ["activated"] }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { StatusNotIn = ["activated"] }));
+        Assert.Empty(await Emails(new UserListFilter { StatusIn = [] }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { StatusNotIn = [] }));
+
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguage = "zh" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageNEQ = "en" }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { PreferLanguageIn = ["en"] }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageNotIn = ["en"] }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageGT = "en" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageGTE = "zh" }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { PreferLanguageLT = "zh" }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { PreferLanguageLTE = "en" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageContains = "h" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageHasPrefix = "z" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageHasSuffix = "h" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageEqualFold = "ZH" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { PreferLanguageContainsFold = "ZH" }));
+
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { FirstName = "Alice" }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { FirstNameNEQ = "Alice" }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { FirstNameIn = ["Alice", "Bob"] }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { FirstNameNotIn = ["Alice"] }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { FirstNameGT = "Bob" }));
+        Assert.Equal(
+            Expected("bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { FirstNameGTE = "Bob" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { FirstNameLT = "Bob" }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { FirstNameLTE = "Bob" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { FirstNameContains = "aro" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { FirstNameHasPrefix = "Ali" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { FirstNameHasSuffix = "ob" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { FirstNameEqualFold = "ALICE" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { FirstNameContainsFold = "ARO" }));
+
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { LastName = "Brown" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { LastNameContains = "ark" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { LastNameHasPrefix = "And" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { LastNameEqualFold = "CLARK" }));
+
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { Avatar = "https://cdn/a.png" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { AvatarNEQ = "https://cdn/a.png" }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { AvatarIn = ["https://cdn/a.png", "https://cdn/c.png"] }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { AvatarNotIn = ["https://cdn/a.png"] }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { AvatarContains = "cdn" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { AvatarHasPrefix = "https://cdn/a" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { AvatarHasSuffix = "c.png" }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { AvatarGT = "https://cdn/a.png" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { AvatarLT = "https://cdn/c.png" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { AvatarEqualFold = "HTTPS://CDN/A.PNG" }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter { AvatarContainsFold = "CDN/A" }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { AvatarIsNil = true }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { AvatarIsNil = false }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { AvatarNotNil = true }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { AvatarNotNil = false }));
+
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter { IsOwner = true }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { IsOwner = false }));
+        Assert.Equal(
+            Expected("alice@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { IsOwnerNEQ = true }));
+    }
+
+    [Fact]
     public async Task UpdateAppliesFieldsScopesAndRoleEdges()
     {
         await using var db = new TestDatabase(fixture);

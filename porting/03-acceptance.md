@@ -1761,6 +1761,21 @@ LIKE / LOWER / IN / NOT IN 与空列表 false / true、NULL 行排除。
 全量谓词；lint 通过；02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74
 resolved）。
 
+§200（2026-11-13）UserWhereInput / RoleWhereInput 标量谓词全量建模（C135 第二刀）。
+
+参照 ent.graphql:7506-7672 与 :5531-5615，UserWhereInput 有 97 个标量谓词、RoleWhereInput 有
+47 个；端口此前只建模前端实际使用的字段。§200 把 97 + 47 个谓词全部加入 GraphQL 输入与
+UserListFilter / RoleListFilter，GID / Time / 枚举 → wire 值 / IsNil 布尔映射逐项对齐；
+Role 的 projectIDIsNil / projectIDNotNil 正式暴露并修正为普通 bool（false 忽略，不再反转）。
+存储层复用 ConnectionSql 的共享谓词 helper。
+
+测试：UserAdminStoreTests 新增 2 例、RoleStoreTests 新增 2 例（Postgres；覆盖 id / 时间 /
+字符串 / 布尔 / 枚举 / projectID 全部操作符、空列表 IN / NOT IN、NULL 行排除与
+projectIDIsNil:false 被忽略），分别 20 / 11 通过；AdminUsersRolesEndpointTests 新增 4 例
+（User / Role 逐族映射 + introspection 字段名集合，User 100 个字段、Role 50 个字段），26 通过。
+台账：C135 保持 gap，残余收窄为 16 组边谓词（Channel 6、User 7、Role 3）；lint 通过；
+02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

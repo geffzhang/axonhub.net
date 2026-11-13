@@ -1265,6 +1265,28 @@ Api 2 例（where 逐族映射到 `ChannelListFilter`、introspection 断言 148
 ProviderQuotaStatus / UserProject 等尚未建模的 where 输入）与 User / RoleWhereInput 的全量
 谓词，继续由 C135 跟踪。
 
+2026-11-13 更新（§200）：UserWhereInput / RoleWhereInput 标量谓词全量建模（C135 第二刀）。
+参照 `internal/server/gql/ent.graphql:7506-7672` 与 `:5531-5615`：UserWhereInput 共 114 个
+字段（97 个标量谓词 + 7 组边谓词 ×2 + not / and / or），RoleWhereInput 共 56 个字段
+（47 个标量谓词 + 3 组边谓词 ×2 + not / and / or）。端口此前只建模前端实际使用的字段
+（user 为 id / idIn / firstNameContainsFold / emailContainsFold / statusIn / and / or / not，
+role 为 id / idIn / nameContainsFold / level / projectID / and / or / not）。§200 把 97 个
+User 谓词（id 8、createdAt 8、updatedAt 8、email 13、status 4、preferLanguage 13、
+firstName 13、lastName 13、avatar 15、isOwner 2）与 47 个 Role 谓词（id 8、createdAt 8、
+updatedAt 8、name 13、level 4、projectID 6）全部加入 GraphQL 输入与对应 ListFilter；
+`ManagementTypes.ToFilter` 完成 GID / Time / 枚举 → wire 值 / IsNil 布尔映射。Role 的
+`projectIDIsNil` / `projectIDNotNil` 在 GraphQL 输入中正式暴露，并按参照生成代码修正为
+普通 bool：只有 true 生效，false 忽略（旧实现为 `bool?` 且 false 会反转成
+IS NOT NULL / IS NULL）。两个 store 复用 §199 上提到 `ConnectionSql` 的谓词 helper，语义与
+Channel 完全一致（LIKE / LOWER / IN / NOT IN 空列表 false / true、`<>` 与 `NOT IN` 不返回
+NULL 行）。新增 4 例：Persistence 4 例（UserAdminStoreTests 的 id / 时间族与字符串 / 布尔族，
+RoleStoreTests 的 id / 时间族与 name / level / projectID 族，含 `projectIDIsNil:false` 被忽略
+与 NULL 行排除语义；UserAdminStoreTests 20 通过、RoleStoreTests 11 通过）、Api 4 例
+（QueryUsersMapsEveryScalarWherePredicate / UserWhereInputExposesEveryScalarPredicate /
+QueryRolesMapsEveryScalarWherePredicate / RoleWhereInputExposesEveryScalarPredicate；
+AdminUsersRolesEndpointTests 26 通过）。残余：Channel 6 组、User 7 组、Role 3 组边谓词，
+依赖尚未建模（或仅子集）的被连接实体 where 输入，继续由 C135 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

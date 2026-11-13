@@ -258,6 +258,133 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task QueryUsersMapsEveryScalarWherePredicate()
+    {
+        SeedUser("alice@example.com", DateTime.UtcNow);
+
+        await QueryDataAsync(
+            """
+            query Users($where: UserWhereInput) {
+              users(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    id = "gid://axonhub/User/4",
+                    idNEQ = "gid://axonhub/User/3",
+                    idIn = new[] { "gid://axonhub/User/2" },
+                    idNotIn = new[] { "gid://axonhub/User/1" },
+                    idGT = "gid://axonhub/User/5",
+                    idGTE = "gid://axonhub/User/6",
+                    idLT = "gid://axonhub/User/7",
+                    idLTE = "gid://axonhub/User/8",
+                    createdAt = "2026-01-02T03:04:05Z",
+                    createdAtNEQ = "2026-01-02T03:04:06Z",
+                    createdAtIn = new[] { "2026-01-02T03:04:07Z" },
+                    createdAtNotIn = new[] { "2026-01-02T03:04:08Z" },
+                    createdAtGT = "2026-01-02T03:04:09Z",
+                    createdAtGTE = "2026-01-02T03:04:10Z",
+                    createdAtLT = "2026-01-02T03:04:11Z",
+                    createdAtLTE = "2026-01-02T03:04:12Z",
+                    updatedAtLT = "2026-02-03T04:05:06Z",
+                    updatedAtNotIn = new[] { "2026-02-03T04:05:07Z" },
+                    email = "alice@example.com",
+                    emailNEQ = "bob@example.com",
+                    emailIn = new[] { "carol@example.com" },
+                    emailNotIn = new[] { "dave@example.com" },
+                    emailGT = "a",
+                    emailGTE = "b",
+                    emailLT = "c",
+                    emailLTE = "d",
+                    emailContains = "example",
+                    emailHasPrefix = "ali",
+                    emailHasSuffix = ".com",
+                    emailEqualFold = "ALICE@EXAMPLE.COM",
+                    emailContainsFold = "EXAMPLE",
+                    status = "deactivated",
+                    statusNEQ = "activated",
+                    statusIn = new[] { "deactivated" },
+                    statusNotIn = new[] { "activated" },
+                    preferLanguageHasPrefix = "zh",
+                    preferLanguageNotIn = new[] { "fr" },
+                    firstNameEqualFold = "ALICE",
+                    firstNameContainsFold = "LIC",
+                    lastNameContains = "son",
+                    lastNameHasSuffix = "ers",
+                    avatarIsNil = true,
+                    avatarNotNil = false,
+                    avatarContainsFold = "CDN",
+                    avatarGT = "https://cdn/a.png",
+                    isOwner = true,
+                    isOwnerNEQ = false,
+                    and = new[] { new { firstNameContains = "a" } },
+                    or = new[] { new { lastNameHasSuffix = "e" } },
+                    not = new { email = "nope@example.com" },
+                },
+            });
+
+        var where = _users.Queries[^1].Where!;
+        Assert.Equal(4L, where.Id!.Value);
+        Assert.Equal(3L, where.IdNEQ!.Value);
+        Assert.Equal([2L], where.IdIn!);
+        Assert.Equal([1L], where.IdNotIn!);
+        Assert.Equal(5L, where.IdGT!.Value);
+        Assert.Equal(6L, where.IdGTE!.Value);
+        Assert.Equal(7L, where.IdLT!.Value);
+        Assert.Equal(8L, where.IdLTE!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), where.CreatedAt!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 6, DateTimeKind.Utc), where.CreatedAtNEQ!.Value);
+        Assert.Equal(
+            [new DateTime(2026, 1, 2, 3, 4, 7, DateTimeKind.Utc)],
+            where.CreatedAtIn!);
+        Assert.Equal(
+            [new DateTime(2026, 1, 2, 3, 4, 8, DateTimeKind.Utc)],
+            where.CreatedAtNotIn!);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 9, DateTimeKind.Utc), where.CreatedAtGT!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 10, DateTimeKind.Utc), where.CreatedAtGTE!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 11, DateTimeKind.Utc), where.CreatedAtLT!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 12, DateTimeKind.Utc), where.CreatedAtLTE!.Value);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc), where.UpdatedAtLT!.Value);
+        Assert.Equal(
+            [new DateTime(2026, 2, 3, 4, 5, 7, DateTimeKind.Utc)],
+            where.UpdatedAtNotIn!);
+        Assert.Equal("alice@example.com", where.Email);
+        Assert.Equal("bob@example.com", where.EmailNEQ);
+        Assert.Equal(["carol@example.com"], where.EmailIn!);
+        Assert.Equal(["dave@example.com"], where.EmailNotIn!);
+        Assert.Equal("a", where.EmailGT);
+        Assert.Equal("b", where.EmailGTE);
+        Assert.Equal("c", where.EmailLT);
+        Assert.Equal("d", where.EmailLTE);
+        Assert.Equal("example", where.EmailContains);
+        Assert.Equal("ali", where.EmailHasPrefix);
+        Assert.Equal(".com", where.EmailHasSuffix);
+        Assert.Equal("ALICE@EXAMPLE.COM", where.EmailEqualFold);
+        Assert.Equal("EXAMPLE", where.EmailContainsFold);
+        Assert.Equal("deactivated", where.Status);
+        Assert.Equal("activated", where.StatusNEQ);
+        Assert.Equal(["deactivated"], where.StatusIn!);
+        Assert.Equal(["activated"], where.StatusNotIn!);
+        Assert.Equal("zh", where.PreferLanguageHasPrefix);
+        Assert.Equal(["fr"], where.PreferLanguageNotIn!);
+        Assert.Equal("ALICE", where.FirstNameEqualFold);
+        Assert.Equal("LIC", where.FirstNameContainsFold);
+        Assert.Equal("son", where.LastNameContains);
+        Assert.Equal("ers", where.LastNameHasSuffix);
+        Assert.True(where.AvatarIsNil);
+        Assert.False(where.AvatarNotNil);
+        Assert.Equal("CDN", where.AvatarContainsFold);
+        Assert.Equal("https://cdn/a.png", where.AvatarGT);
+        Assert.True(where.IsOwner);
+        Assert.False(where.IsOwnerNEQ);
+        Assert.Equal("a", Assert.Single(where.And!).FirstNameContains);
+        Assert.Equal("e", Assert.Single(where.Or!).LastNameHasSuffix);
+        Assert.Equal("nope@example.com", where.Not!.Email);
+    }
+
+    [Fact]
     public async Task NestedRolesAreUnboundedWithoutPaginationArgs()
     {
         // entgql's User.roles edge resolver routes through Paginate, which
@@ -423,6 +550,121 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task QueryRolesMapsEveryScalarWherePredicate()
+    {
+        SeedRole("Developer", projectId: 0);
+
+        await QueryDataAsync(
+            """
+            query Roles($where: RoleWhereInput) {
+              roles(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    id = "gid://axonhub/Role/4",
+                    idNEQ = "gid://axonhub/Role/3",
+                    idIn = new[] { "gid://axonhub/Role/2" },
+                    idNotIn = new[] { "gid://axonhub/Role/1" },
+                    idGT = "gid://axonhub/Role/5",
+                    idGTE = "gid://axonhub/Role/6",
+                    idLT = "gid://axonhub/Role/7",
+                    idLTE = "gid://axonhub/Role/8",
+                    createdAt = "2026-01-02T03:04:05Z",
+                    createdAtNEQ = "2026-01-02T03:04:06Z",
+                    createdAtIn = new[] { "2026-01-02T03:04:07Z" },
+                    createdAtNotIn = new[] { "2026-01-02T03:04:08Z" },
+                    createdAtGT = "2026-01-02T03:04:09Z",
+                    createdAtGTE = "2026-01-02T03:04:10Z",
+                    createdAtLT = "2026-01-02T03:04:11Z",
+                    createdAtLTE = "2026-01-02T03:04:12Z",
+                    updatedAtLT = "2026-02-03T04:05:06Z",
+                    updatedAtNotIn = new[] { "2026-02-03T04:05:07Z" },
+                    name = "Developer",
+                    nameNEQ = "Viewer",
+                    nameIn = new[] { "Admin" },
+                    nameNotIn = new[] { "Owner" },
+                    nameGT = "A",
+                    nameGTE = "B",
+                    nameLT = "C",
+                    nameLTE = "D",
+                    nameContains = "velop",
+                    nameHasPrefix = "Dev",
+                    nameHasSuffix = "per",
+                    nameEqualFold = "DEVELOPER",
+                    nameContainsFold = "VELOP",
+                    level = "project",
+                    levelNEQ = "system",
+                    levelIn = new[] { "project" },
+                    levelNotIn = new[] { "system" },
+                    projectID = "gid://axonhub/Project/5",
+                    projectIDNEQ = "gid://axonhub/Project/6",
+                    projectIDIn = new[] { "gid://axonhub/Project/7" },
+                    projectIDNotIn = new[] { "gid://axonhub/Project/8" },
+                    projectIDIsNil = true,
+                    projectIDNotNil = false,
+                    and = new[] { new { nameContains = "a" } },
+                    or = new[] { new { nameHasSuffix = "r" } },
+                    not = new { name = "Nope" },
+                },
+            });
+
+        var where = _roles.Queries[^1].Where!;
+        Assert.Equal(4L, where.Id!.Value);
+        Assert.Equal(3L, where.IdNEQ!.Value);
+        Assert.Equal([2L], where.IdIn!);
+        Assert.Equal([1L], where.IdNotIn!);
+        Assert.Equal(5L, where.IdGT!.Value);
+        Assert.Equal(6L, where.IdGTE!.Value);
+        Assert.Equal(7L, where.IdLT!.Value);
+        Assert.Equal(8L, where.IdLTE!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), where.CreatedAt!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 6, DateTimeKind.Utc), where.CreatedAtNEQ!.Value);
+        Assert.Equal(
+            [new DateTime(2026, 1, 2, 3, 4, 7, DateTimeKind.Utc)],
+            where.CreatedAtIn!);
+        Assert.Equal(
+            [new DateTime(2026, 1, 2, 3, 4, 8, DateTimeKind.Utc)],
+            where.CreatedAtNotIn!);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 9, DateTimeKind.Utc), where.CreatedAtGT!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 10, DateTimeKind.Utc), where.CreatedAtGTE!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 11, DateTimeKind.Utc), where.CreatedAtLT!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 12, DateTimeKind.Utc), where.CreatedAtLTE!.Value);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc), where.UpdatedAtLT!.Value);
+        Assert.Equal(
+            [new DateTime(2026, 2, 3, 4, 5, 7, DateTimeKind.Utc)],
+            where.UpdatedAtNotIn!);
+        Assert.Equal("Developer", where.Name);
+        Assert.Equal("Viewer", where.NameNEQ);
+        Assert.Equal(["Admin"], where.NameIn!);
+        Assert.Equal(["Owner"], where.NameNotIn!);
+        Assert.Equal("A", where.NameGT);
+        Assert.Equal("B", where.NameGTE);
+        Assert.Equal("C", where.NameLT);
+        Assert.Equal("D", where.NameLTE);
+        Assert.Equal("velop", where.NameContains);
+        Assert.Equal("Dev", where.NameHasPrefix);
+        Assert.Equal("per", where.NameHasSuffix);
+        Assert.Equal("DEVELOPER", where.NameEqualFold);
+        Assert.Equal("VELOP", where.NameContainsFold);
+        Assert.Equal("project", where.Level);
+        Assert.Equal("system", where.LevelNEQ);
+        Assert.Equal(["project"], where.LevelIn!);
+        Assert.Equal(["system"], where.LevelNotIn!);
+        Assert.Equal(5L, where.ProjectId!.Value);
+        Assert.Equal(6L, where.ProjectIdNEQ!.Value);
+        Assert.Equal([7L], where.ProjectIdIn!);
+        Assert.Equal([8L], where.ProjectIdNotIn!);
+        Assert.True(where.ProjectIdIsNil);
+        Assert.False(where.ProjectIdNotNil);
+        Assert.Equal("a", Assert.Single(where.And!).NameContains);
+        Assert.Equal("r", Assert.Single(where.Or!).NameHasSuffix);
+        Assert.Equal("Nope", where.Not!.Name);
+    }
+
+    [Fact]
     public async Task DeleteUserRejectsTheOwner()
     {
         var owner = SeedUser("owner@example.com", DateTime.UtcNow, isOwner: true);
@@ -534,6 +776,96 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
                 .Select(static value => value.GetProperty("name").GetString()).ToArray());
         Assert.Equal("SCALAR", data.GetProperty("time").GetProperty("kind").GetString());
         Assert.Equal("SCALAR", data.GetProperty("cursor").GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public async Task UserWhereInputExposesEveryScalarPredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "UserWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+        string[] nullableText =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "IsNil",
+            "NotNil",
+            "EqualFold",
+            "ContainsFold",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(text.Select(static suffix => "email" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "status" + suffix));
+        expected.AddRange(text.Select(static suffix => "preferLanguage" + suffix));
+        expected.AddRange(text.Select(static suffix => "firstName" + suffix));
+        expected.AddRange(text.Select(static suffix => "lastName" + suffix));
+        expected.AddRange(nullableText.Select(static suffix => "avatar" + suffix));
+        expected.AddRange(comparison.Take(2).Select(static suffix => "isOwner" + suffix));
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
+    }
+
+    [Fact]
+    public async Task RoleWhereInputExposesEveryScalarPredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "RoleWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(text.Select(static suffix => "name" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "level" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "projectID" + suffix));
+        expected.AddRange(new[] { "projectIDIsNil", "projectIDNotNil" });
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
     }
 
     [Fact]

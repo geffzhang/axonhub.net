@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
+using static AxonHub.Persistence.ConnectionSql;
 
 namespace AxonHub.Persistence;
 
@@ -12,22 +13,108 @@ public enum RoleSortField
     UpdatedAt,
 }
 
-/// <summary>Subset of ent.RoleWhereInput used by the management frontend.</summary>
+/// <summary>
+/// Port of <c>RoleWhereInput</c> (ent.graphql:5531-5615). All scalar field
+/// predicates are modeled; the three edge predicates remain a registered gap
+/// (C135).
+/// </summary>
 public sealed record RoleListFilter
 {
     public long? Id { get; init; }
 
+    public long? IdNEQ { get; init; }
+
     public IReadOnlyList<long>? IdIn { get; init; }
+
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
+
+    public string? Name { get; init; }
+
+    public string? NameNEQ { get; init; }
+
+    public IReadOnlyList<string>? NameIn { get; init; }
+
+    public IReadOnlyList<string>? NameNotIn { get; init; }
+
+    public string? NameGT { get; init; }
+
+    public string? NameGTE { get; init; }
+
+    public string? NameLT { get; init; }
+
+    public string? NameLTE { get; init; }
+
+    public string? NameContains { get; init; }
+
+    public string? NameHasPrefix { get; init; }
+
+    public string? NameHasSuffix { get; init; }
+
+    public string? NameEqualFold { get; init; }
 
     public string? NameContainsFold { get; init; }
 
     public string? Level { get; init; }
 
+    public string? LevelNEQ { get; init; }
+
+    public IReadOnlyList<string>? LevelIn { get; init; }
+
+    public IReadOnlyList<string>? LevelNotIn { get; init; }
+
     public long? ProjectId { get; init; }
 
-    public bool? ProjectIdIsNil { get; init; }
+    public long? ProjectIdNEQ { get; init; }
 
-    public bool? ProjectIdNotNil { get; init; }
+    public IReadOnlyList<long>? ProjectIdIn { get; init; }
+
+    public IReadOnlyList<long>? ProjectIdNotIn { get; init; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool ProjectIdIsNil { get; init; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool ProjectIdNotNil { get; init; }
 
     public RoleListFilter? Not { get; init; }
 
@@ -545,49 +632,92 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
 
         var predicates = new List<string?>();
 
-        if (filter.Id is not null)
-        {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
-        }
-
+        AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
         if (filter.IdIn is not null)
         {
-            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+            AppendIdIn(predicates, alias, "id", filter.IdIn, args);
         }
 
-        if (filter.NameContainsFold is not null)
+        if (filter.IdNotIn is not null)
         {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "name",
-                "LIKE",
-                filter.NameContainsFold,
-                args);
+            AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
         }
 
-        if (filter.Level is not null)
+        AppendComparison(predicates, alias, "id", filter.IdGT, ">", args);
+        AppendComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
+        AppendComparison(predicates, alias, "id", filter.IdLT, "<", args);
+        AppendComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAt, "=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtIn, args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAt, "=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtIn, args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLTE, "<=", args);
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "name",
+            filter.Name,
+            filter.NameNEQ,
+            filter.NameIn,
+            filter.NameNotIn,
+            filter.NameGT,
+            filter.NameGTE,
+            filter.NameLT,
+            filter.NameLTE,
+            filter.NameContains,
+            filter.NameHasPrefix,
+            filter.NameHasSuffix,
+            filter.NameEqualFold,
+            filter.NameContainsFold,
+            args);
+
+        AppendComparison(predicates, alias, "level", filter.Level, "=", args);
+        AppendComparison(predicates, alias, "level", filter.LevelNEQ, "<>", args);
+        if (filter.LevelIn is not null)
         {
-            predicates.Add(alias + ".\"level\" = " + args.Add(filter.Level));
+            AppendStringIn(predicates, alias, "level", filter.LevelIn, args);
         }
 
-        if (filter.ProjectId is not null)
+        if (filter.LevelNotIn is not null)
         {
-            predicates.Add(alias + ".\"project_id\" = " + args.Add(filter.ProjectId.Value));
+            AppendStringIn(predicates, alias, "level", filter.LevelNotIn, args, negate: true);
         }
 
-        if (filter.ProjectIdIsNil is not null)
+        AppendComparison(predicates, alias, "project_id", filter.ProjectId, "=", args);
+        AppendComparison(predicates, alias, "project_id", filter.ProjectIdNEQ, "<>", args);
+        if (filter.ProjectIdIn is not null)
         {
-            predicates.Add(
-                alias + ".\"project_id\" IS "
-                + (filter.ProjectIdIsNil.Value ? "NULL" : "NOT NULL"));
+            AppendIdIn(predicates, alias, "project_id", filter.ProjectIdIn, args);
         }
 
-        if (filter.ProjectIdNotNil is not null)
+        if (filter.ProjectIdNotIn is not null)
         {
-            predicates.Add(
-                alias + ".\"project_id\" IS "
-                + (filter.ProjectIdNotNil.Value ? "NOT NULL" : "NULL"));
+            AppendIdIn(predicates, alias, "project_id", filter.ProjectIdNotIn, args, negate: true);
+        }
+
+        if (filter.ProjectIdIsNil)
+        {
+            predicates.Add(alias + ".\"project_id\" IS NULL");
+        }
+
+        if (filter.ProjectIdNotNil)
+        {
+            predicates.Add(alias + ".\"project_id\" IS NOT NULL");
         }
 
         if (filter.Not is not null)
