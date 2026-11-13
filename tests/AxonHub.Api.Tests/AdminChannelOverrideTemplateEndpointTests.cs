@@ -224,6 +224,52 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TemplatesWhereMapsEveryPredicateGroup()
+    {
+        _templates.Templates.Add(Template(id: 1, name: "Alpha"));
+
+        await QueryDataAsync(
+            """
+            query Templates($where: ChannelOverrideTemplateWhereInput) {
+              channelOverrideTemplates(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    id = "gid://axonhub/ChannelOverrideTemplate/1",
+                    userID = "gid://axonhub/User/2",
+                    userIDIsNil = true,
+                    name = "Alpha",
+                    description = "desc",
+                    descriptionNotNil = true,
+                    overrideParametersContains = "model",
+                    hasUser = true,
+                    hasUserWith = new[]
+                    {
+                        new { email = "alice@example.com", status = "activated" },
+                    },
+                    not = new { name = "Nope" },
+                },
+            });
+
+        var where = Assert.Single(_templates.Queries).Where!;
+        Assert.Equal(1L, where.Id);
+        Assert.Equal(2L, where.UserId);
+        Assert.True(where.UserIdIsNil);
+        Assert.Equal("Alpha", where.Name);
+        Assert.Equal("desc", where.Description);
+        Assert.True(where.DescriptionNotNil);
+        Assert.Equal("model", where.OverrideParametersContains);
+        Assert.True(where.HasUser);
+        var user = Assert.Single(where.HasUserWith!);
+        Assert.Equal("alice@example.com", user.Email);
+        Assert.Equal("activated", user.Status);
+        Assert.Equal("Nope", where.Not!.Name);
+    }
+
+    [Fact]
     public async Task TemplatesQueryRequiresFirstOrLast()
     {
         // entgql's validatePaginationArgs rejects an unbounded connection; the
@@ -248,7 +294,7 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SchemaExposesTheTemplateSurfaceAndWhereSubset()
+    public async Task SchemaExposesTheTemplateSurfaceAndEveryWherePredicate()
     {
         var data = await QueryDataAsync(
             """
@@ -263,14 +309,41 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
             }
             """);
 
-        // C162: only the predicates the management frontend sends.
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+        string[] nullableId = ["", "NEQ", "In", "NotIn", "IsNil", "NotNil"];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(nullableId.Select(static suffix => "userID" + suffix));
+        expected.AddRange(text.Select(static suffix => "name" + suffix));
+        expected.AddRange(
+        [
+            .. text.Select(static suffix => "description" + suffix),
+            "descriptionIsNil",
+            "descriptionNotNil",
+        ]);
+        expected.AddRange(
+            text.Select(static suffix => "overrideParameters" + suffix));
+        expected.AddRange(["hasUser", "hasUserWith"]);
+
         var whereFields = data.GetProperty("where").GetProperty("inputFields")
             .EnumerateArray()
             .Select(static field => field.GetProperty("name").GetString()!)
             .OrderBy(static name => name, StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(
-            ["and", "id", "idIn", "name", "nameContains", "nameContainsFold", "nameIn", "not", "or"],
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
             whereFields);
 
         var queryFields = data.GetProperty("schema").GetProperty("queryType")

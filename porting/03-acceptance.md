@@ -1875,6 +1875,31 @@ AdminChannelsEndpointTests.ChannelWhereInputExposesEveryScalarPredicate（Channe
 hasOidcIdentities）；C192 的输入子集缺口关闭，剩余 dataStorage 输出边；新增 C283（resolved）；
 lint 通过；02-differences.md 已重新生成；283 条（206 accepted / 2 gap / 75 resolved）。
 
+§205（2026-11-13）ChannelOverrideTemplate / OIDCIdentity where 输入与 User / Project / APIKey 边谓词
+（C135 第七刀，关闭 C162 / C269 的 where 子集与 C176 的 APIKey 边谓词缺口）。
+
+参照 ent.graphql：ChannelOverrideTemplateWhereInput 76 个字段、OIDCIdentityWhereInput 99 个
+字段（not / and / or 与 hasUser / hasUserWith 在内）。§205 把两张输入全量加入 GraphQL 与对应
+ListFilter，并把 User 的最后 2 组边谓词（hasChannelOverrideTemplates / hasOidcIdentities）接入，
+UserWhereInput 达到 114/114；同时补齐 ProjectWhereInput 的 10 组边（20 个字段，77/77）与
+APIKeyWhereInput 的 3 组边（6 个字段，77/77）。
+
+边谓词语义与 §201–§204 相同：true → EXISTS、false → NOT EXISTS；hasXWith 的谓词 AND 进同一个
+EXISTS，空 With 列表不生成谓词，被连接实体的软删除谓词不重新应用。Project.hasUsers /
+hasProjectUsers 走 user_projects join 表（非 With 版只查 join 行存在性）；APIKey.hasProject 只
+检查 projects.id 存在；OIDC 的 email / idpName / lastLoginAt 保留 IsNil / NotNil（false 忽略），
+<> 与 NOT IN 排除 NULL。
+
+测试：持久化新增 5 例（模板 / OIDC / Project / APIKey / User 各 1 例：三行以上数据覆盖全部标量组、
+10 / 3 / 2 组边、软删除目标仍匹配、空 With、Not / And / Or 与 Or = []），定向运行 Template +
+OIDC 11 通过、Project / ApiKey / User 49 通过；Api 新增 5 个 introspection / 映射测试并更新
+5 个既有断言，改动过的 5 个测试类定向运行 94 通过（AdminChannelOverrideTemplateEndpointTests、
+AdminProjectsEndpointTests、AdminApiKeysEndpointTests、AdminUsersRolesEndpointTests、
+AdminSystemsOidcIdentitiesEndpointTests）。未跑 Api 全量回归。
+台账：C135、C162 转 resolved；C269 更新（OIDC 99 字段闭合，SystemWhereInput 子集保留）；
+C176 的 where 子集缺口关闭；lint 通过；02-differences.md 已重新生成；283 条
+（205 accepted / 1 gap / 77 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

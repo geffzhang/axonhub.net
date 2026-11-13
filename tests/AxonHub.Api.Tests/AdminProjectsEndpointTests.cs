@@ -190,7 +190,7 @@ public sealed class AdminProjectsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ProjectWhereInputExposesEveryScalarPredicate()
+    public async Task ProjectWhereInputExposesEveryScalarAndEdgePredicate()
     {
         var data = await QueryDataAsync(
             """
@@ -215,6 +215,29 @@ public sealed class AdminProjectsEndpointTests : IAsyncLifetime
         expected.AddRange(text.Select(static suffix => "name" + suffix));
         expected.AddRange(text.Select(static suffix => "description" + suffix));
         expected.AddRange(comparison.Take(4).Select(static suffix => "status" + suffix));
+        expected.AddRange(
+        [
+            "hasUsers",
+            "hasUsersWith",
+            "hasRoles",
+            "hasRolesWith",
+            "hasAPIKeys",
+            "hasAPIKeysWith",
+            "hasRequests",
+            "hasRequestsWith",
+            "hasUsageLogs",
+            "hasUsageLogsWith",
+            "hasThreads",
+            "hasThreadsWith",
+            "hasTraces",
+            "hasTracesWith",
+            "hasPrompts",
+            "hasPromptsWith",
+            "hasAPIKeyProfileTemplates",
+            "hasAPIKeyProfileTemplatesWith",
+            "hasProjectUsers",
+            "hasProjectUsersWith",
+        ]);
 
         var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
             .Select(static field => field.GetProperty("name").GetString()!)
@@ -368,6 +391,69 @@ public sealed class AdminProjectsEndpointTests : IAsyncLifetime
         Assert.Equal("Nope", where.Not!.Name);
         Assert.Equal("a", Assert.Single(where.And!).NameContains);
         Assert.Equal("z", Assert.Single(where.Or!).NameHasSuffix);
+    }
+
+    [Fact]
+    public async Task QueryProjectsMapsEveryEdgePredicate()
+    {
+        await QueryDataAsync(
+            """
+            query Projects($where: ProjectWhereInput) {
+              projects(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    hasUsers = true,
+                    hasUsersWith = new[] { new { email = "alice@example.com" } },
+                    hasRoles = false,
+                    hasRolesWith = new[] { new { name = "Developer", level = "system" } },
+                    hasAPIKeys = true,
+                    hasAPIKeysWith = new[] { new { name = "Alpha" } },
+                    hasRequests = false,
+                    hasRequestsWith = new[] { new { status = "completed" } },
+                    hasUsageLogs = true,
+                    hasUsageLogsWith = new[] { new { modelID = "gpt-4o" } },
+                    hasThreads = false,
+                    hasThreadsWith = new[] { new { threadID = "thread-1" } },
+                    hasTraces = true,
+                    hasTracesWith = new[] { new { traceID = "trace-1" } },
+                    hasPrompts = false,
+                    hasPromptsWith = new[] { new { name = "prompt-1" } },
+                    hasAPIKeyProfileTemplates = true,
+                    hasAPIKeyProfileTemplatesWith = new[] { new { name = "template-1" } },
+                    hasProjectUsers = false,
+                    hasProjectUsersWith = new[] { new { isOwner = true } },
+                },
+            });
+
+        var where = _gate.Projects.Queries[^1].Where!;
+        Assert.True(where.HasUsers);
+        Assert.Equal("alice@example.com", Assert.Single(where.HasUsersWith!).Email);
+        Assert.False(where.HasRoles);
+        var role = Assert.Single(where.HasRolesWith!);
+        Assert.Equal("Developer", role.Name);
+        Assert.Equal("system", role.Level);
+        Assert.True(where.HasAPIKeys);
+        Assert.Equal("Alpha", Assert.Single(where.HasAPIKeysWith!).Name);
+        Assert.False(where.HasRequests);
+        Assert.Equal("completed", Assert.Single(where.HasRequestsWith!).Status);
+        Assert.True(where.HasUsageLogs);
+        Assert.Equal("gpt-4o", Assert.Single(where.HasUsageLogsWith!).ModelId);
+        Assert.False(where.HasThreads);
+        Assert.Equal("thread-1", Assert.Single(where.HasThreadsWith!).ThreadId);
+        Assert.True(where.HasTraces);
+        Assert.Equal("trace-1", Assert.Single(where.HasTracesWith!).TraceId);
+        Assert.False(where.HasPrompts);
+        Assert.Equal("prompt-1", Assert.Single(where.HasPromptsWith!).Name);
+        Assert.True(where.HasAPIKeyProfileTemplates);
+        Assert.Equal(
+            "template-1",
+            Assert.Single(where.HasAPIKeyProfileTemplatesWith!).Name);
+        Assert.False(where.HasProjectUsers);
+        Assert.True(Assert.Single(where.HasProjectUsersWith!).IsOwner);
     }
 
     [Fact]

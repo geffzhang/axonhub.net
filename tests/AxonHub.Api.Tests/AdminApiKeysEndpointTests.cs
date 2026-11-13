@@ -307,7 +307,7 @@ public sealed class AdminApiKeysEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ApiKeyWhereInputExposesEveryScalarPredicate()
+    public async Task ApiKeyWhereInputExposesEveryScalarAndEdgePredicate()
     {
         var data = await QueryDataAsync(
             """
@@ -336,6 +336,15 @@ public sealed class AdminApiKeysEndpointTests : IAsyncLifetime
         expected.AddRange(text.Select(static suffix => "name" + suffix));
         expected.AddRange(comparison.Take(4).Select(static suffix => "type" + suffix));
         expected.AddRange(comparison.Take(4).Select(static suffix => "status" + suffix));
+        expected.AddRange(
+        [
+            "hasUser",
+            "hasUserWith",
+            "hasProject",
+            "hasProjectWith",
+            "hasRequests",
+            "hasRequestsWith",
+        ]);
 
         var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
             .Select(static field => field.GetProperty("name").GetString()!)
@@ -517,6 +526,48 @@ public sealed class AdminApiKeysEndpointTests : IAsyncLifetime
         Assert.Equal("Nope", where.Not!.Name);
         Assert.Equal("a", Assert.Single(where.And!).NameContains);
         Assert.Equal("z", Assert.Single(where.Or!).NameHasSuffix);
+    }
+
+    [Fact]
+    public async Task QueryApiKeysMapsTheEdgePredicates()
+    {
+        SeedProject();
+        SeedKey(configure: item => item.Name = "Alpha");
+
+        await QueryDataAsync(
+            """
+            query ApiKeys($where: APIKeyWhereInput) {
+              apiKeys(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    hasUser = true,
+                    hasUserWith = new[]
+                    {
+                        new { email = "alice@example.com", status = "activated" },
+                    },
+                    hasProject = false,
+                    hasProjectWith = new[] { new { name = "Alpha", status = "active" } },
+                    hasRequests = true,
+                    hasRequestsWith = new[] { new { status = "completed" } },
+                },
+            });
+
+        var where = _gate.ApiKeys.Queries[^1].Where!;
+        Assert.True(where.HasUser);
+        var user = Assert.Single(where.HasUserWith!);
+        Assert.Equal("alice@example.com", user.Email);
+        Assert.Equal("activated", user.Status);
+        Assert.False(where.HasProject);
+        var project = Assert.Single(where.HasProjectWith!);
+        Assert.Equal("Alpha", project.Name);
+        Assert.Equal("active", project.Status);
+        Assert.True(where.HasRequests);
+        var request = Assert.Single(where.HasRequestsWith!);
+        Assert.Equal("completed", request.Status);
     }
 
     [Fact]

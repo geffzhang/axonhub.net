@@ -738,7 +738,7 @@ public sealed class ApiKeyProfileTemplateStore(AxonHubDbContext db) : IApiKeyPro
             totalCount);
     }
 
-    private static string? BuildFilter(
+    internal static string? BuildFilter(
         ApiKeyProfileTemplateListFilter? filter,
         string alias,
         SqlArguments args)

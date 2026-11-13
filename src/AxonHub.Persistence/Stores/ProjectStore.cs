@@ -126,6 +126,59 @@ public sealed record ProjectListFilter
 
     public IReadOnlyList<string>? StatusNotIn { get; init; }
 
+    /// <summary>
+    /// Ent's <c>hasUsers</c>: true → the project has a <c>user_projects</c>
+    /// row, false → NOT EXISTS. The users edge is a through edge over the join
+    /// table, so the predicate only touches <c>user_projects</c>.
+    /// </summary>
+    public bool? HasUsers { get; init; }
+
+    public IReadOnlyList<UserListFilter>? HasUsersWith { get; init; }
+
+    public bool? HasRoles { get; init; }
+
+    public IReadOnlyList<RoleListFilter>? HasRolesWith { get; init; }
+
+    public bool? HasAPIKeys { get; init; }
+
+    public IReadOnlyList<ApiKeyListFilter>? HasAPIKeysWith { get; init; }
+
+    public bool? HasRequests { get; init; }
+
+    public IReadOnlyList<RequestListFilter>? HasRequestsWith { get; init; }
+
+    public bool? HasUsageLogs { get; init; }
+
+    public IReadOnlyList<UsageLogListFilter>? HasUsageLogsWith { get; init; }
+
+    public bool? HasThreads { get; init; }
+
+    public IReadOnlyList<ThreadListFilter>? HasThreadsWith { get; init; }
+
+    public bool? HasTraces { get; init; }
+
+    public IReadOnlyList<TraceListFilter>? HasTracesWith { get; init; }
+
+    public bool? HasPrompts { get; init; }
+
+    public IReadOnlyList<PromptListFilter>? HasPromptsWith { get; init; }
+
+    public bool? HasAPIKeyProfileTemplates { get; init; }
+
+    public IReadOnlyList<ApiKeyProfileTemplateListFilter>? HasAPIKeyProfileTemplatesWith
+    {
+        get;
+        init;
+    }
+
+    /// <summary>
+    /// Ent's <c>hasProjectUsers</c>: true → the project has a
+    /// <c>user_projects</c> row, false → NOT EXISTS.
+    /// </summary>
+    public bool? HasProjectUsers { get; init; }
+
+    public IReadOnlyList<UserProjectListFilter>? HasProjectUsersWith { get; init; }
+
     public ProjectListFilter? Not { get; init; }
 
     public IReadOnlyList<ProjectListFilter>? And { get; init; }
@@ -772,6 +825,223 @@ public sealed class ProjectStore(AxonHubDbContext db) : IProjectStore
         ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
         ConnectionSql.AppendStringIn(
             predicates, alias, "status", filter.StatusNotIn, args, negate: true);
+
+        if (filter.HasUsers is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"user_projects\" up2"
+                + " WHERE up2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasUsers.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasUsersWith is { Count: > 0 } userFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the User soft-delete predicate.
+            var userPredicates = userFilters
+                .Select(user => UserAdminStore.BuildFilter(user, "u2", args))
+                .Where(static user => user is not null)
+                .ToArray();
+            var userCondition = ConnectionSql.Combine(userPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_projects\" up2"
+                + " JOIN \"users\" u2 ON u2.\"id\" = up2.\"user_id\""
+                + " WHERE up2.\"project_id\" = " + alias + ".\"id\""
+                + (userCondition is null ? string.Empty : " AND " + userCondition)
+                + ")");
+        }
+
+        if (filter.HasRoles is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"roles\" r2"
+                + " WHERE r2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasRoles.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasRolesWith is { Count: > 0 } roleFilters)
+        {
+            var rolePredicates = roleFilters
+                .Select(role => RoleStore.BuildFilter(role, "r2", args))
+                .Where(static role => role is not null)
+                .ToArray();
+            var roleCondition = ConnectionSql.Combine(rolePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"roles\" r2"
+                + " WHERE r2.\"project_id\" = " + alias + ".\"id\""
+                + (roleCondition is null ? string.Empty : " AND " + roleCondition)
+                + ")");
+        }
+
+        if (filter.HasAPIKeys is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"api_keys\" ak2"
+                + " WHERE ak2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasAPIKeys.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasAPIKeysWith is { Count: > 0 } apiKeyFilters)
+        {
+            var apiKeyPredicates = apiKeyFilters
+                .Select(apiKey => ApiKeyStore.BuildFilter(apiKey, "ak2", args))
+                .Where(static apiKey => apiKey is not null)
+                .ToArray();
+            var apiKeyCondition = ConnectionSql.Combine(apiKeyPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"api_keys\" ak2"
+                + " WHERE ak2.\"project_id\" = " + alias + ".\"id\""
+                + (apiKeyCondition is null ? string.Empty : " AND " + apiKeyCondition)
+                + ")");
+        }
+
+        if (filter.HasRequests is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"requests\" rq2"
+                + " WHERE rq2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasRequests.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasRequestsWith is { Count: > 0 } requestFilters)
+        {
+            var requestPredicates = requestFilters
+                .Select(request => RequestSegmentStore.BuildFilter(request, "rq2", args))
+                .Where(static request => request is not null)
+                .ToArray();
+            var requestCondition = ConnectionSql.Combine(requestPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"requests\" rq2"
+                + " WHERE rq2.\"project_id\" = " + alias + ".\"id\""
+                + (requestCondition is null ? string.Empty : " AND " + requestCondition)
+                + ")");
+        }
+
+        if (filter.HasUsageLogs is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"usage_logs\" ul2"
+                + " WHERE ul2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasUsageLogs.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasUsageLogsWith is { Count: > 0 } usageLogFilters)
+        {
+            var usageLogPredicates = usageLogFilters
+                .Select(usageLog => UsageLogStore.BuildFilter(usageLog, "ul2", args))
+                .Where(static usageLog => usageLog is not null)
+                .ToArray();
+            var usageLogCondition = ConnectionSql.Combine(usageLogPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"usage_logs\" ul2"
+                + " WHERE ul2.\"project_id\" = " + alias + ".\"id\""
+                + (usageLogCondition is null ? string.Empty : " AND " + usageLogCondition)
+                + ")");
+        }
+
+        if (filter.HasThreads is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"threads\" th2"
+                + " WHERE th2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasThreads.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasThreadsWith is { Count: > 0 } threadFilters)
+        {
+            var threadPredicates = threadFilters
+                .Select(thread => ThreadAdminStore.BuildFilter(thread, "th2", args))
+                .Where(static thread => thread is not null)
+                .ToArray();
+            var threadCondition = ConnectionSql.Combine(threadPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"threads\" th2"
+                + " WHERE th2.\"project_id\" = " + alias + ".\"id\""
+                + (threadCondition is null ? string.Empty : " AND " + threadCondition)
+                + ")");
+        }
+
+        if (filter.HasTraces is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"traces\" tr2"
+                + " WHERE tr2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasTraces.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasTracesWith is { Count: > 0 } traceFilters)
+        {
+            var tracePredicates = traceFilters
+                .Select(trace => TraceAdminStore.BuildFilter(trace, "tr2", args))
+                .Where(static trace => trace is not null)
+                .ToArray();
+            var traceCondition = ConnectionSql.Combine(tracePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"traces\" tr2"
+                + " WHERE tr2.\"project_id\" = " + alias + ".\"id\""
+                + (traceCondition is null ? string.Empty : " AND " + traceCondition)
+                + ")");
+        }
+
+        if (filter.HasPrompts is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"prompts\" pr2"
+                + " WHERE pr2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasPrompts.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasPromptsWith is { Count: > 0 } promptFilters)
+        {
+            var promptPredicates = promptFilters
+                .Select(prompt => PromptStore.BuildFilter(prompt, "pr2", args))
+                .Where(static prompt => prompt is not null)
+                .ToArray();
+            var promptCondition = ConnectionSql.Combine(promptPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"prompts\" pr2"
+                + " WHERE pr2.\"project_id\" = " + alias + ".\"id\""
+                + (promptCondition is null ? string.Empty : " AND " + promptCondition)
+                + ")");
+        }
+
+        if (filter.HasAPIKeyProfileTemplates is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"api_key_profile_templates\" apt2"
+                + " WHERE apt2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(
+                filter.HasAPIKeyProfileTemplates.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasAPIKeyProfileTemplatesWith is { Count: > 0 } profileTemplateFilters)
+        {
+            var templatePredicates = profileTemplateFilters
+                .Select(template => ApiKeyProfileTemplateStore.BuildFilter(
+                    template,
+                    "apt2",
+                    args))
+                .Where(static template => template is not null)
+                .ToArray();
+            var templateCondition = ConnectionSql.Combine(templatePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"api_key_profile_templates\" apt2"
+                + " WHERE apt2.\"project_id\" = " + alias + ".\"id\""
+                + (templateCondition is null ? string.Empty : " AND " + templateCondition)
+                + ")");
+        }
+
+        if (filter.HasProjectUsers is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"user_projects\" up2"
+                + " WHERE up2.\"project_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasProjectUsers.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProjectUsersWith is { Count: > 0 } userProjectFilters)
+        {
+            var userProjectPredicates = userProjectFilters
+                .Select(userProject => UserProjectFilterSql.Build(userProject, "up2", args))
+                .Where(static userProject => userProject is not null)
+                .ToArray();
+            var userProjectCondition = ConnectionSql.Combine(userProjectPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_projects\" up2"
+                + " WHERE up2.\"project_id\" = " + alias + ".\"id\""
+                + (userProjectCondition is null ? string.Empty : " AND " + userProjectCondition)
+                + ")");
+        }
 
         if (filter.Not is not null)
         {

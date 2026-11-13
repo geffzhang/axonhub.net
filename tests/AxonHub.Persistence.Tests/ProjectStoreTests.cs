@@ -435,6 +435,225 @@ public sealed class ProjectStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesEveryEdgePredicate()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ProjectStore(context);
+
+        var alpha = NewProject();
+        alpha.Name = "Alpha";
+        var alphaId = await store.CreateAsync(alpha);
+        var beta = NewProject();
+        beta.Name = "Beta";
+        var betaId = await store.CreateAsync(beta);
+        var gamma = NewProject();
+        gamma.Name = "Gamma";
+        await store.CreateAsync(gamma);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "users" ("id", "created_at", "updated_at", "email", "status", "password")
+                VALUES (101, @CreatedAt, @UpdatedAt, 'alice@example.com', 'activated', 'x'),
+                       (102, @CreatedAt, @UpdatedAt, 'bob@example.com', 'activated', 'x');
+                INSERT INTO "user_projects"
+                    ("created_at", "updated_at", "is_owner", "scopes", "user_id", "project_id")
+                VALUES (@CreatedAt, @UpdatedAt, true, '[]', 101, @AlphaId),
+                       (@CreatedAt, @UpdatedAt, false, '[]', 102, @BetaId);
+                UPDATE "users" SET "deleted_at" = 99 WHERE "id" = 102;
+
+                INSERT INTO "roles"
+                    ("created_at", "updated_at", "deleted_at", "name", "level", "project_id")
+                VALUES (@CreatedAt, @UpdatedAt, 99, 'alpha-role', 'project', @AlphaId);
+
+                INSERT INTO "api_keys"
+                    ("created_at", "updated_at", "deleted_at", "key", "name", "project_id")
+                VALUES (@CreatedAt, @UpdatedAt, 0, 'sk-alpha', 'alpha-key', @AlphaId);
+
+                INSERT INTO "requests"
+                    ("created_at", "updated_at", "model_id", "request_body", "status", "project_id")
+                VALUES (@CreatedAt, @UpdatedAt, 'gpt-4o', '{}'::jsonb, 'completed', @AlphaId);
+
+                INSERT INTO "usage_logs"
+                    ("created_at", "updated_at", "model_id", "project_id", "request_id")
+                VALUES (@CreatedAt, @UpdatedAt, 'gpt-4o', @AlphaId, 1);
+
+                INSERT INTO "threads" ("created_at", "updated_at", "thread_id", "project_id")
+                VALUES (@CreatedAt, @UpdatedAt, 'thread-alpha', @AlphaId);
+
+                INSERT INTO "traces" ("created_at", "updated_at", "trace_id", "project_id")
+                VALUES (@CreatedAt, @UpdatedAt, 'trace-alpha', @AlphaId);
+
+                INSERT INTO "prompts"
+                    ("created_at", "updated_at", "deleted_at", "name", "role", "content",
+                     "settings", "project_id")
+                VALUES (@CreatedAt, @UpdatedAt, 99, 'alpha-prompt', 'system', 'hi',
+                        '{}'::jsonb, @AlphaId);
+
+                INSERT INTO "api_key_profile_templates"
+                    ("created_at", "updated_at", "deleted_at", "name", "project_id")
+                VALUES (@CreatedAt, @UpdatedAt, 99, 'alpha-template', @AlphaId);
+                """,
+                new { CreatedAt, UpdatedAt, AlphaId = alphaId, BetaId = betaId });
+        }
+
+        async Task<string[]> Names(ProjectListFilter where)
+        {
+            var page = await store.ListAsync(new ProjectListQuery { Where = where, First = 10 });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        // Only Alpha carries child rows. The soft-deleted role, prompt and
+        // template still satisfy the generated HasNeighborsWith predicates,
+        // which never re-apply the target soft delete.
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ProjectListFilter { HasUsers = true }));
+        Assert.Equal(["Gamma"], await Names(new ProjectListFilter { HasUsers = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasUsersWith = [new UserListFilter { Email = "alice@example.com" }],
+            }));
+        // The M2M edge reads user_projects, so a soft-deleted user still matches.
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ProjectListFilter
+            {
+                HasUsersWith = [new UserListFilter { Email = "bob@example.com" }],
+            }));
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            await Names(new ProjectListFilter { HasUsersWith = [] }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { HasRoles = true }));
+        Assert.Equal(["Beta", "Gamma"], await Names(new ProjectListFilter { HasRoles = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasRolesWith = [new RoleListFilter { Name = "alpha-role" }],
+            }));
+        Assert.Empty(
+            await Names(new ProjectListFilter
+            {
+                HasRolesWith = [new RoleListFilter { Name = "missing" }],
+            }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { HasAPIKeys = true }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { HasAPIKeys = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasAPIKeysWith = [new ApiKeyListFilter { Name = "alpha-key" }],
+            }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { HasRequests = true }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { HasRequests = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasRequestsWith = [new RequestListFilter { Status = "completed" }],
+            }));
+        Assert.Empty(
+            await Names(new ProjectListFilter
+            {
+                HasRequestsWith = [new RequestListFilter { Status = "failed" }],
+            }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { HasUsageLogs = true }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { HasUsageLogs = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasUsageLogsWith = [new UsageLogListFilter { ModelId = "gpt-4o" }],
+            }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { HasThreads = true }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { HasThreads = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasThreadsWith = [new ThreadListFilter { ThreadId = "thread-alpha" }],
+            }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { HasTraces = true }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { HasTraces = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasTracesWith = [new TraceListFilter { TraceId = "trace-alpha" }],
+            }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { HasPrompts = true }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { HasPrompts = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasPromptsWith = [new PromptListFilter { Name = "alpha-prompt" }],
+            }));
+
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter { HasAPIKeyProfileTemplates = true }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { HasAPIKeyProfileTemplates = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasAPIKeyProfileTemplatesWith =
+                    [new ApiKeyProfileTemplateListFilter { Name = "alpha-template" }],
+            }));
+
+        Assert.Equal(["Alpha", "Beta"], await Names(new ProjectListFilter { HasProjectUsers = true }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ProjectListFilter { HasProjectUsers = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter
+            {
+                HasProjectUsersWith = [new UserProjectListFilter { IsOwner = true }],
+            }));
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ProjectListFilter
+            {
+                HasProjectUsersWith = [new UserProjectListFilter { IsOwner = false }],
+            }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter
+            {
+                Not = new ProjectListFilter { HasRoles = true },
+            }));
+    }
+
+    [Fact]
     public async Task UpdateTouchesOnlySuppliedFieldsAndRefreshesUpdatedAt()
     {
         await using var db = new TestDatabase(fixture);

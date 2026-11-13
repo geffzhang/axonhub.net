@@ -592,7 +592,7 @@ public sealed class PromptStore(AxonHubDbContext db) : IPromptStore
 
     private static string JsonCast(string parameter) => "CAST(" + parameter + " AS jsonb)";
 
-    private static string? BuildFilter(PromptListFilter? filter, string alias, SqlArguments args)
+    internal static string? BuildFilter(PromptListFilter? filter, string alias, SqlArguments args)
     {
         if (filter is null)
         {

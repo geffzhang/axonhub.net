@@ -39,9 +39,8 @@ public sealed class ChannelOverrideTemplateOrder
 }
 
 /// <summary>
-/// Port of the subset of <c>ChannelOverrideTemplateWhereInput</c> used by the
-/// management frontend (id/idIn, name/nameIn/nameContains/nameContainsFold, and
-/// and/or/not). The remaining generated predicates are a registered gap (C162).
+/// Port of <c>ChannelOverrideTemplateWhereInput</c> (ent.graphql): every
+/// scalar field predicate group and the <c>user</c> edge predicates.
 /// </summary>
 [GraphQLName("ChannelOverrideTemplateWhereInput")]
 public sealed class ChannelOverrideTemplateWhereInput
@@ -49,16 +48,182 @@ public sealed class ChannelOverrideTemplateWhereInput
     [GraphQLType(typeof(IdType))]
     public string? Id { get; set; }
 
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
     [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
     public IReadOnlyList<string>? IdIn { get; set; }
 
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    [GraphQLName("userID")]
+    [GraphQLType(typeof(IdType))]
+    public string? UserId { get; set; }
+
+    [GraphQLName("userIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? UserIdNEQ { get; set; }
+
+    [GraphQLName("userIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? UserIdIn { get; set; }
+
+    [GraphQLName("userIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? UserIdNotIn { get; set; }
+
+    [GraphQLName("userIDIsNil")]
+    public bool? UserIdIsNil { get; set; }
+
+    [GraphQLName("userIDNotNil")]
+    public bool? UserIdNotNil { get; set; }
+
     public string? Name { get; set; }
+
+    public string? NameNEQ { get; set; }
 
     public IReadOnlyList<string>? NameIn { get; set; }
 
+    public IReadOnlyList<string>? NameNotIn { get; set; }
+
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
     public string? NameContains { get; set; }
 
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
+
     public string? NameContainsFold { get; set; }
+
+    public string? Description { get; set; }
+
+    public string? DescriptionNEQ { get; set; }
+
+    public IReadOnlyList<string>? DescriptionIn { get; set; }
+
+    public IReadOnlyList<string>? DescriptionNotIn { get; set; }
+
+    public string? DescriptionGT { get; set; }
+
+    public string? DescriptionGTE { get; set; }
+
+    public string? DescriptionLT { get; set; }
+
+    public string? DescriptionLTE { get; set; }
+
+    public string? DescriptionContains { get; set; }
+
+    public string? DescriptionHasPrefix { get; set; }
+
+    public string? DescriptionHasSuffix { get; set; }
+
+    public bool? DescriptionIsNil { get; set; }
+
+    public bool? DescriptionNotNil { get; set; }
+
+    public string? DescriptionEqualFold { get; set; }
+
+    public string? DescriptionContainsFold { get; set; }
+
+    public string? OverrideParameters { get; set; }
+
+    public string? OverrideParametersNEQ { get; set; }
+
+    public IReadOnlyList<string>? OverrideParametersIn { get; set; }
+
+    public IReadOnlyList<string>? OverrideParametersNotIn { get; set; }
+
+    public string? OverrideParametersGT { get; set; }
+
+    public string? OverrideParametersGTE { get; set; }
+
+    public string? OverrideParametersLT { get; set; }
+
+    public string? OverrideParametersLTE { get; set; }
+
+    public string? OverrideParametersContains { get; set; }
+
+    public string? OverrideParametersHasPrefix { get; set; }
+
+    public string? OverrideParametersHasSuffix { get; set; }
+
+    public string? OverrideParametersEqualFold { get; set; }
+
+    public string? OverrideParametersContainsFold { get; set; }
+
+    public bool? HasUser { get; set; }
+
+    public IReadOnlyList<UserWhereInput>? HasUserWith { get; set; }
 
     public ChannelOverrideTemplateWhereInput? Not { get; set; }
 
@@ -378,11 +543,85 @@ public static class ChannelOverrideTemplateMapping
         return new ChannelOverrideTemplateListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
+            UserId = where.UserId is null ? null : GidValue.Parse(where.UserId).Id,
+            UserIdNEQ = where.UserIdNEQ is null
+                ? null
+                : GidValue.Parse(where.UserIdNEQ).Id,
+            UserIdIn = where.UserIdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            UserIdNotIn = where.UserIdNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            UserIdIsNil = where.UserIdIsNil,
+            UserIdNotNil = where.UserIdNotNil,
             Name = where.Name,
+            NameNEQ = where.NameNEQ,
             NameIn = where.NameIn,
+            NameNotIn = where.NameNotIn,
+            NameGT = where.NameGT,
+            NameGTE = where.NameGTE,
+            NameLT = where.NameLT,
+            NameLTE = where.NameLTE,
             NameContains = where.NameContains,
+            NameHasPrefix = where.NameHasPrefix,
+            NameHasSuffix = where.NameHasSuffix,
+            NameEqualFold = where.NameEqualFold,
             NameContainsFold = where.NameContainsFold,
+            Description = where.Description,
+            DescriptionNEQ = where.DescriptionNEQ,
+            DescriptionIn = where.DescriptionIn,
+            DescriptionNotIn = where.DescriptionNotIn,
+            DescriptionGT = where.DescriptionGT,
+            DescriptionGTE = where.DescriptionGTE,
+            DescriptionLT = where.DescriptionLT,
+            DescriptionLTE = where.DescriptionLTE,
+            DescriptionContains = where.DescriptionContains,
+            DescriptionHasPrefix = where.DescriptionHasPrefix,
+            DescriptionHasSuffix = where.DescriptionHasSuffix,
+            DescriptionIsNil = where.DescriptionIsNil,
+            DescriptionNotNil = where.DescriptionNotNil,
+            DescriptionEqualFold = where.DescriptionEqualFold,
+            DescriptionContainsFold = where.DescriptionContainsFold,
+            OverrideParameters = where.OverrideParameters,
+            OverrideParametersNEQ = where.OverrideParametersNEQ,
+            OverrideParametersIn = where.OverrideParametersIn,
+            OverrideParametersNotIn = where.OverrideParametersNotIn,
+            OverrideParametersGT = where.OverrideParametersGT,
+            OverrideParametersGTE = where.OverrideParametersGTE,
+            OverrideParametersLT = where.OverrideParametersLT,
+            OverrideParametersLTE = where.OverrideParametersLTE,
+            OverrideParametersContains = where.OverrideParametersContains,
+            OverrideParametersHasPrefix = where.OverrideParametersHasPrefix,
+            OverrideParametersHasSuffix = where.OverrideParametersHasSuffix,
+            OverrideParametersEqualFold = where.OverrideParametersEqualFold,
+            OverrideParametersContainsFold = where.OverrideParametersContainsFold,
+            HasUser = where.HasUser,
+            HasUserWith = where.HasUserWith?
+                .Select(ManagementMapping.ToFilter)
+                .OfType<UserListFilter>()
+                .ToList(),
             Not = ToFilter(where.Not),
             And = where.And?
                 .Select(ToFilter)

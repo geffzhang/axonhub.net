@@ -588,6 +588,117 @@ public sealed class ApiKeyStoreTests(PostgresFixture fixture)
         Assert.Empty(await Names(new ApiKeyListFilter { Or = [] }));
     }
 
+    [Fact]
+    public async Task ListAppliesEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ApiKeyStore(context);
+
+        long alphaProjectId;
+        long betaProjectId;
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "users" ("id", "created_at", "updated_at", "email", "status", "password")
+                VALUES (101, @CreatedAt, @UpdatedAt, 'alice@example.com', 'activated', 'x'),
+                       (102, @CreatedAt, @UpdatedAt, 'bob@example.com', 'activated', 'x');
+                UPDATE "users" SET "deleted_at" = 99 WHERE "id" = 102;
+
+                INSERT INTO "projects"
+                    ("created_at", "updated_at", "deleted_at", "name", "description", "status")
+                VALUES (@CreatedAt, @UpdatedAt, 0, 'alpha-project', '', 'active'),
+                       (@CreatedAt, @UpdatedAt, 99, 'beta-project', '', 'active');
+                """,
+                new { CreatedAt, UpdatedAt });
+            alphaProjectId = await connection.ExecuteScalarAsync<long>(
+                "SELECT \"id\" FROM \"projects\" WHERE \"name\" = 'alpha-project';");
+            betaProjectId = await connection.ExecuteScalarAsync<long>(
+                "SELECT \"id\" FROM \"projects\" WHERE \"name\" = 'beta-project';");
+        }
+
+        var alpha = NewApiKey("Alpha", projectId: alphaProjectId);
+        alpha.Key = "sk-alpha";
+        alpha.UserId = 101;
+        var alphaKeyId = await store.CreateAsync(alpha);
+        var beta = NewApiKey("Beta", projectId: betaProjectId);
+        beta.Key = "sk-beta";
+        beta.UserId = 102;
+        await store.CreateAsync(beta);
+        // A dangling project id: hasProject is a plain EXISTS on projects.id.
+        var gamma = NewApiKey("Gamma", projectId: 424242);
+        gamma.Key = "sk-gamma";
+        gamma.UserId = null;
+        await store.CreateAsync(gamma);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "requests"
+                    ("created_at", "updated_at", "model_id", "request_body", "status",
+                     "project_id", "api_key_id")
+                VALUES (@CreatedAt, @UpdatedAt, 'gpt-4o', '{}'::jsonb, 'completed',
+                        @ProjectId, @ApiKeyId);
+                """,
+                new { CreatedAt, UpdatedAt, ProjectId = alphaProjectId, ApiKeyId = alphaKeyId });
+        }
+
+        async Task<string[]> Names(ApiKeyListFilter where)
+        {
+            var page = await store.ListAsync(new ApiKeyListQuery { Where = where, First = 10 });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        // user 102 is soft-deleted; the generated edge predicate does not
+        // re-apply the User soft delete.
+        Assert.Equal(["Alpha", "Beta"], await Names(new ApiKeyListFilter { HasUser = true }));
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { HasUser = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ApiKeyListFilter
+            {
+                HasUserWith = [new UserListFilter { Email = "alice@example.com" }],
+            }));
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ApiKeyListFilter
+            {
+                HasUserWith = [new UserListFilter { Email = "bob@example.com" }],
+            }));
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { HasUserWith = [] }));
+
+        Assert.Equal(["Alpha", "Beta"], await Names(new ApiKeyListFilter { HasProject = true }));
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { HasProject = false }));
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ApiKeyListFilter
+            {
+                HasProjectWith = [new ProjectListFilter { Name = "beta-project" }],
+            }));
+
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { HasRequests = true }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { HasRequests = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ApiKeyListFilter
+            {
+                HasRequestsWith = [new RequestListFilter { Status = "completed" }],
+            }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter
+            {
+                Not = new ApiKeyListFilter { HasRequests = true },
+            }));
+    }
+
     private static async Task SoftDeleteAsync(TestDatabase db, long id)
     {
         await using var connection = await db.Factory.OpenAsync();

@@ -332,6 +332,18 @@ public sealed class ApiKeyWhereInput
 
     public IReadOnlyList<ApiKeyStatusValue>? StatusNotIn { get; set; }
 
+    public bool? HasUser { get; set; }
+
+    public IReadOnlyList<UserWhereInput>? HasUserWith { get; set; }
+
+    public bool? HasProject { get; set; }
+
+    public IReadOnlyList<ProjectWhereInput>? HasProjectWith { get; set; }
+
+    public bool? HasRequests { get; set; }
+
+    public IReadOnlyList<RequestWhereInput>? HasRequestsWith { get; set; }
+
     public ApiKeyWhereInput? Not { get; set; }
 
     public IReadOnlyList<ApiKeyWhereInput>? And { get; set; }
@@ -915,6 +927,21 @@ public static class ApiKeyMapping
                 .ToList(),
             StatusNotIn = where.StatusNotIn?
                 .Select(static status => ToWireStatus(status))
+                .ToList(),
+            HasUser = where.HasUser,
+            HasUserWith = where.HasUserWith?
+                .Select(ManagementMapping.ToFilter)
+                .OfType<UserListFilter>()
+                .ToList(),
+            HasProject = where.HasProject,
+            HasProjectWith = where.HasProjectWith?
+                .Select(ProjectMapping.ToFilter)
+                .OfType<ProjectListFilter>()
+                .ToList(),
+            HasRequests = where.HasRequests,
+            HasRequestsWith = where.HasRequestsWith?
+                .Select(static nested => TraceMapping.ToFilter(nested))
+                .OfType<RequestListFilter>()
                 .ToList(),
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<ApiKeyListFilter>().ToList(),

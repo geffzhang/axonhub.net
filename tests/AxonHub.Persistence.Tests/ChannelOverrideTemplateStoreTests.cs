@@ -266,6 +266,292 @@ public sealed class ChannelOverrideTemplateStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesEveryScalarAndUserEdgePredicate()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelOverrideTemplateStore(context);
+
+        // Users 101 (live) and 102 (soft-deleted); the generated edge
+        // predicates do not re-apply the User soft delete.
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "users" ("id", "created_at", "updated_at", "email", "status", "password")
+                VALUES (101, @CreatedAt, @UpdatedAt, 'alice@example.com', 'activated', 'x'),
+                       (102, @CreatedAt, @UpdatedAt, 'bob@example.com', 'activated', 'x');
+                UPDATE "users" SET "deleted_at" = 99 WHERE "id" = 102;
+                """,
+                new { CreatedAt, UpdatedAt });
+        }
+
+        var alpha = NewTemplate("Alpha", userId: 101);
+        alpha.Description = "First";
+        alpha.OverrideParameters = """{"a":1}""";
+        alpha.CreatedAt = CreatedAt;
+        alpha.UpdatedAt = CreatedAt.AddHours(1);
+        var alphaId = (await store.CreateAsync(alpha)).Id;
+
+        var beta = NewTemplate("beta", userId: 102);
+        beta.Description = null;
+        beta.OverrideParameters = """{"b":2}""";
+        beta.CreatedAt = CreatedAt.AddMinutes(1);
+        beta.UpdatedAt = CreatedAt.AddHours(2);
+        var betaId = (await store.CreateAsync(beta)).Id;
+
+        var gamma = NewTemplate("Gamma", userId: null);
+        gamma.Description = "Third";
+        gamma.OverrideParameters = """{"c":3}""";
+        gamma.CreatedAt = CreatedAt.AddMinutes(2);
+        gamma.UpdatedAt = CreatedAt.AddHours(3);
+        await store.CreateAsync(gamma);
+
+        async Task<string[]> Names(ChannelOverrideTemplateListFilter where)
+        {
+            var page = await store.ListAsync(new ChannelOverrideTemplateListQuery
+            {
+                Where = where,
+                First = 10,
+            });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        Assert.Equal(["Alpha"], await Names(new ChannelOverrideTemplateListFilter { Id = alphaId }));
+        Assert.Equal(
+            ["beta", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { IdNEQ = alphaId }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { IdGT = betaId }));
+        Assert.Equal(
+            ["Alpha", "beta"],
+            await Names(new ChannelOverrideTemplateListFilter { IdLTE = betaId }));
+        Assert.Equal(
+            ["Alpha", "beta"],
+            await Names(new ChannelOverrideTemplateListFilter { IdIn = [alphaId, betaId] }));
+
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter { CreatedAt = CreatedAt }));
+        Assert.Equal(
+            ["beta", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { CreatedAtGT = CreatedAt }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                CreatedAtLT = CreatedAt.AddMinutes(1),
+            }));
+        Assert.Equal(
+            ["Alpha", "beta"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                CreatedAtIn = [CreatedAt, CreatedAt.AddMinutes(1)],
+            }));
+
+        Assert.Equal(
+            ["beta"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                UpdatedAt = CreatedAt.AddHours(2),
+            }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                UpdatedAtNotIn = [CreatedAt.AddHours(2)],
+            }));
+
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter { UserId = 101 }));
+        // "user_id <> 101" excludes the NULL row, like SQL and ent.
+        Assert.Equal(
+            ["beta"],
+            await Names(new ChannelOverrideTemplateListFilter { UserIdNEQ = 101 }));
+        Assert.Equal(
+            ["Alpha", "beta"],
+            await Names(new ChannelOverrideTemplateListFilter { UserIdIn = [101, 102] }));
+        Assert.Equal(
+            ["beta"],
+            await Names(new ChannelOverrideTemplateListFilter { UserIdNotIn = [101] }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { UserIdIsNil = true }));
+        Assert.Equal(
+            ["Alpha", "beta"],
+            await Names(new ChannelOverrideTemplateListFilter { UserIdNotNil = true }));
+        // Ent reads these as plain bools: false is ignored, not inverted.
+        Assert.Equal(
+            ["Alpha", "beta", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { UserIdIsNil = false }));
+
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter { Name = "Alpha" }));
+        Assert.Equal(
+            ["beta", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { NameGT = "Alpha" }));
+        // Byte order: "Alpha" < "Gamma" < "beta".
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { NameLTE = "Gamma" }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { NameContains = "amm" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter { NameHasPrefix = "Al" }));
+        Assert.Equal(
+            ["beta"],
+            await Names(new ChannelOverrideTemplateListFilter { NameHasSuffix = "ta" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter { NameEqualFold = "ALPHA" }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { NameContainsFold = "AMM" }));
+
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter { Description = "First" }));
+        // "description <> 'First'" excludes the NULL row.
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { DescriptionNEQ = "First" }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                DescriptionIn = ["First", "Third"],
+            }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { DescriptionGT = "First" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter { DescriptionLT = "Third" }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { DescriptionHasSuffix = "ird" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter { DescriptionEqualFold = "FIRST" }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { DescriptionContainsFold = "THIRD" }));
+        Assert.Equal(
+            ["beta"],
+            await Names(new ChannelOverrideTemplateListFilter { DescriptionIsNil = true }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { DescriptionNotNil = true }));
+
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                OverrideParameters = """{"a":1}""",
+            }));
+        Assert.Equal(
+            ["beta", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                OverrideParametersNEQ = """{"a":1}""",
+            }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                OverrideParametersIn = ["""{"a":1}""", """{"c":3}"""],
+            }));
+        Assert.Equal(
+            ["beta"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                OverrideParametersContains = "\"b\"",
+            }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                OverrideParametersHasPrefix = """{"a""",
+            }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                OverrideParametersHasSuffix = "3}",
+            }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                OverrideParametersEqualFold = """{"A":1}""",
+            }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                OverrideParametersContainsFold = """{"C""",
+            }));
+
+        Assert.Equal(
+            ["Alpha", "beta"],
+            await Names(new ChannelOverrideTemplateListFilter { HasUser = true }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { HasUser = false }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                HasUserWith = [new UserListFilter { Email = "alice@example.com" }],
+            }));
+        // The soft-deleted user still matches: sqlgraph does not re-apply the
+        // User soft-delete predicate inside HasNeighborsWith.
+        Assert.Equal(
+            ["beta"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                HasUserWith = [new UserListFilter { Email = "bob@example.com" }],
+            }));
+        Assert.Equal(
+            ["Alpha", "beta", "Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter { HasUserWith = [] }));
+
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                Not = new ChannelOverrideTemplateListFilter { HasUser = true },
+            }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                And =
+                [
+                    new ChannelOverrideTemplateListFilter { HasUser = true },
+                    new ChannelOverrideTemplateListFilter { NameContainsFold = "ALP" },
+                ],
+            }));
+        Assert.Equal(
+            ["Alpha", "beta"],
+            await Names(new ChannelOverrideTemplateListFilter
+            {
+                Or =
+                [
+                    new ChannelOverrideTemplateListFilter { Name = "Alpha" },
+                    new ChannelOverrideTemplateListFilter { Name = "beta" },
+                ],
+            }));
+        Assert.Empty(await Names(new ChannelOverrideTemplateListFilter { Or = [] }));
+    }
+
+    [Fact]
     public async Task ListChannelsIgnoresMissingAndDeletedRows()
     {
         await using var db = new TestDatabase(fixture);
@@ -321,7 +607,7 @@ public sealed class ChannelOverrideTemplateStoreTests(PostgresFixture fixture)
         Assert.Equal("""{"modelMappings": []}""", reloaded.Settings);
     }
 
-    private static ChannelOverrideTemplateRecord NewTemplate(string name, long userId) => new()
+    private static ChannelOverrideTemplateRecord NewTemplate(string name, long? userId) => new()
     {
         CreatedAt = CreatedAt,
         UpdatedAt = UpdatedAt,

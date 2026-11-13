@@ -1392,6 +1392,31 @@ introspect）并更新 AdminChannelsEndpointTests.ChannelWhereInputExposesEveryS
 （163 字段），两个 introspection 测试通过。
 残余：User 的 2 组边谓词（hasChannelOverrideTemplates / hasOidcIdentities），继续由 C135 跟踪。
 
+2026-11-13 更新（§205）：ChannelOverrideTemplate / OIDCIdentity where 输入与 User / Project /
+APIKey 边谓词（C135 第七刀、C162、C269）。
+参照 `internal/server/gql/ent.graphql`：ChannelOverrideTemplateWhereInput 76 个字段、
+OIDCIdentityWhereInput 99 个字段（not / and / or 与 hasUser / hasUserWith 在内）。端口 §205
+把两张输入全量加入 GraphQL 与对应 ListFilter（ChannelOverrideTemplateStore.BuildFilter /
+OidcIdentityAdminStore.BuildFilter），并把 User 的 hasChannelOverrideTemplates /
+hasOidcIdentities 两组边谓词接入（UserWhereInput 114/114）；同时补齐 ProjectWhereInput 的
+10 组边（hasUsers / hasRoles / hasAPIKeys / hasRequests / hasUsageLogs / hasThreads /
+hasTraces / hasPrompts / hasAPIKeyProfileTemplates / hasProjectUsers，20 个字段，77/77）与
+APIKeyWhereInput 的 3 组边（hasUser / hasProject / hasRequests，6 个字段，77/77）。
+语义：true → EXISTS、false → NOT EXISTS；hasXWith 的谓词 AND 进同一个 EXISTS；空 With 列表
+不生成谓词；不重新应用目标实体的软删除（已软删除的 role / prompt / template / api_key /
+user / OIDC identity / project 仍匹配）。Project.hasUsers / hasProjectUsers 是 M2M through
+user_projects：非 With 版只查 join 行的存在性，With 版再把 users 谓词 AND 进同一个 EXISTS；
+APIKey.hasProject 只检查 projects.id 存在。OIDC 的 email / idpName / lastLoginAt 保留
+IsNil / NotNil（传 false 时忽略）；<> 与 NOT IN 排除 NULL。
+另：OidcIdentityAdminStore.BuildFilter 由 private 改为 internal，供 UserAdminStore 的
+hasOidcIdentitiesWith 复用；Project / APIKey 的 hasRequestsWith 沿用 TraceMapping.ToFilter
+（RequestMapping.ToFilter 的重载面向 execution / usage log，方法组无法推断）。
+新增 5 例持久化测试（ChannelOverrideTemplateStoreTests / OidcIdentityAdminStoreTests /
+ProjectStoreTests / ApiKeyStoreTests / UserAdminStoreTests 各 1 例），定向运行 Template +
+OIDC 11 通过、Project / ApiKey / User 49 通过；Api 侧新增 5 个 introspection / 映射测试，
+改动过的 5 个测试类定向运行 94 通过。未跑全量回归。
+残余：无（已列十张 where 输入的字段面全部闭合）；SystemWhereInput 的子集仍由 C269 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

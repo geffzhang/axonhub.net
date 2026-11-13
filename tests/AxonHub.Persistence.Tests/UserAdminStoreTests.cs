@@ -762,6 +762,130 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesOverrideTemplateAndOidcIdentityEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var alice = NewUser("alice@example.com");
+        await store.CreateAsync(alice, null);
+        var bob = NewUser("bob@example.com");
+        await store.CreateAsync(bob, null);
+        var carol = NewUser("carol@example.com");
+        await store.CreateAsync(carol, null);
+
+        context.ChannelOverrideTemplates.AddRange(
+            new ChannelOverrideTemplateRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                Name = "alice-template",
+                OverrideParameters = "{}",
+                OverrideHeaders = "[]",
+                UserId = alice.Id,
+            },
+            new ChannelOverrideTemplateRecord
+            {
+                // A soft-deleted template still satisfies hasChannelOverrideTemplatesWith.
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                DeletedAt = 1_700_000_000L,
+                Name = "bob-template",
+                OverrideParameters = """{"model":"x"}""",
+                OverrideHeaders = "[]",
+                UserId = bob.Id,
+            });
+        context.OidcIdentities.AddRange(
+            new OidcIdentityRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                Issuer = "https://issuer.example.com",
+                Subject = "sub-alice",
+                IdpName = "okta",
+                UserId = alice.Id,
+            },
+            new OidcIdentityRecord
+            {
+                // A soft-deleted identity still satisfies hasOidcIdentitiesWith.
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                DeletedAt = 1_700_000_000L,
+                Issuer = "https://other.example.com",
+                Subject = "sub-bob",
+                UserId = bob.Id,
+            });
+        await context.SaveChangesAsync();
+
+        async Task<string[]> Emails(UserListFilter where)
+        {
+            var page = await store.ListAsync(new UserListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Email).ToArray();
+        }
+
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { HasChannelOverrideTemplates = true }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { HasChannelOverrideTemplates = false }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { HasChannelOverrideTemplatesWith = [] }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasChannelOverrideTemplatesWith =
+                    [new ChannelOverrideTemplateListFilter { Name = "alice-template" }],
+            }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasChannelOverrideTemplatesWith =
+                    [new ChannelOverrideTemplateListFilter { NameContainsFold = "BOB-" }],
+            }));
+        Assert.Empty(await Emails(new UserListFilter
+        {
+            HasChannelOverrideTemplatesWith =
+                [new ChannelOverrideTemplateListFilter { Name = "missing" }],
+        }));
+
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { HasOidcIdentities = true }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { HasOidcIdentities = false }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { HasOidcIdentitiesWith = [] }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasOidcIdentitiesWith =
+                    [new OidcIdentityListFilter { SubjectContainsFold = "ALICE" }],
+            }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasOidcIdentitiesWith =
+                    [new OidcIdentityListFilter { Issuer = "https://other.example.com" }],
+            }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter
+            {
+                Not = new UserListFilter { HasOidcIdentities = true },
+            }));
+    }
+
+    [Fact]
     public async Task UpdateAppliesFieldsScopesAndRoleEdges()
     {
         await using var db = new TestDatabase(fixture);

@@ -488,6 +488,106 @@ public sealed class AdminSystemsOidcIdentitiesEndpointTests : IAsyncLifetime
         Assert.Empty(_identities.Queries);
     }
 
+    [Fact]
+    public async Task QueryOidcIdentitiesMapsEveryPredicateGroup()
+    {
+        _identities.Add(row => row.UserId = 9);
+
+        await QueryDataAsync(
+            """
+            query OidcIdentities($where: OIDCIdentityWhereInput) {
+              oidcIdentities(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    id = "gid://axonhub/OIDCIdentity/1",
+                    issuer = "https://issuer.example.com",
+                    subjectContainsFold = "SUB",
+                    email = "alice@example.com",
+                    emailNotNil = true,
+                    idpNameIsNil = true,
+                    lastLoginAtIsNil = true,
+                    userID = "gid://axonhub/User/9",
+                    hasUser = true,
+                    hasUserWith = new[] { new { email = "alice@example.com" } },
+                    not = new { subject = "Nope" },
+                },
+            });
+
+        var where = Assert.Single(_identities.Queries).Where!;
+        Assert.Equal(1L, where.Id);
+        Assert.Equal("https://issuer.example.com", where.Issuer);
+        Assert.Equal("SUB", where.SubjectContainsFold);
+        Assert.Equal("alice@example.com", where.Email);
+        Assert.True(where.EmailNotNil);
+        Assert.True(where.IdpNameIsNil);
+        Assert.True(where.LastLoginAtIsNil);
+        Assert.Equal(9L, where.UserId);
+        Assert.True(where.HasUser);
+        Assert.Equal("alice@example.com", Assert.Single(where.HasUserWith!).Email);
+        Assert.Equal("Nope", where.Not!.Subject);
+    }
+
+    [Fact]
+    public async Task OidcIdentityWhereInputExposesEveryScalarAndUserEdgePredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "OIDCIdentityWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+        string[] nullableText =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "IsNil",
+            "NotNil",
+            "EqualFold",
+            "ContainsFold",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(text.Select(static suffix => "issuer" + suffix));
+        expected.AddRange(text.Select(static suffix => "subject" + suffix));
+        expected.AddRange(nullableText.Select(static suffix => "email" + suffix));
+        expected.AddRange(nullableText.Select(static suffix => "idpName" + suffix));
+        expected.AddRange(
+        [
+            .. comparison.Select(static suffix => "lastLoginAt" + suffix),
+            "lastLoginAtIsNil",
+            "lastLoginAtNotNil",
+        ]);
+        expected.AddRange(comparison.Take(4).Select(static suffix => "userID" + suffix));
+        expected.AddRange(["hasUser", "hasUserWith"]);
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
+    }
+
     private async Task<UserRecord> SeedMemberAsync(string email, string? scopes)
     {
         var member = _gate.Users.Add(user =>

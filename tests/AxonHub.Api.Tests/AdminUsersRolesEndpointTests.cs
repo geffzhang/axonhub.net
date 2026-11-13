@@ -539,6 +539,73 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task QueryUsersMapsTheOverrideTemplateAndOidcIdentityEdgePredicates()
+    {
+        SeedUser("alice@example.com", DateTime.UtcNow);
+
+        await QueryDataAsync(
+            """
+            query Users($where: UserWhereInput) {
+              users(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    hasChannelOverrideTemplates = true,
+                    hasChannelOverrideTemplatesWith = new[]
+                    {
+                        new
+                        {
+                            id = "gid://axonhub/ChannelOverrideTemplate/3",
+                            userID = "gid://axonhub/User/4",
+                            name = "template-1",
+                            descriptionIsNil = true,
+                            overrideParametersContains = "model",
+                        },
+                    },
+                    hasOidcIdentities = false,
+                    hasOidcIdentitiesWith = new[]
+                    {
+                        new
+                        {
+                            id = "gid://axonhub/OIDCIdentity/5",
+                            issuer = "https://issuer.example.com",
+                            subject = "sub-1",
+                            emailIsNil = true,
+                            idpName = "okta",
+                            lastLoginAt = "2026-02-03T04:05:06Z",
+                            lastLoginAtNotNil = true,
+                            userID = "gid://axonhub/User/6",
+                        },
+                    },
+                },
+            });
+
+        var where = _users.Queries[^1].Where!;
+        Assert.True(where.HasChannelOverrideTemplates);
+        var template = Assert.Single(where.HasChannelOverrideTemplatesWith!);
+        Assert.Equal(3L, template.Id);
+        Assert.Equal(4L, template.UserId);
+        Assert.Equal("template-1", template.Name);
+        Assert.True(template.DescriptionIsNil);
+        Assert.Equal("model", template.OverrideParametersContains);
+        Assert.False(where.HasOidcIdentities);
+        var identity = Assert.Single(where.HasOidcIdentitiesWith!);
+        Assert.Equal(5L, identity.Id);
+        Assert.Equal("https://issuer.example.com", identity.Issuer);
+        Assert.Equal("sub-1", identity.Subject);
+        Assert.True(identity.EmailIsNil);
+        Assert.Equal("okta", identity.IdpName);
+        Assert.Equal(
+            new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc),
+            identity.LastLoginAt);
+        Assert.True(identity.LastLoginAtNotNil);
+        Assert.Equal(6L, identity.UserId);
+    }
+
+    [Fact]
     public async Task QueryRolesMapsTheProjectEdgePredicate()
     {
         SeedRole("Developer", projectId: 0);
@@ -963,7 +1030,7 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UserWhereInputExposesEveryScalarAndRoleEdgePredicate()
+    public async Task UserWhereInputExposesEveryScalarAndEdgePredicate()
     {
         var data = await QueryDataAsync(
             """
@@ -1013,6 +1080,10 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
             "hasProjectUsersWith",
             "hasRoles",
             "hasRolesWith",
+            "hasChannelOverrideTemplates",
+            "hasChannelOverrideTemplatesWith",
+            "hasOidcIdentities",
+            "hasOidcIdentitiesWith",
             "hasUserRoles",
             "hasUserRolesWith",
         ]);

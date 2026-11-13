@@ -263,6 +263,28 @@ public sealed record UserListFilter
     public IReadOnlyList<UserRoleListFilter>? HasUserRolesWith { get; init; }
 
     /// <summary>
+    /// Ent's <c>hasChannelOverrideTemplates</c>: true → the user has a
+    /// <c>channel_override_templates</c> row, false → NOT EXISTS. Generated
+    /// sqlgraph does not re-apply the template soft-delete predicate.
+    /// </summary>
+    public bool? HasChannelOverrideTemplates { get; init; }
+
+    public IReadOnlyList<ChannelOverrideTemplateListFilter>? HasChannelOverrideTemplatesWith
+    {
+        get;
+        init;
+    }
+
+    /// <summary>
+    /// Ent's <c>hasOidcIdentities</c>: true → the user has an
+    /// <c>oidc_identities</c> row, false → NOT EXISTS. Generated sqlgraph does
+    /// not re-apply the identity soft-delete predicate.
+    /// </summary>
+    public bool? HasOidcIdentities { get; init; }
+
+    public IReadOnlyList<OidcIdentityListFilter>? HasOidcIdentitiesWith { get; init; }
+
+    /// <summary>
     /// Ent's <c>WhereHasProjectUsersWith(project_id = ?)</c> predicate the
     /// User query policy installs for project owners and project members
     /// (internal/scopes/rule_user_project_scope.go:91,124).
@@ -1766,6 +1788,56 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
                 "EXISTS (SELECT 1 FROM \"user_roles\" ur"
                 + " WHERE ur.\"user_id\" = " + alias + ".\"id\""
                 + (userRoleCondition is null ? string.Empty : " AND " + userRoleCondition)
+                + ")");
+        }
+
+        if (filter.HasChannelOverrideTemplates is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channel_override_templates\" cot"
+                + " WHERE cot.\"user_id\" = " + alias + ".\"id\")";
+            predicates.Add(
+                filter.HasChannelOverrideTemplates.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelOverrideTemplatesWith is { Count: > 0 } templateFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the template soft delete.
+            var templatePredicates = templateFilters
+                .Select(template => ChannelOverrideTemplateStore.BuildFilter(
+                    template,
+                    "cot",
+                    args))
+                .Where(static template => template is not null)
+                .ToArray();
+            var templateCondition = ConnectionSql.Combine(templatePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channel_override_templates\" cot"
+                + " WHERE cot.\"user_id\" = " + alias + ".\"id\""
+                + (templateCondition is null ? string.Empty : " AND " + templateCondition)
+                + ")");
+        }
+
+        if (filter.HasOidcIdentities is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"oidc_identities\" oi"
+                + " WHERE oi.\"user_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasOidcIdentities.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasOidcIdentitiesWith is { Count: > 0 } identityFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the identity soft delete.
+            var identityPredicates = identityFilters
+                .Select(identity => OidcIdentityAdminStore.BuildFilter(identity, "oi", args))
+                .Where(static identity => identity is not null)
+                .ToArray();
+            var identityCondition = ConnectionSql.Combine(identityPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"oidc_identities\" oi"
+                + " WHERE oi.\"user_id\" = " + alias + ".\"id\""
+                + (identityCondition is null ? string.Empty : " AND " + identityCondition)
                 + ")");
         }
 

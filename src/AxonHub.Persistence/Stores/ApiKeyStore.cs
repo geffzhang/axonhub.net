@@ -179,6 +179,27 @@ public sealed record ApiKeyListFilter
 
     public IReadOnlyList<string>? StatusNotIn { get; init; }
 
+    /// <summary>
+    /// Ent's <c>hasUser</c>: true → the optional <c>user_id</c> resolves to a
+    /// user row, false → NOT EXISTS. Generated sqlgraph does not re-apply the
+    /// User soft-delete predicate.
+    /// </summary>
+    public bool? HasUser { get; init; }
+
+    public IReadOnlyList<UserListFilter>? HasUserWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasProject</c>: true → <c>project_id</c> resolves to a project
+    /// row, false → NOT EXISTS.
+    /// </summary>
+    public bool? HasProject { get; init; }
+
+    public IReadOnlyList<ProjectListFilter>? HasProjectWith { get; init; }
+
+    public bool? HasRequests { get; init; }
+
+    public IReadOnlyList<RequestListFilter>? HasRequestsWith { get; init; }
+
     public ApiKeyListFilter? Not { get; init; }
 
     public IReadOnlyList<ApiKeyListFilter>? And { get; init; }
@@ -1014,6 +1035,71 @@ public sealed class ApiKeyStore(AxonHubDbContext db) : IApiKeyStore
         ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
         ConnectionSql.AppendStringIn(
             predicates, alias, "status", filter.StatusNotIn, args, negate: true);
+
+        if (filter.HasUser is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"users\" u2 WHERE u2.\"id\" = "
+                + alias + ".\"user_id\")";
+            predicates.Add(filter.HasUser.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasUserWith is { Count: > 0 } userFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the User soft-delete predicate.
+            var userPredicates = userFilters
+                .Select(user => UserAdminStore.BuildFilter(user, "u2", args))
+                .Where(static user => user is not null)
+                .ToArray();
+            var userCondition = ConnectionSql.Combine(userPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"users\" u2"
+                + " WHERE u2.\"id\" = " + alias + ".\"user_id\""
+                + (userCondition is null ? string.Empty : " AND " + userCondition)
+                + ")");
+        }
+
+        if (filter.HasProject is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"projects\" pj2 WHERE pj2.\"id\" = "
+                + alias + ".\"project_id\")";
+            predicates.Add(filter.HasProject.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProjectWith is { Count: > 0 } projectFilters)
+        {
+            var projectPredicates = projectFilters
+                .Select(project => ProjectStore.BuildFilter(project, "pj2", args))
+                .Where(static project => project is not null)
+                .ToArray();
+            var projectCondition = ConnectionSql.Combine(projectPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"projects\" pj2"
+                + " WHERE pj2.\"id\" = " + alias + ".\"project_id\""
+                + (projectCondition is null ? string.Empty : " AND " + projectCondition)
+                + ")");
+        }
+
+        if (filter.HasRequests is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"requests\" rq2 WHERE rq2.\"api_key_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasRequests.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasRequestsWith is { Count: > 0 } requestFilters)
+        {
+            var requestPredicates = requestFilters
+                .Select(request => RequestSegmentStore.BuildFilter(request, "rq2", args))
+                .Where(static request => request is not null)
+                .ToArray();
+            var requestCondition = ConnectionSql.Combine(requestPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"requests\" rq2"
+                + " WHERE rq2.\"api_key_id\" = " + alias + ".\"id\""
+                + (requestCondition is null ? string.Empty : " AND " + requestCondition)
+                + ")");
+        }
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)
         {

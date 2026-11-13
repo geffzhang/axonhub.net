@@ -204,6 +204,50 @@ public sealed class ProjectWhereInput
 
     public IReadOnlyList<ProjectStatusValue>? StatusNotIn { get; set; }
 
+    public bool? HasUsers { get; set; }
+
+    public IReadOnlyList<UserWhereInput>? HasUsersWith { get; set; }
+
+    public bool? HasRoles { get; set; }
+
+    public IReadOnlyList<RoleWhereInput>? HasRolesWith { get; set; }
+
+    public bool? HasAPIKeys { get; set; }
+
+    public IReadOnlyList<ApiKeyWhereInput>? HasAPIKeysWith { get; set; }
+
+    public bool? HasRequests { get; set; }
+
+    public IReadOnlyList<RequestWhereInput>? HasRequestsWith { get; set; }
+
+    public bool? HasUsageLogs { get; set; }
+
+    public IReadOnlyList<UsageLogWhereInput>? HasUsageLogsWith { get; set; }
+
+    public bool? HasThreads { get; set; }
+
+    public IReadOnlyList<ThreadWhereInput>? HasThreadsWith { get; set; }
+
+    public bool? HasTraces { get; set; }
+
+    public IReadOnlyList<TraceWhereInput>? HasTracesWith { get; set; }
+
+    public bool? HasPrompts { get; set; }
+
+    public IReadOnlyList<PromptWhereInput>? HasPromptsWith { get; set; }
+
+    public bool? HasAPIKeyProfileTemplates { get; set; }
+
+    public IReadOnlyList<ApiKeyProfileTemplateWhereInput>? HasAPIKeyProfileTemplatesWith
+    {
+        get;
+        set;
+    }
+
+    public bool? HasProjectUsers { get; set; }
+
+    public IReadOnlyList<UserProjectWhereInput>? HasProjectUsersWith { get; set; }
+
     public ProjectWhereInput? Not { get; set; }
 
     public IReadOnlyList<ProjectWhereInput>? And { get; set; }
@@ -412,6 +456,56 @@ public static class ProjectMapping
                 .ToList(),
             StatusNotIn = where.StatusNotIn?
                 .Select(static status => ToWireStatus(status))
+                .ToList(),
+            HasUsers = where.HasUsers,
+            HasUsersWith = where.HasUsersWith?
+                .Select(ManagementMapping.ToFilter)
+                .OfType<UserListFilter>()
+                .ToList(),
+            HasRoles = where.HasRoles,
+            HasRolesWith = where.HasRolesWith?
+                .Select(ManagementMapping.ToFilter)
+                .OfType<RoleListFilter>()
+                .ToList(),
+            HasAPIKeys = where.HasAPIKeys,
+            HasAPIKeysWith = where.HasAPIKeysWith?
+                .Select(ApiKeyMapping.ToFilter)
+                .OfType<ApiKeyListFilter>()
+                .ToList(),
+            HasRequests = where.HasRequests,
+            HasRequestsWith = where.HasRequestsWith?
+                .Select(static nested => TraceMapping.ToFilter(nested))
+                .OfType<RequestListFilter>()
+                .ToList(),
+            HasUsageLogs = where.HasUsageLogs,
+            HasUsageLogsWith = where.HasUsageLogsWith?
+                .Select(RequestMapping.ToFilter)
+                .OfType<UsageLogListFilter>()
+                .ToList(),
+            HasThreads = where.HasThreads,
+            HasThreadsWith = where.HasThreadsWith?
+                .Select(TraceMapping.ToFilter)
+                .OfType<ThreadListFilter>()
+                .ToList(),
+            HasTraces = where.HasTraces,
+            HasTracesWith = where.HasTracesWith?
+                .Select(TraceMapping.ToFilter)
+                .OfType<TraceListFilter>()
+                .ToList(),
+            HasPrompts = where.HasPrompts,
+            HasPromptsWith = where.HasPromptsWith?
+                .Select(PromptMapping.ToFilter)
+                .OfType<PromptListFilter>()
+                .ToList(),
+            HasAPIKeyProfileTemplates = where.HasAPIKeyProfileTemplates,
+            HasAPIKeyProfileTemplatesWith = where.HasAPIKeyProfileTemplatesWith?
+                .Select(ApiKeyProfileTemplateMapping.ToFilter)
+                .OfType<ApiKeyProfileTemplateListFilter>()
+                .ToList(),
+            HasProjectUsers = where.HasProjectUsers,
+            HasProjectUsersWith = where.HasProjectUsersWith?
+                .Select(ManagementMapping.ToFilter)
+                .OfType<UserProjectListFilter>()
                 .ToList(),
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<ProjectListFilter>().ToList(),

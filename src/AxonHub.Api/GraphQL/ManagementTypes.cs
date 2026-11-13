@@ -331,6 +331,18 @@ public sealed class UserWhereInput
 
     public IReadOnlyList<RoleWhereInput>? HasRolesWith { get; set; }
 
+    public bool? HasChannelOverrideTemplates { get; set; }
+
+    public IReadOnlyList<ChannelOverrideTemplateWhereInput>? HasChannelOverrideTemplatesWith
+    {
+        get;
+        set;
+    }
+
+    public bool? HasOidcIdentities { get; set; }
+
+    public IReadOnlyList<OidcIdentityWhereInput>? HasOidcIdentitiesWith { get; set; }
+
     public bool? HasUserRoles { get; set; }
 
     public IReadOnlyList<UserRoleWhereInput>? HasUserRolesWith { get; set; }
@@ -1283,6 +1295,16 @@ public static class ManagementMapping
             HasRolesWith = where.HasRolesWith?
                 .Select(ToFilter)
                 .OfType<RoleListFilter>()
+                .ToList(),
+            HasChannelOverrideTemplates = where.HasChannelOverrideTemplates,
+            HasChannelOverrideTemplatesWith = where.HasChannelOverrideTemplatesWith?
+                .Select(ChannelOverrideTemplateMapping.ToFilter)
+                .OfType<ChannelOverrideTemplateListFilter>()
+                .ToList(),
+            HasOidcIdentities = where.HasOidcIdentities,
+            HasOidcIdentitiesWith = where.HasOidcIdentitiesWith?
+                .Select(SystemAdminMapping.ToFilter)
+                .OfType<OidcIdentityListFilter>()
                 .ToList(),
             HasUserRoles = where.HasUserRoles,
             HasUserRolesWith = where.HasUserRolesWith?
