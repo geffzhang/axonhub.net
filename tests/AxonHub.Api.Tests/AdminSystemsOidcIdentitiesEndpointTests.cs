@@ -588,6 +588,43 @@ public sealed class AdminSystemsOidcIdentitiesEndpointTests : IAsyncLifetime
             actual);
     }
 
+    [Fact]
+    public async Task SchemaExposesEverySystemWherePredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "SystemWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(text.Select(static suffix => "key" + suffix));
+        expected.AddRange(text.Select(static suffix => "value" + suffix));
+
+        var whereFields = data.GetProperty("where").GetProperty("inputFields")
+            .EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            whereFields);
+    }
+
     private async Task<UserRecord> SeedMemberAsync(string email, string? scopes)
     {
         var member = _gate.Users.Add(user =>

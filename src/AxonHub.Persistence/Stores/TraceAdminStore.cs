@@ -12,11 +12,10 @@ public enum TraceSortField
 }
 
 /// <summary>
-/// Subset of ent.TraceWhereInput used by the management frontend plus the
-/// pointer comparisons the admin pages can send (id, timestamps, projectID,
-/// traceID string predicates, threadID, status and and/or/not). The edge
-/// predicates (hasProjectWith, hasThreadWith, hasRequestsWith) are not ported
-/// in this slice (C189).
+/// Port of ent.TraceWhereInput: the pointer comparisons the admin pages can
+/// send (id, timestamps, projectID, traceID string predicates, threadID,
+/// status), the and/or/not combinators and the project / thread / requests edge
+/// predicates.
 /// </summary>
 public sealed record TraceListFilter
 {
@@ -121,6 +120,18 @@ public sealed record TraceListFilter
     public IReadOnlyList<string>? StatusIn { get; init; }
 
     public IReadOnlyList<string>? StatusNotIn { get; init; }
+
+    public bool? HasProject { get; init; }
+
+    public IReadOnlyList<ProjectListFilter>? HasProjectWith { get; init; }
+
+    public bool? HasThread { get; init; }
+
+    public IReadOnlyList<ThreadListFilter>? HasThreadWith { get; init; }
+
+    public bool? HasRequests { get; init; }
+
+    public IReadOnlyList<RequestListFilter>? HasRequestsWith { get; init; }
 
     public TraceListFilter? Not { get; init; }
 
@@ -539,6 +550,71 @@ public sealed class TraceAdminStore(AxonHubDbContext db) : ITraceAdminStore
 
         AppendStatusComparisons(predicates, filter.Status, filter.StatusNEQ,
             filter.StatusIn, filter.StatusNotIn, alias, args);
+
+        if (filter.HasProject is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"projects\" pj2 WHERE pj2.\"id\" = "
+                + alias + ".\"project_id\")";
+            predicates.Add(filter.HasProject.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProjectWith is { Count: > 0 } projectFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the target soft-delete predicate.
+            var projectPredicates = projectFilters
+                .Select(project => ProjectStore.BuildFilter(project, "pj2", args))
+                .Where(static project => project is not null)
+                .ToArray();
+            var projectCondition = ConnectionSql.Combine(projectPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"projects\" pj2"
+                + " WHERE pj2.\"id\" = " + alias + ".\"project_id\""
+                + (projectCondition is null ? string.Empty : " AND " + projectCondition)
+                + ")");
+        }
+
+        if (filter.HasThread is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"threads\" th2 WHERE th2.\"id\" = "
+                + alias + ".\"thread_id\")";
+            predicates.Add(filter.HasThread.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasThreadWith is { Count: > 0 } threadFilters)
+        {
+            var threadPredicates = threadFilters
+                .Select(thread => ThreadAdminStore.BuildFilter(thread, "th2", args))
+                .Where(static thread => thread is not null)
+                .ToArray();
+            var threadCondition = ConnectionSql.Combine(threadPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"threads\" th2"
+                + " WHERE th2.\"id\" = " + alias + ".\"thread_id\""
+                + (threadCondition is null ? string.Empty : " AND " + threadCondition)
+                + ")");
+        }
+
+        if (filter.HasRequests is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"requests\" rq2 WHERE rq2.\"trace_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasRequests.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasRequestsWith is { Count: > 0 } requestFilters)
+        {
+            var requestPredicates = requestFilters
+                .Select(request => RequestSegmentStore.BuildFilter(request, "rq2", args))
+                .Where(static request => request is not null)
+                .ToArray();
+            var requestCondition = ConnectionSql.Combine(requestPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"requests\" rq2"
+                + " WHERE rq2.\"trace_id\" = " + alias + ".\"id\""
+                + (requestCondition is null ? string.Empty : " AND " + requestCondition)
+                + ")");
+        }
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)
         {

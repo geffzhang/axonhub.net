@@ -13,23 +13,106 @@ public enum SystemSortField
     UpdatedAt,
 }
 
-/// <summary>
-/// Subset of <c>SystemWhereInput</c> used by the root <c>systems</c> query.
-/// The remaining entgql scalar predicates are not modelled (C269).
-/// </summary>
+/// <summary>Port of <c>SystemWhereInput</c> (every predicate group).</summary>
 public sealed record SystemListFilter
 {
     public long? Id { get; init; }
 
+    public long? IdNEQ { get; init; }
+
     public IReadOnlyList<long>? IdIn { get; init; }
+
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
 
     public string? Key { get; init; }
 
+    public string? KeyNEQ { get; init; }
+
     public IReadOnlyList<string>? KeyIn { get; init; }
+
+    public IReadOnlyList<string>? KeyNotIn { get; init; }
+
+    public string? KeyGT { get; init; }
+
+    public string? KeyGTE { get; init; }
+
+    public string? KeyLT { get; init; }
+
+    public string? KeyLTE { get; init; }
+
+    public string? KeyContains { get; init; }
 
     public string? KeyHasPrefix { get; init; }
 
+    public string? KeyHasSuffix { get; init; }
+
+    public string? KeyEqualFold { get; init; }
+
     public string? KeyContainsFold { get; init; }
+
+    public string? Value { get; init; }
+
+    public string? ValueNEQ { get; init; }
+
+    public IReadOnlyList<string>? ValueIn { get; init; }
+
+    public IReadOnlyList<string>? ValueNotIn { get; init; }
+
+    public string? ValueGT { get; init; }
+
+    public string? ValueGTE { get; init; }
+
+    public string? ValueLT { get; init; }
+
+    public string? ValueLTE { get; init; }
+
+    public string? ValueContains { get; init; }
+
+    public string? ValueHasPrefix { get; init; }
+
+    public string? ValueHasSuffix { get; init; }
+
+    public string? ValueEqualFold { get; init; }
 
     public string? ValueContainsFold { get; init; }
 
@@ -295,54 +378,87 @@ public sealed class SystemStore(AxonHubDbContext db) : ISystemStore
 
         var predicates = new List<string?>();
 
-        if (filter.Id is not null)
-        {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
-        }
+        ConnectionSql.AppendLongPredicates(
+            predicates,
+            alias,
+            "id",
+            filter.Id,
+            filter.IdNEQ,
+            filter.IdIn,
+            filter.IdNotIn,
+            filter.IdGT,
+            filter.IdGTE,
+            filter.IdLT,
+            filter.IdLTE,
+            isNil: null,
+            notNil: null,
+            args);
 
-        if (filter.IdIn is not null)
-        {
-            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
-        }
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "created_at",
+            filter.CreatedAt,
+            filter.CreatedAtNEQ,
+            filter.CreatedAtIn,
+            filter.CreatedAtNotIn,
+            filter.CreatedAtGT,
+            filter.CreatedAtGTE,
+            filter.CreatedAtLT,
+            filter.CreatedAtLTE,
+            args);
 
-        if (filter.Key is not null)
-        {
-            predicates.Add(alias + ".\"key\" = " + args.Add(filter.Key));
-        }
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "updated_at",
+            filter.UpdatedAt,
+            filter.UpdatedAtNEQ,
+            filter.UpdatedAtIn,
+            filter.UpdatedAtNotIn,
+            filter.UpdatedAtGT,
+            filter.UpdatedAtGTE,
+            filter.UpdatedAtLT,
+            filter.UpdatedAtLTE,
+            args);
 
-        if (filter.KeyIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "key", filter.KeyIn, args);
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "key",
+            filter.Key,
+            filter.KeyNEQ,
+            filter.KeyIn,
+            filter.KeyNotIn,
+            filter.KeyGT,
+            filter.KeyGTE,
+            filter.KeyLT,
+            filter.KeyLTE,
+            filter.KeyContains,
+            filter.KeyHasPrefix,
+            filter.KeyHasSuffix,
+            filter.KeyEqualFold,
+            filter.KeyContainsFold,
+            args);
 
-        if (filter.KeyHasPrefix is not null)
-        {
-            // ent.HasPrefix: LIKE value + '%', no wildcard escaping.
-            predicates.Add(
-                alias + ".\"key\" LIKE " + args.Add(filter.KeyHasPrefix + "%"));
-        }
-
-        if (filter.KeyContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "key",
-                "LIKE",
-                filter.KeyContainsFold,
-                args);
-        }
-
-        if (filter.ValueContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "value",
-                "LIKE",
-                filter.ValueContainsFold,
-                args);
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "value",
+            filter.Value,
+            filter.ValueNEQ,
+            filter.ValueIn,
+            filter.ValueNotIn,
+            filter.ValueGT,
+            filter.ValueGTE,
+            filter.ValueLT,
+            filter.ValueLTE,
+            filter.ValueContains,
+            filter.ValueHasPrefix,
+            filter.ValueHasSuffix,
+            filter.ValueEqualFold,
+            filter.ValueContainsFold,
+            args);
 
         if (filter.Not is not null)
         {

@@ -541,6 +541,75 @@ public sealed class SystemStoreTests(PostgresFixture fixture)
         Assert.Equal(Expected("retry_policy"), excluded.Nodes.Select(row => row.Key));
     }
 
+    [Fact]
+    public async Task ListAppliesTheFullScalarPredicateSet()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new SystemStore(context);
+
+        var security = NewSystem(
+            "security_settings", """{"blocked_ips":[]}""",
+            CreatedAt, UpdatedAt.AddMinutes(2));
+        var retry = NewSystem(
+            "retry_policy", """{"enabled":true}""",
+            CreatedAt.AddMinutes(1), UpdatedAt.AddMinutes(1));
+        var model = NewSystem(
+            "model_settings", """{"default_model":"gpt"}""",
+            CreatedAt.AddMinutes(2), UpdatedAt);
+        await store.CreateAsync(security);
+        await store.CreateAsync(retry);
+        await store.CreateAsync(model);
+
+        async Task<string[]> Keys(SystemListFilter where)
+        {
+            var page = await store.ListAsync(new SystemListQuery { Where = where, First = 10 });
+            return [.. page.Nodes.Select(static row => row.Key)];
+        }
+
+        Assert.Equal(
+            Expected("security_settings"),
+            await Keys(new SystemListFilter
+            {
+                IdGT = security.Id - 1,
+                IdLTE = security.Id,
+            }));
+        Assert.Equal(
+            Expected("model_settings"),
+            await Keys(new SystemListFilter { CreatedAtGT = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            Expected("retry_policy"),
+            await Keys(new SystemListFilter { UpdatedAtIn = [UpdatedAt.AddMinutes(1)] }));
+
+        Assert.Equal(
+            Expected("security_settings", "retry_policy"),
+            await Keys(new SystemListFilter { KeyGT = "model_settings" }));
+        Assert.Equal(
+            Expected("security_settings"),
+            await Keys(new SystemListFilter
+            {
+                KeyHasSuffix = "_settings",
+                KeyGT = "model_settings",
+            }));
+        Assert.Equal(
+            Expected("retry_policy"),
+            await Keys(new SystemListFilter { KeyEqualFold = "RETRY_POLICY" }));
+        Assert.Equal(
+            Expected("model_settings"),
+            await Keys(new SystemListFilter { KeyContains = "model_" }));
+
+        Assert.Equal(
+            Expected("retry_policy"),
+            await Keys(new SystemListFilter { KeyNEQ = "model_settings", ValueContains = "true" }));
+        Assert.Equal(
+            Expected("model_settings"),
+            await Keys(new SystemListFilter { ValueHasPrefix = """{"default""" }));
+        Assert.Equal(
+            Expected("security_settings", "retry_policy", "model_settings"),
+            await Keys(new SystemListFilter { KeyIn = [] }));
+    }
+
     private static T[] Expected<T>(params T[] values) => values;
 
     private static SystemRecord NewSystem() => NewSystem(

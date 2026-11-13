@@ -1900,6 +1900,25 @@ AdminSystemsOidcIdentitiesEndpointTests）。未跑 Api 全量回归。
 C176 的 where 子集缺口关闭；lint 通过；02-differences.md 已重新生成；283 条
 （205 accepted / 1 gap / 77 resolved）。
 
+§206（2026-11-13）Model / Prompt / PromptProtectionRule / DataStorage / System / Trace / Thread
+where 输入全量建模（关闭 C177 / C188 / C231 / C196 / C269 / C189 的 where 子集缺口；C231 的
+枚举严格度仍为 accepted）。
+
+参照 ent.graphql：七张输入共 115 + 97 + 70 + 67 + 53 + 60 + 52 = 514 个字段（not / and / or
+与全部边谓词在内）。§206 把七张输入全量加入 GraphQL 与对应 ListFilter，TraceAdminStore /
+ThreadAdminStore 新增 10 个边谓词字段（Trace：hasProject / hasThread / hasRequests 各 2；
+Thread：hasProject / hasTraces 各 2）。标量语义沿用 ConnectionSql（新增 AppendTimePredicates，
+时间族 8 个谓词）；边谓词 true → EXISTS、false → NOT EXISTS，hasXWith 的谓词 AND 进同一个
+EXISTS，空 With 不生成谓词，不重新应用目标软删除。DataStorage 的嵌套空谓词保留 error 文案，
+Model / Prompt / PromptProtectionRule / System 的空 Or 渲染为 FALSE，Trace / Thread 忽略空 Or。
+
+测试：持久化新增 8 例（DataStorage 2、其余各 1：全量标量族、remark / threadID 的 IsNil /
+NotNil、10 个边谓词、空 With、Or / Not 组合），七个持久化类定向运行 78 通过；Api 新增 6 个
+introspection 测试（七张输入的完整字段名集合），七个端点测试类定向运行 106 通过。未跑 Api
+全量回归。
+台账：C177 / C188 / C231 / C196 / C269 / C189 更新（where 子集闭合，其余已接受差异保留）；
+lint 通过；02-differences.md 已重新生成；283 条（205 accepted / 1 gap / 77 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

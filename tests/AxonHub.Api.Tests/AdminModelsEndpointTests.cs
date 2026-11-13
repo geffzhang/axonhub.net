@@ -524,6 +524,50 @@ public sealed class AdminModelsEndpointTests : IAsyncLifetime
             negative[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task SchemaExposesEveryModelWherePredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "ModelWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(text.Select(static suffix => "developer" + suffix));
+        expected.AddRange(text.Select(static suffix => "modelID" + suffix));
+        expected.AddRange(["type", "typeNEQ", "typeIn", "typeNotIn"]);
+        expected.AddRange(text.Select(static suffix => "name" + suffix));
+        expected.AddRange(text.Select(static suffix => "icon" + suffix));
+        expected.AddRange(text.Select(static suffix => "group" + suffix));
+        expected.AddRange(text.Select(static suffix => "remark" + suffix));
+        expected.AddRange(["remarkIsNil", "remarkNotNil"]);
+        expected.AddRange(["status", "statusNEQ", "statusIn", "statusNotIn"]);
+
+        var whereFields = data.GetProperty("where").GetProperty("inputFields")
+            .EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            whereFields);
+    }
+
     private static string Gid(long id) => "gid://axonhub/Model/" + id;
 
     private async Task<JsonElement> QueryDataAsync(string query, object? variables = null)

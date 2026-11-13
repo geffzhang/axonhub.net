@@ -13,31 +13,198 @@ public enum PromptSortField
 }
 
 /// <summary>
-/// Subset of ent.PromptWhereInput used by the management frontend
-/// (id/idIn, projectID/projectIDIn, name/nameContainsFold,
-/// status/statusIn/statusNotIn, and/or/not). Every other ent predicate
-/// (time, description, role, content and order comparisons, prefix/suffix
-/// variants) is not ported in this slice (C188).
+/// Port of ent.PromptWhereInput: every scalar predicate group and the project
+/// edge predicates.
 /// </summary>
 public sealed record PromptListFilter
 {
     public long? Id { get; init; }
 
+    public long? IdNEQ { get; init; }
+
     public IReadOnlyList<long>? IdIn { get; init; }
+
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
 
     public long? ProjectId { get; init; }
 
+    public long? ProjectIdNEQ { get; init; }
+
     public IReadOnlyList<long>? ProjectIdIn { get; init; }
+
+    public IReadOnlyList<long>? ProjectIdNotIn { get; init; }
 
     public string? Name { get; init; }
 
+    public string? NameNEQ { get; init; }
+
+    public IReadOnlyList<string>? NameIn { get; init; }
+
+    public IReadOnlyList<string>? NameNotIn { get; init; }
+
+    public string? NameGT { get; init; }
+
+    public string? NameGTE { get; init; }
+
+    public string? NameLT { get; init; }
+
+    public string? NameLTE { get; init; }
+
+    public string? NameContains { get; init; }
+
+    public string? NameHasPrefix { get; init; }
+
+    public string? NameHasSuffix { get; init; }
+
+    public string? NameEqualFold { get; init; }
+
     public string? NameContainsFold { get; init; }
 
+    public string? Description { get; init; }
+
+    public string? DescriptionNEQ { get; init; }
+
+    public IReadOnlyList<string>? DescriptionIn { get; init; }
+
+    public IReadOnlyList<string>? DescriptionNotIn { get; init; }
+
+    public string? DescriptionGT { get; init; }
+
+    public string? DescriptionGTE { get; init; }
+
+    public string? DescriptionLT { get; init; }
+
+    public string? DescriptionLTE { get; init; }
+
+    public string? DescriptionContains { get; init; }
+
+    public string? DescriptionHasPrefix { get; init; }
+
+    public string? DescriptionHasSuffix { get; init; }
+
+    public string? DescriptionEqualFold { get; init; }
+
+    public string? DescriptionContainsFold { get; init; }
+
+    public string? Role { get; init; }
+
+    public string? RoleNEQ { get; init; }
+
+    public IReadOnlyList<string>? RoleIn { get; init; }
+
+    public IReadOnlyList<string>? RoleNotIn { get; init; }
+
+    public string? RoleGT { get; init; }
+
+    public string? RoleGTE { get; init; }
+
+    public string? RoleLT { get; init; }
+
+    public string? RoleLTE { get; init; }
+
+    public string? RoleContains { get; init; }
+
+    public string? RoleHasPrefix { get; init; }
+
+    public string? RoleHasSuffix { get; init; }
+
+    public string? RoleEqualFold { get; init; }
+
+    public string? RoleContainsFold { get; init; }
+
+    public string? Content { get; init; }
+
+    public string? ContentNEQ { get; init; }
+
+    public IReadOnlyList<string>? ContentIn { get; init; }
+
+    public IReadOnlyList<string>? ContentNotIn { get; init; }
+
+    public string? ContentGT { get; init; }
+
+    public string? ContentGTE { get; init; }
+
+    public string? ContentLT { get; init; }
+
+    public string? ContentLTE { get; init; }
+
+    public string? ContentContains { get; init; }
+
+    public string? ContentHasPrefix { get; init; }
+
+    public string? ContentHasSuffix { get; init; }
+
+    public string? ContentEqualFold { get; init; }
+
+    public string? ContentContainsFold { get; init; }
+
     public string? Status { get; init; }
+
+    public string? StatusNEQ { get; init; }
 
     public IReadOnlyList<string>? StatusIn { get; init; }
 
     public IReadOnlyList<string>? StatusNotIn { get; init; }
+
+    public long? Order { get; init; }
+
+    public long? OrderNEQ { get; init; }
+
+    public IReadOnlyList<long>? OrderIn { get; init; }
+
+    public IReadOnlyList<long>? OrderNotIn { get; init; }
+
+    public long? OrderGT { get; init; }
+
+    public long? OrderGTE { get; init; }
+
+    public long? OrderLT { get; init; }
+
+    public long? OrderLTE { get; init; }
+
+    public bool? HasProject { get; init; }
+
+    public IReadOnlyList<ProjectListFilter>? HasProjectWith { get; init; }
 
     public PromptListFilter? Not { get; init; }
 
@@ -600,60 +767,186 @@ public sealed class PromptStore(AxonHubDbContext db) : IPromptStore
         }
 
         var predicates = new List<string?>();
-        if (filter.Id is not null)
+        ConnectionSql.AppendLongPredicates(
+            predicates,
+            alias,
+            "id",
+            filter.Id,
+            filter.IdNEQ,
+            filter.IdIn,
+            filter.IdNotIn,
+            filter.IdGT,
+            filter.IdGTE,
+            filter.IdLT,
+            filter.IdLTE,
+            isNil: null,
+            notNil: null,
+            args);
+
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "created_at",
+            filter.CreatedAt,
+            filter.CreatedAtNEQ,
+            filter.CreatedAtIn,
+            filter.CreatedAtNotIn,
+            filter.CreatedAtGT,
+            filter.CreatedAtGTE,
+            filter.CreatedAtLT,
+            filter.CreatedAtLTE,
+            args);
+
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "updated_at",
+            filter.UpdatedAt,
+            filter.UpdatedAtNEQ,
+            filter.UpdatedAtIn,
+            filter.UpdatedAtNotIn,
+            filter.UpdatedAtGT,
+            filter.UpdatedAtGTE,
+            filter.UpdatedAtLT,
+            filter.UpdatedAtLTE,
+            args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates,
+            alias,
+            "project_id",
+            filter.ProjectId,
+            filter.ProjectIdNEQ,
+            filter.ProjectIdIn,
+            filter.ProjectIdNotIn,
+            greaterThan: null,
+            greaterThanOrEqual: null,
+            lessThan: null,
+            lessThanOrEqual: null,
+            isNil: null,
+            notNil: null,
+            args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "name",
+            filter.Name,
+            filter.NameNEQ,
+            filter.NameIn,
+            filter.NameNotIn,
+            filter.NameGT,
+            filter.NameGTE,
+            filter.NameLT,
+            filter.NameLTE,
+            filter.NameContains,
+            filter.NameHasPrefix,
+            filter.NameHasSuffix,
+            filter.NameEqualFold,
+            filter.NameContainsFold,
+            args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "description",
+            filter.Description,
+            filter.DescriptionNEQ,
+            filter.DescriptionIn,
+            filter.DescriptionNotIn,
+            filter.DescriptionGT,
+            filter.DescriptionGTE,
+            filter.DescriptionLT,
+            filter.DescriptionLTE,
+            filter.DescriptionContains,
+            filter.DescriptionHasPrefix,
+            filter.DescriptionHasSuffix,
+            filter.DescriptionEqualFold,
+            filter.DescriptionContainsFold,
+            args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "role",
+            filter.Role,
+            filter.RoleNEQ,
+            filter.RoleIn,
+            filter.RoleNotIn,
+            filter.RoleGT,
+            filter.RoleGTE,
+            filter.RoleLT,
+            filter.RoleLTE,
+            filter.RoleContains,
+            filter.RoleHasPrefix,
+            filter.RoleHasSuffix,
+            filter.RoleEqualFold,
+            filter.RoleContainsFold,
+            args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "content",
+            filter.Content,
+            filter.ContentNEQ,
+            filter.ContentIn,
+            filter.ContentNotIn,
+            filter.ContentGT,
+            filter.ContentGTE,
+            filter.ContentLT,
+            filter.ContentLTE,
+            filter.ContentContains,
+            filter.ContentHasPrefix,
+            filter.ContentHasSuffix,
+            filter.ContentEqualFold,
+            filter.ContentContainsFold,
+            args);
+
+        ConnectionSql.AppendComparison(predicates, alias, "status", filter.Status, "=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "status", filter.StatusNEQ, "<>", args);
+        ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+        ConnectionSql.AppendStringIn(
+            predicates, alias, "status", filter.StatusNotIn, args, negate: true);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates,
+            alias,
+            "order",
+            filter.Order,
+            filter.OrderNEQ,
+            filter.OrderIn,
+            filter.OrderNotIn,
+            filter.OrderGT,
+            filter.OrderGTE,
+            filter.OrderLT,
+            filter.OrderLTE,
+            isNil: null,
+            notNil: null,
+            args);
+
+        if (filter.HasProject is not null)
         {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
+            var exists = "EXISTS (SELECT 1 FROM \"projects\" pj2 WHERE pj2.\"id\" = "
+                + alias + ".\"project_id\")";
+            predicates.Add(filter.HasProject.Value ? exists : "NOT (" + exists + ")");
         }
 
-        if (filter.IdIn is not null)
+        if (filter.HasProjectWith is { Count: > 0 } projectFilters)
         {
-            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
-        }
-
-        if (filter.ProjectId is not null)
-        {
-            predicates.Add(alias + ".\"project_id\" = " + args.Add(filter.ProjectId.Value));
-        }
-
-        if (filter.ProjectIdIn is not null)
-        {
-            ConnectionSql.AppendIdIn(predicates, alias, "project_id", filter.ProjectIdIn, args);
-        }
-
-        if (filter.Name is not null)
-        {
-            predicates.Add(alias + ".\"name\" = " + args.Add(filter.Name));
-        }
-
-        if (filter.NameContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(predicates, alias, "name", "LIKE", filter.NameContainsFold, args);
-        }
-
-        if (filter.Status is not null)
-        {
-            predicates.Add(alias + ".\"status\" = " + args.Add(filter.Status));
-        }
-
-        if (filter.StatusIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
-        }
-
-        if (filter.StatusNotIn is not null)
-        {
-            if (filter.StatusNotIn.Count == 0)
-            {
-                predicates.Add("TRUE");
-            }
-            else
-            {
-                var parameters = filter.StatusNotIn
-                    .Select(value => args.Add(value))
-                    .ToArray();
-                predicates.Add(
-                    alias + ".\"status\" NOT IN (" + string.Join(", ", parameters) + ")");
-            }
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the target soft-delete predicate.
+            var projectPredicates = projectFilters
+                .Select(project => ProjectStore.BuildFilter(project, "pj2", args))
+                .Where(static project => project is not null)
+                .ToArray();
+            var projectCondition = ConnectionSql.Combine(projectPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"projects\" pj2"
+                + " WHERE pj2.\"id\" = " + alias + ".\"project_id\""
+                + (projectCondition is null ? string.Empty : " AND " + projectCondition)
+                + ")");
         }
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)

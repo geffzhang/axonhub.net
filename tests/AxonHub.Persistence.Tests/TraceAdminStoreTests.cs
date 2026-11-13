@@ -109,6 +109,88 @@ public sealed class TraceAdminStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesProjectThreadAndRequestsEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new TraceAdminStore(context);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "projects"
+                    ("id", "created_at", "updated_at", "deleted_at", "name", "description", "status")
+                VALUES (1, @CreatedAt, @UpdatedAt, 0, 'alpha-project', '', 'active'),
+                       (2, @CreatedAt, @UpdatedAt, 99, 'beta-project', '', 'active');
+
+                INSERT INTO "threads"
+                    ("id", "created_at", "updated_at", "thread_id", "status", "project_id")
+                VALUES (1, @CreatedAt, @UpdatedAt, 'thread-a', 'active', 1),
+                       (2, @CreatedAt, @UpdatedAt, 'thread-b', 'archived', 2);
+                """,
+                new { CreatedAt, UpdatedAt });
+        }
+
+        await SeedTraceAsync(db, 1, "trace-a", projectId: 1, threadId: 1, status: "active");
+        await SeedTraceAsync(db, 2, "trace-b", projectId: 2, threadId: 2, status: "archived");
+        await SeedTraceAsync(db, 3, "trace-c", projectId: 424242, threadId: null, status: "active");
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "requests"
+                    ("created_at", "updated_at", "model_id", "request_body", "status",
+                     "project_id", "trace_id")
+                VALUES (@CreatedAt, @UpdatedAt, 'gpt-4o', '{}'::jsonb, 'completed', 1, 1);
+                """,
+                new { CreatedAt, UpdatedAt });
+        }
+
+        async Task<long[]> IdsAsync(TraceListFilter where)
+        {
+            var page = await store.ListAsync(new TraceListQuery { Where = where, First = 10 });
+            return [.. page.Nodes.Select(static row => row.Id)];
+        }
+
+        // The generated EXISTS does not re-apply the Project soft delete, and a
+        // dangling project id has no row.
+        var withProject = await IdsAsync(new TraceListFilter { HasProject = true });
+        var withoutProject = await IdsAsync(new TraceListFilter { HasProject = false });
+        var betaProject = await IdsAsync(new TraceListFilter
+        {
+            HasProjectWith = [new ProjectListFilter { Name = "beta-project" }],
+        });
+        Assert.Equal([1L, 2L], withProject);
+        Assert.Equal([3L], withoutProject);
+        Assert.Equal([2L], betaProject);
+
+        var withThread = await IdsAsync(new TraceListFilter { HasThread = true });
+        var withoutThread = await IdsAsync(new TraceListFilter { HasThread = false });
+        var archivedThread = await IdsAsync(new TraceListFilter
+        {
+            HasThreadWith = [new ThreadListFilter { Status = "archived" }],
+        });
+        Assert.Equal([1L, 2L], withThread);
+        Assert.Equal([3L], withoutThread);
+        Assert.Equal([2L], archivedThread);
+
+        var withRequests = await IdsAsync(new TraceListFilter { HasRequests = true });
+        var withoutRequests = await IdsAsync(new TraceListFilter { HasRequests = false });
+        var completedRequests = await IdsAsync(new TraceListFilter
+        {
+            HasRequestsWith = [new RequestListFilter { Status = "completed" }],
+        });
+        var emptyWith = await IdsAsync(new TraceListFilter { HasRequestsWith = [] });
+        Assert.Equal([1L], withRequests);
+        Assert.Equal([2L, 3L], withoutRequests);
+        Assert.Equal([1L], completedRequests);
+        Assert.Equal([1L, 2L, 3L], emptyWith);
+    }
+
+    [Fact]
     public async Task GetByIdHonorsProjectScope()
     {
         await using var db = new TestDatabase(fixture);

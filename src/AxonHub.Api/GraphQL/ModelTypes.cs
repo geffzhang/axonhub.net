@@ -67,32 +67,158 @@ public sealed class ModelOrder
 }
 
 /// <summary>
-/// Port of the subset of <c>ModelWhereInput</c> used by the management
-/// frontend (id/idIn, developer/developerContainsFold,
-/// modelID/modelIDContainsFold, type/typeIn/typeNotIn, name/nameContainsFold,
-/// status/statusIn/statusNotIn, remarkIsNil/remarkNotNil, and/or/not). The
-/// remaining ent predicates are not ported (C177).
+/// Port of <c>ModelWhereInput</c> (ent.graphql): every scalar predicate group
+/// exposed by entgql. The Model type has no edge predicates.
 /// </summary>
 [GraphQLName("ModelWhereInput")]
 public sealed class ModelWhereInput
 {
+    public ModelWhereInput? Not { get; set; }
+
+    public IReadOnlyList<ModelWhereInput>? And { get; set; }
+
+    public IReadOnlyList<ModelWhereInput>? Or { get; set; }
+
     [GraphQLType(typeof(IdType))]
     public string? Id { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
 
     [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
     public IReadOnlyList<string>? IdIn { get; set; }
 
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
     public string? Developer { get; set; }
+
+    public string? DeveloperNEQ { get; set; }
+
+    public IReadOnlyList<string>? DeveloperIn { get; set; }
+
+    public IReadOnlyList<string>? DeveloperNotIn { get; set; }
+
+    public string? DeveloperGT { get; set; }
+
+    public string? DeveloperGTE { get; set; }
+
+    public string? DeveloperLT { get; set; }
+
+    public string? DeveloperLTE { get; set; }
+
+    public string? DeveloperContains { get; set; }
+
+    public string? DeveloperHasPrefix { get; set; }
+
+    public string? DeveloperHasSuffix { get; set; }
+
+    public string? DeveloperEqualFold { get; set; }
 
     public string? DeveloperContainsFold { get; set; }
 
     [GraphQLName("modelID")]
     public string? ModelId { get; set; }
 
+    [GraphQLName("modelIDNEQ")]
+    public string? ModelIdNEQ { get; set; }
+
+    [GraphQLName("modelIDIn")]
+    public IReadOnlyList<string>? ModelIdIn { get; set; }
+
+    [GraphQLName("modelIDNotIn")]
+    public IReadOnlyList<string>? ModelIdNotIn { get; set; }
+
+    [GraphQLName("modelIDGT")]
+    public string? ModelIdGT { get; set; }
+
+    [GraphQLName("modelIDGTE")]
+    public string? ModelIdGTE { get; set; }
+
+    [GraphQLName("modelIDLT")]
+    public string? ModelIdLT { get; set; }
+
+    [GraphQLName("modelIDLTE")]
+    public string? ModelIdLTE { get; set; }
+
+    [GraphQLName("modelIDContains")]
+    public string? ModelIdContains { get; set; }
+
+    [GraphQLName("modelIDHasPrefix")]
+    public string? ModelIdHasPrefix { get; set; }
+
+    [GraphQLName("modelIDHasSuffix")]
+    public string? ModelIdHasSuffix { get; set; }
+
+    [GraphQLName("modelIDEqualFold")]
+    public string? ModelIdEqualFold { get; set; }
+
     [GraphQLName("modelIDContainsFold")]
     public string? ModelIdContainsFold { get; set; }
 
     public ModelTypeValue? Type { get; set; }
+
+    public ModelTypeValue? TypeNEQ { get; set; }
 
     public IReadOnlyList<ModelTypeValue>? TypeIn { get; set; }
 
@@ -100,13 +226,111 @@ public sealed class ModelWhereInput
 
     public string? Name { get; set; }
 
+    public string? NameNEQ { get; set; }
+
+    public IReadOnlyList<string>? NameIn { get; set; }
+
+    public IReadOnlyList<string>? NameNotIn { get; set; }
+
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
+    public string? NameContains { get; set; }
+
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
+
     public string? NameContainsFold { get; set; }
 
+    public string? Icon { get; set; }
+
+    public string? IconNEQ { get; set; }
+
+    public IReadOnlyList<string>? IconIn { get; set; }
+
+    public IReadOnlyList<string>? IconNotIn { get; set; }
+
+    public string? IconGT { get; set; }
+
+    public string? IconGTE { get; set; }
+
+    public string? IconLT { get; set; }
+
+    public string? IconLTE { get; set; }
+
+    public string? IconContains { get; set; }
+
+    public string? IconHasPrefix { get; set; }
+
+    public string? IconHasSuffix { get; set; }
+
+    public string? IconEqualFold { get; set; }
+
+    public string? IconContainsFold { get; set; }
+
+    public string? Group { get; set; }
+
+    public string? GroupNEQ { get; set; }
+
+    public IReadOnlyList<string>? GroupIn { get; set; }
+
+    public IReadOnlyList<string>? GroupNotIn { get; set; }
+
+    public string? GroupGT { get; set; }
+
+    public string? GroupGTE { get; set; }
+
+    public string? GroupLT { get; set; }
+
+    public string? GroupLTE { get; set; }
+
+    public string? GroupContains { get; set; }
+
+    public string? GroupHasPrefix { get; set; }
+
+    public string? GroupHasSuffix { get; set; }
+
+    public string? GroupEqualFold { get; set; }
+
+    public string? GroupContainsFold { get; set; }
+
     public ModelStatusValue? Status { get; set; }
+
+    public ModelStatusValue? StatusNEQ { get; set; }
 
     public IReadOnlyList<ModelStatusValue>? StatusIn { get; set; }
 
     public IReadOnlyList<ModelStatusValue>? StatusNotIn { get; set; }
+
+    public string? Remark { get; set; }
+
+    public string? RemarkNEQ { get; set; }
+
+    public IReadOnlyList<string>? RemarkIn { get; set; }
+
+    public IReadOnlyList<string>? RemarkNotIn { get; set; }
+
+    public string? RemarkGT { get; set; }
+
+    public string? RemarkGTE { get; set; }
+
+    public string? RemarkLT { get; set; }
+
+    public string? RemarkLTE { get; set; }
+
+    public string? RemarkContains { get; set; }
+
+    public string? RemarkHasPrefix { get; set; }
+
+    public string? RemarkHasSuffix { get; set; }
 
     /// <summary>
     /// entgql binds this nullable Boolean to a plain Go bool, so only an
@@ -120,11 +344,9 @@ public sealed class ModelWhereInput
     /// </summary>
     public bool? RemarkNotNil { get; set; }
 
-    public ModelWhereInput? Not { get; set; }
+    public string? RemarkEqualFold { get; set; }
 
-    public IReadOnlyList<ModelWhereInput>? And { get; set; }
-
-    public IReadOnlyList<ModelWhereInput>? Or { get; set; }
+    public string? RemarkContainsFold { get; set; }
 }
 
 /// <summary>Port of the <c>ModelCard</c> type (model.graphql:2-14).</summary>
@@ -588,12 +810,57 @@ public static class ModelMapping
         return new ModelListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
             Developer = where.Developer,
+            DeveloperNEQ = where.DeveloperNEQ,
+            DeveloperIn = where.DeveloperIn,
+            DeveloperNotIn = where.DeveloperNotIn,
+            DeveloperGT = where.DeveloperGT,
+            DeveloperGTE = where.DeveloperGTE,
+            DeveloperLT = where.DeveloperLT,
+            DeveloperLTE = where.DeveloperLTE,
+            DeveloperContains = where.DeveloperContains,
+            DeveloperHasPrefix = where.DeveloperHasPrefix,
+            DeveloperHasSuffix = where.DeveloperHasSuffix,
+            DeveloperEqualFold = where.DeveloperEqualFold,
             DeveloperContainsFold = where.DeveloperContainsFold,
             ModelId = where.ModelId,
+            ModelIdNEQ = where.ModelIdNEQ,
+            ModelIdIn = where.ModelIdIn,
+            ModelIdNotIn = where.ModelIdNotIn,
+            ModelIdGT = where.ModelIdGT,
+            ModelIdGTE = where.ModelIdGTE,
+            ModelIdLT = where.ModelIdLT,
+            ModelIdLTE = where.ModelIdLTE,
+            ModelIdContains = where.ModelIdContains,
+            ModelIdHasPrefix = where.ModelIdHasPrefix,
+            ModelIdHasSuffix = where.ModelIdHasSuffix,
+            ModelIdEqualFold = where.ModelIdEqualFold,
             ModelIdContainsFold = where.ModelIdContainsFold,
             Type = where.Type is null ? null : ToWireType(where.Type.Value),
+            TypeNEQ = where.TypeNEQ is null ? null : ToWireType(where.TypeNEQ.Value),
             TypeIn = where.TypeIn?
                 .Select(static type => ToWireType(type))
                 .ToList(),
@@ -601,16 +868,67 @@ public static class ModelMapping
                 .Select(static type => ToWireType(type))
                 .ToList(),
             Name = where.Name,
+            NameNEQ = where.NameNEQ,
+            NameIn = where.NameIn,
+            NameNotIn = where.NameNotIn,
+            NameGT = where.NameGT,
+            NameGTE = where.NameGTE,
+            NameLT = where.NameLT,
+            NameLTE = where.NameLTE,
+            NameContains = where.NameContains,
+            NameHasPrefix = where.NameHasPrefix,
+            NameHasSuffix = where.NameHasSuffix,
+            NameEqualFold = where.NameEqualFold,
             NameContainsFold = where.NameContainsFold,
+            Icon = where.Icon,
+            IconNEQ = where.IconNEQ,
+            IconIn = where.IconIn,
+            IconNotIn = where.IconNotIn,
+            IconGT = where.IconGT,
+            IconGTE = where.IconGTE,
+            IconLT = where.IconLT,
+            IconLTE = where.IconLTE,
+            IconContains = where.IconContains,
+            IconHasPrefix = where.IconHasPrefix,
+            IconHasSuffix = where.IconHasSuffix,
+            IconEqualFold = where.IconEqualFold,
+            IconContainsFold = where.IconContainsFold,
+            Group = where.Group,
+            GroupNEQ = where.GroupNEQ,
+            GroupIn = where.GroupIn,
+            GroupNotIn = where.GroupNotIn,
+            GroupGT = where.GroupGT,
+            GroupGTE = where.GroupGTE,
+            GroupLT = where.GroupLT,
+            GroupLTE = where.GroupLTE,
+            GroupContains = where.GroupContains,
+            GroupHasPrefix = where.GroupHasPrefix,
+            GroupHasSuffix = where.GroupHasSuffix,
+            GroupEqualFold = where.GroupEqualFold,
+            GroupContainsFold = where.GroupContainsFold,
             Status = where.Status is null ? null : ToWireStatus(where.Status.Value),
+            StatusNEQ = where.StatusNEQ is null ? null : ToWireStatus(where.StatusNEQ.Value),
             StatusIn = where.StatusIn?
                 .Select(static status => ToWireStatus(status))
                 .ToList(),
             StatusNotIn = where.StatusNotIn?
                 .Select(static status => ToWireStatus(status))
                 .ToList(),
+            Remark = where.Remark,
+            RemarkNEQ = where.RemarkNEQ,
+            RemarkIn = where.RemarkIn,
+            RemarkNotIn = where.RemarkNotIn,
+            RemarkGT = where.RemarkGT,
+            RemarkGTE = where.RemarkGTE,
+            RemarkLT = where.RemarkLT,
+            RemarkLTE = where.RemarkLTE,
+            RemarkContains = where.RemarkContains,
+            RemarkHasPrefix = where.RemarkHasPrefix,
+            RemarkHasSuffix = where.RemarkHasSuffix,
             RemarkIsNil = where.RemarkIsNil == true,
             RemarkNotNil = where.RemarkNotNil == true,
+            RemarkEqualFold = where.RemarkEqualFold,
+            RemarkContainsFold = where.RemarkContainsFold,
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<ModelListFilter>().ToList(),
             Or = where.Or?.Select(ToFilter).OfType<ModelListFilter>().ToList(),

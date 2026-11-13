@@ -78,37 +78,173 @@ public sealed class PromptProtectionRuleOrder
         PromptProtectionRuleOrderFieldValue.CreatedAt;
 }
 
-/// <summary>
-/// Port of the subset of <c>PromptProtectionRuleWhereInput</c> used by the
-/// management frontend (id/idIn, name/nameContainsFold,
-/// status/statusIn/statusNotIn, and/or/not). The remaining ent predicates
-/// (time, description and pattern comparisons, prefix/suffix variants) are not
-/// ported (C231).
-/// </summary>
+/// <summary>Port of <c>PromptProtectionRuleWhereInput</c> (axonhub.graphql).</summary>
 [GraphQLName("PromptProtectionRuleWhereInput")]
 public sealed class PromptProtectionRuleWhereInput
 {
-    [GraphQLType(typeof(IdType))]
-    public string? Id { get; set; }
-
-    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
-    public IReadOnlyList<string>? IdIn { get; set; }
-
-    public string? Name { get; set; }
-
-    public string? NameContainsFold { get; set; }
-
-    public PromptProtectionRuleStatusValue? Status { get; set; }
-
-    public IReadOnlyList<PromptProtectionRuleStatusValue>? StatusIn { get; set; }
-
-    public IReadOnlyList<PromptProtectionRuleStatusValue>? StatusNotIn { get; set; }
-
     public PromptProtectionRuleWhereInput? Not { get; set; }
 
     public IReadOnlyList<PromptProtectionRuleWhereInput>? And { get; set; }
 
     public IReadOnlyList<PromptProtectionRuleWhereInput>? Or { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? Id { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    public string? Name { get; set; }
+
+    public string? NameNEQ { get; set; }
+
+    public IReadOnlyList<string>? NameIn { get; set; }
+
+    public IReadOnlyList<string>? NameNotIn { get; set; }
+
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
+    public string? NameContains { get; set; }
+
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
+
+    public string? NameContainsFold { get; set; }
+
+    public string? Description { get; set; }
+
+    public string? DescriptionNEQ { get; set; }
+
+    public IReadOnlyList<string>? DescriptionIn { get; set; }
+
+    public IReadOnlyList<string>? DescriptionNotIn { get; set; }
+
+    public string? DescriptionGT { get; set; }
+
+    public string? DescriptionGTE { get; set; }
+
+    public string? DescriptionLT { get; set; }
+
+    public string? DescriptionLTE { get; set; }
+
+    public string? DescriptionContains { get; set; }
+
+    public string? DescriptionHasPrefix { get; set; }
+
+    public string? DescriptionHasSuffix { get; set; }
+
+    public string? DescriptionEqualFold { get; set; }
+
+    public string? DescriptionContainsFold { get; set; }
+
+    public string? Pattern { get; set; }
+
+    public string? PatternNEQ { get; set; }
+
+    public IReadOnlyList<string>? PatternIn { get; set; }
+
+    public IReadOnlyList<string>? PatternNotIn { get; set; }
+
+    public string? PatternGT { get; set; }
+
+    public string? PatternGTE { get; set; }
+
+    public string? PatternLT { get; set; }
+
+    public string? PatternLTE { get; set; }
+
+    public string? PatternContains { get; set; }
+
+    public string? PatternHasPrefix { get; set; }
+
+    public string? PatternHasSuffix { get; set; }
+
+    public string? PatternEqualFold { get; set; }
+
+    public string? PatternContainsFold { get; set; }
+
+    public PromptProtectionRuleStatusValue? Status { get; set; }
+
+    public PromptProtectionRuleStatusValue? StatusNEQ { get; set; }
+
+    public IReadOnlyList<PromptProtectionRuleStatusValue>? StatusIn { get; set; }
+
+    public IReadOnlyList<PromptProtectionRuleStatusValue>? StatusNotIn { get; set; }
 }
 
 /// <summary>Port of the <c>PromptProtectionSettings</c> type (prompt_protection_rule.graphql).</summary>
@@ -268,10 +404,72 @@ public static class PromptProtectionRuleMapping
         return new PromptProtectionRuleListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
             Name = where.Name,
+            NameNEQ = where.NameNEQ,
+            NameIn = where.NameIn,
+            NameNotIn = where.NameNotIn,
+            NameGT = where.NameGT,
+            NameGTE = where.NameGTE,
+            NameLT = where.NameLT,
+            NameLTE = where.NameLTE,
+            NameContains = where.NameContains,
+            NameHasPrefix = where.NameHasPrefix,
+            NameHasSuffix = where.NameHasSuffix,
+            NameEqualFold = where.NameEqualFold,
             NameContainsFold = where.NameContainsFold,
+            Description = where.Description,
+            DescriptionNEQ = where.DescriptionNEQ,
+            DescriptionIn = where.DescriptionIn,
+            DescriptionNotIn = where.DescriptionNotIn,
+            DescriptionGT = where.DescriptionGT,
+            DescriptionGTE = where.DescriptionGTE,
+            DescriptionLT = where.DescriptionLT,
+            DescriptionLTE = where.DescriptionLTE,
+            DescriptionContains = where.DescriptionContains,
+            DescriptionHasPrefix = where.DescriptionHasPrefix,
+            DescriptionHasSuffix = where.DescriptionHasSuffix,
+            DescriptionEqualFold = where.DescriptionEqualFold,
+            DescriptionContainsFold = where.DescriptionContainsFold,
+            Pattern = where.Pattern,
+            PatternNEQ = where.PatternNEQ,
+            PatternIn = where.PatternIn,
+            PatternNotIn = where.PatternNotIn,
+            PatternGT = where.PatternGT,
+            PatternGTE = where.PatternGTE,
+            PatternLT = where.PatternLT,
+            PatternLTE = where.PatternLTE,
+            PatternContains = where.PatternContains,
+            PatternHasPrefix = where.PatternHasPrefix,
+            PatternHasSuffix = where.PatternHasSuffix,
+            PatternEqualFold = where.PatternEqualFold,
+            PatternContainsFold = where.PatternContainsFold,
             Status = where.Status is null ? null : ToWireStatus(where.Status.Value),
+            StatusNEQ = where.StatusNEQ is null ? null : ToWireStatus(where.StatusNEQ.Value),
             StatusIn = where.StatusIn?
                 .Select(static status => ToWireStatus(status))
                 .ToList(),

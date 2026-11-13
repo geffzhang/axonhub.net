@@ -27,34 +27,138 @@ public sealed class SystemOrder
     public SystemOrderFieldValue Field { get; set; }
 }
 
-/// <summary>
-/// Port of the subset of <c>SystemWhereInput</c> used by the root
-/// <c>systems</c> query (id, key and value filters). The remaining entgql
-/// scalar predicates are not modelled (C269).
-/// </summary>
+/// <summary>Port of <c>SystemWhereInput</c> (axonhub.graphql).</summary>
 public sealed class SystemWhereInput
 {
-    [GraphQLType(typeof(IdType))]
-    public string? Id { get; set; }
-
-    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
-    public IReadOnlyList<string>? IdIn { get; set; }
-
-    public string? Key { get; set; }
-
-    public IReadOnlyList<string>? KeyIn { get; set; }
-
-    public string? KeyHasPrefix { get; set; }
-
-    public string? KeyContainsFold { get; set; }
-
-    public string? ValueContainsFold { get; set; }
-
     public SystemWhereInput? Not { get; set; }
 
     public IReadOnlyList<SystemWhereInput>? And { get; set; }
 
     public IReadOnlyList<SystemWhereInput>? Or { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? Id { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    public string? Key { get; set; }
+
+    public string? KeyNEQ { get; set; }
+
+    public IReadOnlyList<string>? KeyIn { get; set; }
+
+    public IReadOnlyList<string>? KeyNotIn { get; set; }
+
+    public string? KeyGT { get; set; }
+
+    public string? KeyGTE { get; set; }
+
+    public string? KeyLT { get; set; }
+
+    public string? KeyLTE { get; set; }
+
+    public string? KeyContains { get; set; }
+
+    public string? KeyHasPrefix { get; set; }
+
+    public string? KeyHasSuffix { get; set; }
+
+    public string? KeyEqualFold { get; set; }
+
+    public string? KeyContainsFold { get; set; }
+
+    public string? Value { get; set; }
+
+    public string? ValueNEQ { get; set; }
+
+    public IReadOnlyList<string>? ValueIn { get; set; }
+
+    public IReadOnlyList<string>? ValueNotIn { get; set; }
+
+    public string? ValueGT { get; set; }
+
+    public string? ValueGTE { get; set; }
+
+    public string? ValueLT { get; set; }
+
+    public string? ValueLTE { get; set; }
+
+    public string? ValueContains { get; set; }
+
+    public string? ValueHasPrefix { get; set; }
+
+    public string? ValueHasSuffix { get; set; }
+
+    public string? ValueEqualFold { get; set; }
+
+    public string? ValueContainsFold { get; set; }
 }
 
 /// <summary>Port of the entgql <c>System</c> type (ent.graphql:5616-5624).</summary>
@@ -540,11 +644,54 @@ public static class SystemAdminMapping
         return new SystemListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
             Key = where.Key,
+            KeyNEQ = where.KeyNEQ,
             KeyIn = where.KeyIn,
+            KeyNotIn = where.KeyNotIn,
+            KeyGT = where.KeyGT,
+            KeyGTE = where.KeyGTE,
+            KeyLT = where.KeyLT,
+            KeyLTE = where.KeyLTE,
+            KeyContains = where.KeyContains,
             KeyHasPrefix = where.KeyHasPrefix,
+            KeyHasSuffix = where.KeyHasSuffix,
+            KeyEqualFold = where.KeyEqualFold,
             KeyContainsFold = where.KeyContainsFold,
+            Value = where.Value,
+            ValueNEQ = where.ValueNEQ,
+            ValueIn = where.ValueIn,
+            ValueNotIn = where.ValueNotIn,
+            ValueGT = where.ValueGT,
+            ValueGTE = where.ValueGTE,
+            ValueLT = where.ValueLT,
+            ValueLTE = where.ValueLTE,
+            ValueContains = where.ValueContains,
+            ValueHasPrefix = where.ValueHasPrefix,
+            ValueHasSuffix = where.ValueHasSuffix,
+            ValueEqualFold = where.ValueEqualFold,
             ValueContainsFold = where.ValueContainsFold,
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<SystemListFilter>().ToList(),

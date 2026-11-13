@@ -12,11 +12,8 @@ public enum DataStorageSortField
 }
 
 /// <summary>
-/// Subset of ent.DataStorageWhereInput used by the management frontend
-/// (nameContainsFold, typeIn, statusIn) plus the id/name/primary/type/status
-/// equality and collection predicates and the and/or/not operators. The time,
-/// description and string comparison variants and the requests/executions edge
-/// predicates are not exposed in this slice (C196).
+/// Port of ent.DataStorageWhereInput: every scalar predicate group and the
+/// requests / executions edge predicates.
 /// </summary>
 public sealed record DataStorageListFilter
 {
@@ -28,6 +25,46 @@ public sealed record DataStorageListFilter
 
     public IReadOnlyList<long>? IdNotIn { get; init; }
 
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
+
     public string? Name { get; init; }
 
     public string? NameNEQ { get; init; }
@@ -36,7 +73,49 @@ public sealed record DataStorageListFilter
 
     public IReadOnlyList<string>? NameNotIn { get; init; }
 
+    public string? NameGT { get; init; }
+
+    public string? NameGTE { get; init; }
+
+    public string? NameLT { get; init; }
+
+    public string? NameLTE { get; init; }
+
+    public string? NameContains { get; init; }
+
+    public string? NameHasPrefix { get; init; }
+
+    public string? NameHasSuffix { get; init; }
+
+    public string? NameEqualFold { get; init; }
+
     public string? NameContainsFold { get; init; }
+
+    public string? Description { get; init; }
+
+    public string? DescriptionNEQ { get; init; }
+
+    public IReadOnlyList<string>? DescriptionIn { get; init; }
+
+    public IReadOnlyList<string>? DescriptionNotIn { get; init; }
+
+    public string? DescriptionGT { get; init; }
+
+    public string? DescriptionGTE { get; init; }
+
+    public string? DescriptionLT { get; init; }
+
+    public string? DescriptionLTE { get; init; }
+
+    public string? DescriptionContains { get; init; }
+
+    public string? DescriptionHasPrefix { get; init; }
+
+    public string? DescriptionHasSuffix { get; init; }
+
+    public string? DescriptionEqualFold { get; init; }
+
+    public string? DescriptionContainsFold { get; init; }
 
     public bool? Primary { get; init; }
 
@@ -57,6 +136,14 @@ public sealed record DataStorageListFilter
     public IReadOnlyList<string>? StatusIn { get; init; }
 
     public IReadOnlyList<string>? StatusNotIn { get; init; }
+
+    public bool? HasRequests { get; init; }
+
+    public IReadOnlyList<RequestListFilter>? HasRequestsWith { get; init; }
+
+    public bool? HasExecutions { get; init; }
+
+    public IReadOnlyList<RequestExecutionListFilter>? HasExecutionsWith { get; init; }
 
     public DataStorageListFilter? Not { get; init; }
 
@@ -491,130 +578,150 @@ public sealed class DataStorageStore(AxonHubDbContext db) : IDataStorageStore
             }
         }
 
-        if (filter.Id is not null)
-        {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
-        }
+        ConnectionSql.AppendLongPredicates(
+            predicates,
+            alias,
+            "id",
+            filter.Id,
+            filter.IdNEQ,
+            filter.IdIn,
+            filter.IdNotIn,
+            filter.IdGT,
+            filter.IdGTE,
+            filter.IdLT,
+            filter.IdLTE,
+            isNil: null,
+            notNil: null,
+            args);
 
-        if (filter.IdNEQ is not null)
-        {
-            predicates.Add(alias + ".\"id\" <> " + args.Add(filter.IdNEQ.Value));
-        }
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "created_at",
+            filter.CreatedAt,
+            filter.CreatedAtNEQ,
+            filter.CreatedAtIn,
+            filter.CreatedAtNotIn,
+            filter.CreatedAtGT,
+            filter.CreatedAtGTE,
+            filter.CreatedAtLT,
+            filter.CreatedAtLTE,
+            args);
 
-        AppendIdIn(predicates, alias, "id", filter.IdIn, args, negate: false);
-        AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "updated_at",
+            filter.UpdatedAt,
+            filter.UpdatedAtNEQ,
+            filter.UpdatedAtIn,
+            filter.UpdatedAtNotIn,
+            filter.UpdatedAtGT,
+            filter.UpdatedAtGTE,
+            filter.UpdatedAtLT,
+            filter.UpdatedAtLTE,
+            args);
 
-        if (filter.Name is not null)
-        {
-            predicates.Add(alias + ".\"name\" = " + args.Add(filter.Name));
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "name",
+            filter.Name,
+            filter.NameNEQ,
+            filter.NameIn,
+            filter.NameNotIn,
+            filter.NameGT,
+            filter.NameGTE,
+            filter.NameLT,
+            filter.NameLTE,
+            filter.NameContains,
+            filter.NameHasPrefix,
+            filter.NameHasSuffix,
+            filter.NameEqualFold,
+            filter.NameContainsFold,
+            args);
 
-        if (filter.NameNEQ is not null)
-        {
-            predicates.Add(alias + ".\"name\" <> " + args.Add(filter.NameNEQ));
-        }
-
-        AppendStringIn(predicates, alias, "name", filter.NameIn, args, negate: false);
-        AppendStringIn(predicates, alias, "name", filter.NameNotIn, args, negate: true);
-
-        if (filter.NameContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "name",
-                "LIKE",
-                filter.NameContainsFold,
-                args);
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "description",
+            filter.Description,
+            filter.DescriptionNEQ,
+            filter.DescriptionIn,
+            filter.DescriptionNotIn,
+            filter.DescriptionGT,
+            filter.DescriptionGTE,
+            filter.DescriptionLT,
+            filter.DescriptionLTE,
+            filter.DescriptionContains,
+            filter.DescriptionHasPrefix,
+            filter.DescriptionHasSuffix,
+            filter.DescriptionEqualFold,
+            filter.DescriptionContainsFold,
+            args);
 
         // GraphQL Boolean maps to *bool: both true and false install a predicate.
-        if (filter.Primary is not null)
+        ConnectionSql.AppendBoolPredicates(
+            predicates, alias, "primary", filter.Primary, filter.PrimaryNEQ, args);
+
+        ConnectionSql.AppendComparison(predicates, alias, "type", filter.Type, "=", args);
+        ConnectionSql.AppendComparison(predicates, alias, "type", filter.TypeNEQ, "<>", args);
+        ConnectionSql.AppendStringIn(predicates, alias, "type", filter.TypeIn, args);
+        ConnectionSql.AppendStringIn(predicates, alias, "type", filter.TypeNotIn, args, negate: true);
+
+        ConnectionSql.AppendComparison(predicates, alias, "status", filter.Status, "=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "status", filter.StatusNEQ, "<>", args);
+        ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+        ConnectionSql.AppendStringIn(
+            predicates, alias, "status", filter.StatusNotIn, args, negate: true);
+
+        if (filter.HasRequests is not null)
         {
-            predicates.Add(alias + ".\"primary\" = " + args.Add(filter.Primary.Value));
+            var exists = "EXISTS (SELECT 1 FROM \"requests\" rq2 WHERE rq2.\"data_storage_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasRequests.Value ? exists : "NOT (" + exists + ")");
         }
 
-        if (filter.PrimaryNEQ is not null)
+        if (filter.HasRequestsWith is { Count: > 0 } requestFilters)
         {
-            predicates.Add(alias + ".\"primary\" <> " + args.Add(filter.PrimaryNEQ.Value));
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the target soft-delete predicate.
+            var requestPredicates = requestFilters
+                .Select(request => RequestSegmentStore.BuildFilter(request, "rq2", args))
+                .Where(static request => request is not null)
+                .ToArray();
+            var requestCondition = ConnectionSql.Combine(requestPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"requests\" rq2"
+                + " WHERE rq2.\"data_storage_id\" = " + alias + ".\"id\""
+                + (requestCondition is null ? string.Empty : " AND " + requestCondition)
+                + ")");
         }
 
-        if (filter.Type is not null)
+        if (filter.HasExecutions is not null)
         {
-            predicates.Add(alias + ".\"type\" = " + args.Add(filter.Type));
+            var exists =
+                "EXISTS (SELECT 1 FROM \"request_executions\" re2"
+                + " WHERE re2.\"data_storage_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasExecutions.Value ? exists : "NOT (" + exists + ")");
         }
 
-        if (filter.TypeNEQ is not null)
+        if (filter.HasExecutionsWith is { Count: > 0 } executionFilters)
         {
-            predicates.Add(alias + ".\"type\" <> " + args.Add(filter.TypeNEQ));
+            var executionPredicates = executionFilters
+                .Select(execution => RequestExecutionStore.BuildFilter(execution, "re2", args))
+                .Where(static execution => execution is not null)
+                .ToArray();
+            var executionCondition = ConnectionSql.Combine(executionPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"request_executions\" re2"
+                + " WHERE re2.\"data_storage_id\" = " + alias + ".\"id\""
+                + (executionCondition is null ? string.Empty : " AND " + executionCondition)
+                + ")");
         }
-
-        AppendStringIn(predicates, alias, "type", filter.TypeIn, args, negate: false);
-        AppendStringIn(predicates, alias, "type", filter.TypeNotIn, args, negate: true);
-
-        if (filter.Status is not null)
-        {
-            predicates.Add(alias + ".\"status\" = " + args.Add(filter.Status));
-        }
-
-        if (filter.StatusNEQ is not null)
-        {
-            predicates.Add(alias + ".\"status\" <> " + args.Add(filter.StatusNEQ));
-        }
-
-        AppendStringIn(predicates, alias, "status", filter.StatusIn, args, negate: false);
-        AppendStringIn(predicates, alias, "status", filter.StatusNotIn, args, negate: true);
 
         return ConnectionSql.Combine(predicates);
-    }
-
-    /// <summary>Ent skips an empty collection predicate instead of matching nothing.</summary>
-    private static void AppendIdIn(
-        List<string?> predicates,
-        string alias,
-        string column,
-        IReadOnlyList<long>? values,
-        SqlArguments args,
-        bool negate)
-    {
-        if (values is null || values.Count == 0)
-        {
-            return;
-        }
-
-        var parameters = new string[values.Count];
-        for (var i = 0; i < values.Count; i++)
-        {
-            parameters[i] = args.Add(values[i]);
-        }
-
-        predicates.Add(
-            alias + ".\"" + column + "\" " + (negate ? "NOT IN" : "IN")
-            + " (" + string.Join(", ", parameters) + ")");
-    }
-
-    private static void AppendStringIn(
-        List<string?> predicates,
-        string alias,
-        string column,
-        IReadOnlyList<string>? values,
-        SqlArguments args,
-        bool negate)
-    {
-        if (values is null || values.Count == 0)
-        {
-            return;
-        }
-
-        var parameters = new string[values.Count];
-        for (var i = 0; i < values.Count; i++)
-        {
-            parameters[i] = args.Add(values[i]);
-        }
-
-        predicates.Add(
-            alias + ".\"" + column + "\" " + (negate ? "NOT IN" : "IN")
-            + " (" + string.Join(", ", parameters) + ")");
     }
 
     /// <summary>

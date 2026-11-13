@@ -69,45 +69,235 @@ public sealed class PromptOrder
     public PromptOrderFieldValue Field { get; set; } = PromptOrderFieldValue.CreatedAt;
 }
 
-/// <summary>
-/// Port of the subset of <c>PromptWhereInput</c> used by the management
-/// frontend (id/idIn, projectID/projectIDIn, name/nameContainsFold,
-/// status/statusIn/statusNotIn, and/or/not). The remaining ent predicates
-/// (time, description, role, content and order comparisons, prefix/suffix
-/// variants) are not ported (C188).
-/// </summary>
+/// <summary>Port of <c>PromptWhereInput</c> (axonhub.graphql).</summary>
 [GraphQLName("PromptWhereInput")]
 public sealed class PromptWhereInput
 {
-    [GraphQLType(typeof(IdType))]
-    public string? Id { get; set; }
-
-    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
-    public IReadOnlyList<string>? IdIn { get; set; }
-
-    [GraphQLName("projectID")]
-    [GraphQLType(typeof(IdType))]
-    public string? ProjectId { get; set; }
-
-    [GraphQLName("projectIDIn")]
-    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
-    public IReadOnlyList<string>? ProjectIdIn { get; set; }
-
-    public string? Name { get; set; }
-
-    public string? NameContainsFold { get; set; }
-
-    public PromptStatusValue? Status { get; set; }
-
-    public IReadOnlyList<PromptStatusValue>? StatusIn { get; set; }
-
-    public IReadOnlyList<PromptStatusValue>? StatusNotIn { get; set; }
-
     public PromptWhereInput? Not { get; set; }
 
     public IReadOnlyList<PromptWhereInput>? And { get; set; }
 
     public IReadOnlyList<PromptWhereInput>? Or { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? Id { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    [GraphQLName("projectID")]
+    [GraphQLType(typeof(IdType))]
+    public string? ProjectId { get; set; }
+
+    [GraphQLName("projectIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? ProjectIdNEQ { get; set; }
+
+    [GraphQLName("projectIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ProjectIdIn { get; set; }
+
+    [GraphQLName("projectIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ProjectIdNotIn { get; set; }
+
+    public string? Name { get; set; }
+
+    public string? NameNEQ { get; set; }
+
+    public IReadOnlyList<string>? NameIn { get; set; }
+
+    public IReadOnlyList<string>? NameNotIn { get; set; }
+
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
+    public string? NameContains { get; set; }
+
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
+
+    public string? NameContainsFold { get; set; }
+
+    public string? Description { get; set; }
+
+    public string? DescriptionNEQ { get; set; }
+
+    public IReadOnlyList<string>? DescriptionIn { get; set; }
+
+    public IReadOnlyList<string>? DescriptionNotIn { get; set; }
+
+    public string? DescriptionGT { get; set; }
+
+    public string? DescriptionGTE { get; set; }
+
+    public string? DescriptionLT { get; set; }
+
+    public string? DescriptionLTE { get; set; }
+
+    public string? DescriptionContains { get; set; }
+
+    public string? DescriptionHasPrefix { get; set; }
+
+    public string? DescriptionHasSuffix { get; set; }
+
+    public string? DescriptionEqualFold { get; set; }
+
+    public string? DescriptionContainsFold { get; set; }
+
+    public string? Role { get; set; }
+
+    public string? RoleNEQ { get; set; }
+
+    public IReadOnlyList<string>? RoleIn { get; set; }
+
+    public IReadOnlyList<string>? RoleNotIn { get; set; }
+
+    public string? RoleGT { get; set; }
+
+    public string? RoleGTE { get; set; }
+
+    public string? RoleLT { get; set; }
+
+    public string? RoleLTE { get; set; }
+
+    public string? RoleContains { get; set; }
+
+    public string? RoleHasPrefix { get; set; }
+
+    public string? RoleHasSuffix { get; set; }
+
+    public string? RoleEqualFold { get; set; }
+
+    public string? RoleContainsFold { get; set; }
+
+    public string? Content { get; set; }
+
+    public string? ContentNEQ { get; set; }
+
+    public IReadOnlyList<string>? ContentIn { get; set; }
+
+    public IReadOnlyList<string>? ContentNotIn { get; set; }
+
+    public string? ContentGT { get; set; }
+
+    public string? ContentGTE { get; set; }
+
+    public string? ContentLT { get; set; }
+
+    public string? ContentLTE { get; set; }
+
+    public string? ContentContains { get; set; }
+
+    public string? ContentHasPrefix { get; set; }
+
+    public string? ContentHasSuffix { get; set; }
+
+    public string? ContentEqualFold { get; set; }
+
+    public string? ContentContainsFold { get; set; }
+
+    public PromptStatusValue? Status { get; set; }
+
+    public PromptStatusValue? StatusNEQ { get; set; }
+
+    public IReadOnlyList<PromptStatusValue>? StatusIn { get; set; }
+
+    public IReadOnlyList<PromptStatusValue>? StatusNotIn { get; set; }
+
+    public int? Order { get; set; }
+
+    public int? OrderNEQ { get; set; }
+
+    public IReadOnlyList<int>? OrderIn { get; set; }
+
+    public IReadOnlyList<int>? OrderNotIn { get; set; }
+
+    public int? OrderGT { get; set; }
+
+    public int? OrderGTE { get; set; }
+
+    public int? OrderLT { get; set; }
+
+    public int? OrderLTE { get; set; }
+
+    public bool? HasProject { get; set; }
+
+    public IReadOnlyList<ProjectWhereInput>? HasProjectWith { get; set; }
 }
 
 /// <summary>Port of the <c>PromptAction</c> type (prompt.graphql:12-14).</summary>
@@ -322,21 +512,115 @@ public static class PromptMapping
         return new PromptListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
             ProjectId = where.ProjectId is null
                 ? null
                 : GidValue.Parse(where.ProjectId).Id,
+            ProjectIdNEQ = where.ProjectIdNEQ is null
+                ? null
+                : GidValue.Parse(where.ProjectIdNEQ).Id,
             ProjectIdIn = where.ProjectIdIn?
                 .Select(static id => GidValue.Parse(id).Id)
                 .ToList(),
+            ProjectIdNotIn = where.ProjectIdNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
             Name = where.Name,
+            NameNEQ = where.NameNEQ,
+            NameIn = where.NameIn,
+            NameNotIn = where.NameNotIn,
+            NameGT = where.NameGT,
+            NameGTE = where.NameGTE,
+            NameLT = where.NameLT,
+            NameLTE = where.NameLTE,
+            NameContains = where.NameContains,
+            NameHasPrefix = where.NameHasPrefix,
+            NameHasSuffix = where.NameHasSuffix,
+            NameEqualFold = where.NameEqualFold,
             NameContainsFold = where.NameContainsFold,
+            Description = where.Description,
+            DescriptionNEQ = where.DescriptionNEQ,
+            DescriptionIn = where.DescriptionIn,
+            DescriptionNotIn = where.DescriptionNotIn,
+            DescriptionGT = where.DescriptionGT,
+            DescriptionGTE = where.DescriptionGTE,
+            DescriptionLT = where.DescriptionLT,
+            DescriptionLTE = where.DescriptionLTE,
+            DescriptionContains = where.DescriptionContains,
+            DescriptionHasPrefix = where.DescriptionHasPrefix,
+            DescriptionHasSuffix = where.DescriptionHasSuffix,
+            DescriptionEqualFold = where.DescriptionEqualFold,
+            DescriptionContainsFold = where.DescriptionContainsFold,
+            Role = where.Role,
+            RoleNEQ = where.RoleNEQ,
+            RoleIn = where.RoleIn,
+            RoleNotIn = where.RoleNotIn,
+            RoleGT = where.RoleGT,
+            RoleGTE = where.RoleGTE,
+            RoleLT = where.RoleLT,
+            RoleLTE = where.RoleLTE,
+            RoleContains = where.RoleContains,
+            RoleHasPrefix = where.RoleHasPrefix,
+            RoleHasSuffix = where.RoleHasSuffix,
+            RoleEqualFold = where.RoleEqualFold,
+            RoleContainsFold = where.RoleContainsFold,
+            Content = where.Content,
+            ContentNEQ = where.ContentNEQ,
+            ContentIn = where.ContentIn,
+            ContentNotIn = where.ContentNotIn,
+            ContentGT = where.ContentGT,
+            ContentGTE = where.ContentGTE,
+            ContentLT = where.ContentLT,
+            ContentLTE = where.ContentLTE,
+            ContentContains = where.ContentContains,
+            ContentHasPrefix = where.ContentHasPrefix,
+            ContentHasSuffix = where.ContentHasSuffix,
+            ContentEqualFold = where.ContentEqualFold,
+            ContentContainsFold = where.ContentContainsFold,
             Status = where.Status is null ? null : ToWireStatus(where.Status.Value),
+            StatusNEQ = where.StatusNEQ is null ? null : ToWireStatus(where.StatusNEQ.Value),
             StatusIn = where.StatusIn?
                 .Select(static status => ToWireStatus(status))
                 .ToList(),
             StatusNotIn = where.StatusNotIn?
                 .Select(static status => ToWireStatus(status))
+                .ToList(),
+            Order = where.Order,
+            OrderNEQ = where.OrderNEQ,
+            OrderIn = where.OrderIn?.Select(static order => (long)order).ToList(),
+            OrderNotIn = where.OrderNotIn?.Select(static order => (long)order).ToList(),
+            OrderGT = where.OrderGT,
+            OrderGTE = where.OrderGTE,
+            OrderLT = where.OrderLT,
+            OrderLTE = where.OrderLTE,
+            HasProject = where.HasProject,
+            HasProjectWith = where.HasProjectWith?
+                .Select(ProjectMapping.ToFilter)
+                .OfType<ProjectListFilter>()
                 .ToList(),
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<PromptListFilter>().ToList(),

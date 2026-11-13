@@ -12,23 +12,138 @@ public enum PromptProtectionRuleSortField
     Name,
 }
 
-/// <summary>
-/// Subset of ent.PromptProtectionRuleWhereInput used by the management frontend
-/// (id/idIn, name/nameContainsFold, status/statusIn/statusNotIn, and/or/not).
-/// Every other ent predicate (time, description and pattern comparisons,
-/// prefix/suffix variants) is not ported in this slice (C231).
-/// </summary>
+/// <summary>Port of ent.PromptProtectionRuleWhereInput (every predicate group).</summary>
 public sealed record PromptProtectionRuleListFilter
 {
     public long? Id { get; init; }
 
+    public long? IdNEQ { get; init; }
+
     public IReadOnlyList<long>? IdIn { get; init; }
+
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
 
     public string? Name { get; init; }
 
+    public string? NameNEQ { get; init; }
+
+    public IReadOnlyList<string>? NameIn { get; init; }
+
+    public IReadOnlyList<string>? NameNotIn { get; init; }
+
+    public string? NameGT { get; init; }
+
+    public string? NameGTE { get; init; }
+
+    public string? NameLT { get; init; }
+
+    public string? NameLTE { get; init; }
+
+    public string? NameContains { get; init; }
+
+    public string? NameHasPrefix { get; init; }
+
+    public string? NameHasSuffix { get; init; }
+
+    public string? NameEqualFold { get; init; }
+
     public string? NameContainsFold { get; init; }
 
+    public string? Description { get; init; }
+
+    public string? DescriptionNEQ { get; init; }
+
+    public IReadOnlyList<string>? DescriptionIn { get; init; }
+
+    public IReadOnlyList<string>? DescriptionNotIn { get; init; }
+
+    public string? DescriptionGT { get; init; }
+
+    public string? DescriptionGTE { get; init; }
+
+    public string? DescriptionLT { get; init; }
+
+    public string? DescriptionLTE { get; init; }
+
+    public string? DescriptionContains { get; init; }
+
+    public string? DescriptionHasPrefix { get; init; }
+
+    public string? DescriptionHasSuffix { get; init; }
+
+    public string? DescriptionEqualFold { get; init; }
+
+    public string? DescriptionContainsFold { get; init; }
+
+    public string? Pattern { get; init; }
+
+    public string? PatternNEQ { get; init; }
+
+    public IReadOnlyList<string>? PatternIn { get; init; }
+
+    public IReadOnlyList<string>? PatternNotIn { get; init; }
+
+    public string? PatternGT { get; init; }
+
+    public string? PatternGTE { get; init; }
+
+    public string? PatternLT { get; init; }
+
+    public string? PatternLTE { get; init; }
+
+    public string? PatternContains { get; init; }
+
+    public string? PatternHasPrefix { get; init; }
+
+    public string? PatternHasSuffix { get; init; }
+
+    public string? PatternEqualFold { get; init; }
+
+    public string? PatternContainsFold { get; init; }
+
     public string? Status { get; init; }
+
+    public string? StatusNEQ { get; init; }
 
     public IReadOnlyList<string>? StatusIn { get; init; }
 
@@ -545,57 +660,113 @@ public sealed class PromptProtectionRuleStore(AxonHubDbContext db)
         }
 
         var predicates = new List<string?>();
-        if (filter.Id is not null)
-        {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
-        }
+        ConnectionSql.AppendLongPredicates(
+            predicates,
+            alias,
+            "id",
+            filter.Id,
+            filter.IdNEQ,
+            filter.IdIn,
+            filter.IdNotIn,
+            filter.IdGT,
+            filter.IdGTE,
+            filter.IdLT,
+            filter.IdLTE,
+            isNil: null,
+            notNil: null,
+            args);
 
-        if (filter.IdIn is not null)
-        {
-            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
-        }
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "created_at",
+            filter.CreatedAt,
+            filter.CreatedAtNEQ,
+            filter.CreatedAtIn,
+            filter.CreatedAtNotIn,
+            filter.CreatedAtGT,
+            filter.CreatedAtGTE,
+            filter.CreatedAtLT,
+            filter.CreatedAtLTE,
+            args);
 
-        if (filter.Name is not null)
-        {
-            predicates.Add(alias + ".\"name\" = " + args.Add(filter.Name));
-        }
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "updated_at",
+            filter.UpdatedAt,
+            filter.UpdatedAtNEQ,
+            filter.UpdatedAtIn,
+            filter.UpdatedAtNotIn,
+            filter.UpdatedAtGT,
+            filter.UpdatedAtGTE,
+            filter.UpdatedAtLT,
+            filter.UpdatedAtLTE,
+            args);
 
-        if (filter.NameContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "name",
-                "LIKE",
-                filter.NameContainsFold,
-                args);
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "name",
+            filter.Name,
+            filter.NameNEQ,
+            filter.NameIn,
+            filter.NameNotIn,
+            filter.NameGT,
+            filter.NameGTE,
+            filter.NameLT,
+            filter.NameLTE,
+            filter.NameContains,
+            filter.NameHasPrefix,
+            filter.NameHasSuffix,
+            filter.NameEqualFold,
+            filter.NameContainsFold,
+            args);
 
-        if (filter.Status is not null)
-        {
-            predicates.Add(alias + ".\"status\" = " + args.Add(filter.Status));
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "description",
+            filter.Description,
+            filter.DescriptionNEQ,
+            filter.DescriptionIn,
+            filter.DescriptionNotIn,
+            filter.DescriptionGT,
+            filter.DescriptionGTE,
+            filter.DescriptionLT,
+            filter.DescriptionLTE,
+            filter.DescriptionContains,
+            filter.DescriptionHasPrefix,
+            filter.DescriptionHasSuffix,
+            filter.DescriptionEqualFold,
+            filter.DescriptionContainsFold,
+            args);
 
-        if (filter.StatusIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "pattern",
+            filter.Pattern,
+            filter.PatternNEQ,
+            filter.PatternIn,
+            filter.PatternNotIn,
+            filter.PatternGT,
+            filter.PatternGTE,
+            filter.PatternLT,
+            filter.PatternLTE,
+            filter.PatternContains,
+            filter.PatternHasPrefix,
+            filter.PatternHasSuffix,
+            filter.PatternEqualFold,
+            filter.PatternContainsFold,
+            args);
 
-        if (filter.StatusNotIn is not null)
-        {
-            if (filter.StatusNotIn.Count == 0)
-            {
-                predicates.Add("TRUE");
-            }
-            else
-            {
-                var parameters = filter.StatusNotIn
-                    .Select(value => args.Add(value))
-                    .ToArray();
-                predicates.Add(
-                    alias + ".\"status\" NOT IN (" + string.Join(", ", parameters) + ")");
-            }
-        }
+        ConnectionSql.AppendComparison(predicates, alias, "status", filter.Status, "=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "status", filter.StatusNEQ, "<>", args);
+        ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+        ConnectionSql.AppendStringIn(
+            predicates, alias, "status", filter.StatusNotIn, args, negate: true);
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)
         {

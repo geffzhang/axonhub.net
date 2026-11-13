@@ -254,6 +254,68 @@ public sealed class PromptProtectionRuleStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesTheFullScalarPredicateSet()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new PromptProtectionRuleStore(context);
+
+        var alpha = NewRule(name: "Alpha");
+        alpha.Description = "cold archive";
+        await store.CreateAsync(alpha);
+
+        var beta = NewRule(name: "Beta", status: "disabled");
+        beta.Description = "warm cache";
+        beta.Pattern = "token";
+        beta.UpdatedAt = UpdatedAt.AddDays(1);
+        await store.CreateAsync(beta);
+
+        var gamma = NewRule(name: "gamma");
+        gamma.Description = "archive too";
+        await store.CreateAsync(gamma);
+
+        async Task<string[]> Names(PromptProtectionRuleListFilter where)
+        {
+            var page = await store.ListAsync(new PromptProtectionRuleListQuery
+            {
+                Where = where,
+                First = 10,
+            });
+            return page.Nodes.Select(static node => node.Name).ToArray();
+        }
+
+        Assert.Equal(["Alpha"], await Names(
+            new PromptProtectionRuleListFilter { IdGT = alpha.Id - 1, IdLTE = alpha.Id }));
+        Assert.Equal(["Alpha", "Beta", "gamma"], await Names(
+            new PromptProtectionRuleListFilter { CreatedAtIn = [CreatedAt] }));
+        Assert.Equal(["Beta"], await Names(
+            new PromptProtectionRuleListFilter { UpdatedAtGT = UpdatedAt }));
+        Assert.Equal(["Alpha", "Beta"], await Names(
+            new PromptProtectionRuleListFilter { NameLT = "gamma" }));
+        Assert.Equal(["Alpha"], await Names(
+            new PromptProtectionRuleListFilter { NameHasPrefix = "Al" }));
+        Assert.Equal(["Alpha"], await Names(
+            new PromptProtectionRuleListFilter { DescriptionContains = "cold" }));
+        Assert.Equal(["gamma"], await Names(
+            new PromptProtectionRuleListFilter { DescriptionHasSuffix = "too" }));
+        Assert.Equal(["Beta"], await Names(
+            new PromptProtectionRuleListFilter { PatternNEQ = "secret" }));
+        Assert.Equal(["Alpha", "gamma"], await Names(
+            new PromptProtectionRuleListFilter { PatternIn = ["secret"] }));
+        Assert.Equal(["Beta"], await Names(
+            new PromptProtectionRuleListFilter { StatusNEQ = "enabled" }));
+        Assert.Equal(["Alpha", "gamma"], await Names(new PromptProtectionRuleListFilter
+        {
+            Or =
+            [
+                new PromptProtectionRuleListFilter { Name = "Alpha" },
+                new PromptProtectionRuleListFilter { Name = "gamma" },
+            ],
+        }));
+    }
+
+    [Fact]
     public async Task ListOrdersByUpdatedAtDescendingWithValueCursors()
     {
         await using var db = new TestDatabase(fixture);

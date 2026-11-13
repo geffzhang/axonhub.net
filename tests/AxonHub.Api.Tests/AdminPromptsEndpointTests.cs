@@ -508,6 +508,49 @@ public sealed class AdminPromptsEndpointTests : IAsyncLifetime
         Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task SchemaExposesEveryPromptWherePredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "PromptWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(["projectID", "projectIDNEQ", "projectIDIn", "projectIDNotIn"]);
+        expected.AddRange(text.Select(static suffix => "name" + suffix));
+        expected.AddRange(text.Select(static suffix => "description" + suffix));
+        expected.AddRange(text.Select(static suffix => "role" + suffix));
+        expected.AddRange(text.Select(static suffix => "content" + suffix));
+        expected.AddRange(["status", "statusNEQ", "statusIn", "statusNotIn"]);
+        expected.AddRange(comparison.Select(static suffix => "order" + suffix));
+        expected.AddRange(["hasProject", "hasProjectWith"]);
+
+        var whereFields = data.GetProperty("where").GetProperty("inputFields")
+            .EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            whereFields);
+    }
+
     private static string Gid(long id) => "gid://axonhub/Prompt/" + id;
 
     private async Task<JsonElement> QueryDataAsync(string query, object? variables = null)

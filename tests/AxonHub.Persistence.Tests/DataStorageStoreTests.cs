@@ -199,6 +199,155 @@ public sealed class DataStorageStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesTheFullScalarPredicateSet()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new DataStorageStore(context);
+
+        var alpha = NewStorage(name: "Alpha", type: "s3");
+        alpha.Description = "cold archive";
+        await store.CreateAsync(alpha);
+
+        var beta = NewStorage(name: "Beta", type: "fs");
+        beta.Description = "warm cache";
+        beta.UpdatedAt = UpdatedAt.AddDays(1);
+        await store.CreateAsync(beta);
+
+        var gamma = NewStorage(name: "gamma", type: "fs", status: "archived");
+        gamma.Description = "archive too";
+        await store.CreateAsync(gamma);
+
+        async Task<string[]> Names(DataStorageListFilter where)
+        {
+            var page = await store.ListAsync(new DataStorageListQuery { Where = where, First = 10 });
+            return page.Nodes.Select(static node => node.Name).ToArray();
+        }
+
+        // id and time comparisons.
+        Assert.Equal(["Alpha"], await Names(
+            new DataStorageListFilter { IdGT = alpha.Id - 1, IdLTE = alpha.Id }));
+        Assert.Equal(["Beta", "gamma"], await Names(
+            new DataStorageListFilter { CreatedAtGTE = CreatedAt, IdGT = alpha.Id }));
+        Assert.Equal(["Beta"], await Names(
+            new DataStorageListFilter { UpdatedAtGT = UpdatedAt }));
+        Assert.Equal(["Alpha", "Beta"], await Names(
+            new DataStorageListFilter { CreatedAtIn = [CreatedAt], NameNEQ = "gamma" }));
+
+        // String comparisons are plain PostgreSQL byte order.
+        Assert.Equal(["Alpha"], await Names(
+            new DataStorageListFilter { NameLT = "Beta" }));
+        Assert.Equal(["Beta"], await Names(
+            new DataStorageListFilter { NameEqualFold = "BETA" }));
+        Assert.Equal(["Alpha"], await Names(
+            new DataStorageListFilter { NameHasPrefix = "Al" }));
+        Assert.Equal(["gamma"], await Names(
+            new DataStorageListFilter { NameHasSuffix = "mma" }));
+        Assert.Equal(["Beta"], await Names(
+            new DataStorageListFilter { NameContains = "e" }));
+
+        // Description predicates, including the <> NULL trap.
+        Assert.Equal(["Alpha"], await Names(
+            new DataStorageListFilter { DescriptionContains = "cold" }));
+        Assert.Equal(["Alpha", "Beta"], await Names(
+            new DataStorageListFilter { DescriptionHasSuffix = "e" }));
+        Assert.Equal(["Beta"], await Names(
+            new DataStorageListFilter { DescriptionEqualFold = "WARM CACHE" }));
+
+        // and/or composition.
+        Assert.Equal(["gamma"], await Names(new DataStorageListFilter
+        {
+            Or =
+            [
+                new DataStorageListFilter { Name = "Beta" },
+                new DataStorageListFilter { Type = "fs", Status = "archived" },
+            ],
+            Not = new DataStorageListFilter { Name = "Beta" },
+        }));
+    }
+
+    [Fact]
+    public async Task ListAppliesRequestsAndExecutionsEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new DataStorageStore(context);
+
+        var referenced = NewStorage(name: "referenced");
+        var executed = NewStorage(name: "executed");
+        var idle = NewStorage(name: "idle");
+        await store.CreateAsync(referenced);
+        await store.CreateAsync(executed);
+        await store.CreateAsync(idle);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "requests"
+                    ("created_at", "updated_at", "model_id", "request_body", "status",
+                     "project_id", "data_storage_id")
+                VALUES (@CreatedAt, @UpdatedAt, 'gpt-4o', '{}'::jsonb, 'completed',
+                        1, @ReferencedId);
+
+                INSERT INTO "request_executions"
+                    ("created_at", "updated_at", "model_id", "request_body", "status",
+                     "project_id", "data_storage_id", "request_id")
+                VALUES (@CreatedAt, @UpdatedAt, 'gpt-4o', '{}'::jsonb, 'completed',
+                        1, @ExecutedId, 1);
+                """,
+                new
+                {
+                    CreatedAt,
+                    UpdatedAt,
+                    ReferencedId = referenced.Id,
+                    ExecutedId = executed.Id,
+                });
+        }
+
+        async Task<string[]> Names(DataStorageListFilter where)
+        {
+            var page = await store.ListAsync(new DataStorageListQuery { Where = where, First = 10 });
+            return page.Nodes.Select(static node => node.Name).ToArray();
+        }
+
+        Assert.Equal(["referenced"], await Names(new DataStorageListFilter { HasRequests = true }));
+        Assert.Equal(
+            ["executed", "idle"],
+            await Names(new DataStorageListFilter { HasRequests = false }));
+        Assert.Equal(
+            ["referenced"],
+            await Names(new DataStorageListFilter
+            {
+                HasRequestsWith = [new RequestListFilter { Status = "completed" }],
+            }));
+        Assert.Equal(
+            ["executed", "idle"],
+            await Names(new DataStorageListFilter
+            {
+                Not = new DataStorageListFilter { HasRequests = true },
+            }));
+
+        Assert.Equal(["executed"], await Names(new DataStorageListFilter { HasExecutions = true }));
+        Assert.Equal(
+            ["referenced", "idle"],
+            await Names(new DataStorageListFilter { HasExecutions = false }));
+        Assert.Equal(
+            ["executed"],
+            await Names(new DataStorageListFilter
+            {
+                HasExecutionsWith = [new RequestExecutionListFilter { Status = "completed" }],
+            }));
+
+        // An empty With list installs no predicate.
+        Assert.Equal(
+            ["referenced", "executed", "idle"],
+            await Names(new DataStorageListFilter { HasExecutionsWith = [] }));
+    }
+
+    [Fact]
     public async Task ListPaginatesWithTheIdKeyset()
     {
         await using var db = new TestDatabase(fixture);

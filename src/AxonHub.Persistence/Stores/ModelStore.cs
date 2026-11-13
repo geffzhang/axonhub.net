@@ -13,28 +13,115 @@ public enum ModelSortField
 }
 
 /// <summary>
-/// Subset of ent.ModelWhereInput used by the management frontend. Every other
-/// ent predicate (boolean operators over time fields, string prefix/suffix
-/// variants, idNEQ, ...) is not ported in this slice (C177).
+/// Port of ent.ModelWhereInput: every scalar predicate group exposed by
+/// entgql (there are no edge predicates on the Model type).
 /// </summary>
 public sealed record ModelListFilter
 {
     public long? Id { get; init; }
 
+    public long? IdNEQ { get; init; }
+
     public IReadOnlyList<long>? IdIn { get; init; }
 
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
+
     public string? Developer { get; init; }
+
+    public string? DeveloperNEQ { get; init; }
+
+    public IReadOnlyList<string>? DeveloperIn { get; init; }
+
+    public IReadOnlyList<string>? DeveloperNotIn { get; init; }
+
+    public string? DeveloperGT { get; init; }
+
+    public string? DeveloperGTE { get; init; }
+
+    public string? DeveloperLT { get; init; }
+
+    public string? DeveloperLTE { get; init; }
+
+    public string? DeveloperContains { get; init; }
+
+    public string? DeveloperHasPrefix { get; init; }
+
+    public string? DeveloperHasSuffix { get; init; }
+
+    public string? DeveloperEqualFold { get; init; }
 
     public string? DeveloperContainsFold { get; init; }
 
     public string? ModelId { get; init; }
 
+    public string? ModelIdNEQ { get; init; }
+
     /// <summary>ent <c>ModelIDIn</c> (model.ModelIDIn in the reference).</summary>
     public IReadOnlyList<string>? ModelIdIn { get; init; }
+
+    public IReadOnlyList<string>? ModelIdNotIn { get; init; }
+
+    public string? ModelIdGT { get; init; }
+
+    public string? ModelIdGTE { get; init; }
+
+    public string? ModelIdLT { get; init; }
+
+    public string? ModelIdLTE { get; init; }
+
+    public string? ModelIdContains { get; init; }
+
+    public string? ModelIdHasPrefix { get; init; }
+
+    public string? ModelIdHasSuffix { get; init; }
+
+    public string? ModelIdEqualFold { get; init; }
 
     public string? ModelIdContainsFold { get; init; }
 
     public string? Type { get; init; }
+
+    public string? TypeNEQ { get; init; }
 
     public IReadOnlyList<string>? TypeIn { get; init; }
 
@@ -42,19 +129,121 @@ public sealed record ModelListFilter
 
     public string? Name { get; init; }
 
+    public string? NameNEQ { get; init; }
+
+    public IReadOnlyList<string>? NameIn { get; init; }
+
+    public IReadOnlyList<string>? NameNotIn { get; init; }
+
+    public string? NameGT { get; init; }
+
+    public string? NameGTE { get; init; }
+
+    public string? NameLT { get; init; }
+
+    public string? NameLTE { get; init; }
+
+    public string? NameContains { get; init; }
+
+    public string? NameHasPrefix { get; init; }
+
+    public string? NameHasSuffix { get; init; }
+
+    public string? NameEqualFold { get; init; }
+
     public string? NameContainsFold { get; init; }
 
+    public string? Icon { get; init; }
+
+    public string? IconNEQ { get; init; }
+
+    public IReadOnlyList<string>? IconIn { get; init; }
+
+    public IReadOnlyList<string>? IconNotIn { get; init; }
+
+    public string? IconGT { get; init; }
+
+    public string? IconGTE { get; init; }
+
+    public string? IconLT { get; init; }
+
+    public string? IconLTE { get; init; }
+
+    public string? IconContains { get; init; }
+
+    public string? IconHasPrefix { get; init; }
+
+    public string? IconHasSuffix { get; init; }
+
+    public string? IconEqualFold { get; init; }
+
+    public string? IconContainsFold { get; init; }
+
+    public string? Group { get; init; }
+
+    public string? GroupNEQ { get; init; }
+
+    public IReadOnlyList<string>? GroupIn { get; init; }
+
+    public IReadOnlyList<string>? GroupNotIn { get; init; }
+
+    public string? GroupGT { get; init; }
+
+    public string? GroupGTE { get; init; }
+
+    public string? GroupLT { get; init; }
+
+    public string? GroupLTE { get; init; }
+
+    public string? GroupContains { get; init; }
+
+    public string? GroupHasPrefix { get; init; }
+
+    public string? GroupHasSuffix { get; init; }
+
+    public string? GroupEqualFold { get; init; }
+
+    public string? GroupContainsFold { get; init; }
+
     public string? Status { get; init; }
+
+    public string? StatusNEQ { get; init; }
 
     public IReadOnlyList<string>? StatusIn { get; init; }
 
     public IReadOnlyList<string>? StatusNotIn { get; init; }
+
+    public string? Remark { get; init; }
+
+    public string? RemarkNEQ { get; init; }
+
+    public IReadOnlyList<string>? RemarkIn { get; init; }
+
+    public IReadOnlyList<string>? RemarkNotIn { get; init; }
+
+    public string? RemarkGT { get; init; }
+
+    public string? RemarkGTE { get; init; }
+
+    public string? RemarkLT { get; init; }
+
+    public string? RemarkLTE { get; init; }
+
+    public string? RemarkContains { get; init; }
+
+    public string? RemarkHasPrefix { get; init; }
+
+    public string? RemarkHasSuffix { get; init; }
 
     /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
     public bool RemarkIsNil { get; init; }
 
     /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
     public bool RemarkNotNil { get; init; }
+
+    public string? RemarkEqualFold { get; init; }
+
+    public string? RemarkContainsFold { get; init; }
 
     public ModelListFilter? Not { get; init; }
 
@@ -737,92 +926,191 @@ public sealed class ModelStore(AxonHubDbContext db) : IModelStore
         }
 
         var predicates = new List<string?>();
-        if (filter.Id is not null)
-        {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
-        }
-
-        if (filter.IdIn is not null)
-        {
-            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
-        }
-
-        if (filter.Developer is not null)
-        {
-            predicates.Add(alias + ".\"developer\" = " + args.Add(filter.Developer));
-        }
-
-        if (filter.DeveloperContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "developer",
-                "LIKE",
-                filter.DeveloperContainsFold,
-                args);
-        }
-
-        if (filter.ModelId is not null)
-        {
-            predicates.Add(alias + ".\"model_id\" = " + args.Add(filter.ModelId));
-        }
-
-        if (filter.ModelIdIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "model_id", filter.ModelIdIn, args);
-        }
-
-        if (filter.ModelIdContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "model_id",
-                "LIKE",
-                filter.ModelIdContainsFold,
-                args);
-        }
-
-        if (filter.Type is not null)
-        {
-            predicates.Add(alias + ".\"type\" = " + args.Add(filter.Type));
-        }
-
-        if (filter.TypeIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "type", filter.TypeIn, args);
-        }
-
-        if (filter.TypeNotIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "type", filter.TypeNotIn, args, negate: true);
-        }
-
-        if (filter.Name is not null)
-        {
-            predicates.Add(alias + ".\"name\" = " + args.Add(filter.Name));
-        }
-
-        if (filter.NameContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(predicates, alias, "name", "LIKE", filter.NameContainsFold, args);
-        }
-
-        if (filter.Status is not null)
-        {
-            predicates.Add(alias + ".\"status\" = " + args.Add(filter.Status));
-        }
-
-        if (filter.StatusIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
-        }
-
-        if (filter.StatusNotIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusNotIn, args, negate: true);
-        }
+        ConnectionSql.AppendLongPredicates(
+            predicates,
+            alias,
+            "id",
+            filter.Id,
+            filter.IdNEQ,
+            filter.IdIn,
+            filter.IdNotIn,
+            filter.IdGT,
+            filter.IdGTE,
+            filter.IdLT,
+            filter.IdLTE,
+            null,
+            null,
+            args);
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "created_at",
+            filter.CreatedAt,
+            filter.CreatedAtNEQ,
+            filter.CreatedAtIn,
+            filter.CreatedAtNotIn,
+            filter.CreatedAtGT,
+            filter.CreatedAtGTE,
+            filter.CreatedAtLT,
+            filter.CreatedAtLTE,
+            args);
+        ConnectionSql.AppendTimePredicates(
+            predicates,
+            alias,
+            "updated_at",
+            filter.UpdatedAt,
+            filter.UpdatedAtNEQ,
+            filter.UpdatedAtIn,
+            filter.UpdatedAtNotIn,
+            filter.UpdatedAtGT,
+            filter.UpdatedAtGTE,
+            filter.UpdatedAtLT,
+            filter.UpdatedAtLTE,
+            args);
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "developer",
+            filter.Developer,
+            filter.DeveloperNEQ,
+            filter.DeveloperIn,
+            filter.DeveloperNotIn,
+            filter.DeveloperGT,
+            filter.DeveloperGTE,
+            filter.DeveloperLT,
+            filter.DeveloperLTE,
+            filter.DeveloperContains,
+            filter.DeveloperHasPrefix,
+            filter.DeveloperHasSuffix,
+            filter.DeveloperEqualFold,
+            filter.DeveloperContainsFold,
+            args);
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "model_id",
+            filter.ModelId,
+            filter.ModelIdNEQ,
+            filter.ModelIdIn,
+            filter.ModelIdNotIn,
+            filter.ModelIdGT,
+            filter.ModelIdGTE,
+            filter.ModelIdLT,
+            filter.ModelIdLTE,
+            filter.ModelIdContains,
+            filter.ModelIdHasPrefix,
+            filter.ModelIdHasSuffix,
+            filter.ModelIdEqualFold,
+            filter.ModelIdContainsFold,
+            args);
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "type",
+            filter.Type,
+            filter.TypeNEQ,
+            filter.TypeIn,
+            filter.TypeNotIn,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            args);
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "name",
+            filter.Name,
+            filter.NameNEQ,
+            filter.NameIn,
+            filter.NameNotIn,
+            filter.NameGT,
+            filter.NameGTE,
+            filter.NameLT,
+            filter.NameLTE,
+            filter.NameContains,
+            filter.NameHasPrefix,
+            filter.NameHasSuffix,
+            filter.NameEqualFold,
+            filter.NameContainsFold,
+            args);
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "icon",
+            filter.Icon,
+            filter.IconNEQ,
+            filter.IconIn,
+            filter.IconNotIn,
+            filter.IconGT,
+            filter.IconGTE,
+            filter.IconLT,
+            filter.IconLTE,
+            filter.IconContains,
+            filter.IconHasPrefix,
+            filter.IconHasSuffix,
+            filter.IconEqualFold,
+            filter.IconContainsFold,
+            args);
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "group",
+            filter.Group,
+            filter.GroupNEQ,
+            filter.GroupIn,
+            filter.GroupNotIn,
+            filter.GroupGT,
+            filter.GroupGTE,
+            filter.GroupLT,
+            filter.GroupLTE,
+            filter.GroupContains,
+            filter.GroupHasPrefix,
+            filter.GroupHasSuffix,
+            filter.GroupEqualFold,
+            filter.GroupContainsFold,
+            args);
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "status",
+            filter.Status,
+            filter.StatusNEQ,
+            filter.StatusIn,
+            filter.StatusNotIn,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            args);
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "remark",
+            filter.Remark,
+            filter.RemarkNEQ,
+            filter.RemarkIn,
+            filter.RemarkNotIn,
+            filter.RemarkGT,
+            filter.RemarkGTE,
+            filter.RemarkLT,
+            filter.RemarkLTE,
+            filter.RemarkContains,
+            filter.RemarkHasPrefix,
+            filter.RemarkHasSuffix,
+            filter.RemarkEqualFold,
+            filter.RemarkContainsFold,
+            args);
 
         if (filter.RemarkIsNil)
         {

@@ -61,16 +61,16 @@ public sealed class DataStorageOrder
     public DataStorageOrderFieldValue Field { get; set; }
 }
 
-/// <summary>
-/// Port of the subset of <c>DataStorageWhereInput</c> used by the management
-/// frontend (nameContainsFold, typeIn, statusIn) plus the id/name/primary/type/
-/// status equality and collection predicates and and/or/not. The time,
-/// description and string comparison predicates and the requests/executions
-/// edge predicates are not ported (C196).
-/// </summary>
+/// <summary>Port of <c>DataStorageWhereInput</c> (axonhub.graphql).</summary>
 [GraphQLName("DataStorageWhereInput")]
 public sealed class DataStorageWhereInput
 {
+    public DataStorageWhereInput? Not { get; set; }
+
+    public IReadOnlyList<DataStorageWhereInput>? And { get; set; }
+
+    public IReadOnlyList<DataStorageWhereInput>? Or { get; set; }
+
     [GraphQLType(typeof(IdType))]
     public string? Id { get; set; }
 
@@ -83,6 +83,66 @@ public sealed class DataStorageWhereInput
     [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
     public IReadOnlyList<string>? IdNotIn { get; set; }
 
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
     public string? Name { get; set; }
 
     public string? NameNEQ { get; set; }
@@ -91,7 +151,49 @@ public sealed class DataStorageWhereInput
 
     public IReadOnlyList<string>? NameNotIn { get; set; }
 
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
+    public string? NameContains { get; set; }
+
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
+
     public string? NameContainsFold { get; set; }
+
+    public string? Description { get; set; }
+
+    public string? DescriptionNEQ { get; set; }
+
+    public IReadOnlyList<string>? DescriptionIn { get; set; }
+
+    public IReadOnlyList<string>? DescriptionNotIn { get; set; }
+
+    public string? DescriptionGT { get; set; }
+
+    public string? DescriptionGTE { get; set; }
+
+    public string? DescriptionLT { get; set; }
+
+    public string? DescriptionLTE { get; set; }
+
+    public string? DescriptionContains { get; set; }
+
+    public string? DescriptionHasPrefix { get; set; }
+
+    public string? DescriptionHasSuffix { get; set; }
+
+    public string? DescriptionEqualFold { get; set; }
+
+    public string? DescriptionContainsFold { get; set; }
 
     /// <summary>Nullable in the SDL; an explicit false is a predicate too.</summary>
     public bool? Primary { get; set; }
@@ -114,11 +216,13 @@ public sealed class DataStorageWhereInput
 
     public IReadOnlyList<DataStorageStatusValue>? StatusNotIn { get; set; }
 
-    public DataStorageWhereInput? Not { get; set; }
+    public bool? HasRequests { get; set; }
 
-    public IReadOnlyList<DataStorageWhereInput>? And { get; set; }
+    public IReadOnlyList<RequestWhereInput>? HasRequestsWith { get; set; }
 
-    public IReadOnlyList<DataStorageWhereInput>? Or { get; set; }
+    public bool? HasExecutions { get; set; }
+
+    public IReadOnlyList<RequestExecutionWhereInput>? HasExecutionsWith { get; set; }
 }
 
 /// <summary>Port of DataStorageSettingsInput (axonhub.graphql:696-703).</summary>
@@ -379,11 +483,52 @@ public static class DataStorageMapping
             IdNotIn = where.IdNotIn?
                 .Select(static id => GidValue.Parse(id).Id)
                 .ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
             Name = where.Name,
             NameNEQ = where.NameNEQ,
             NameIn = where.NameIn,
             NameNotIn = where.NameNotIn,
+            NameGT = where.NameGT,
+            NameGTE = where.NameGTE,
+            NameLT = where.NameLT,
+            NameLTE = where.NameLTE,
+            NameContains = where.NameContains,
+            NameHasPrefix = where.NameHasPrefix,
+            NameHasSuffix = where.NameHasSuffix,
+            NameEqualFold = where.NameEqualFold,
             NameContainsFold = where.NameContainsFold,
+            Description = where.Description,
+            DescriptionNEQ = where.DescriptionNEQ,
+            DescriptionIn = where.DescriptionIn,
+            DescriptionNotIn = where.DescriptionNotIn,
+            DescriptionGT = where.DescriptionGT,
+            DescriptionGTE = where.DescriptionGTE,
+            DescriptionLT = where.DescriptionLT,
+            DescriptionLTE = where.DescriptionLTE,
+            DescriptionContains = where.DescriptionContains,
+            DescriptionHasPrefix = where.DescriptionHasPrefix,
+            DescriptionHasSuffix = where.DescriptionHasSuffix,
+            DescriptionEqualFold = where.DescriptionEqualFold,
+            DescriptionContainsFold = where.DescriptionContainsFold,
             // entgql binds these to *bool, so an explicit false is a predicate.
             Primary = where.Primary,
             PrimaryNEQ = where.PrimaryNEQ,
@@ -402,6 +547,16 @@ public static class DataStorageMapping
                 .ToList(),
             StatusNotIn = where.StatusNotIn?
                 .Select(static status => ToWireStatus(status))
+                .ToList(),
+            HasRequests = where.HasRequests,
+            HasRequestsWith = where.HasRequestsWith?
+                .Select(static nested => TraceMapping.ToFilter(nested))
+                .OfType<RequestListFilter>()
+                .ToList(),
+            HasExecutions = where.HasExecutions,
+            HasExecutionsWith = where.HasExecutionsWith?
+                .Select(static nested => RequestMapping.ToFilter(nested))
+                .OfType<RequestExecutionListFilter>()
                 .ToList(),
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<DataStorageListFilter>().ToList(),

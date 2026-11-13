@@ -79,6 +79,63 @@ public sealed class ThreadAdminStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesProjectAndTracesEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ThreadAdminStore(context);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "projects"
+                    ("id", "created_at", "updated_at", "deleted_at", "name", "description", "status")
+                VALUES (1, @CreatedAt, @UpdatedAt, 0, 'alpha-project', '', 'active'),
+                       (2, @CreatedAt, @UpdatedAt, 99, 'beta-project', '', 'active');
+                """,
+                new { CreatedAt, UpdatedAt });
+        }
+
+        await SeedThreadAsync(db, 1, "thread-a", projectId: 1);
+        await SeedThreadAsync(db, 2, "thread-b", projectId: 2);
+        await SeedThreadAsync(db, 3, "thread-c", projectId: 424242);
+        await SeedTraceAsync(db, 1, "trace-a", projectId: 1, threadId: 1, status: "active");
+        await SeedTraceAsync(db, 2, "trace-b", projectId: 2, threadId: 2, status: "archived");
+
+        async Task<long[]> IdsAsync(ThreadListFilter where)
+        {
+            var page = await store.ListAsync(new ThreadListQuery { Where = where, First = 10 });
+            return [.. page.Nodes.Select(static row => row.Id)];
+        }
+
+        // The generated EXISTS does not re-apply the Project soft delete, and a
+        // dangling project id has no row.
+        var withProject = await IdsAsync(new ThreadListFilter { HasProject = true });
+        var withoutProject = await IdsAsync(new ThreadListFilter { HasProject = false });
+        var betaProject = await IdsAsync(new ThreadListFilter
+        {
+            HasProjectWith = [new ProjectListFilter { Name = "beta-project" }],
+        });
+        Assert.Equal([1L, 2L], withProject);
+        Assert.Equal([3L], withoutProject);
+        Assert.Equal([2L], betaProject);
+
+        var withTraces = await IdsAsync(new ThreadListFilter { HasTraces = true });
+        var withoutTraces = await IdsAsync(new ThreadListFilter { HasTraces = false });
+        var activeTraces = await IdsAsync(new ThreadListFilter
+        {
+            HasTracesWith = [new TraceListFilter { Status = "active" }],
+        });
+        var emptyWith = await IdsAsync(new ThreadListFilter { HasTracesWith = [] });
+        Assert.Equal([1L, 2L], withTraces);
+        Assert.Equal([3L], withoutTraces);
+        Assert.Equal([1L], activeTraces);
+        Assert.Equal([1L, 2L, 3L], emptyWith);
+    }
+
+    [Fact]
     public async Task GetByIdHonorsProjectScope()
     {
         await using var db = new TestDatabase(fixture);

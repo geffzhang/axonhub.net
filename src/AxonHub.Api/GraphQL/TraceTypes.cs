@@ -135,12 +135,7 @@ public sealed class RequestOrder
     public RequestOrderFieldValue Field { get; set; }
 }
 
-/// <summary>
-/// Port of <c>TraceWhereInput</c> (ent.graphql:6060-6180). The edge predicates
-/// (<c>hasProject</c>/<c>hasProjectWith</c>, <c>hasThread</c>/<c>hasThreadWith</c>,
-/// <c>hasRequests</c>/<c>hasRequestsWith</c>) are not ported in this slice
-/// (C189).
-/// </summary>
+/// <summary>Port of <c>TraceWhereInput</c> (ent.graphql:6060-6180).</summary>
 [GraphQLName("TraceWhereInput")]
 public sealed class TraceWhereInput
 {
@@ -314,13 +309,21 @@ public sealed class TraceWhereInput
     public IReadOnlyList<TraceStatusValue>? StatusIn { get; set; }
 
     public IReadOnlyList<TraceStatusValue>? StatusNotIn { get; set; }
+
+    public bool? HasProject { get; set; }
+
+    public IReadOnlyList<ProjectWhereInput>? HasProjectWith { get; set; }
+
+    public bool? HasThread { get; set; }
+
+    public IReadOnlyList<ThreadWhereInput>? HasThreadWith { get; set; }
+
+    public bool? HasRequests { get; set; }
+
+    public IReadOnlyList<RequestWhereInput>? HasRequestsWith { get; set; }
 }
 
-/// <summary>
-/// Port of <c>ThreadWhereInput</c> (ent.graphql:5912-6000). The
-/// <c>hasProject</c>/<c>hasTraces</c> edge predicates are not ported in this
-/// slice (C189).
-/// </summary>
+/// <summary>Port of <c>ThreadWhereInput</c> (ent.graphql:5912-6000).</summary>
 [GraphQLName("ThreadWhereInput")]
 public sealed class ThreadWhereInput
 {
@@ -472,6 +475,14 @@ public sealed class ThreadWhereInput
     public IReadOnlyList<ThreadStatusValue>? StatusIn { get; set; }
 
     public IReadOnlyList<ThreadStatusValue>? StatusNotIn { get; set; }
+
+    public bool? HasProject { get; set; }
+
+    public IReadOnlyList<ProjectWhereInput>? HasProjectWith { get; set; }
+
+    public bool? HasTraces { get; set; }
+
+    public IReadOnlyList<TraceWhereInput>? HasTracesWith { get; set; }
 }
 
 /// <summary>
@@ -1431,6 +1442,21 @@ public static class TraceMapping
             StatusNotIn = where.StatusNotIn is { Count: > 0 }
                 ? where.StatusNotIn.Select(static status => ToWireStatus(status)).ToList()
                 : null,
+            HasProject = where.HasProject,
+            HasProjectWith = where.HasProjectWith?
+                .Select(static nested => ProjectMapping.ToFilter(nested))
+                .OfType<ProjectListFilter>()
+                .ToList(),
+            HasThread = where.HasThread,
+            HasThreadWith = where.HasThreadWith?
+                .Select(static nested => ToFilter(nested))
+                .OfType<ThreadListFilter>()
+                .ToList(),
+            HasRequests = where.HasRequests,
+            HasRequestsWith = where.HasRequestsWith?
+                .Select(static nested => ToFilter(nested))
+                .OfType<RequestListFilter>()
+                .ToList(),
             Not = ToFilter(where.Not),
             And = ToList(where.And?.Select(ToFilter).OfType<TraceListFilter>().ToList()),
             Or = ToList(where.Or?.Select(ToFilter).OfType<TraceListFilter>().ToList()),
@@ -1497,6 +1523,16 @@ public static class TraceMapping
             StatusNotIn = where.StatusNotIn is { Count: > 0 }
                 ? where.StatusNotIn.Select(static status => ToWireStatus(status)).ToList()
                 : null,
+            HasProject = where.HasProject,
+            HasProjectWith = where.HasProjectWith?
+                .Select(static nested => ProjectMapping.ToFilter(nested))
+                .OfType<ProjectListFilter>()
+                .ToList(),
+            HasTraces = where.HasTraces,
+            HasTracesWith = where.HasTracesWith?
+                .Select(static nested => ToFilter(nested))
+                .OfType<TraceListFilter>()
+                .ToList(),
             Not = ToFilter(where.Not),
             And = ToList(where.And?.Select(ToFilter).OfType<ThreadListFilter>().ToList()),
             Or = ToList(where.Or?.Select(ToFilter).OfType<ThreadListFilter>().ToList()),

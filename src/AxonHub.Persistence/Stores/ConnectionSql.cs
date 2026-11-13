@@ -403,6 +403,43 @@ internal static class ConnectionSql
     }
 
     /// <summary>
+    /// The full ent time predicate set for one non-nullable time column:
+    /// equality/ordering comparisons and IN/NOT IN. Entgql only installs
+    /// In/NotIn when the list is non-empty.
+    /// </summary>
+    public static void AppendTimePredicates(
+        List<string?> predicates,
+        string alias,
+        string column,
+        DateTime? equal,
+        DateTime? notEqual,
+        IReadOnlyList<DateTime>? @in,
+        IReadOnlyList<DateTime>? notIn,
+        DateTime? greater,
+        DateTime? greaterOrEqual,
+        DateTime? less,
+        DateTime? lessOrEqual,
+        SqlArguments args)
+    {
+        AppendComparison(predicates, alias, column, equal, "=", args);
+        AppendComparison(predicates, alias, column, notEqual, "<>", args);
+        if (@in is not null)
+        {
+            AppendTimeIn(predicates, alias, column, @in, args);
+        }
+
+        if (notIn is not null)
+        {
+            AppendTimeIn(predicates, alias, column, notIn, args, negate: true);
+        }
+
+        AppendComparison(predicates, alias, column, greater, ">", args);
+        AppendComparison(predicates, alias, column, greaterOrEqual, ">=", args);
+        AppendComparison(predicates, alias, column, less, "<", args);
+        AppendComparison(predicates, alias, column, lessOrEqual, "<=", args);
+    }
+
+    /// <summary>
     /// The full ent int predicate set for one column: equality/ordering
     /// comparisons, IN/NOT IN and the optional IsNil/NotNil pair.
     /// </summary>

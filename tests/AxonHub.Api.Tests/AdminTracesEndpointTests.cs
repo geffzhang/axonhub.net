@@ -1102,6 +1102,79 @@ public sealed class AdminTracesEndpointTests : IAsyncLifetime
         Assert.Equal("permission denied", errors[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task SchemaExposesEveryTraceAndThreadWherePredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            {
+              trace: __type(name: "TraceWhereInput") { inputFields { name } }
+              thread: __type(name: "ThreadWhereInput") { inputFields { name } }
+            }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+        string[] projectId = ["projectID", "projectIDNEQ", "projectIDIn", "projectIDNotIn"];
+        string[] status = ["status", "statusNEQ", "statusIn", "statusNotIn"];
+
+        var trace = new List<string> { "and", "not", "or" };
+        trace.AddRange(comparison.Select(static suffix => "id" + suffix));
+        trace.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        trace.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        trace.AddRange(projectId);
+        trace.AddRange(text.Select(static suffix => "traceID" + suffix));
+        trace.AddRange(
+        [
+            "threadID",
+            "threadIDNEQ",
+            "threadIDIn",
+            "threadIDNotIn",
+            "threadIDIsNil",
+            "threadIDNotNil",
+        ]);
+        trace.AddRange(status);
+        trace.AddRange(
+        [
+            "hasProject",
+            "hasProjectWith",
+            "hasThread",
+            "hasThreadWith",
+            "hasRequests",
+            "hasRequestsWith",
+        ]);
+
+        var thread = new List<string> { "and", "not", "or" };
+        thread.AddRange(comparison.Select(static suffix => "id" + suffix));
+        thread.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        thread.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        thread.AddRange(projectId);
+        thread.AddRange(text.Select(static suffix => "threadID" + suffix));
+        thread.AddRange(status);
+        thread.AddRange(["hasProject", "hasProjectWith", "hasTraces", "hasTracesWith"]);
+
+        static string[] Sorted(JsonElement type) => type.GetProperty("inputFields")
+            .EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            trace.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            Sorted(data.GetProperty("trace")));
+        Assert.Equal(
+            thread.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            Sorted(data.GetProperty("thread")));
+    }
+
     private void AddProject(long id)
         => _gate.Projects.Add(project =>
         {

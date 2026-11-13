@@ -722,6 +722,53 @@ public sealed class AdminDataStoragesEndpointTests : IAsyncLifetime
         Assert.Equal("first must be greater than 0", negative[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task SchemaExposesEveryStorageWherePredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "DataStorageWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(text.Select(static suffix => "name" + suffix));
+        expected.AddRange(text.Select(static suffix => "description" + suffix));
+        expected.AddRange(["primary", "primaryNEQ"]);
+        expected.AddRange(["type", "typeNEQ", "typeIn", "typeNotIn"]);
+        expected.AddRange(["status", "statusNEQ", "statusIn", "statusNotIn"]);
+        expected.AddRange(
+        [
+            "hasRequests",
+            "hasRequestsWith",
+            "hasExecutions",
+            "hasExecutionsWith",
+        ]);
+
+        var whereFields = data.GetProperty("where").GetProperty("inputFields")
+            .EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            whereFields);
+    }
+
     private static string Gid(long id) => "gid://axonhub/DataStorage/" + id;
 
     private async Task<JsonElement> QueryDataAsync(

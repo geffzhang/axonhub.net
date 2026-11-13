@@ -178,6 +178,87 @@ public sealed class ModelStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesTheFullScalarPredicateSet()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ModelStore(context);
+
+        var alpha = NewModel("gpt-4o");
+        alpha.Name = "Alpha";
+        alpha.Status = "enabled";
+        var alphaId = await store.CreateAsync(alpha);
+
+        var beta = NewModel("gpt-4o-mini");
+        beta.Name = "Beta";
+        beta.Type = "embedding";
+        beta.Remark = "note";
+        beta.UpdatedAt = UpdatedAt.AddDays(1);
+        var betaId = await store.CreateAsync(beta);
+
+        var delta = NewModel("claude-3");
+        delta.Developer = "anthropic";
+        delta.Name = "Delta";
+        delta.Icon = "anthropic";
+        delta.Group = "premium";
+        delta.Type = "images";
+        delta.Status = "archived";
+        delta.Remark = "mixed";
+        var deltaId = await store.CreateAsync(delta);
+
+        async Task<long[]> IdsAsync(ModelListFilter filter)
+            => [.. (await store.ListAllAsync(filter)).Select(model => model.Id)];
+
+        // id and time predicates.
+        Assert.Equal([alphaId], await IdsAsync(
+            new ModelListFilter { IdGT = alphaId - 1, IdLTE = alphaId }));
+        Assert.Equal([betaId, deltaId], await IdsAsync(
+            new ModelListFilter { CreatedAtIn = [CreatedAt], IdGT = alphaId }));
+        Assert.Equal([betaId], await IdsAsync(
+            new ModelListFilter { UpdatedAtGT = UpdatedAt }));
+
+        // String predicate set: byte-order comparisons, folds, prefix/suffix.
+        Assert.Equal([deltaId], await IdsAsync(
+            new ModelListFilter { DeveloperLT = "openai" }));
+        Assert.Equal([alphaId, betaId], await IdsAsync(
+            new ModelListFilter { DeveloperEqualFold = "OPENAI" }));
+        Assert.Equal([betaId], await IdsAsync(
+            new ModelListFilter { ModelIdContains = "mini" }));
+        Assert.Equal([alphaId], await IdsAsync(
+            new ModelListFilter { NameHasPrefix = "Al" }));
+        Assert.Equal([deltaId], await IdsAsync(
+            new ModelListFilter { NameHasSuffix = "lta" }));
+        Assert.Equal([alphaId, betaId, deltaId], await IdsAsync(
+            new ModelListFilter { NameContainsFold = "a" }));
+        Assert.Equal([deltaId], await IdsAsync(
+            new ModelListFilter { IconIn = ["anthropic"] }));
+        Assert.Equal([deltaId], await IdsAsync(
+            new ModelListFilter { GroupNEQ = "default" }));
+
+        // remark is nullable: <> excludes the NULL row.
+        Assert.Equal([deltaId], await IdsAsync(
+            new ModelListFilter { RemarkNEQ = "note" }));
+        Assert.Equal([betaId], await IdsAsync(
+            new ModelListFilter { RemarkContains = "not" }));
+        Assert.Equal([alphaId], await IdsAsync(
+            new ModelListFilter { RemarkIsNil = true }));
+        Assert.Equal([betaId, deltaId], await IdsAsync(
+            new ModelListFilter { RemarkNotNil = true }));
+        Assert.Equal([betaId], await IdsAsync(
+            new ModelListFilter { RemarkIn = ["note", "missing"] }));
+
+        Assert.Equal([alphaId], await IdsAsync(new ModelListFilter
+        {
+            And =
+            [
+                new ModelListFilter { Status = "enabled" },
+                new ModelListFilter { TypeIn = ["chat"] },
+            ],
+        }));
+    }
+
+    [Fact]
     public async Task ListPaginatesByTheRequestedSortField()
     {
         await using var db = new TestDatabase(fixture);

@@ -1417,6 +1417,30 @@ OIDC 11 通过、Project / ApiKey / User 49 通过；Api 侧新增 5 个 introsp
 改动过的 5 个测试类定向运行 94 通过。未跑全量回归。
 残余：无（已列十张 where 输入的字段面全部闭合）；SystemWhereInput 的子集仍由 C269 跟踪。
 
+2026-11-13 更新（§206）：Model / Prompt / PromptProtectionRule / DataStorage / System / Trace /
+Thread where 输入全量建模（C177、C188、C231、C196、C269、C189 的 where 子集缺口闭合）。
+参照 `internal/server/gql/ent.graphql`：最后七张 where 输入的字段数为 Model 115、Prompt 97、
+PromptProtectionRule 70、DataStorage 67、System 53、Trace 60、Thread 52（not / and / or 与
+全部边谓词在内）。§206 把七张输入全量加入 GraphQL（ModelTypes / PromptTypes /
+PromptProtectionRuleTypes / DataStorageTypes / SystemAdminTypes / TraceTypes 的 WhereInput 与
+对应 ToFilter），并把 ModelListFilter / PromptListFilter / PromptProtectionRuleListFilter /
+DataStorageListFilter / SystemListFilter 扩到同样的字段面；TraceAdminStore /
+ThreadAdminStore 新增 10 个边谓词字段（Trace 的 hasProject / hasThread / hasRequests 各 2，
+Thread 的 hasProject / hasTraces 各 2）。标量语义沿用 §199 上提的 ConnectionSql helper（新增
+AppendTimePredicates，时间族 8 个谓词）：Contains → LIKE %v%、HasPrefix → LIKE v%、HasSuffix
+→ LIKE %v%、EqualFold → LOWER(col) = LOWER(@p)、ContainsFold → LOWER(col) LIKE LOWER(@p)，
+<> 与 NOT IN 排除 NULL，空 In / NotIn 列表忽略。边谓词语义与 §201–§205 相同：true → EXISTS、
+false → NOT EXISTS；hasXWith 的谓词 AND 进同一个 EXISTS；空 With 列表不生成谓词；不重新应用
+目标实体的软删除。三处本地空谓词约定按各 store 既有行为保持不动：DataStorage 的嵌套空
+not / and / or 抛 `ent: empty predicate DataStorageWhereInput: field '…'`，Model / Prompt /
+PromptProtectionRule / System 的空 Or 列表渲染为 FALSE，TraceAdminStore / ThreadAdminStore
+忽略空 Or 列表。Api 侧新增 6 个 introspection 测试（Model 115、Prompt 97、
+PromptProtectionRule 70、DataStorage 67、System 53、Trace 60 + Thread 52 字段）；持久化新增
+8 例（DataStorage 2、Model / Prompt / PromptProtectionRule / System / Trace / Thread 各 1，
+覆盖全量标量族与 10 个边谓词）。定向运行：七个持久化测试类 78 通过；七个 Api 端点测试类
+106 通过。未跑 Api 全量回归。残余：DataStorage 的 requests / executions 输出 relay 边仍由
+C196 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

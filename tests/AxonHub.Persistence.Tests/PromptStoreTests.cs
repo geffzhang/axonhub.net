@@ -286,6 +286,108 @@ public sealed class PromptStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesTheFullScalarPredicateSetAndProjectEdge()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new PromptStore(context);
+
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                INSERT INTO "projects"
+                    ("created_at", "updated_at", "deleted_at", "name", "description", "status")
+                VALUES (@CreatedAt, @UpdatedAt, 0, 'alpha-project', '', 'active'),
+                       (@CreatedAt, @UpdatedAt, 99, 'beta-project', '', 'active');
+                """,
+                new { CreatedAt, UpdatedAt });
+        }
+
+        long alphaProjectId;
+        long betaProjectId;
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            alphaProjectId = await connection.ExecuteScalarAsync<long>(
+                "SELECT \"id\" FROM \"projects\" WHERE \"name\" = 'alpha-project';");
+            betaProjectId = await connection.ExecuteScalarAsync<long>(
+                "SELECT \"id\" FROM \"projects\" WHERE \"name\" = 'beta-project';");
+        }
+
+        var alpha = NewPrompt(projectId: alphaProjectId, name: "Alpha", order: 5);
+        alpha.Description = "cold archive";
+        await store.CreateAsync(alpha);
+        var beta = NewPrompt(projectId: betaProjectId, name: "Beta", order: 10);
+        beta.Role = "user";
+        beta.Content = "Summarize the news.";
+        beta.UpdatedAt = UpdatedAt.AddDays(1);
+        await store.CreateAsync(beta);
+        var gamma = NewPrompt(projectId: 424242, name: "gamma", status: "disabled", order: 1);
+        gamma.Description = "archive too";
+        await store.CreateAsync(gamma);
+
+        async Task<string[]> Names(PromptListFilter where, long? projectScope = null)
+        {
+            var page = await store.ListAsync(new PromptListQuery
+            {
+                Where = where,
+                ProjectScope = projectScope,
+                First = 10,
+            });
+            return page.Nodes.Select(static node => node.Name).ToArray();
+        }
+
+        // id, time, projectID and order predicates.
+        Assert.Equal(["Alpha"], await Names(
+            new PromptListFilter { IdGT = alpha.Id - 1, IdLTE = alpha.Id }));
+        Assert.Equal(["Alpha", "Beta", "gamma"], await Names(
+            new PromptListFilter { CreatedAtIn = [CreatedAt] }));
+        Assert.Equal(["Beta"], await Names(
+            new PromptListFilter { UpdatedAtGT = UpdatedAt }));
+        Assert.Equal(["Alpha", "Beta"], await Names(
+            new PromptListFilter { ProjectIdNEQ = 424242 }));
+        Assert.Equal(["gamma"], await Names(
+            new PromptListFilter { ProjectIdNotIn = [alphaProjectId, betaProjectId] }));
+        Assert.Equal(["Alpha"], await Names(
+            new PromptListFilter { OrderGT = 1, OrderLTE = 5 }));
+        Assert.Equal(["Beta", "gamma"], await Names(
+            new PromptListFilter { OrderIn = [1, 10] }));
+
+        // String predicates over name / description / role / content.
+        Assert.Equal(["Alpha", "Beta"], await Names(
+            new PromptListFilter { NameIn = ["Alpha", "Beta"] }));
+        Assert.Equal(["gamma"], await Names(
+            new PromptListFilter { NameHasPrefix = "ga" }));
+        Assert.Equal(["Alpha"], await Names(
+            new PromptListFilter { DescriptionContains = "cold" }));
+        Assert.Equal(["gamma"], await Names(
+            new PromptListFilter { DescriptionHasSuffix = "too" }));
+        Assert.Equal(["Beta"], await Names(
+            new PromptListFilter { RoleNEQ = "system" }));
+        Assert.Equal(["Beta"], await Names(
+            new PromptListFilter { ContentContainsFold = "NEWS" }));
+        Assert.Equal(["Alpha", "Beta"], await Names(
+            new PromptListFilter { StatusNEQ = "disabled" }));
+
+        // project edge: the generated EXISTS does not re-apply the soft delete,
+        // and a dangling project id has no project row.
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new PromptListFilter { HasProject = true }));
+        Assert.Equal(["gamma"], await Names(new PromptListFilter { HasProject = false }));
+        Assert.Equal(
+            ["Beta"],
+            await Names(new PromptListFilter
+            {
+                HasProjectWith = [new ProjectListFilter { Name = "beta-project" }],
+            }));
+        Assert.Equal(
+            ["Alpha", "Beta", "gamma"],
+            await Names(new PromptListFilter { HasProjectWith = [] }));
+    }
+
+    [Fact]
     public async Task UpdateWritesFieldsAndHasNoSoftDeletePredicate()
     {
         await using var db = new TestDatabase(fixture);
