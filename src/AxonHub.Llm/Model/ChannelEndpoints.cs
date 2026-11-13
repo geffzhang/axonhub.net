@@ -186,7 +186,10 @@ public static class ChannelEndpoints
             ["nanogpt"] = OpenAIFullDefaultEndpoints,
             ["nanogpt_responses"] = [Endpoint(ApiFormats.OpenAIResponse)],
             ["opencode_go"] = OpenAIChatOnlyDefaultEndpoints,
-            ["opencode_go_anthropic"] = AnthropicDefaultEndpoints,
+            // channel.TypeOpencodeGoAnthropic has no entry in the reference
+            // defaultEndpointsForChannelType (channel_endpoint.go:225-345):
+            // its outbound comes from the channel-type dispatch, not from a
+            // resolved endpoint (PrimaryApiFormat models the same hole).
             ["ollama"] = [Endpoint(ApiFormats.OllamaChat)],
             ["ollama_anthropic"] = AnthropicDefaultEndpoints,
             ["evolink"] = OpenAICompatibleDefaultEndpoints,

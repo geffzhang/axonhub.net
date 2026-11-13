@@ -1441,6 +1441,22 @@ PromptProtectionRule 70、DataStorage 67、System 53、Trace 60 + Thread 52 字�
 106 通过。未跑 Api 全量回归。残余：DataStorage 的 requests / executions 输出 relay 边仍由
 C196 跟踪。
 
+2026-11-13 更新（§207）：端点表与能力表收口审计 + 台账对账（关闭 C097）。
+参照 `internal/server/biz/channel_endpoint.go` 的 defaultEndpointsForChannelType 与
+`llm/api_capability.go` 的 CapableAPIFormats / RequestTypeForModelType，逐项比对 live 树：
+默认端点表 74 个通道类型全部一致（含 cloudflare 的 chat + embeddings、codex 的 responses /
+responses-ws / alpha_search / image_generation / image_edit、ollama 的 ollama/chat、jina 的
+rerank + embeddings、typesafe 的 typesafe/systemone），能力表 14 个请求类型全部一致（chat 集含
+openai/responses-ws）。审计发现并修复一处内部不一致：端口曾为 `opencode_go_anthropic` 合成
+anthropic/messages 默认端点，而参照没有该条目（其出站来自通道类型分派），导致 GraphQL
+`defaultEndpoints` 多显示一项；已删除该条目，并由 GraphQL 用例锁定为空。新增测试：
+`ChannelEndpointsTests` 的三个用例（74 项逐类型有序全表比对、14 组能力集合比对、
+RequestTypeForModelType 映射）与 `AdminChannelsEndpointTests.DefaultEndpointsExposeTheLiveTables`
+的 opencode_go_anthropic 空默认端点断言。定向运行：ChannelEndpointsTests 22 通过（含 3 个新用例）、
+AdminChannelsEndpointTests 45 通过；未跑 Api 全量回归。台账：C097 由 gap 转 resolved，
+C061 / C080 / C086 / C098 / C099 / C100 / C101 / C102 / C105 / C106 / C150 的端点/能力表口径更新；
+283 条（205 accepted / 0 gap / 78 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

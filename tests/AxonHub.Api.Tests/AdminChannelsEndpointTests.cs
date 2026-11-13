@@ -1118,6 +1118,10 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
     {
         SeedChannel(type: "codex", name: "Codex");
         SeedChannel(type: "cloudflare", name: "Cloudflare");
+        // No entry in the reference default-endpoint table (channel_endpoint.go):
+        // its outbound comes from the channel-type dispatch, so GraphQL exposes
+        // an empty defaultEndpoints list rather than a synthesized one.
+        SeedChannel(type: "opencode_go_anthropic", name: "OpenCode");
 
         var data = await QueryDataAsync(
             """
@@ -1136,7 +1140,7 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
         var nodes = data.GetProperty("channels").GetProperty("edges").EnumerateArray()
             .Select(static edge => edge.GetProperty("node")).ToArray();
 
-        // NAME ASC: "Cloudflare" sorts before "Codex".
+        // NAME ASC: "Cloudflare" → "Codex" → "OpenCode".
         Assert.Equal(
             ["openai/chat_completions", "openai/embeddings"],
             nodes[0].GetProperty("defaultEndpoints").EnumerateArray()
@@ -1149,6 +1153,7 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
         Assert.Equal(
             "",
             nodes[1].GetProperty("defaultEndpoints")[0].GetProperty("path").GetString());
+        Assert.Empty(nodes[2].GetProperty("defaultEndpoints").EnumerateArray());
     }
 
     [Fact]

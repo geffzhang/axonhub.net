@@ -196,4 +196,158 @@ public sealed class ChannelEndpointsTests
         Assert.NotNull(webSocket);
         Assert.Equal("/two", webSocket.Path);
     }
+
+    /// <summary>
+    /// channel_endpoint.go:225-345 (live tree): the built-in default endpoint
+    /// table for every modeled channel type, in order. §207 audits the whole
+    /// table against the reference; opencode_go_anthropic is deliberately
+    /// absent there (it has no entry in the Go map) and therefore has no
+    /// built-in endpoints in the port either.
+    /// </summary>
+    [Fact]
+    public void DefaultEndpointTableMatchesTheReferenceForEveryChannelType()
+    {
+        var expected = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["aihubmix"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["aihubmix_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["anthropic"] = [ApiFormats.AnthropicMessage],
+            ["anthropic_aws"] = [ApiFormats.AnthropicMessage],
+            ["anthropic_fake"] = [ApiFormats.AnthropicMessage],
+            ["anthropic_gcp"] = [ApiFormats.AnthropicMessage],
+            ["antigravity"] = [ApiFormats.GeminiContents],
+            ["atlascloud"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["bailian"] = [ApiFormats.OpenAIChatCompletion],
+            ["bailian_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["bailian_responses"] = [ApiFormats.OpenAIResponse],
+            ["burncloud"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["cerebras"] = [ApiFormats.OpenAIChatCompletion],
+            ["claudecode"] = [ApiFormats.AnthropicMessage],
+            ["cline"] = [ApiFormats.OpenAIChatCompletion],
+            ["cloudflare"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding],
+            ["codex"] = [ApiFormats.OpenAIResponse, ApiFormats.OpenAIResponseWebSocket, ApiFormats.OpenAIAlphaSearch, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit],
+            ["commandcode"] = [ApiFormats.OpenAIChatCompletion],
+            ["commandcode_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["deepinfra"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["deepseek"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAICompletion],
+            ["deepseek_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["doubao"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.SeedanceVideo],
+            ["doubao_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["evolink"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["evolink_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["fenno"] = [ApiFormats.OpenAIResponse],
+            ["fireworks"] = [ApiFormats.OpenAIChatCompletion],
+            ["gemini"] = [ApiFormats.GeminiContents, ApiFormats.GeminiEmbedding],
+            ["gemini_openai"] = [ApiFormats.OpenAIChatCompletion],
+            ["gemini_vertex"] = [ApiFormats.GeminiContents, ApiFormats.GeminiEmbedding],
+            ["github"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["github_copilot"] = [ApiFormats.OpenAIChatCompletion],
+            ["groq"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAISpeech, ApiFormats.OpenAITranscription, ApiFormats.OpenAITranslation],
+            ["jina"] = [ApiFormats.JinaRerank, ApiFormats.JinaEmbedding],
+            ["longcat"] = [ApiFormats.OpenAIChatCompletion],
+            ["longcat_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["minimax"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIImageGeneration],
+            ["minimax_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["modelscope"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.ModelScopeImage],
+            ["moonshot"] = [ApiFormats.OpenAIChatCompletion],
+            ["moonshot_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["moonshot_coding"] = [ApiFormats.AnthropicMessage],
+            ["nanogpt"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration, ApiFormats.OpenAISpeech, ApiFormats.OpenAITranscription, ApiFormats.OpenAITranslation],
+            ["nanogpt_responses"] = [ApiFormats.OpenAIResponse],
+            ["ollama"] = [ApiFormats.OllamaChat],
+            ["ollama_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["openai"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration, ApiFormats.OpenAISpeech, ApiFormats.OpenAITranscription, ApiFormats.OpenAITranslation],
+            ["openai_fake"] = [ApiFormats.OpenAIChatCompletion],
+            ["openai_responses"] = [ApiFormats.OpenAIResponse],
+            ["opencode_go"] = [ApiFormats.OpenAIChatCompletion],
+            ["openrouter"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAISpeech, ApiFormats.OpenAITranscription, ApiFormats.OpenAITranslation],
+            ["ppio"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["qiniu"] = [ApiFormats.OpenAIChatCompletion],
+            ["qiniu_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["siliconflow"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["typesafe"] = [ApiFormats.TypeSafeSystemOne],
+            ["vercel"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration],
+            ["volcengine"] = [ApiFormats.OpenAIChatCompletion],
+            ["volcengine_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["xai"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIResponse],
+            ["xai_responses"] = [ApiFormats.OpenAIResponse],
+            ["xai_subscription"] = [ApiFormats.OpenAIResponse],
+            ["xiaomi"] = [ApiFormats.OpenAIChatCompletion],
+            ["xiaomi_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["zai"] = [ApiFormats.OpenAIChatCompletion],
+            ["zai_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["zenmux"] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIEmbedding, ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.OpenAIVideo, ApiFormats.OpenAIModeration, ApiFormats.OpenAISpeech, ApiFormats.OpenAITranscription, ApiFormats.OpenAITranslation],
+            ["zenmux_anthropic"] = [ApiFormats.AnthropicMessage],
+            ["zenmux_gemini"] = [ApiFormats.GeminiContents, ApiFormats.GeminiEmbedding],
+            ["zenmux_responses"] = [ApiFormats.OpenAIResponse],
+            ["zenmux_video"] = [ApiFormats.ZenmuxVideo],
+            ["zhipu"] = [ApiFormats.OpenAIChatCompletion],
+            ["zhipu_anthropic"] = [ApiFormats.AnthropicMessage],
+        };
+
+        foreach (var (channelType, formats) in expected)
+        {
+            Assert.Equal(
+                formats,
+                ChannelEndpoints.DefaultsForChannelType(channelType)
+                    .Select(static endpoint => endpoint.ApiFormat));
+        }
+
+        // The reference registers no default endpoint for this type; its
+        // outbound comes from the channel-type dispatch.
+        Assert.Empty(ChannelEndpoints.DefaultsForChannelType("opencode_go_anthropic"));
+        Assert.Empty(ChannelEndpoints.DefaultsForChannelType("unknown"));
+        Assert.Equal(74, expected.Count);
+    }
+
+    /// <summary>
+    /// llm/api_capability.go (live tree, including the WebSocket Responses
+    /// format added to the chat set): every request type's format set.
+    /// </summary>
+    [Fact]
+    public void CapableApiFormatsMatchesTheReferenceForEveryRequestType()
+    {
+        var expected = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            [RequestTypes.Chat] = [ApiFormats.OpenAIChatCompletion, ApiFormats.OpenAIResponse, ApiFormats.OpenAIResponseWebSocket, ApiFormats.AnthropicMessage, ApiFormats.GeminiContents, ApiFormats.OllamaChat],
+            [RequestTypes.Compact] = [ApiFormats.OpenAIResponseCompact],
+            [RequestTypes.Completion] = [ApiFormats.OpenAICompletion],
+            [RequestTypes.Embedding] = [ApiFormats.OpenAIEmbedding, ApiFormats.JinaEmbedding, ApiFormats.GeminiEmbedding],
+            [RequestTypes.Moderation] = [ApiFormats.OpenAIModeration],
+            [RequestTypes.AlphaSearch] = [ApiFormats.OpenAIAlphaSearch],
+            [RequestTypes.Decisions] = [ApiFormats.OpenAIDecisions],
+            [RequestTypes.Image] = [ApiFormats.OpenAIImageGeneration, ApiFormats.OpenAIImageEdit, ApiFormats.OpenAIImageVariation, ApiFormats.ModelScopeImage],
+            [RequestTypes.Rerank] = [ApiFormats.JinaRerank],
+            [RequestTypes.Video] = [ApiFormats.OpenAIVideo, ApiFormats.SeedanceVideo, ApiFormats.ZenmuxVideo],
+            [RequestTypes.Speech] = [ApiFormats.OpenAISpeech],
+            [RequestTypes.Transcription] = [ApiFormats.OpenAITranscription],
+            [RequestTypes.Translation] = [ApiFormats.OpenAITranslation],
+            [RequestTypes.SystemOne] = [ApiFormats.TypeSafeSystemOne],
+        };
+
+        foreach (var (requestType, formats) in expected)
+        {
+            var allowed = ApiCapabilities.CapableApiFormats(requestType);
+            Assert.NotNull(allowed);
+            Assert.Equal(
+                formats.Order(StringComparer.Ordinal),
+                allowed.Order(StringComparer.Ordinal));
+        }
+
+        Assert.Null(ApiCapabilities.CapableApiFormats("unknown"));
+        Assert.Equal(14, expected.Count);
+    }
+
+    [Fact]
+    public void RequestTypeForModelTypeMapsTheConfiguredModelTypes()
+    {
+        Assert.Equal(RequestTypes.Chat, ApiCapabilities.RequestTypeForModelType("chat"));
+        Assert.Equal(RequestTypes.Embedding, ApiCapabilities.RequestTypeForModelType("embedding"));
+        Assert.Equal(RequestTypes.Rerank, ApiCapabilities.RequestTypeForModelType("rerank"));
+        Assert.Equal(RequestTypes.Image, ApiCapabilities.RequestTypeForModelType("image_generation"));
+        Assert.Equal(RequestTypes.Video, ApiCapabilities.RequestTypeForModelType("video_generation"));
+        Assert.Equal(RequestTypes.SystemOne, ApiCapabilities.RequestTypeForModelType("systemone"));
+        Assert.Equal(RequestTypes.SystemOne, ApiCapabilities.RequestTypeForModelType("system_one"));
+        Assert.Equal(string.Empty, ApiCapabilities.RequestTypeForModelType("unknown"));
+    }
 }
