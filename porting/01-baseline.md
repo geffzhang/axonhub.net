@@ -1336,6 +1336,36 @@ introspection 断言（ProjectWhereInput 57 个字段与逐族映射、APIKeyWhe
 56 个字段、4 组边谓词到 ListFilter 的映射；三类合计 61 通过）。
 残余：8 组边谓词（Channel 6、User 2），继续由 C135 跟踪。
 
+2026-11-13 更新（§203）：Channel 侧 ChannelProbe / ChannelModelPrice / ProviderQuotaStatus 的
+where 输入与 Channel 的 3 组边谓词（C135 第五刀）。
+参照 `internal/server/gql/ent.graphql`：ChannelProbeWhereInput 共 61 个字段（id 8、channelID 4、
+totalRequestCount 8、successRequestCount 8、avgTokensPerSecond 10、avgTimeToFirstTokenMs 10、
+timestamp 8、hasChannel / hasChannelWith 与 not / and / or），ChannelModelPriceWhereInput 共
+61 个字段（id 8、createdAt / updatedAt 各 8、channelID 4、modelID / referenceID 各 13、
+hasChannel / hasVersions 两组边与 not / and / or），ChannelModelPriceVersionWhereInput 共 89 个
+字段（id 8、createdAt / updatedAt 各 8、channelID 8、modelID 13、channelModelPriceID 4、
+status 4、effectiveStartAt 8、effectiveEndAt 10、referenceID 13、hasChannelModelPrice 与
+not / and / or），ProviderQuotaStatusWhereInput 共 76 个字段（id 8、createdAt / updatedAt 各 8、
+channelID 4、providerType 4、status 4、nextResetAt 10、ready 2、nextCheckAt 8、accountKey 15、
+hasChannel 与 not / and / or）。端口新增四个输入与对应 ListFilter（ChannelProbeListFilter /
+ChannelModelPriceListFilter / ChannelModelPriceVersionListFilter /
+ProviderQuotaStatusListFilter），ChannelWhereInput 增加 hasChannelProbes /
+hasChannelModelPrices / hasProviderQuotaStatus 三组边（6 个字段，157/163 字段）。
+存储层扩展 `ConnectionSql`（double 比较、double IN / NOT IN，空列表语义与 Id 列表一致），
+`ChannelAdminStore.BuildFilter` 改为 internal static，并用 EXISTS 子查询接入三组边：
+channel_probes.channel_id、channel_model_prices.channel_id、provider_quota_status.channel_id
+→ channels.id；价格 ↔ 版本 ↔ 通道的嵌套互指由 ChannelModelPriceFilterSql /
+ChannelModelPriceVersionFilterSql 递归生成。语义与 §201 / §202 相同：true → EXISTS、
+false → NOT EXISTS；hasXWith 的谓词 AND 进同一个 EXISTS，空列表不生成谓词，空过滤器退化为
+「存在任意链接」，不重新应用被连接实体的软删除谓词（已软删除的价格行仍满足
+hasChannelModelPrices / hasChannelModelPricesWith）。新增 1 例：ChannelAdminStoreTests 的
+ListAppliesEdgePredicatesWithoutReapplyingTheTargetSoftDelete（覆盖 true / false、
+hasXWith 标量、嵌套 hasChannelWith / hasVersionsWith、软删除行仍匹配与 Not / Or 组合；
+该类 8 通过）。Api 侧更新 2 个断言并新增 1 个 4 例 theory（ChannelWhereInput 157 个字段、
+三组边谓词到 ListFilter 的映射、四个新输入的 61 / 61 / 89 / 76 字段全量锁；
+AdminChannelsEndpointTests 45 通过）。
+残余：5 组边谓词（Channel 3、User 2），继续由 C135 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

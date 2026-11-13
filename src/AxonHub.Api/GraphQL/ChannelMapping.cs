@@ -36,8 +36,16 @@ public static class ChannelMapping
     private static readonly Dictionary<string, ProviderQuotaStatusProviderTypeValue>
         ProviderQuotaTypesByWire = BuildWireMap<ProviderQuotaStatusProviderTypeValue>();
 
+    private static readonly Dictionary<ProviderQuotaStatusProviderTypeValue, string>
+        ProviderQuotaTypeWires = ProviderQuotaTypesByWire
+            .ToDictionary(static pair => pair.Value, static pair => pair.Key);
+
     private static readonly Dictionary<string, ProviderQuotaStatusStatusValue>
         ProviderQuotaStatusesByWire = BuildWireMap<ProviderQuotaStatusStatusValue>();
+
+    private static readonly Dictionary<ProviderQuotaStatusStatusValue, string>
+        ProviderQuotaStatusWires = ProviderQuotaStatusesByWire
+            .ToDictionary(static pair => pair.Value, static pair => pair.Key);
 
     private static readonly DateTime ZeroTime = new(1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -359,11 +367,148 @@ public static class ChannelMapping
             RemarkNotNil = where.RemarkNotNil == true,
             RemarkEqualFold = where.RemarkEqualFold,
             RemarkContainsFold = where.RemarkContainsFold,
+            HasChannelProbes = where.HasChannelProbes,
+            HasChannelProbesWith = where.HasChannelProbesWith?
+                .Select(static probe => ChannelProbeMapping.ToFilter(probe))
+                .OfType<ChannelProbeListFilter>()
+                .ToList(),
+            HasChannelModelPrices = where.HasChannelModelPrices,
+            HasChannelModelPricesWith = where.HasChannelModelPricesWith?
+                .Select(static price => PriceMapping.ToFilter(price))
+                .OfType<ChannelModelPriceListFilter>()
+                .ToList(),
+            HasProviderQuotaStatus = where.HasProviderQuotaStatus,
+            HasProviderQuotaStatusWith = where.HasProviderQuotaStatusWith?
+                .Select(static quota => ToFilter(quota))
+                .OfType<ProviderQuotaStatusListFilter>()
+                .ToList(),
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<ChannelListFilter>().ToList(),
             Or = where.Or?.Select(ToFilter).OfType<ChannelListFilter>().ToList(),
         };
     }
+
+    public static ProviderQuotaStatusListFilter? ToFilter(
+        ProviderQuotaStatusWhereInput? where)
+    {
+        if (where is null)
+        {
+            return null;
+        }
+
+        return new ProviderQuotaStatusListFilter
+        {
+            Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
+            IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
+            ChannelId = where.ChannelID is null ? null : GidValue.Parse(where.ChannelID).Id,
+            ChannelIdNEQ = where.ChannelIDNEQ is null ? null : GidValue.Parse(where.ChannelIDNEQ).Id,
+            ChannelIdIn = where.ChannelIDIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            ChannelIdNotIn = where.ChannelIDNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            ProviderType = where.ProviderType is null
+                ? null
+                : ToWireProviderType(where.ProviderType.Value),
+            ProviderTypeNEQ = where.ProviderTypeNEQ is null
+                ? null
+                : ToWireProviderType(where.ProviderTypeNEQ.Value),
+            ProviderTypeIn = where.ProviderTypeIn?
+                .Select(static value => ToWireProviderType(value))
+                .ToList(),
+            ProviderTypeNotIn = where.ProviderTypeNotIn?
+                .Select(static value => ToWireProviderType(value))
+                .ToList(),
+            Status = where.Status is null ? null : ToWireProviderStatus(where.Status.Value),
+            StatusNEQ = where.StatusNEQ is null
+                ? null
+                : ToWireProviderStatus(where.StatusNEQ.Value),
+            StatusIn = where.StatusIn?
+                .Select(static value => ToWireProviderStatus(value))
+                .ToList(),
+            StatusNotIn = where.StatusNotIn?
+                .Select(static value => ToWireProviderStatus(value))
+                .ToList(),
+            NextResetAt = where.NextResetAt,
+            NextResetAtNEQ = where.NextResetAtNEQ,
+            NextResetAtIn = where.NextResetAtIn,
+            NextResetAtNotIn = where.NextResetAtNotIn,
+            NextResetAtGT = where.NextResetAtGT,
+            NextResetAtGTE = where.NextResetAtGTE,
+            NextResetAtLT = where.NextResetAtLT,
+            NextResetAtLTE = where.NextResetAtLTE,
+            NextResetAtIsNil = where.NextResetAtIsNil == true,
+            NextResetAtNotNil = where.NextResetAtNotNil == true,
+            Ready = where.Ready,
+            ReadyNEQ = where.ReadyNEQ,
+            NextCheckAt = where.NextCheckAt,
+            NextCheckAtNEQ = where.NextCheckAtNEQ,
+            NextCheckAtIn = where.NextCheckAtIn,
+            NextCheckAtNotIn = where.NextCheckAtNotIn,
+            NextCheckAtGT = where.NextCheckAtGT,
+            NextCheckAtGTE = where.NextCheckAtGTE,
+            NextCheckAtLT = where.NextCheckAtLT,
+            NextCheckAtLTE = where.NextCheckAtLTE,
+            AccountKey = where.AccountKey,
+            AccountKeyNEQ = where.AccountKeyNEQ,
+            AccountKeyIn = where.AccountKeyIn,
+            AccountKeyNotIn = where.AccountKeyNotIn,
+            AccountKeyGT = where.AccountKeyGT,
+            AccountKeyGTE = where.AccountKeyGTE,
+            AccountKeyLT = where.AccountKeyLT,
+            AccountKeyLTE = where.AccountKeyLTE,
+            AccountKeyContains = where.AccountKeyContains,
+            AccountKeyHasPrefix = where.AccountKeyHasPrefix,
+            AccountKeyHasSuffix = where.AccountKeyHasSuffix,
+            AccountKeyIsNil = where.AccountKeyIsNil == true,
+            AccountKeyNotNil = where.AccountKeyNotNil == true,
+            AccountKeyEqualFold = where.AccountKeyEqualFold,
+            AccountKeyContainsFold = where.AccountKeyContainsFold,
+            HasChannel = where.HasChannel,
+            HasChannelWith = where.HasChannelWith?
+                .Select(ToFilter)
+                .OfType<ChannelListFilter>()
+                .ToList(),
+            Not = ToFilter(where.Not),
+            And = where.And?.Select(ToFilter).OfType<ProviderQuotaStatusListFilter>().ToList(),
+            Or = where.Or?.Select(ToFilter).OfType<ProviderQuotaStatusListFilter>().ToList(),
+        };
+    }
+
+    private static string ToWireProviderType(ProviderQuotaStatusProviderTypeValue type)
+        => ProviderQuotaTypeWires.TryGetValue(type, out var wire)
+            ? wire
+            : throw new InvalidOperationException(
+                "Enum \"ProviderQuotaStatusProviderType\" cannot represent value: "
+                + JsonSerializer.Serialize(type.ToString()));
+
+    private static string ToWireProviderStatus(ProviderQuotaStatusStatusValue status)
+        => ProviderQuotaStatusWires.TryGetValue(status, out var wire)
+            ? wire
+            : throw new InvalidOperationException(
+                "Enum \"ProviderQuotaStatusStatus\" cannot represent value: "
+                + JsonSerializer.Serialize(status.ToString()));
 
     /// <summary>
     /// CREATED_AT is remapped to ent.DefaultChannelOrder before the query runs,

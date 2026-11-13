@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.EntityFrameworkCore;
+using static AxonHub.Persistence.ConnectionSql;
 
 namespace AxonHub.Persistence;
 
@@ -42,6 +43,746 @@ public delegate string ChannelPriceReferenceIdFactory();
 
 /// <summary>One resolved auto-price candidate (channelModelPriceTemplate).</summary>
 public sealed record ChannelModelPriceTemplate(string ModelId, string PriceJson);
+
+/// <summary>
+/// Port of the scalar and edge predicates of ent.ChannelModelPriceWhereInput
+/// (ent.graphql). The filter itself never restricts <c>deleted_at</c>, matching
+/// the generated sqlgraph predicates used inside a nested edge filter.
+/// </summary>
+public sealed record ChannelModelPriceListFilter
+{
+    public long? Id { get; init; }
+
+    public long? IdNEQ { get; init; }
+
+    public IReadOnlyList<long>? IdIn { get; init; }
+
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
+
+    public long? ChannelId { get; init; }
+
+    public long? ChannelIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? ChannelIdIn { get; init; }
+
+    public IReadOnlyList<long>? ChannelIdNotIn { get; init; }
+
+    public string? ModelId { get; init; }
+
+    public string? ModelIdNEQ { get; init; }
+
+    public IReadOnlyList<string>? ModelIdIn { get; init; }
+
+    public IReadOnlyList<string>? ModelIdNotIn { get; init; }
+
+    public string? ModelIdGT { get; init; }
+
+    public string? ModelIdGTE { get; init; }
+
+    public string? ModelIdLT { get; init; }
+
+    public string? ModelIdLTE { get; init; }
+
+    public string? ModelIdContains { get; init; }
+
+    public string? ModelIdHasPrefix { get; init; }
+
+    public string? ModelIdHasSuffix { get; init; }
+
+    public string? ModelIdEqualFold { get; init; }
+
+    public string? ModelIdContainsFold { get; init; }
+
+    public string? ReferenceId { get; init; }
+
+    public string? ReferenceIdNEQ { get; init; }
+
+    public IReadOnlyList<string>? ReferenceIdIn { get; init; }
+
+    public IReadOnlyList<string>? ReferenceIdNotIn { get; init; }
+
+    public string? ReferenceIdGT { get; init; }
+
+    public string? ReferenceIdGTE { get; init; }
+
+    public string? ReferenceIdLT { get; init; }
+
+    public string? ReferenceIdLTE { get; init; }
+
+    public string? ReferenceIdContains { get; init; }
+
+    public string? ReferenceIdHasPrefix { get; init; }
+
+    public string? ReferenceIdHasSuffix { get; init; }
+
+    public string? ReferenceIdEqualFold { get; init; }
+
+    public string? ReferenceIdContainsFold { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasChannel</c>: true → an EXISTS over <c>channels</c>, false →
+    /// NOT EXISTS. Generated sqlgraph does not re-apply the Channel soft-delete
+    /// predicate.
+    /// </summary>
+    public bool? HasChannel { get; init; }
+
+    public IReadOnlyList<ChannelListFilter>? HasChannelWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasVersions</c>: true → the price has a version row, false →
+    /// NOT EXISTS.
+    /// </summary>
+    public bool? HasVersions { get; init; }
+
+    public IReadOnlyList<ChannelModelPriceVersionListFilter>? HasVersionsWith { get; init; }
+
+    public ChannelModelPriceListFilter? Not { get; init; }
+
+    public IReadOnlyList<ChannelModelPriceListFilter>? And { get; init; }
+
+    public IReadOnlyList<ChannelModelPriceListFilter>? Or { get; init; }
+}
+
+/// <summary>
+/// Port of the scalar and edge predicates of
+/// ent.ChannelModelPriceVersionWhereInput (ent.graphql).
+/// </summary>
+public sealed record ChannelModelPriceVersionListFilter
+{
+    public long? Id { get; init; }
+
+    public long? IdNEQ { get; init; }
+
+    public IReadOnlyList<long>? IdIn { get; init; }
+
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
+
+    public long? ChannelId { get; init; }
+
+    public long? ChannelIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? ChannelIdIn { get; init; }
+
+    public IReadOnlyList<long>? ChannelIdNotIn { get; init; }
+
+    public long? ChannelIdGT { get; init; }
+
+    public long? ChannelIdGTE { get; init; }
+
+    public long? ChannelIdLT { get; init; }
+
+    public long? ChannelIdLTE { get; init; }
+
+    public string? ModelId { get; init; }
+
+    public string? ModelIdNEQ { get; init; }
+
+    public IReadOnlyList<string>? ModelIdIn { get; init; }
+
+    public IReadOnlyList<string>? ModelIdNotIn { get; init; }
+
+    public string? ModelIdGT { get; init; }
+
+    public string? ModelIdGTE { get; init; }
+
+    public string? ModelIdLT { get; init; }
+
+    public string? ModelIdLTE { get; init; }
+
+    public string? ModelIdContains { get; init; }
+
+    public string? ModelIdHasPrefix { get; init; }
+
+    public string? ModelIdHasSuffix { get; init; }
+
+    public string? ModelIdEqualFold { get; init; }
+
+    public string? ModelIdContainsFold { get; init; }
+
+    public long? ChannelModelPriceId { get; init; }
+
+    public long? ChannelModelPriceIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? ChannelModelPriceIdIn { get; init; }
+
+    public IReadOnlyList<long>? ChannelModelPriceIdNotIn { get; init; }
+
+    public string? Status { get; init; }
+
+    public string? StatusNEQ { get; init; }
+
+    public IReadOnlyList<string>? StatusIn { get; init; }
+
+    public IReadOnlyList<string>? StatusNotIn { get; init; }
+
+    public DateTime? EffectiveStartAt { get; init; }
+
+    public DateTime? EffectiveStartAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? EffectiveStartAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? EffectiveStartAtNotIn { get; init; }
+
+    public DateTime? EffectiveStartAtGT { get; init; }
+
+    public DateTime? EffectiveStartAtGTE { get; init; }
+
+    public DateTime? EffectiveStartAtLT { get; init; }
+
+    public DateTime? EffectiveStartAtLTE { get; init; }
+
+    public DateTime? EffectiveEndAt { get; init; }
+
+    public DateTime? EffectiveEndAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? EffectiveEndAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? EffectiveEndAtNotIn { get; init; }
+
+    public DateTime? EffectiveEndAtGT { get; init; }
+
+    public DateTime? EffectiveEndAtGTE { get; init; }
+
+    public DateTime? EffectiveEndAtLT { get; init; }
+
+    public DateTime? EffectiveEndAtLTE { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool EffectiveEndAtIsNil { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool EffectiveEndAtNotNil { get; init; }
+
+    public string? ReferenceId { get; init; }
+
+    public string? ReferenceIdNEQ { get; init; }
+
+    public IReadOnlyList<string>? ReferenceIdIn { get; init; }
+
+    public IReadOnlyList<string>? ReferenceIdNotIn { get; init; }
+
+    public string? ReferenceIdGT { get; init; }
+
+    public string? ReferenceIdGTE { get; init; }
+
+    public string? ReferenceIdLT { get; init; }
+
+    public string? ReferenceIdLTE { get; init; }
+
+    public string? ReferenceIdContains { get; init; }
+
+    public string? ReferenceIdHasPrefix { get; init; }
+
+    public string? ReferenceIdHasSuffix { get; init; }
+
+    public string? ReferenceIdEqualFold { get; init; }
+
+    public string? ReferenceIdContainsFold { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasChannelModelPrice</c>: true → the version's parent price
+    /// row exists, false → NOT EXISTS.
+    /// </summary>
+    public bool? HasChannelModelPrice { get; init; }
+
+    public IReadOnlyList<ChannelModelPriceListFilter>? HasChannelModelPriceWith { get; init; }
+
+    public ChannelModelPriceVersionListFilter? Not { get; init; }
+
+    public IReadOnlyList<ChannelModelPriceVersionListFilter>? And { get; init; }
+
+    public IReadOnlyList<ChannelModelPriceVersionListFilter>? Or { get; init; }
+}
+
+/// <summary>SQL fragments for ent.ChannelModelPriceWhereInput.</summary>
+internal static class ChannelModelPriceFilterSql
+{
+    internal static string? Build(
+        ChannelModelPriceListFilter? filter,
+        string alias,
+        SqlArguments args)
+    {
+        if (filter is null)
+        {
+            return null;
+        }
+
+        var predicates = new List<string?>();
+
+        AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
+        if (filter.IdIn is not null)
+        {
+            AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+        }
+
+        if (filter.IdNotIn is not null)
+        {
+            AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
+        }
+
+        AppendComparison(predicates, alias, "id", filter.IdGT, ">", args);
+        AppendComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
+        AppendComparison(predicates, alias, "id", filter.IdLT, "<", args);
+        AppendComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAt, "=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtIn, args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAt, "=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtIn, args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelId, "=", args);
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelIdNEQ, "<>", args);
+        if (filter.ChannelIdIn is not null)
+        {
+            AppendIdIn(predicates, alias, "channel_id", filter.ChannelIdIn, args);
+        }
+
+        if (filter.ChannelIdNotIn is not null)
+        {
+            AppendIdIn(predicates, alias, "channel_id", filter.ChannelIdNotIn, args, negate: true);
+        }
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "model_id",
+            filter.ModelId,
+            filter.ModelIdNEQ,
+            filter.ModelIdIn,
+            filter.ModelIdNotIn,
+            filter.ModelIdGT,
+            filter.ModelIdGTE,
+            filter.ModelIdLT,
+            filter.ModelIdLTE,
+            filter.ModelIdContains,
+            filter.ModelIdHasPrefix,
+            filter.ModelIdHasSuffix,
+            filter.ModelIdEqualFold,
+            filter.ModelIdContainsFold,
+            args);
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "reference_id",
+            filter.ReferenceId,
+            filter.ReferenceIdNEQ,
+            filter.ReferenceIdIn,
+            filter.ReferenceIdNotIn,
+            filter.ReferenceIdGT,
+            filter.ReferenceIdGTE,
+            filter.ReferenceIdLT,
+            filter.ReferenceIdLTE,
+            filter.ReferenceIdContains,
+            filter.ReferenceIdHasPrefix,
+            filter.ReferenceIdHasSuffix,
+            filter.ReferenceIdEqualFold,
+            filter.ReferenceIdContainsFold,
+            args);
+
+        if (filter.HasChannel is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channels\" mpch WHERE mpch.\"id\" = "
+                + alias + ".\"channel_id\")";
+            predicates.Add(filter.HasChannel.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelWith is { Count: > 0 } channelFilters)
+        {
+            var channelPredicates = channelFilters
+                .Select(channel => ChannelAdminStore.BuildFilter(channel, "mpchf", args))
+                .Where(static channel => channel is not null)
+                .ToArray();
+            var channelCondition = Combine(channelPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channels\" mpchf WHERE mpchf.\"id\" = "
+                + alias + ".\"channel_id\""
+                + (channelCondition is null ? string.Empty : " AND " + channelCondition)
+                + ")");
+        }
+
+        if (filter.HasVersions is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channel_model_price_versions\" mpv"
+                + " WHERE mpv.\"channel_model_price_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasVersions.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasVersionsWith is { Count: > 0 } versionFilters)
+        {
+            var versionPredicates = versionFilters
+                .Select(version => ChannelModelPriceVersionFilterSql.Build(version, "mpv", args))
+                .Where(static version => version is not null)
+                .ToArray();
+            var versionCondition = Combine(versionPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channel_model_price_versions\" mpv"
+                + " WHERE mpv.\"channel_model_price_id\" = " + alias + ".\"id\""
+                + (versionCondition is null ? string.Empty : " AND " + versionCondition)
+                + ")");
+        }
+
+        if (filter.Not is not null)
+        {
+            var not = Build(filter.Not, alias, args);
+            if (not is not null)
+            {
+                predicates.Add("NOT (" + not + ")");
+            }
+        }
+
+        if (filter.And is not null)
+        {
+            var and = filter.And
+                .Select(nested => Build(nested, alias, args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            if (and.Length > 0)
+            {
+                predicates.Add("(" + string.Join(" AND ", and) + ")");
+            }
+        }
+
+        if (filter.Or is not null)
+        {
+            var or = filter.Or
+                .Select(nested => Build(nested, alias, args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            predicates.Add(or.Length == 0 ? "FALSE" : "(" + string.Join(" OR ", or) + ")");
+        }
+
+        return Combine(predicates);
+    }
+}
+
+/// <summary>SQL fragments for ent.ChannelModelPriceVersionWhereInput.</summary>
+internal static class ChannelModelPriceVersionFilterSql
+{
+    internal static string? Build(
+        ChannelModelPriceVersionListFilter? filter,
+        string alias,
+        SqlArguments args)
+    {
+        if (filter is null)
+        {
+            return null;
+        }
+
+        var predicates = new List<string?>();
+
+        AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
+        if (filter.IdIn is not null)
+        {
+            AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+        }
+
+        if (filter.IdNotIn is not null)
+        {
+            AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
+        }
+
+        AppendComparison(predicates, alias, "id", filter.IdGT, ">", args);
+        AppendComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
+        AppendComparison(predicates, alias, "id", filter.IdLT, "<", args);
+        AppendComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAt, "=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtIn, args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAt, "=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtIn, args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelId, "=", args);
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelIdNEQ, "<>", args);
+        if (filter.ChannelIdIn is not null)
+        {
+            AppendIdIn(predicates, alias, "channel_id", filter.ChannelIdIn, args);
+        }
+
+        if (filter.ChannelIdNotIn is not null)
+        {
+            AppendIdIn(predicates, alias, "channel_id", filter.ChannelIdNotIn, args, negate: true);
+        }
+
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelIdGT, ">", args);
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelIdGTE, ">=", args);
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelIdLT, "<", args);
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelIdLTE, "<=", args);
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "model_id",
+            filter.ModelId,
+            filter.ModelIdNEQ,
+            filter.ModelIdIn,
+            filter.ModelIdNotIn,
+            filter.ModelIdGT,
+            filter.ModelIdGTE,
+            filter.ModelIdLT,
+            filter.ModelIdLTE,
+            filter.ModelIdContains,
+            filter.ModelIdHasPrefix,
+            filter.ModelIdHasSuffix,
+            filter.ModelIdEqualFold,
+            filter.ModelIdContainsFold,
+            args);
+
+        AppendComparison(
+            predicates,
+            alias,
+            "channel_model_price_id",
+            filter.ChannelModelPriceId,
+            "=",
+            args);
+        AppendComparison(
+            predicates,
+            alias,
+            "channel_model_price_id",
+            filter.ChannelModelPriceIdNEQ,
+            "<>",
+            args);
+        if (filter.ChannelModelPriceIdIn is not null)
+        {
+            AppendIdIn(
+                predicates,
+                alias,
+                "channel_model_price_id",
+                filter.ChannelModelPriceIdIn,
+                args);
+        }
+
+        if (filter.ChannelModelPriceIdNotIn is not null)
+        {
+            AppendIdIn(
+                predicates,
+                alias,
+                "channel_model_price_id",
+                filter.ChannelModelPriceIdNotIn,
+                args,
+                negate: true);
+        }
+
+        AppendComparison(predicates, alias, "status", filter.Status, "=", args);
+        AppendComparison(predicates, alias, "status", filter.StatusNEQ, "<>", args);
+        if (filter.StatusIn is not null)
+        {
+            AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+        }
+
+        if (filter.StatusNotIn is not null)
+        {
+            AppendStringIn(predicates, alias, "status", filter.StatusNotIn, args, negate: true);
+        }
+
+        AppendComparison(predicates, alias, "effective_start_at", filter.EffectiveStartAt, "=", args);
+        AppendComparison(predicates, alias, "effective_start_at", filter.EffectiveStartAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "effective_start_at", filter.EffectiveStartAtIn, args);
+        AppendTimeIn(predicates, alias, "effective_start_at", filter.EffectiveStartAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "effective_start_at", filter.EffectiveStartAtGT, ">", args);
+        AppendComparison(predicates, alias, "effective_start_at", filter.EffectiveStartAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "effective_start_at", filter.EffectiveStartAtLT, "<", args);
+        AppendComparison(predicates, alias, "effective_start_at", filter.EffectiveStartAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "effective_end_at", filter.EffectiveEndAt, "=", args);
+        AppendComparison(predicates, alias, "effective_end_at", filter.EffectiveEndAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "effective_end_at", filter.EffectiveEndAtIn, args);
+        AppendTimeIn(predicates, alias, "effective_end_at", filter.EffectiveEndAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "effective_end_at", filter.EffectiveEndAtGT, ">", args);
+        AppendComparison(predicates, alias, "effective_end_at", filter.EffectiveEndAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "effective_end_at", filter.EffectiveEndAtLT, "<", args);
+        AppendComparison(predicates, alias, "effective_end_at", filter.EffectiveEndAtLTE, "<=", args);
+        if (filter.EffectiveEndAtIsNil)
+        {
+            predicates.Add(alias + ".\"effective_end_at\" IS NULL");
+        }
+
+        if (filter.EffectiveEndAtNotNil)
+        {
+            predicates.Add(alias + ".\"effective_end_at\" IS NOT NULL");
+        }
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "reference_id",
+            filter.ReferenceId,
+            filter.ReferenceIdNEQ,
+            filter.ReferenceIdIn,
+            filter.ReferenceIdNotIn,
+            filter.ReferenceIdGT,
+            filter.ReferenceIdGTE,
+            filter.ReferenceIdLT,
+            filter.ReferenceIdLTE,
+            filter.ReferenceIdContains,
+            filter.ReferenceIdHasPrefix,
+            filter.ReferenceIdHasSuffix,
+            filter.ReferenceIdEqualFold,
+            filter.ReferenceIdContainsFold,
+            args);
+
+        if (filter.HasChannelModelPrice is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channel_model_prices\" vmp"
+                + " WHERE vmp.\"id\" = " + alias + ".\"channel_model_price_id\")";
+            predicates.Add(filter.HasChannelModelPrice.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelModelPriceWith is { Count: > 0 } priceFilters)
+        {
+            var pricePredicates = priceFilters
+                .Select(price => ChannelModelPriceFilterSql.Build(price, "vmp", args))
+                .Where(static price => price is not null)
+                .ToArray();
+            var priceCondition = Combine(pricePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channel_model_prices\" vmp"
+                + " WHERE vmp.\"id\" = " + alias + ".\"channel_model_price_id\""
+                + (priceCondition is null ? string.Empty : " AND " + priceCondition)
+                + ")");
+        }
+
+        if (filter.Not is not null)
+        {
+            var not = Build(filter.Not, alias, args);
+            if (not is not null)
+            {
+                predicates.Add("NOT (" + not + ")");
+            }
+        }
+
+        if (filter.And is not null)
+        {
+            var and = filter.And
+                .Select(nested => Build(nested, alias, args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            if (and.Length > 0)
+            {
+                predicates.Add("(" + string.Join(" AND ", and) + ")");
+            }
+        }
+
+        if (filter.Or is not null)
+        {
+            var or = filter.Or
+                .Select(nested => Build(nested, alias, args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            predicates.Add(or.Length == 0 ? "FALSE" : "(" + string.Join(" OR ", or) + ")");
+        }
+
+        return Combine(predicates);
+    }
+}
 
 /// <summary>Persistence seam for the reference <c>channel_model_prices</c> table.</summary>
 public interface IChannelModelPriceStore

@@ -1,4 +1,5 @@
 using Dapper;
+using static AxonHub.Persistence.ConnectionSql;
 
 namespace AxonHub.Persistence;
 
@@ -30,6 +31,391 @@ public sealed class ChannelProbeStatsRow
     public long RequestCount { get; init; }
 
     public long StreamingRequestCount { get; init; }
+}
+
+/// <summary>
+/// Port of the scalar and edge predicates of ent.ChannelProbeWhereInput
+/// (ent.graphql). The table has no mixins, so the predicate never restricts
+/// soft deletion.
+/// </summary>
+public sealed record ChannelProbeListFilter
+{
+    public long? Id { get; init; }
+
+    public long? IdNEQ { get; init; }
+
+    public IReadOnlyList<long>? IdIn { get; init; }
+
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public long? ChannelId { get; init; }
+
+    public long? ChannelIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? ChannelIdIn { get; init; }
+
+    public IReadOnlyList<long>? ChannelIdNotIn { get; init; }
+
+    public long? TotalRequestCount { get; init; }
+
+    public long? TotalRequestCountNEQ { get; init; }
+
+    public IReadOnlyList<long>? TotalRequestCountIn { get; init; }
+
+    public IReadOnlyList<long>? TotalRequestCountNotIn { get; init; }
+
+    public long? TotalRequestCountGT { get; init; }
+
+    public long? TotalRequestCountGTE { get; init; }
+
+    public long? TotalRequestCountLT { get; init; }
+
+    public long? TotalRequestCountLTE { get; init; }
+
+    public long? SuccessRequestCount { get; init; }
+
+    public long? SuccessRequestCountNEQ { get; init; }
+
+    public IReadOnlyList<long>? SuccessRequestCountIn { get; init; }
+
+    public IReadOnlyList<long>? SuccessRequestCountNotIn { get; init; }
+
+    public long? SuccessRequestCountGT { get; init; }
+
+    public long? SuccessRequestCountGTE { get; init; }
+
+    public long? SuccessRequestCountLT { get; init; }
+
+    public long? SuccessRequestCountLTE { get; init; }
+
+    public double? AvgTokensPerSecond { get; init; }
+
+    public double? AvgTokensPerSecondNEQ { get; init; }
+
+    public IReadOnlyList<double>? AvgTokensPerSecondIn { get; init; }
+
+    public IReadOnlyList<double>? AvgTokensPerSecondNotIn { get; init; }
+
+    public double? AvgTokensPerSecondGT { get; init; }
+
+    public double? AvgTokensPerSecondGTE { get; init; }
+
+    public double? AvgTokensPerSecondLT { get; init; }
+
+    public double? AvgTokensPerSecondLTE { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AvgTokensPerSecondIsNil { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AvgTokensPerSecondNotNil { get; init; }
+
+    public double? AvgTimeToFirstTokenMs { get; init; }
+
+    public double? AvgTimeToFirstTokenMsNEQ { get; init; }
+
+    public IReadOnlyList<double>? AvgTimeToFirstTokenMsIn { get; init; }
+
+    public IReadOnlyList<double>? AvgTimeToFirstTokenMsNotIn { get; init; }
+
+    public double? AvgTimeToFirstTokenMsGT { get; init; }
+
+    public double? AvgTimeToFirstTokenMsGTE { get; init; }
+
+    public double? AvgTimeToFirstTokenMsLT { get; init; }
+
+    public double? AvgTimeToFirstTokenMsLTE { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AvgTimeToFirstTokenMsIsNil { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AvgTimeToFirstTokenMsNotNil { get; init; }
+
+    public long? Timestamp { get; init; }
+
+    public long? TimestampNEQ { get; init; }
+
+    public IReadOnlyList<long>? TimestampIn { get; init; }
+
+    public IReadOnlyList<long>? TimestampNotIn { get; init; }
+
+    public long? TimestampGT { get; init; }
+
+    public long? TimestampGTE { get; init; }
+
+    public long? TimestampLT { get; init; }
+
+    public long? TimestampLTE { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasChannel</c>: true → an EXISTS over <c>channels</c>, false →
+    /// NOT EXISTS. Generated sqlgraph does not re-apply the Channel soft-delete
+    /// predicate.
+    /// </summary>
+    public bool? HasChannel { get; init; }
+
+    public IReadOnlyList<ChannelListFilter>? HasChannelWith { get; init; }
+
+    public ChannelProbeListFilter? Not { get; init; }
+
+    public IReadOnlyList<ChannelProbeListFilter>? And { get; init; }
+
+    public IReadOnlyList<ChannelProbeListFilter>? Or { get; init; }
+}
+
+/// <summary>
+/// SQL fragments for ent.ChannelProbeWhereInput. Mirrors sqlgraph's
+/// HasNeighbors / HasNeighborsWith shape: one EXISTS per edge predicate group.
+/// </summary>
+internal static class ChannelProbeFilterSql
+{
+    internal static string? Build(
+        ChannelProbeListFilter? filter,
+        string alias,
+        SqlArguments args)
+    {
+        if (filter is null)
+        {
+            return null;
+        }
+
+        var predicates = new List<string?>();
+
+        AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
+        if (filter.IdIn is not null)
+        {
+            AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+        }
+
+        if (filter.IdNotIn is not null)
+        {
+            AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
+        }
+
+        AppendComparison(predicates, alias, "id", filter.IdGT, ">", args);
+        AppendComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
+        AppendComparison(predicates, alias, "id", filter.IdLT, "<", args);
+        AppendComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelId, "=", args);
+        AppendComparison(predicates, alias, "channel_id", filter.ChannelIdNEQ, "<>", args);
+        if (filter.ChannelIdIn is not null)
+        {
+            AppendIdIn(predicates, alias, "channel_id", filter.ChannelIdIn, args);
+        }
+
+        if (filter.ChannelIdNotIn is not null)
+        {
+            AppendIdIn(predicates, alias, "channel_id", filter.ChannelIdNotIn, args, negate: true);
+        }
+
+        AppendComparison(predicates, alias, "total_request_count", filter.TotalRequestCount, "=", args);
+        AppendComparison(predicates, alias, "total_request_count", filter.TotalRequestCountNEQ, "<>", args);
+        if (filter.TotalRequestCountIn is not null)
+        {
+            AppendIdIn(predicates, alias, "total_request_count", filter.TotalRequestCountIn, args);
+        }
+
+        if (filter.TotalRequestCountNotIn is not null)
+        {
+            AppendIdIn(
+                predicates,
+                alias,
+                "total_request_count",
+                filter.TotalRequestCountNotIn,
+                args,
+                negate: true);
+        }
+
+        AppendComparison(predicates, alias, "total_request_count", filter.TotalRequestCountGT, ">", args);
+        AppendComparison(predicates, alias, "total_request_count", filter.TotalRequestCountGTE, ">=", args);
+        AppendComparison(predicates, alias, "total_request_count", filter.TotalRequestCountLT, "<", args);
+        AppendComparison(predicates, alias, "total_request_count", filter.TotalRequestCountLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "success_request_count", filter.SuccessRequestCount, "=", args);
+        AppendComparison(predicates, alias, "success_request_count", filter.SuccessRequestCountNEQ, "<>", args);
+        if (filter.SuccessRequestCountIn is not null)
+        {
+            AppendIdIn(predicates, alias, "success_request_count", filter.SuccessRequestCountIn, args);
+        }
+
+        if (filter.SuccessRequestCountNotIn is not null)
+        {
+            AppendIdIn(
+                predicates,
+                alias,
+                "success_request_count",
+                filter.SuccessRequestCountNotIn,
+                args,
+                negate: true);
+        }
+
+        AppendComparison(predicates, alias, "success_request_count", filter.SuccessRequestCountGT, ">", args);
+        AppendComparison(predicates, alias, "success_request_count", filter.SuccessRequestCountGTE, ">=", args);
+        AppendComparison(predicates, alias, "success_request_count", filter.SuccessRequestCountLT, "<", args);
+        AppendComparison(predicates, alias, "success_request_count", filter.SuccessRequestCountLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "avg_tokens_per_second", filter.AvgTokensPerSecond, "=", args);
+        AppendComparison(predicates, alias, "avg_tokens_per_second", filter.AvgTokensPerSecondNEQ, "<>", args);
+        if (filter.AvgTokensPerSecondIn is not null)
+        {
+            AppendDoubleIn(predicates, alias, "avg_tokens_per_second", filter.AvgTokensPerSecondIn, args);
+        }
+
+        if (filter.AvgTokensPerSecondNotIn is not null)
+        {
+            AppendDoubleIn(
+                predicates,
+                alias,
+                "avg_tokens_per_second",
+                filter.AvgTokensPerSecondNotIn,
+                args,
+                negate: true);
+        }
+
+        AppendComparison(predicates, alias, "avg_tokens_per_second", filter.AvgTokensPerSecondGT, ">", args);
+        AppendComparison(predicates, alias, "avg_tokens_per_second", filter.AvgTokensPerSecondGTE, ">=", args);
+        AppendComparison(predicates, alias, "avg_tokens_per_second", filter.AvgTokensPerSecondLT, "<", args);
+        AppendComparison(predicates, alias, "avg_tokens_per_second", filter.AvgTokensPerSecondLTE, "<=", args);
+        if (filter.AvgTokensPerSecondIsNil)
+        {
+            predicates.Add(alias + ".\"avg_tokens_per_second\" IS NULL");
+        }
+
+        if (filter.AvgTokensPerSecondNotNil)
+        {
+            predicates.Add(alias + ".\"avg_tokens_per_second\" IS NOT NULL");
+        }
+
+        AppendComparison(
+            predicates,
+            alias,
+            "avg_time_to_first_token_ms",
+            filter.AvgTimeToFirstTokenMs,
+            "=",
+            args);
+        AppendComparison(
+            predicates,
+            alias,
+            "avg_time_to_first_token_ms",
+            filter.AvgTimeToFirstTokenMsNEQ,
+            "<>",
+            args);
+        if (filter.AvgTimeToFirstTokenMsIn is not null)
+        {
+            AppendDoubleIn(
+                predicates,
+                alias,
+                "avg_time_to_first_token_ms",
+                filter.AvgTimeToFirstTokenMsIn,
+                args);
+        }
+
+        if (filter.AvgTimeToFirstTokenMsNotIn is not null)
+        {
+            AppendDoubleIn(
+                predicates,
+                alias,
+                "avg_time_to_first_token_ms",
+                filter.AvgTimeToFirstTokenMsNotIn,
+                args,
+                negate: true);
+        }
+
+        AppendComparison(predicates, alias, "avg_time_to_first_token_ms", filter.AvgTimeToFirstTokenMsGT, ">", args);
+        AppendComparison(predicates, alias, "avg_time_to_first_token_ms", filter.AvgTimeToFirstTokenMsGTE, ">=", args);
+        AppendComparison(predicates, alias, "avg_time_to_first_token_ms", filter.AvgTimeToFirstTokenMsLT, "<", args);
+        AppendComparison(predicates, alias, "avg_time_to_first_token_ms", filter.AvgTimeToFirstTokenMsLTE, "<=", args);
+        if (filter.AvgTimeToFirstTokenMsIsNil)
+        {
+            predicates.Add(alias + ".\"avg_time_to_first_token_ms\" IS NULL");
+        }
+
+        if (filter.AvgTimeToFirstTokenMsNotNil)
+        {
+            predicates.Add(alias + ".\"avg_time_to_first_token_ms\" IS NOT NULL");
+        }
+
+        AppendComparison(predicates, alias, "timestamp", filter.Timestamp, "=", args);
+        AppendComparison(predicates, alias, "timestamp", filter.TimestampNEQ, "<>", args);
+        if (filter.TimestampIn is not null)
+        {
+            AppendIdIn(predicates, alias, "timestamp", filter.TimestampIn, args);
+        }
+
+        if (filter.TimestampNotIn is not null)
+        {
+            AppendIdIn(predicates, alias, "timestamp", filter.TimestampNotIn, args, negate: true);
+        }
+
+        AppendComparison(predicates, alias, "timestamp", filter.TimestampGT, ">", args);
+        AppendComparison(predicates, alias, "timestamp", filter.TimestampGTE, ">=", args);
+        AppendComparison(predicates, alias, "timestamp", filter.TimestampLT, "<", args);
+        AppendComparison(predicates, alias, "timestamp", filter.TimestampLTE, "<=", args);
+
+        if (filter.HasChannel is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channels\" chp WHERE chp.\"id\" = "
+                + alias + ".\"channel_id\")";
+            predicates.Add(filter.HasChannel.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelWith is { Count: > 0 } channelFilters)
+        {
+            var channelPredicates = channelFilters
+                .Select(channel => ChannelAdminStore.BuildFilter(channel, "chpc", args))
+                .Where(static channel => channel is not null)
+                .ToArray();
+            var channelCondition = Combine(channelPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channels\" chpc WHERE chpc.\"id\" = "
+                + alias + ".\"channel_id\""
+                + (channelCondition is null ? string.Empty : " AND " + channelCondition)
+                + ")");
+        }
+
+        if (filter.Not is not null)
+        {
+            var not = Build(filter.Not, alias, args);
+            if (not is not null)
+            {
+                predicates.Add("NOT (" + not + ")");
+            }
+        }
+
+        if (filter.And is not null)
+        {
+            var and = filter.And
+                .Select(nested => Build(nested, alias, args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            if (and.Length > 0)
+            {
+                predicates.Add("(" + string.Join(" AND ", and) + ")");
+            }
+        }
+
+        if (filter.Or is not null)
+        {
+            var or = filter.Or
+                .Select(nested => Build(nested, alias, args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            predicates.Add(or.Length == 0 ? "FALSE" : "(" + string.Join(" OR ", or) + ")");
+        }
+
+        return Combine(predicates);
+    }
 }
 
 /// <summary>

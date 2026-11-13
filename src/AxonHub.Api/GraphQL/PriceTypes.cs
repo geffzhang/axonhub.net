@@ -429,6 +429,496 @@ public sealed class SaveChannelModelPriceInput
     public ModelPriceInput Price { get; init; } = new();
 }
 
+/// <summary>
+/// Port of <c>ChannelModelPriceWhereInput</c> (ent.graphql). The filter itself
+/// never restricts <c>deleted_at</c>, matching the generated sqlgraph
+/// predicates used inside a nested edge filter.
+/// </summary>
+[GraphQLName("ChannelModelPriceWhereInput")]
+public sealed class ChannelModelPriceWhereInput
+{
+    public ChannelModelPriceWhereInput? Not { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceWhereInput>? And { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceWhereInput>? Or { get; set; }
+
+    [GraphQLName("id")]
+    [GraphQLType(typeof(IdType))]
+    public string? Id { get; set; }
+
+    [GraphQLName("idNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLName("idIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLName("idNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLName("idGT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLName("idGTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLName("idLT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLName("idLTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    [GraphQLName("channelID")]
+    [GraphQLType(typeof(IdType))]
+    public string? ChannelID { get; set; }
+
+    [GraphQLName("channelIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? ChannelIDNEQ { get; set; }
+
+    [GraphQLName("channelIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ChannelIDIn { get; set; }
+
+    [GraphQLName("channelIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ChannelIDNotIn { get; set; }
+
+    [GraphQLName("modelID")]
+    public string? ModelID { get; set; }
+
+    [GraphQLName("modelIDNEQ")]
+    public string? ModelIDNEQ { get; set; }
+
+    [GraphQLName("modelIDIn")]
+    public IReadOnlyList<string>? ModelIDIn { get; set; }
+
+    [GraphQLName("modelIDNotIn")]
+    public IReadOnlyList<string>? ModelIDNotIn { get; set; }
+
+    [GraphQLName("modelIDGT")]
+    public string? ModelIDGT { get; set; }
+
+    [GraphQLName("modelIDGTE")]
+    public string? ModelIDGTE { get; set; }
+
+    [GraphQLName("modelIDLT")]
+    public string? ModelIDLT { get; set; }
+
+    [GraphQLName("modelIDLTE")]
+    public string? ModelIDLTE { get; set; }
+
+    [GraphQLName("modelIDContains")]
+    public string? ModelIDContains { get; set; }
+
+    [GraphQLName("modelIDHasPrefix")]
+    public string? ModelIDHasPrefix { get; set; }
+
+    [GraphQLName("modelIDHasSuffix")]
+    public string? ModelIDHasSuffix { get; set; }
+
+    [GraphQLName("modelIDEqualFold")]
+    public string? ModelIDEqualFold { get; set; }
+
+    [GraphQLName("modelIDContainsFold")]
+    public string? ModelIDContainsFold { get; set; }
+
+    [GraphQLName("referenceID")]
+    public string? ReferenceID { get; set; }
+
+    [GraphQLName("referenceIDNEQ")]
+    public string? ReferenceIDNEQ { get; set; }
+
+    [GraphQLName("referenceIDIn")]
+    public IReadOnlyList<string>? ReferenceIDIn { get; set; }
+
+    [GraphQLName("referenceIDNotIn")]
+    public IReadOnlyList<string>? ReferenceIDNotIn { get; set; }
+
+    [GraphQLName("referenceIDGT")]
+    public string? ReferenceIDGT { get; set; }
+
+    [GraphQLName("referenceIDGTE")]
+    public string? ReferenceIDGTE { get; set; }
+
+    [GraphQLName("referenceIDLT")]
+    public string? ReferenceIDLT { get; set; }
+
+    [GraphQLName("referenceIDLTE")]
+    public string? ReferenceIDLTE { get; set; }
+
+    [GraphQLName("referenceIDContains")]
+    public string? ReferenceIDContains { get; set; }
+
+    [GraphQLName("referenceIDHasPrefix")]
+    public string? ReferenceIDHasPrefix { get; set; }
+
+    [GraphQLName("referenceIDHasSuffix")]
+    public string? ReferenceIDHasSuffix { get; set; }
+
+    [GraphQLName("referenceIDEqualFold")]
+    public string? ReferenceIDEqualFold { get; set; }
+
+    [GraphQLName("referenceIDContainsFold")]
+    public string? ReferenceIDContainsFold { get; set; }
+
+    public bool? HasChannel { get; set; }
+
+    public IReadOnlyList<ChannelWhereInput>? HasChannelWith { get; set; }
+
+    public bool? HasVersions { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceVersionWhereInput>? HasVersionsWith { get; set; }
+}
+
+/// <summary>
+/// Port of <c>ChannelModelPriceVersionWhereInput</c> (ent.graphql).
+/// </summary>
+[GraphQLName("ChannelModelPriceVersionWhereInput")]
+public sealed class ChannelModelPriceVersionWhereInput
+{
+    public ChannelModelPriceVersionWhereInput? Not { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceVersionWhereInput>? And { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceVersionWhereInput>? Or { get; set; }
+
+    [GraphQLName("id")]
+    [GraphQLType(typeof(IdType))]
+    public string? Id { get; set; }
+
+    [GraphQLName("idNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLName("idIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLName("idNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLName("idGT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLName("idGTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLName("idLT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLName("idLTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    [GraphQLName("channelID")]
+    public int? ChannelID { get; set; }
+
+    [GraphQLName("channelIDNEQ")]
+    public int? ChannelIDNEQ { get; set; }
+
+    [GraphQLName("channelIDIn")]
+    public IReadOnlyList<int>? ChannelIDIn { get; set; }
+
+    [GraphQLName("channelIDNotIn")]
+    public IReadOnlyList<int>? ChannelIDNotIn { get; set; }
+
+    [GraphQLName("channelIDGT")]
+    public int? ChannelIDGT { get; set; }
+
+    [GraphQLName("channelIDGTE")]
+    public int? ChannelIDGTE { get; set; }
+
+    [GraphQLName("channelIDLT")]
+    public int? ChannelIDLT { get; set; }
+
+    [GraphQLName("channelIDLTE")]
+    public int? ChannelIDLTE { get; set; }
+
+    [GraphQLName("modelID")]
+    public string? ModelID { get; set; }
+
+    [GraphQLName("modelIDNEQ")]
+    public string? ModelIDNEQ { get; set; }
+
+    [GraphQLName("modelIDIn")]
+    public IReadOnlyList<string>? ModelIDIn { get; set; }
+
+    [GraphQLName("modelIDNotIn")]
+    public IReadOnlyList<string>? ModelIDNotIn { get; set; }
+
+    [GraphQLName("modelIDGT")]
+    public string? ModelIDGT { get; set; }
+
+    [GraphQLName("modelIDGTE")]
+    public string? ModelIDGTE { get; set; }
+
+    [GraphQLName("modelIDLT")]
+    public string? ModelIDLT { get; set; }
+
+    [GraphQLName("modelIDLTE")]
+    public string? ModelIDLTE { get; set; }
+
+    [GraphQLName("modelIDContains")]
+    public string? ModelIDContains { get; set; }
+
+    [GraphQLName("modelIDHasPrefix")]
+    public string? ModelIDHasPrefix { get; set; }
+
+    [GraphQLName("modelIDHasSuffix")]
+    public string? ModelIDHasSuffix { get; set; }
+
+    [GraphQLName("modelIDEqualFold")]
+    public string? ModelIDEqualFold { get; set; }
+
+    [GraphQLName("modelIDContainsFold")]
+    public string? ModelIDContainsFold { get; set; }
+
+    [GraphQLName("channelModelPriceID")]
+    [GraphQLType(typeof(IdType))]
+    public string? ChannelModelPriceID { get; set; }
+
+    [GraphQLName("channelModelPriceIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? ChannelModelPriceIDNEQ { get; set; }
+
+    [GraphQLName("channelModelPriceIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ChannelModelPriceIDIn { get; set; }
+
+    [GraphQLName("channelModelPriceIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ChannelModelPriceIDNotIn { get; set; }
+
+    public ChannelModelPriceVersionStatusValue? Status { get; set; }
+
+    public ChannelModelPriceVersionStatusValue? StatusNEQ { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceVersionStatusValue>? StatusIn { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceVersionStatusValue>? StatusNotIn { get; set; }
+
+    [GraphQLName("effectiveStartAt")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveStartAt { get; set; }
+
+    [GraphQLName("effectiveStartAtNEQ")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveStartAtNEQ { get; set; }
+
+    [GraphQLName("effectiveStartAtIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? EffectiveStartAtIn { get; set; }
+
+    [GraphQLName("effectiveStartAtNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? EffectiveStartAtNotIn { get; set; }
+
+    [GraphQLName("effectiveStartAtGT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveStartAtGT { get; set; }
+
+    [GraphQLName("effectiveStartAtGTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveStartAtGTE { get; set; }
+
+    [GraphQLName("effectiveStartAtLT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveStartAtLT { get; set; }
+
+    [GraphQLName("effectiveStartAtLTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveStartAtLTE { get; set; }
+
+    [GraphQLName("effectiveEndAt")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveEndAt { get; set; }
+
+    [GraphQLName("effectiveEndAtNEQ")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveEndAtNEQ { get; set; }
+
+    [GraphQLName("effectiveEndAtIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? EffectiveEndAtIn { get; set; }
+
+    [GraphQLName("effectiveEndAtNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? EffectiveEndAtNotIn { get; set; }
+
+    [GraphQLName("effectiveEndAtGT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveEndAtGT { get; set; }
+
+    [GraphQLName("effectiveEndAtGTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveEndAtGTE { get; set; }
+
+    [GraphQLName("effectiveEndAtLT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveEndAtLT { get; set; }
+
+    [GraphQLName("effectiveEndAtLTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? EffectiveEndAtLTE { get; set; }
+
+    [GraphQLName("effectiveEndAtIsNil")]
+    public bool? EffectiveEndAtIsNil { get; set; }
+
+    [GraphQLName("effectiveEndAtNotNil")]
+    public bool? EffectiveEndAtNotNil { get; set; }
+
+    [GraphQLName("referenceID")]
+    public string? ReferenceID { get; set; }
+
+    [GraphQLName("referenceIDNEQ")]
+    public string? ReferenceIDNEQ { get; set; }
+
+    [GraphQLName("referenceIDIn")]
+    public IReadOnlyList<string>? ReferenceIDIn { get; set; }
+
+    [GraphQLName("referenceIDNotIn")]
+    public IReadOnlyList<string>? ReferenceIDNotIn { get; set; }
+
+    [GraphQLName("referenceIDGT")]
+    public string? ReferenceIDGT { get; set; }
+
+    [GraphQLName("referenceIDGTE")]
+    public string? ReferenceIDGTE { get; set; }
+
+    [GraphQLName("referenceIDLT")]
+    public string? ReferenceIDLT { get; set; }
+
+    [GraphQLName("referenceIDLTE")]
+    public string? ReferenceIDLTE { get; set; }
+
+    [GraphQLName("referenceIDContains")]
+    public string? ReferenceIDContains { get; set; }
+
+    [GraphQLName("referenceIDHasPrefix")]
+    public string? ReferenceIDHasPrefix { get; set; }
+
+    [GraphQLName("referenceIDHasSuffix")]
+    public string? ReferenceIDHasSuffix { get; set; }
+
+    [GraphQLName("referenceIDEqualFold")]
+    public string? ReferenceIDEqualFold { get; set; }
+
+    [GraphQLName("referenceIDContainsFold")]
+    public string? ReferenceIDContainsFold { get; set; }
+
+    public bool? HasChannelModelPrice { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceWhereInput>? HasChannelModelPriceWith { get; set; }
+}
+
 /// <summary>Mapping between the price SDL types and objects.ModelPrice.</summary>
 public static class PriceMapping
 {
@@ -499,6 +989,204 @@ public static class PriceMapping
             EffectiveStartAt = record.EffectiveStartAt,
             EffectiveEndAt = record.EffectiveEndAt,
             ReferenceID = record.ReferenceId,
+        };
+    }
+
+    public static ChannelModelPriceListFilter? ToFilter(ChannelModelPriceWhereInput? where)
+    {
+        if (where is null)
+        {
+            return null;
+        }
+
+        return new ChannelModelPriceListFilter
+        {
+            Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
+            IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
+            ChannelId = where.ChannelID is null ? null : GidValue.Parse(where.ChannelID).Id,
+            ChannelIdNEQ = where.ChannelIDNEQ is null ? null : GidValue.Parse(where.ChannelIDNEQ).Id,
+            ChannelIdIn = where.ChannelIDIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            ChannelIdNotIn = where.ChannelIDNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            ModelId = where.ModelID,
+            ModelIdNEQ = where.ModelIDNEQ,
+            ModelIdIn = where.ModelIDIn,
+            ModelIdNotIn = where.ModelIDNotIn,
+            ModelIdGT = where.ModelIDGT,
+            ModelIdGTE = where.ModelIDGTE,
+            ModelIdLT = where.ModelIDLT,
+            ModelIdLTE = where.ModelIDLTE,
+            ModelIdContains = where.ModelIDContains,
+            ModelIdHasPrefix = where.ModelIDHasPrefix,
+            ModelIdHasSuffix = where.ModelIDHasSuffix,
+            ModelIdEqualFold = where.ModelIDEqualFold,
+            ModelIdContainsFold = where.ModelIDContainsFold,
+            ReferenceId = where.ReferenceID,
+            ReferenceIdNEQ = where.ReferenceIDNEQ,
+            ReferenceIdIn = where.ReferenceIDIn,
+            ReferenceIdNotIn = where.ReferenceIDNotIn,
+            ReferenceIdGT = where.ReferenceIDGT,
+            ReferenceIdGTE = where.ReferenceIDGTE,
+            ReferenceIdLT = where.ReferenceIDLT,
+            ReferenceIdLTE = where.ReferenceIDLTE,
+            ReferenceIdContains = where.ReferenceIDContains,
+            ReferenceIdHasPrefix = where.ReferenceIDHasPrefix,
+            ReferenceIdHasSuffix = where.ReferenceIDHasSuffix,
+            ReferenceIdEqualFold = where.ReferenceIDEqualFold,
+            ReferenceIdContainsFold = where.ReferenceIDContainsFold,
+            HasChannel = where.HasChannel,
+            HasChannelWith = where.HasChannelWith?
+                .Select(static channel => ChannelMapping.ToFilter(channel))
+                .OfType<ChannelListFilter>()
+                .ToList(),
+            HasVersions = where.HasVersions,
+            HasVersionsWith = where.HasVersionsWith?
+                .Select(ToFilter)
+                .OfType<ChannelModelPriceVersionListFilter>()
+                .ToList(),
+            Not = ToFilter(where.Not),
+            And = where.And?.Select(ToFilter).OfType<ChannelModelPriceListFilter>().ToList(),
+            Or = where.Or?.Select(ToFilter).OfType<ChannelModelPriceListFilter>().ToList(),
+        };
+    }
+
+    public static ChannelModelPriceVersionListFilter? ToFilter(
+        ChannelModelPriceVersionWhereInput? where)
+    {
+        if (where is null)
+        {
+            return null;
+        }
+
+        return new ChannelModelPriceVersionListFilter
+        {
+            Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
+            IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
+            ChannelId = where.ChannelID,
+            ChannelIdNEQ = where.ChannelIDNEQ,
+            ChannelIdIn = where.ChannelIDIn?.Select(static value => (long)value).ToList(),
+            ChannelIdNotIn = where.ChannelIDNotIn?.Select(static value => (long)value).ToList(),
+            ChannelIdGT = where.ChannelIDGT,
+            ChannelIdGTE = where.ChannelIDGTE,
+            ChannelIdLT = where.ChannelIDLT,
+            ChannelIdLTE = where.ChannelIDLTE,
+            ModelId = where.ModelID,
+            ModelIdNEQ = where.ModelIDNEQ,
+            ModelIdIn = where.ModelIDIn,
+            ModelIdNotIn = where.ModelIDNotIn,
+            ModelIdGT = where.ModelIDGT,
+            ModelIdGTE = where.ModelIDGTE,
+            ModelIdLT = where.ModelIDLT,
+            ModelIdLTE = where.ModelIDLTE,
+            ModelIdContains = where.ModelIDContains,
+            ModelIdHasPrefix = where.ModelIDHasPrefix,
+            ModelIdHasSuffix = where.ModelIDHasSuffix,
+            ModelIdEqualFold = where.ModelIDEqualFold,
+            ModelIdContainsFold = where.ModelIDContainsFold,
+            ChannelModelPriceId = where.ChannelModelPriceID is null
+                ? null
+                : GidValue.Parse(where.ChannelModelPriceID).Id,
+            ChannelModelPriceIdNEQ = where.ChannelModelPriceIDNEQ is null
+                ? null
+                : GidValue.Parse(where.ChannelModelPriceIDNEQ).Id,
+            ChannelModelPriceIdIn = where.ChannelModelPriceIDIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            ChannelModelPriceIdNotIn = where.ChannelModelPriceIDNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            Status = where.Status is null ? null : ToWireVersionStatus(where.Status.Value),
+            StatusNEQ = where.StatusNEQ is null ? null : ToWireVersionStatus(where.StatusNEQ.Value),
+            StatusIn = where.StatusIn?
+                .Select(static status => ToWireVersionStatus(status))
+                .ToList(),
+            StatusNotIn = where.StatusNotIn?
+                .Select(static status => ToWireVersionStatus(status))
+                .ToList(),
+            EffectiveStartAt = where.EffectiveStartAt,
+            EffectiveStartAtNEQ = where.EffectiveStartAtNEQ,
+            EffectiveStartAtIn = where.EffectiveStartAtIn,
+            EffectiveStartAtNotIn = where.EffectiveStartAtNotIn,
+            EffectiveStartAtGT = where.EffectiveStartAtGT,
+            EffectiveStartAtGTE = where.EffectiveStartAtGTE,
+            EffectiveStartAtLT = where.EffectiveStartAtLT,
+            EffectiveStartAtLTE = where.EffectiveStartAtLTE,
+            EffectiveEndAt = where.EffectiveEndAt,
+            EffectiveEndAtNEQ = where.EffectiveEndAtNEQ,
+            EffectiveEndAtIn = where.EffectiveEndAtIn,
+            EffectiveEndAtNotIn = where.EffectiveEndAtNotIn,
+            EffectiveEndAtGT = where.EffectiveEndAtGT,
+            EffectiveEndAtGTE = where.EffectiveEndAtGTE,
+            EffectiveEndAtLT = where.EffectiveEndAtLT,
+            EffectiveEndAtLTE = where.EffectiveEndAtLTE,
+            EffectiveEndAtIsNil = where.EffectiveEndAtIsNil == true,
+            EffectiveEndAtNotNil = where.EffectiveEndAtNotNil == true,
+            ReferenceId = where.ReferenceID,
+            ReferenceIdNEQ = where.ReferenceIDNEQ,
+            ReferenceIdIn = where.ReferenceIDIn,
+            ReferenceIdNotIn = where.ReferenceIDNotIn,
+            ReferenceIdGT = where.ReferenceIDGT,
+            ReferenceIdGTE = where.ReferenceIDGTE,
+            ReferenceIdLT = where.ReferenceIDLT,
+            ReferenceIdLTE = where.ReferenceIDLTE,
+            ReferenceIdContains = where.ReferenceIDContains,
+            ReferenceIdHasPrefix = where.ReferenceIDHasPrefix,
+            ReferenceIdHasSuffix = where.ReferenceIDHasSuffix,
+            ReferenceIdEqualFold = where.ReferenceIDEqualFold,
+            ReferenceIdContainsFold = where.ReferenceIDContainsFold,
+            HasChannelModelPrice = where.HasChannelModelPrice,
+            HasChannelModelPriceWith = where.HasChannelModelPriceWith?
+                .Select(ToFilter)
+                .OfType<ChannelModelPriceListFilter>()
+                .ToList(),
+            Not = ToFilter(where.Not),
+            And = where.And?.Select(ToFilter).OfType<ChannelModelPriceVersionListFilter>().ToList(),
+            Or = where.Or?.Select(ToFilter).OfType<ChannelModelPriceVersionListFilter>().ToList(),
         };
     }
 
@@ -706,6 +1394,13 @@ public static class PriceMapping
             _ => throw new InvalidOperationException(
                 "Enum \"ChannelModelPriceVersionStatus\" cannot represent value: \""
                 + status + "\""),
+        };
+
+    private static string ToWireVersionStatus(ChannelModelPriceVersionStatusValue status)
+        => status switch
+        {
+            ChannelModelPriceVersionStatusValue.Active => "active",
+            _ => "archived",
         };
 
     private static string ToWire(PromptWriteCacheVariantCodeValue code) => code switch

@@ -328,6 +328,32 @@ public sealed record ChannelListFilter
 
     public string? RemarkContainsFold { get; init; }
 
+    /// <summary>
+    /// Ent's <c>hasChannelProbes</c>: true → an EXISTS over
+    /// <c>channel_probes</c>, false → NOT EXISTS.
+    /// </summary>
+    public bool? HasChannelProbes { get; init; }
+
+    public IReadOnlyList<ChannelProbeListFilter>? HasChannelProbesWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasChannelModelPrices</c>: true → an EXISTS over
+    /// <c>channel_model_prices</c>, false → NOT EXISTS. Generated sqlgraph does
+    /// not re-apply the price soft-delete predicate.
+    /// </summary>
+    public bool? HasChannelModelPrices { get; init; }
+
+    public IReadOnlyList<ChannelModelPriceListFilter>? HasChannelModelPricesWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasProviderQuotaStatus</c>: true → an EXISTS over
+    /// <c>provider_quota_status</c>, false → NOT EXISTS. Generated sqlgraph does
+    /// not re-apply the quota soft-delete predicate.
+    /// </summary>
+    public bool? HasProviderQuotaStatus { get; init; }
+
+    public IReadOnlyList<ProviderQuotaStatusListFilter>? HasProviderQuotaStatusWith { get; init; }
+
     public ChannelListFilter? Not { get; init; }
 
     public IReadOnlyList<ChannelListFilter>? And { get; init; }
@@ -726,7 +752,7 @@ public sealed class ChannelAdminStore(AxonHubDbContext db) : IChannelAdminStore
         return new ListPage<ChannelRecord>(nodes, hasNextPage, hasPreviousPage, totalCount);
     }
 
-    private static string? BuildFilter(
+    internal static string? BuildFilter(
         ChannelListFilter? filter,
         string alias,
         SqlArguments args)
@@ -1036,6 +1062,72 @@ public sealed class ChannelAdminStore(AxonHubDbContext db) : IChannelAdminStore
         if (filter.RemarkNotNil)
         {
             predicates.Add(alias + ".\"remark\" IS NOT NULL");
+        }
+
+        if (filter.HasChannelProbes is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channel_probes\" cp WHERE cp.\"channel_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasChannelProbes.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelProbesWith is { Count: > 0 } probeFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply any target soft-delete
+            // predicate (channel_probes has none).
+            var probePredicates = probeFilters
+                .Select(probe => ChannelProbeFilterSql.Build(probe, "cp", args))
+                .Where(static probe => probe is not null)
+                .ToArray();
+            var probeCondition = ConnectionSql.Combine(probePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channel_probes\" cp WHERE cp.\"channel_id\" = "
+                + alias + ".\"id\""
+                + (probeCondition is null ? string.Empty : " AND " + probeCondition)
+                + ")");
+        }
+
+        if (filter.HasChannelModelPrices is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channel_model_prices\" cmp"
+                + " WHERE cmp.\"channel_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasChannelModelPrices.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelModelPricesWith is { Count: > 0 } priceFilters)
+        {
+            var pricePredicates = priceFilters
+                .Select(price => ChannelModelPriceFilterSql.Build(price, "cmp", args))
+                .Where(static price => price is not null)
+                .ToArray();
+            var priceCondition = ConnectionSql.Combine(pricePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channel_model_prices\" cmp"
+                + " WHERE cmp.\"channel_id\" = " + alias + ".\"id\""
+                + (priceCondition is null ? string.Empty : " AND " + priceCondition)
+                + ")");
+        }
+
+        if (filter.HasProviderQuotaStatus is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"provider_quota_status\" pqs"
+                + " WHERE pqs.\"channel_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasProviderQuotaStatus.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProviderQuotaStatusWith is { Count: > 0 } quotaFilters)
+        {
+            var quotaPredicates = quotaFilters
+                .Select(quota => ProviderQuotaStatusFilterSql.Build(quota, "pqs", args))
+                .Where(static quota => quota is not null)
+                .ToArray();
+            var quotaCondition = ConnectionSql.Combine(quotaPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"provider_quota_status\" pqs"
+                + " WHERE pqs.\"channel_id\" = " + alias + ".\"id\""
+                + (quotaCondition is null ? string.Empty : " AND " + quotaCondition)
+                + ")");
         }
 
         if (filter.Not is not null)

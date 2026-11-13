@@ -368,6 +368,19 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
                         autoDisabledAtGT = "2026-04-01T00:00:00Z",
                         autoDisableExpiresAtNotNil = true,
                         remarkHasPrefix = "pri",
+                        hasChannelProbes = true,
+                        hasChannelProbesWith = new[] { new { totalRequestCountGT = 5 } },
+                        hasChannelModelPrices = false,
+                        hasChannelModelPricesWith = new[]
+                        {
+                            new
+                            {
+                                modelIDContains = "gpt",
+                                hasVersionsWith = new[] { new { status = "active" } },
+                            },
+                        },
+                        hasProviderQuotaStatus = true,
+                        hasProviderQuotaStatusWith = new[] { new { providerType = "codex", ready = true } },
                         and = new[] { new { nameContains = "a" } },
                         or = new[] { new { nameContains = "A" } },
                         not = new { name = "Nope" },
@@ -399,6 +412,17 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
         Assert.Equal(new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc), where.AutoDisabledAtGT!.Value);
         Assert.True(where.AutoDisableExpiresAtNotNil);
         Assert.Equal("pri", where.RemarkHasPrefix);
+
+        Assert.True(where.HasChannelProbes);
+        Assert.Equal(5L, Assert.Single(where.HasChannelProbesWith!).TotalRequestCountGT);
+        Assert.False(where.HasChannelModelPrices);
+        var priceFilter = Assert.Single(where.HasChannelModelPricesWith!);
+        Assert.Equal("gpt", priceFilter.ModelIdContains);
+        Assert.Equal("active", Assert.Single(priceFilter.HasVersionsWith!).Status);
+        Assert.True(where.HasProviderQuotaStatus);
+        var quotaFilter = Assert.Single(where.HasProviderQuotaStatusWith!);
+        Assert.Equal("codex", quotaFilter.ProviderType);
+        Assert.True(quotaFilter.Ready);
 
         Assert.Equal("a", Assert.Single(where.And!).NameContains);
         Assert.Equal("A", Assert.Single(where.Or!).NameContains);
@@ -444,6 +468,18 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
         expected.AddRange(nullableTime.Select(static suffix => "autoDisabledAt" + suffix));
         expected.AddRange(nullableTime.Select(static suffix => "autoDisableExpiresAt" + suffix));
         expected.AddRange(nullableText.Select(static suffix => "remark" + suffix));
+        // The request/execution/usage-log edges remain a C135 gap (the target
+        // side has no where input yet); the three modelled edges mirror the
+        // reference's hasX/hasXWith pair.
+        expected.AddRange(
+        [
+            "hasChannelModelPrices",
+            "hasChannelModelPricesWith",
+            "hasChannelProbes",
+            "hasChannelProbesWith",
+            "hasProviderQuotaStatus",
+            "hasProviderQuotaStatusWith",
+        ]);
 
         var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
             .Select(static field => field.GetProperty("name").GetString()!)
@@ -452,6 +488,122 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
 
         Assert.Equal(
             expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
+    }
+
+    public static TheoryData<string, string[]> EdgeWhereInputFields
+    {
+        get
+        {
+            string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+            string[] idComparison = ["", "NEQ", "In", "NotIn"];
+            string[] text =
+            [
+                .. comparison,
+                "Contains",
+                "HasPrefix",
+                "HasSuffix",
+                "EqualFold",
+                "ContainsFold",
+            ];
+            string[] nullableText =
+            [
+                .. comparison,
+                "Contains",
+                "HasPrefix",
+                "HasSuffix",
+                "IsNil",
+                "NotNil",
+                "EqualFold",
+                "ContainsFold",
+            ];
+            string[] nullableTime = [.. comparison, "IsNil", "NotNil"];
+
+            var probes = new List<string> { "and", "not", "or", "hasChannel", "hasChannelWith" };
+            probes.AddRange(comparison.Select(static suffix => "id" + suffix));
+            probes.AddRange(idComparison.Select(static suffix => "channelID" + suffix));
+            probes.AddRange(comparison.Select(static suffix => "totalRequestCount" + suffix));
+            probes.AddRange(comparison.Select(static suffix => "successRequestCount" + suffix));
+            probes.AddRange(nullableTime.Select(static suffix => "avgTokensPerSecond" + suffix));
+            probes.AddRange(nullableTime.Select(static suffix => "avgTimeToFirstTokenMs" + suffix));
+            probes.AddRange(comparison.Select(static suffix => "timestamp" + suffix));
+
+            var prices = new List<string>
+            {
+                "and",
+                "not",
+                "or",
+                "hasChannel",
+                "hasChannelWith",
+                "hasVersions",
+                "hasVersionsWith",
+            };
+            prices.AddRange(comparison.Select(static suffix => "id" + suffix));
+            prices.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+            prices.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+            prices.AddRange(idComparison.Select(static suffix => "channelID" + suffix));
+            prices.AddRange(text.Select(static suffix => "modelID" + suffix));
+            prices.AddRange(text.Select(static suffix => "referenceID" + suffix));
+
+            var versions = new List<string>
+            {
+                "and",
+                "not",
+                "or",
+                "hasChannelModelPrice",
+                "hasChannelModelPriceWith",
+            };
+            versions.AddRange(comparison.Select(static suffix => "id" + suffix));
+            versions.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+            versions.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+            versions.AddRange(comparison.Select(static suffix => "channelID" + suffix));
+            versions.AddRange(text.Select(static suffix => "modelID" + suffix));
+            versions.AddRange(idComparison.Select(static suffix => "channelModelPriceID" + suffix));
+            versions.AddRange(idComparison.Select(static suffix => "status" + suffix));
+            versions.AddRange(comparison.Select(static suffix => "effectiveStartAt" + suffix));
+            versions.AddRange(nullableTime.Select(static suffix => "effectiveEndAt" + suffix));
+            versions.AddRange(text.Select(static suffix => "referenceID" + suffix));
+
+            var quotas = new List<string> { "and", "not", "or", "hasChannel", "hasChannelWith" };
+            quotas.AddRange(comparison.Select(static suffix => "id" + suffix));
+            quotas.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+            quotas.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+            quotas.AddRange(idComparison.Select(static suffix => "channelID" + suffix));
+            quotas.AddRange(idComparison.Select(static suffix => "providerType" + suffix));
+            quotas.AddRange(idComparison.Select(static suffix => "status" + suffix));
+            quotas.AddRange(nullableTime.Select(static suffix => "nextResetAt" + suffix));
+            quotas.AddRange(idComparison.Take(2).Select(static suffix => "ready" + suffix));
+            quotas.AddRange(comparison.Select(static suffix => "nextCheckAt" + suffix));
+            quotas.AddRange(nullableText.Select(static suffix => "accountKey" + suffix));
+
+            return new TheoryData<string, string[]>
+            {
+                { "ChannelProbeWhereInput", [.. probes] },
+                { "ChannelModelPriceWhereInput", [.. prices] },
+                { "ChannelModelPriceVersionWhereInput", [.. versions] },
+                { "ProviderQuotaStatusWhereInput", [.. quotas] },
+            };
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(EdgeWhereInputFields))]
+    public async Task EdgeWhereInputsExposeEveryPredicate(
+        string typeName,
+        string[] expectedFields)
+    {
+        var data = await QueryDataAsync(
+            $$"""
+            { where: __type(name: "{{typeName}}") { inputFields { name } } }
+            """);
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expectedFields.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
             actual);
     }
 

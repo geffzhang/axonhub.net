@@ -1818,6 +1818,32 @@ AdminApiKeysEndpointTests / AdminUsersRolesEndpointTests 新增 7 例并更新 2
 台账：C135 保持 gap，残余收窄为 8 组边谓词（Channel 6、User 2）；lint 通过；
 02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
 
+§203（2026-11-13）Channel 侧 ChannelProbe / ChannelModelPrice / ProviderQuotaStatus 的 where
+输入与 Channel 的 3 组边谓词（C135 第五刀）。
+
+参照 ent.graphql，ChannelProbeWhereInput / ChannelModelPriceWhereInput /
+ChannelModelPriceVersionWhereInput / ProviderQuotaStatusWhereInput 分别有 61 / 61 / 89 / 76 个
+字段；端口此前均未建模。§203 把四个输入的 61 + 61 + 89 + 76 个字段全部加入 GraphQL 输入与
+对应的 ChannelProbeListFilter / ChannelModelPriceListFilter /
+ChannelModelPriceVersionListFilter / ProviderQuotaStatusListFilter，GID / Time / 枚举 →
+wire 值 / IsNil 布尔映射逐项对齐（providerType / status 20 + 4 值、版本 status 2 值），
+channelID / modelID / referenceID / channelModelPriceID 显式使用参照大小写。
+
+同时把已解锁的 3 组边谓词接入 ChannelWhereInput：hasChannelProbes / hasChannelProbesWith、
+hasChannelModelPrices / hasChannelModelPricesWith、hasProviderQuotaStatus /
+hasProviderQuotaStatusWith（ChannelWhereInput 157/163 个字段）。语义与 §201 / §202 相同：
+true → EXISTS、false → NOT EXISTS；hasXWith 的谓词 AND 进同一个 EXISTS，空列表不生成谓词，
+空过滤器退化为「存在任意链接」，被连接实体的软删除谓词不重新应用。价格 ↔ 版本 ↔ 通道的
+嵌套互指由价格 / 版本过滤器递归生成。
+
+测试：ChannelAdminStoreTests 新增 1 例（Postgres；覆盖 true / false、hasXWith 标量、嵌套
+hasChannelWith / hasVersionsWith、软删除价格行仍匹配与 Not / Or 组合），该类 8 通过；
+AdminChannelsEndpointTests 更新 2 个断言并新增 1 个 theory（4 个新 where 输入的
+61 / 61 / 89 / 76 字段全量 introspect、ChannelWhereInput 157 字段、三组边谓词到 ListFilter
+的映射），该类 45 通过。
+台账：C135 保持 gap，残余收窄为 5 组边谓词（Channel 3、User 2）；lint 通过；
+02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

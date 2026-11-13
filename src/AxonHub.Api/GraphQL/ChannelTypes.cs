@@ -290,9 +290,9 @@ public sealed class ChannelOrder
 
 /// <summary>
 /// Port of <c>ChannelWhereInput</c> (ent.graphql:1349-1576). All scalar field
-/// predicates are modeled; the six edge predicates (hasRequests, hasExecutions,
-/// hasUsageLogs, hasChannelProbes, hasChannelModelPrices,
-/// hasProviderQuotaStatus) remain a registered gap (C135).
+/// predicates and the hasChannelProbes / hasChannelModelPrices /
+/// hasProviderQuotaStatus edges are modeled; the hasRequests / hasExecutions /
+/// hasUsageLogs edges remain a registered gap (C135).
 /// </summary>
 public sealed class ChannelWhereInput
 {
@@ -666,6 +666,18 @@ public sealed class ChannelWhereInput
     public string? RemarkEqualFold { get; set; }
 
     public string? RemarkContainsFold { get; set; }
+
+    public bool? HasChannelProbes { get; set; }
+
+    public IReadOnlyList<ChannelProbeWhereInput>? HasChannelProbesWith { get; set; }
+
+    public bool? HasChannelModelPrices { get; set; }
+
+    public IReadOnlyList<ChannelModelPriceWhereInput>? HasChannelModelPricesWith { get; set; }
+
+    public bool? HasProviderQuotaStatus { get; set; }
+
+    public IReadOnlyList<ProviderQuotaStatusWhereInput>? HasProviderQuotaStatusWith { get; set; }
 
     public ChannelWhereInput? Not { get; set; }
 
@@ -1237,6 +1249,256 @@ public sealed class MapScalarType : JsonRawMessageType
         : base("Map")
     {
     }
+}
+
+/// <summary>
+/// Port of <c>ProviderQuotaStatusWhereInput</c> (ent.graphql). The filter
+/// itself never restricts <c>deleted_at</c>, matching the generated sqlgraph
+/// predicates used inside a nested edge filter.
+/// </summary>
+[GraphQLName("ProviderQuotaStatusWhereInput")]
+public sealed class ProviderQuotaStatusWhereInput
+{
+    public ProviderQuotaStatusWhereInput? Not { get; set; }
+
+    public IReadOnlyList<ProviderQuotaStatusWhereInput>? And { get; set; }
+
+    public IReadOnlyList<ProviderQuotaStatusWhereInput>? Or { get; set; }
+
+    [GraphQLName("id")]
+    [GraphQLType(typeof(IdType))]
+    public string? Id { get; set; }
+
+    [GraphQLName("idNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLName("idIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLName("idNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLName("idGT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLName("idGTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLName("idLT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLName("idLTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    [GraphQLName("channelID")]
+    [GraphQLType(typeof(IdType))]
+    public string? ChannelID { get; set; }
+
+    [GraphQLName("channelIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? ChannelIDNEQ { get; set; }
+
+    [GraphQLName("channelIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ChannelIDIn { get; set; }
+
+    [GraphQLName("channelIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ChannelIDNotIn { get; set; }
+
+    public ProviderQuotaStatusProviderTypeValue? ProviderType { get; set; }
+
+    public ProviderQuotaStatusProviderTypeValue? ProviderTypeNEQ { get; set; }
+
+    public IReadOnlyList<ProviderQuotaStatusProviderTypeValue>? ProviderTypeIn { get; set; }
+
+    public IReadOnlyList<ProviderQuotaStatusProviderTypeValue>? ProviderTypeNotIn { get; set; }
+
+    public ProviderQuotaStatusStatusValue? Status { get; set; }
+
+    public ProviderQuotaStatusStatusValue? StatusNEQ { get; set; }
+
+    public IReadOnlyList<ProviderQuotaStatusStatusValue>? StatusIn { get; set; }
+
+    public IReadOnlyList<ProviderQuotaStatusStatusValue>? StatusNotIn { get; set; }
+
+    [GraphQLName("nextResetAt")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextResetAt { get; set; }
+
+    [GraphQLName("nextResetAtNEQ")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextResetAtNEQ { get; set; }
+
+    [GraphQLName("nextResetAtIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? NextResetAtIn { get; set; }
+
+    [GraphQLName("nextResetAtNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? NextResetAtNotIn { get; set; }
+
+    [GraphQLName("nextResetAtGT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextResetAtGT { get; set; }
+
+    [GraphQLName("nextResetAtGTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextResetAtGTE { get; set; }
+
+    [GraphQLName("nextResetAtLT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextResetAtLT { get; set; }
+
+    [GraphQLName("nextResetAtLTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextResetAtLTE { get; set; }
+
+    [GraphQLName("nextResetAtIsNil")]
+    public bool? NextResetAtIsNil { get; set; }
+
+    [GraphQLName("nextResetAtNotNil")]
+    public bool? NextResetAtNotNil { get; set; }
+
+    public bool? Ready { get; set; }
+
+    public bool? ReadyNEQ { get; set; }
+
+    [GraphQLName("nextCheckAt")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextCheckAt { get; set; }
+
+    [GraphQLName("nextCheckAtNEQ")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextCheckAtNEQ { get; set; }
+
+    [GraphQLName("nextCheckAtIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? NextCheckAtIn { get; set; }
+
+    [GraphQLName("nextCheckAtNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? NextCheckAtNotIn { get; set; }
+
+    [GraphQLName("nextCheckAtGT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextCheckAtGT { get; set; }
+
+    [GraphQLName("nextCheckAtGTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextCheckAtGTE { get; set; }
+
+    [GraphQLName("nextCheckAtLT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextCheckAtLT { get; set; }
+
+    [GraphQLName("nextCheckAtLTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? NextCheckAtLTE { get; set; }
+
+    [GraphQLName("accountKey")]
+    public string? AccountKey { get; set; }
+
+    [GraphQLName("accountKeyNEQ")]
+    public string? AccountKeyNEQ { get; set; }
+
+    [GraphQLName("accountKeyIn")]
+    public IReadOnlyList<string>? AccountKeyIn { get; set; }
+
+    [GraphQLName("accountKeyNotIn")]
+    public IReadOnlyList<string>? AccountKeyNotIn { get; set; }
+
+    [GraphQLName("accountKeyGT")]
+    public string? AccountKeyGT { get; set; }
+
+    [GraphQLName("accountKeyGTE")]
+    public string? AccountKeyGTE { get; set; }
+
+    [GraphQLName("accountKeyLT")]
+    public string? AccountKeyLT { get; set; }
+
+    [GraphQLName("accountKeyLTE")]
+    public string? AccountKeyLTE { get; set; }
+
+    [GraphQLName("accountKeyContains")]
+    public string? AccountKeyContains { get; set; }
+
+    [GraphQLName("accountKeyHasPrefix")]
+    public string? AccountKeyHasPrefix { get; set; }
+
+    [GraphQLName("accountKeyHasSuffix")]
+    public string? AccountKeyHasSuffix { get; set; }
+
+    [GraphQLName("accountKeyIsNil")]
+    public bool? AccountKeyIsNil { get; set; }
+
+    [GraphQLName("accountKeyNotNil")]
+    public bool? AccountKeyNotNil { get; set; }
+
+    [GraphQLName("accountKeyEqualFold")]
+    public string? AccountKeyEqualFold { get; set; }
+
+    [GraphQLName("accountKeyContainsFold")]
+    public string? AccountKeyContainsFold { get; set; }
+
+    public bool? HasChannel { get; set; }
+
+    public IReadOnlyList<ChannelWhereInput>? HasChannelWith { get; set; }
 }
 
 /// <summary>

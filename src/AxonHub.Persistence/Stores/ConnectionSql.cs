@@ -275,6 +275,52 @@ internal static class ConnectionSql
         }
     }
 
+    public static void AppendComparison(
+        List<string?> predicates,
+        string alias,
+        string column,
+        double? value,
+        string op,
+        SqlArguments args)
+    {
+        if (value is not null)
+        {
+            predicates.Add(
+                alias + ".\"" + column + "\" " + op + " " + args.Add(value.Value));
+        }
+    }
+
+    /// <summary>Ent's FloatIn/FloatNotIn predicate (same empty-list semantics).</summary>
+    public static void AppendDoubleIn(
+        List<string?> predicates,
+        string alias,
+        string column,
+        IReadOnlyList<double>? values,
+        SqlArguments args,
+        bool negate = false)
+    {
+        if (values is null)
+        {
+            return;
+        }
+
+        if (values.Count == 0)
+        {
+            predicates.Add(negate ? "TRUE" : "FALSE");
+            return;
+        }
+
+        var parameters = new string[values.Count];
+        for (var i = 0; i < values.Count; i++)
+        {
+            parameters[i] = args.Add(values[i]);
+        }
+
+        predicates.Add(
+            alias + ".\"" + column + "\" " + (negate ? "NOT IN" : "IN")
+            + " (" + string.Join(", ", parameters) + ")");
+    }
+
     /// <summary>
     /// The full ent string predicate set for one nullable string column:
     /// equality/ordering comparisons, IN/NOT IN, Contains/HasPrefix/HasSuffix,

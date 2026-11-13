@@ -526,6 +526,255 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
             }));
     }
 
+    [Fact]
+    public async Task ListAppliesEdgePredicatesWithoutReapplyingTheTargetSoftDelete()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelAdminStore(context);
+
+        var alpha = await SeedChannelAsync(context, "openai", "Alpha", "enabled");
+        var bravo = await SeedChannelAsync(context, "anthropic", "Bravo", "disabled");
+        var charlie = await SeedChannelAsync(context, "openai", "Charlie", "enabled");
+
+        await SeedProbeAsync(context, alpha.Id, total: 10, success: 9, tps: 5.5, ttft: 120);
+        await SeedProbeAsync(context, bravo.Id, total: 2, success: 1, tps: null, ttft: null);
+
+        var alphaPrice = await SeedPriceAsync(context, alpha.Id, "gpt-4o", "alpha-gpt-4o");
+        // Soft-deleted prices still satisfy ent's nested edge predicates: the
+        // generated filter never re-applies the target's deleted_at = 0.
+        await SeedPriceAsync(context, bravo.Id, "claude-3", "bravo-claude-3", deletedAt: 77);
+        await SeedVersionAsync(
+            context, alphaPrice.Id, alpha.Id, "gpt-4o", "alpha-gpt-4o-v1", status: "active");
+
+        await SeedQuotaAsync(
+            context, charlie.Id, providerType: "codex", status: "available", ready: true);
+
+        async Task<long[]> QueryAsync(ChannelListFilter where)
+            => (await store.ListAsync(new ChannelListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal(
+            [alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { HasChannelProbes = true }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter { HasChannelProbes = false }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasChannelProbesWith = [new ChannelProbeListFilter { TotalRequestCountGTE = 5 }],
+            }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasChannelProbesWith = [new ChannelProbeListFilter { AvgTokensPerSecondIsNil = true }],
+            }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasChannelProbesWith =
+                [
+                    new ChannelProbeListFilter
+                    {
+                        HasChannelWith = [new ChannelListFilter { Type = "anthropic" }],
+                    },
+                ],
+            }));
+
+        Assert.Equal(
+            [alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { HasChannelModelPrices = true }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter { HasChannelModelPrices = false }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasChannelModelPricesWith = [new ChannelModelPriceListFilter { ModelIdContains = "gpt" }],
+            }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasChannelModelPricesWith = [new ChannelModelPriceListFilter { HasVersions = true }],
+            }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasChannelModelPricesWith = [new ChannelModelPriceListFilter { HasVersions = false }],
+            }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasChannelModelPricesWith =
+                [
+                    new ChannelModelPriceListFilter
+                    {
+                        HasVersionsWith =
+                        [
+                            new ChannelModelPriceVersionListFilter
+                            {
+                                Status = "active",
+                                EffectiveEndAtIsNil = true,
+                            },
+                        ],
+                    },
+                ],
+            }));
+
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter { HasProviderQuotaStatus = true }));
+        Assert.Equal(
+            [alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { HasProviderQuotaStatus = false }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasProviderQuotaStatusWith =
+                [
+                    new ProviderQuotaStatusListFilter
+                    {
+                        ProviderType = "codex",
+                        Status = "available",
+                        Ready = true,
+                    },
+                ],
+            }));
+
+        // Edges compose with the nested boolean logic exactly like scalars.
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                Or =
+                [
+                    new ChannelListFilter { Status = "disabled" },
+                    new ChannelListFilter { HasProviderQuotaStatus = true },
+                ],
+            }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                Not = new ChannelListFilter
+                {
+                    Or =
+                    [
+                        new ChannelListFilter { HasChannelProbes = true },
+                        new ChannelListFilter { HasChannelModelPrices = true },
+                    ],
+                },
+            }));
+    }
+
+    private static async Task<ChannelProbeRecord> SeedProbeAsync(
+        AxonHubDbContext context,
+        long channelId,
+        long total,
+        long success,
+        double? tps,
+        double? ttft)
+    {
+        var probe = new ChannelProbeRecord
+        {
+            ChannelId = channelId,
+            TotalRequestCount = total,
+            SuccessRequestCount = success,
+            AvgTokensPerSecond = tps,
+            AvgTimeToFirstTokenMs = ttft,
+            Timestamp = 1_700_000_000,
+        };
+
+        context.ChannelProbes.Add(probe);
+        await context.SaveChangesAsync();
+        return probe;
+    }
+
+    private static async Task<ChannelModelPriceRecord> SeedPriceAsync(
+        AxonHubDbContext context,
+        long channelId,
+        string modelId,
+        string referenceId,
+        long deletedAt = 0)
+    {
+        var price = new ChannelModelPriceRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            DeletedAt = deletedAt,
+            ChannelId = channelId,
+            ModelId = modelId,
+            Price = "{}",
+            ReferenceId = referenceId,
+        };
+
+        context.ChannelModelPrices.Add(price);
+        await context.SaveChangesAsync();
+        return price;
+    }
+
+    private static async Task<ChannelModelPriceVersionRecord> SeedVersionAsync(
+        AxonHubDbContext context,
+        long priceId,
+        long channelId,
+        string modelId,
+        string referenceId,
+        string status)
+    {
+        var version = new ChannelModelPriceVersionRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            ChannelId = channelId,
+            ModelId = modelId,
+            ChannelModelPriceId = priceId,
+            Price = "{}",
+            Status = status,
+            EffectiveStartAt = CreatedAt,
+            ReferenceId = referenceId,
+        };
+
+        context.ChannelModelPriceVersions.Add(version);
+        await context.SaveChangesAsync();
+        return version;
+    }
+
+    private static async Task<ProviderQuotaStatusRecord> SeedQuotaAsync(
+        AxonHubDbContext context,
+        long channelId,
+        string providerType,
+        string status,
+        bool ready)
+    {
+        var quota = new ProviderQuotaStatusRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            DeletedAt = 0,
+            ChannelId = channelId,
+            ProviderType = providerType,
+            Status = status,
+            QuotaData = "{}",
+            Ready = ready,
+            NextCheckAt = CreatedAt.AddHours(1),
+            AccountKey = "account",
+        };
+
+        context.ProviderQuotaStatuses.Add(quota);
+        await context.SaveChangesAsync();
+        return quota;
+    }
+
     private static async Task<ChannelRecord> SeedChannelAsync(
         AxonHubDbContext context,
         string type,

@@ -1,4 +1,5 @@
 using AxonHub.Api.Management;
+using AxonHub.Persistence;
 using HotChocolate;
 using HotChocolate.Types;
 
@@ -48,6 +49,160 @@ public sealed class GetChannelProbeDataInput
     public IReadOnlyList<string> ChannelIDs { get; set; } = [];
 }
 
+/// <summary>
+/// Port of <c>ChannelProbeWhereInput</c> (ent.graphql). The probe table has no
+/// mixins, so none of the predicates touches a soft-delete column.
+/// </summary>
+[GraphQLName("ChannelProbeWhereInput")]
+public sealed class ChannelProbeWhereInput
+{
+    public ChannelProbeWhereInput? Not { get; set; }
+
+    public IReadOnlyList<ChannelProbeWhereInput>? And { get; set; }
+
+    public IReadOnlyList<ChannelProbeWhereInput>? Or { get; set; }
+
+    [GraphQLName("id")]
+    [GraphQLType(typeof(IdType))]
+    public string? Id { get; set; }
+
+    [GraphQLName("idNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLName("idIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLName("idNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLName("idGT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLName("idGTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLName("idLT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLName("idLTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLName("channelID")]
+    [GraphQLType(typeof(IdType))]
+    public string? ChannelID { get; set; }
+
+    [GraphQLName("channelIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? ChannelIDNEQ { get; set; }
+
+    [GraphQLName("channelIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ChannelIDIn { get; set; }
+
+    [GraphQLName("channelIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ChannelIDNotIn { get; set; }
+
+    public int? TotalRequestCount { get; set; }
+
+    public int? TotalRequestCountNEQ { get; set; }
+
+    public IReadOnlyList<int>? TotalRequestCountIn { get; set; }
+
+    public IReadOnlyList<int>? TotalRequestCountNotIn { get; set; }
+
+    public int? TotalRequestCountGT { get; set; }
+
+    public int? TotalRequestCountGTE { get; set; }
+
+    public int? TotalRequestCountLT { get; set; }
+
+    public int? TotalRequestCountLTE { get; set; }
+
+    public int? SuccessRequestCount { get; set; }
+
+    public int? SuccessRequestCountNEQ { get; set; }
+
+    public IReadOnlyList<int>? SuccessRequestCountIn { get; set; }
+
+    public IReadOnlyList<int>? SuccessRequestCountNotIn { get; set; }
+
+    public int? SuccessRequestCountGT { get; set; }
+
+    public int? SuccessRequestCountGTE { get; set; }
+
+    public int? SuccessRequestCountLT { get; set; }
+
+    public int? SuccessRequestCountLTE { get; set; }
+
+    public double? AvgTokensPerSecond { get; set; }
+
+    public double? AvgTokensPerSecondNEQ { get; set; }
+
+    public IReadOnlyList<double>? AvgTokensPerSecondIn { get; set; }
+
+    public IReadOnlyList<double>? AvgTokensPerSecondNotIn { get; set; }
+
+    public double? AvgTokensPerSecondGT { get; set; }
+
+    public double? AvgTokensPerSecondGTE { get; set; }
+
+    public double? AvgTokensPerSecondLT { get; set; }
+
+    public double? AvgTokensPerSecondLTE { get; set; }
+
+    public bool? AvgTokensPerSecondIsNil { get; set; }
+
+    public bool? AvgTokensPerSecondNotNil { get; set; }
+
+    public double? AvgTimeToFirstTokenMs { get; set; }
+
+    public double? AvgTimeToFirstTokenMsNEQ { get; set; }
+
+    public IReadOnlyList<double>? AvgTimeToFirstTokenMsIn { get; set; }
+
+    public IReadOnlyList<double>? AvgTimeToFirstTokenMsNotIn { get; set; }
+
+    public double? AvgTimeToFirstTokenMsGT { get; set; }
+
+    public double? AvgTimeToFirstTokenMsGTE { get; set; }
+
+    public double? AvgTimeToFirstTokenMsLT { get; set; }
+
+    public double? AvgTimeToFirstTokenMsLTE { get; set; }
+
+    public bool? AvgTimeToFirstTokenMsIsNil { get; set; }
+
+    public bool? AvgTimeToFirstTokenMsNotNil { get; set; }
+
+    public int? Timestamp { get; set; }
+
+    public int? TimestampNEQ { get; set; }
+
+    public IReadOnlyList<int>? TimestampIn { get; set; }
+
+    public IReadOnlyList<int>? TimestampNotIn { get; set; }
+
+    public int? TimestampGT { get; set; }
+
+    public int? TimestampGTE { get; set; }
+
+    public int? TimestampLT { get; set; }
+
+    public int? TimestampLTE { get; set; }
+
+    public bool? HasChannel { get; set; }
+
+    public IReadOnlyList<ChannelWhereInput>? HasChannelWith { get; set; }
+}
+
 /// <summary>Domain to GraphQL projection for the probe read.</summary>
 public static class ChannelProbeMapping
 {
@@ -73,6 +228,88 @@ public static class ChannelProbeMapping
             // channel_probe.resolvers.go:17-20 hard-codes the Channel type.
             ChannelID = new GidValue("Channel", data.ChannelId).ToString(),
             Points = points,
+        };
+    }
+
+    public static ChannelProbeListFilter? ToFilter(ChannelProbeWhereInput? where)
+    {
+        if (where is null)
+        {
+            return null;
+        }
+
+        return new ChannelProbeListFilter
+        {
+            Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
+            IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            ChannelId = where.ChannelID is null ? null : GidValue.Parse(where.ChannelID).Id,
+            ChannelIdNEQ = where.ChannelIDNEQ is null ? null : GidValue.Parse(where.ChannelIDNEQ).Id,
+            ChannelIdIn = where.ChannelIDIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            ChannelIdNotIn = where.ChannelIDNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            TotalRequestCount = where.TotalRequestCount,
+            TotalRequestCountNEQ = where.TotalRequestCountNEQ,
+            TotalRequestCountIn = where.TotalRequestCountIn?.Select(static value => (long)value).ToList(),
+            TotalRequestCountNotIn = where.TotalRequestCountNotIn?
+                .Select(static value => (long)value)
+                .ToList(),
+            TotalRequestCountGT = where.TotalRequestCountGT,
+            TotalRequestCountGTE = where.TotalRequestCountGTE,
+            TotalRequestCountLT = where.TotalRequestCountLT,
+            TotalRequestCountLTE = where.TotalRequestCountLTE,
+            SuccessRequestCount = where.SuccessRequestCount,
+            SuccessRequestCountNEQ = where.SuccessRequestCountNEQ,
+            SuccessRequestCountIn = where.SuccessRequestCountIn?
+                .Select(static value => (long)value)
+                .ToList(),
+            SuccessRequestCountNotIn = where.SuccessRequestCountNotIn?
+                .Select(static value => (long)value)
+                .ToList(),
+            SuccessRequestCountGT = where.SuccessRequestCountGT,
+            SuccessRequestCountGTE = where.SuccessRequestCountGTE,
+            SuccessRequestCountLT = where.SuccessRequestCountLT,
+            SuccessRequestCountLTE = where.SuccessRequestCountLTE,
+            AvgTokensPerSecond = where.AvgTokensPerSecond,
+            AvgTokensPerSecondNEQ = where.AvgTokensPerSecondNEQ,
+            AvgTokensPerSecondIn = where.AvgTokensPerSecondIn,
+            AvgTokensPerSecondNotIn = where.AvgTokensPerSecondNotIn,
+            AvgTokensPerSecondGT = where.AvgTokensPerSecondGT,
+            AvgTokensPerSecondGTE = where.AvgTokensPerSecondGTE,
+            AvgTokensPerSecondLT = where.AvgTokensPerSecondLT,
+            AvgTokensPerSecondLTE = where.AvgTokensPerSecondLTE,
+            AvgTokensPerSecondIsNil = where.AvgTokensPerSecondIsNil == true,
+            AvgTokensPerSecondNotNil = where.AvgTokensPerSecondNotNil == true,
+            AvgTimeToFirstTokenMs = where.AvgTimeToFirstTokenMs,
+            AvgTimeToFirstTokenMsNEQ = where.AvgTimeToFirstTokenMsNEQ,
+            AvgTimeToFirstTokenMsIn = where.AvgTimeToFirstTokenMsIn,
+            AvgTimeToFirstTokenMsNotIn = where.AvgTimeToFirstTokenMsNotIn,
+            AvgTimeToFirstTokenMsGT = where.AvgTimeToFirstTokenMsGT,
+            AvgTimeToFirstTokenMsGTE = where.AvgTimeToFirstTokenMsGTE,
+            AvgTimeToFirstTokenMsLT = where.AvgTimeToFirstTokenMsLT,
+            AvgTimeToFirstTokenMsLTE = where.AvgTimeToFirstTokenMsLTE,
+            AvgTimeToFirstTokenMsIsNil = where.AvgTimeToFirstTokenMsIsNil == true,
+            AvgTimeToFirstTokenMsNotNil = where.AvgTimeToFirstTokenMsNotNil == true,
+            Timestamp = where.Timestamp,
+            TimestampNEQ = where.TimestampNEQ,
+            TimestampIn = where.TimestampIn?.Select(static value => (long)value).ToList(),
+            TimestampNotIn = where.TimestampNotIn?.Select(static value => (long)value).ToList(),
+            TimestampGT = where.TimestampGT,
+            TimestampGTE = where.TimestampGTE,
+            TimestampLT = where.TimestampLT,
+            TimestampLTE = where.TimestampLTE,
+            HasChannel = where.HasChannel,
+            HasChannelWith = where.HasChannelWith?
+                .Select(static channel => ChannelMapping.ToFilter(channel))
+                .OfType<ChannelListFilter>()
+                .ToList(),
+            Not = ToFilter(where.Not),
+            And = where.And?.Select(ToFilter).OfType<ChannelProbeListFilter>().ToList(),
+            Or = where.Or?.Select(ToFilter).OfType<ChannelProbeListFilter>().ToList(),
         };
     }
 }
