@@ -468,17 +468,23 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
         expected.AddRange(nullableTime.Select(static suffix => "autoDisabledAt" + suffix));
         expected.AddRange(nullableTime.Select(static suffix => "autoDisableExpiresAt" + suffix));
         expected.AddRange(nullableText.Select(static suffix => "remark" + suffix));
-        // The request/execution/usage-log edges remain a C135 gap (the target
-        // side has no where input yet); the three modelled edges mirror the
-        // reference's hasX/hasXWith pair.
+        // Every channel edge now mirrors the reference's hasX/hasXWith pair;
+        // the target-side where inputs exist for all six of them. The only
+        // remaining C135 edges live on User (see ChannelWhereInput comment).
         expected.AddRange(
         [
             "hasChannelModelPrices",
             "hasChannelModelPricesWith",
             "hasChannelProbes",
             "hasChannelProbesWith",
+            "hasExecutions",
+            "hasExecutionsWith",
             "hasProviderQuotaStatus",
             "hasProviderQuotaStatusWith",
+            "hasRequests",
+            "hasRequestsWith",
+            "hasUsageLogs",
+            "hasUsageLogsWith",
         ]);
 
         var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()

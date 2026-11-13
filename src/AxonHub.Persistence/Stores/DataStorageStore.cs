@@ -445,7 +445,7 @@ public sealed class DataStorageStore(AxonHubDbContext db) : IDataStorageStore
 
     private static string JsonCast(string parameter) => "CAST(" + parameter + " AS jsonb)";
 
-    private static string? BuildFilter(
+    internal static string? BuildFilter(
         DataStorageListFilter? filter,
         string alias,
         SqlArguments args)

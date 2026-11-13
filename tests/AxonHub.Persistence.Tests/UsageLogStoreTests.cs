@@ -281,6 +281,363 @@ public sealed class UsageLogStoreTests(PostgresFixture fixture)
         Assert.Equal(7L, (await store.GetByIdAsync(7, 2, null))?.RequestId);
     }
 
+    [Fact]
+    public async Task ListAppliesEveryScalarPredicate()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UsageLogStore(context);
+
+        var first = new UsageLogRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            ApiKeyId = 3,
+            ModelId = "gpt-4o",
+            PromptTokens = 100,
+            CompletionTokens = 50,
+            TotalTokens = 150,
+            PromptAudioTokens = 1,
+            PromptCachedTokens = 2,
+            PromptWriteCachedTokens = 3,
+            PromptWriteCachedTokens5m = 4,
+            PromptWriteCachedTokens1h = 5,
+            CompletionAudioTokens = 6,
+            CompletionReasoningTokens = 7,
+            CompletionAcceptedPredictionTokens = 8,
+            CompletionRejectedPredictionTokens = 9,
+            Source = "api",
+            Format = "openai/chat_completions",
+            TotalCost = 0.125,
+            CostPriceReferenceId = "price-alpha",
+            ChannelId = 300,
+            ProjectId = 1,
+            RequestId = 101,
+        };
+        var firstId = await store.CreateAsync(first);
+
+        var second = new UsageLogRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            ApiKeyId = null,
+            ModelId = "claude-4",
+            PromptTokens = 200,
+            CompletionTokens = 100,
+            TotalTokens = 300,
+            Source = "playground",
+            Format = "anthropic/messages",
+            TotalCost = null,
+            CostPriceReferenceId = null,
+            ChannelId = 301,
+            ProjectId = 2,
+            RequestId = 201,
+        };
+        var secondId = await store.CreateAsync(second);
+
+        var third = new UsageLogRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            ApiKeyId = 4,
+            ModelId = "gpt-4o-mini",
+            PromptTokens = 10,
+            CompletionTokens = 5,
+            TotalTokens = 15,
+            PromptAudioTokens = 0,
+            Source = "api",
+            Format = "openai/chat_completions",
+            TotalCost = 2.5,
+            CostPriceReferenceId = "price-beta",
+            ChannelId = 300,
+            ProjectId = 1,
+            RequestId = 301,
+        };
+        var thirdId = await store.CreateAsync(third);
+
+        var fourth = new UsageLogRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            ApiKeyId = 5,
+            ModelId = "o3",
+            PromptTokens = 0,
+            CompletionTokens = 0,
+            TotalTokens = 0,
+            PromptAudioTokens = 0,
+            Source = "api",
+            Format = "openai/responses",
+            TotalCost = 0.5,
+            CostPriceReferenceId = null,
+            ChannelId = null,
+            ProjectId = 1,
+            RequestId = 401,
+        };
+        var fourthId = await store.CreateAsync(fourth);
+
+        // The detail columns carry a schema default of 0, so reach NULL through
+        // SQL to exercise ent's IsNil/NotNil predicates.
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                """
+                UPDATE "usage_logs"
+                SET "prompt_audio_tokens" = NULL,
+                    "prompt_cached_tokens" = NULL,
+                    "prompt_write_cached_tokens" = NULL,
+                    "prompt_write_cached_tokens_5m" = NULL,
+                    "prompt_write_cached_tokens_1h" = NULL,
+                    "completion_audio_tokens" = NULL,
+                    "completion_reasoning_tokens" = NULL,
+                    "completion_accepted_prediction_tokens" = NULL,
+                    "completion_rejected_prediction_tokens" = NULL
+                WHERE "id" = @Id;
+                """,
+                new { Id = secondId });
+        }
+
+        async Task<IReadOnlyList<long>> QueryAsync(UsageLogListFilter where)
+            => (await store.ListAsync(new UsageLogListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal([firstId], await QueryAsync(new UsageLogListFilter { ApiKeyId = 3 }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { ApiKeyIdNEQ = 3 }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter { ApiKeyIdIn = [3, 4] }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { ApiKeyIdNotIn = [3] }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { ApiKeyIdGT = 3 }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { ApiKeyIdGTE = 4 }));
+        Assert.Empty(await QueryAsync(new UsageLogListFilter { ApiKeyIdLT = 3 }));
+        Assert.Equal([firstId], await QueryAsync(new UsageLogListFilter { ApiKeyIdLTE = 3 }));
+        Assert.Equal([secondId], await QueryAsync(new UsageLogListFilter { ApiKeyIdIsNil = true }));
+        Assert.Equal([firstId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { ApiKeyIdNotNil = true }));
+
+        Assert.Equal([firstId], await QueryAsync(new UsageLogListFilter { ModelId = "gpt-4o" }));
+        Assert.Equal([secondId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { ModelIdNEQ = "gpt-4o" }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new UsageLogListFilter { ModelIdIn = ["claude-4", "o3"] }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter { ModelIdContains = "gpt" }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter { ModelIdContainsFold = "GPT" }));
+        Assert.Equal([secondId],
+            await QueryAsync(new UsageLogListFilter { ModelIdHasPrefix = "claude" }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new UsageLogListFilter { ModelIdHasSuffix = "mini" }));
+        Assert.Equal([fourthId], await QueryAsync(new UsageLogListFilter { ModelIdEqualFold = "O3" }));
+
+        Assert.Equal([firstId], await QueryAsync(new UsageLogListFilter { PromptTokens = 100 }));
+        Assert.Equal([firstId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { PromptTokensNEQ = 200 }));
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new UsageLogListFilter { PromptTokensGT = 10 }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { PromptTokensLTE = 10 }));
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new UsageLogListFilter { CompletionTokensGT = 5 }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { CompletionTokensLT = 50 }));
+        Assert.Equal([secondId],
+            await QueryAsync(new UsageLogListFilter { TotalTokensIn = [300] }));
+        Assert.Equal([firstId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { TotalTokensNotIn = [300] }));
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new UsageLogListFilter { TotalTokensGTE = 150 }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { TotalTokensLT = 50 }));
+
+        Assert.Equal([firstId], await QueryAsync(new UsageLogListFilter { PromptAudioTokens = 1 }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { PromptAudioTokensNEQ = 1 }));
+        Assert.Equal([secondId],
+            await QueryAsync(new UsageLogListFilter { PromptAudioTokensIsNil = true }));
+        Assert.Equal([firstId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { PromptAudioTokensNotNil = true }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { PromptAudioTokensLT = 1 }));
+        Assert.Equal([firstId], await QueryAsync(new UsageLogListFilter { PromptCachedTokens = 2 }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { PromptWriteCachedTokens = 3 }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { PromptWriteCachedTokens5m = 4 }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { PromptWriteCachedTokens1h = 5 }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { CompletionAudioTokens = 6 }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { CompletionReasoningTokens = 7 }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { CompletionAcceptedPredictionTokens = 8 }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { CompletionRejectedPredictionTokens = 9 }));
+
+        Assert.Equal([secondId], await QueryAsync(new UsageLogListFilter { SourceIn = ["playground"] }));
+        Assert.Equal([secondId], await QueryAsync(new UsageLogListFilter { SourceNEQ = "api" }));
+        Assert.Equal([firstId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { SourceNotIn = ["playground"] }));
+
+        Assert.Equal([secondId], await QueryAsync(new UsageLogListFilter { FormatContains = "anthropic" }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter { Format = "openai/chat_completions" }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new UsageLogListFilter { FormatNEQ = "openai/chat_completions" }));
+
+        Assert.Equal([firstId], await QueryAsync(new UsageLogListFilter { TotalCost = 0.125 }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { TotalCostNEQ = 0.125 }));
+        Assert.Equal([thirdId], await QueryAsync(new UsageLogListFilter { TotalCostIn = [2.5] }));
+        Assert.Equal([thirdId], await QueryAsync(new UsageLogListFilter { TotalCostGT = 1 }));
+        Assert.Equal([thirdId], await QueryAsync(new UsageLogListFilter { TotalCostGTE = 2.5 }));
+        Assert.Equal([firstId, fourthId],
+            await QueryAsync(new UsageLogListFilter { TotalCostLT = 1 }));
+        Assert.Equal([firstId], await QueryAsync(new UsageLogListFilter { TotalCostLTE = 0.125 }));
+        Assert.Equal([secondId], await QueryAsync(new UsageLogListFilter { TotalCostIsNil = true }));
+        Assert.Equal([firstId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { TotalCostNotNil = true }));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { CostPriceReferenceId = "price-alpha" }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter { CostPriceReferenceIdContains = "price" }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { CostPriceReferenceIdHasPrefix = "price-a" }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new UsageLogListFilter { CostPriceReferenceIdHasSuffix = "-beta" }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter { CostPriceReferenceIdEqualFold = "PRICE-ALPHA" }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new UsageLogListFilter { CostPriceReferenceIdContainsFold = "BETA" }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new UsageLogListFilter { CostPriceReferenceIdIsNil = true }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter { CostPriceReferenceIdNotNil = true }));
+
+        // entgql ignores empty In lists.
+        Assert.Equal([firstId, secondId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { SourceIn = [] }));
+        Assert.Equal([firstId, secondId, thirdId, fourthId],
+            await QueryAsync(new UsageLogListFilter { PromptTokensIn = [] }));
+    }
+
+    [Fact]
+    public async Task ListAppliesTheEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UsageLogStore(context);
+
+        await SeedChannelRowAsync(db, 300, "Alpha");
+        // Soft-deleted targets still satisfy nested edge predicates.
+        await SeedChannelRowAsync(db, 301, "Beta", deletedAt: 99);
+        await SeedProjectRowAsync(db, 1, "Alpha");
+        await SeedProjectRowAsync(db, 2, "Ghost", deletedAt: 99);
+        await SeedRequestRowAsync(db, 101, "completed", channelId: 300);
+        await SeedRequestRowAsync(db, 201, "failed", channelId: 301);
+        await SeedRequestRowAsync(db, 301, "completed", channelId: 300);
+
+        var first = NewUsageLog(101);
+        first.ProjectId = 1;
+        first.ChannelId = 300;
+        var firstId = await store.CreateAsync(first);
+
+        var second = NewUsageLog(201);
+        second.ProjectId = 2;
+        second.ChannelId = 301;
+        var secondId = await store.CreateAsync(second);
+
+        var third = NewUsageLog(301);
+        third.ProjectId = 1;
+        third.ChannelId = null;
+        var thirdId = await store.CreateAsync(third);
+
+        async Task<IReadOnlyList<long>> QueryAsync(UsageLogListFilter where)
+            => (await store.ListAsync(new UsageLogListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal([firstId, secondId, thirdId],
+            await QueryAsync(new UsageLogListFilter { HasRequest = true }));
+        Assert.Empty(await QueryAsync(new UsageLogListFilter { HasRequest = false }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                HasRequestWith = [new RequestListFilter { Status = "completed" }],
+            }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                HasRequestWith =
+                [
+                    new RequestListFilter
+                    {
+                        HasChannelWith = [new ChannelListFilter { Name = "Alpha" }],
+                    },
+                ],
+            }));
+
+        Assert.Equal([firstId, secondId, thirdId],
+            await QueryAsync(new UsageLogListFilter { HasProject = true }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                HasProjectWith = [new ProjectListFilter { Name = "Alpha" }],
+            }));
+        Assert.Equal([secondId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                HasProjectWith = [new ProjectListFilter { Name = "Ghost" }],
+            }));
+
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new UsageLogListFilter { HasChannel = true }));
+        Assert.Equal([thirdId], await QueryAsync(new UsageLogListFilter { HasChannel = false }));
+        Assert.Equal([firstId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                HasChannelWith = [new ChannelListFilter { Name = "Alpha" }],
+            }));
+        Assert.Equal([secondId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                HasChannelWith = [new ChannelListFilter { Name = "Beta" }],
+            }));
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                HasChannelWith = [new ChannelListFilter { Status = "enabled" }],
+            }));
+
+        Assert.Equal([firstId, secondId, thirdId],
+            await QueryAsync(new UsageLogListFilter { HasChannelWith = [] }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                Not = new UsageLogListFilter { HasChannel = true },
+            }));
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new UsageLogListFilter
+            {
+                Or =
+                [
+                    new UsageLogListFilter
+                    {
+                        HasProjectWith = [new ProjectListFilter { Name = "Ghost" }],
+                    },
+                    new UsageLogListFilter
+                    {
+                        HasChannelWith = [new ChannelListFilter { Name = "Alpha" }],
+                    },
+                ],
+            }));
+    }
+
     private static async Task SeedRequestAsync(
         TestDatabase db,
         long id,
@@ -392,4 +749,56 @@ public sealed class UsageLogStoreTests(PostgresFixture fixture)
         ProjectId = 5,
         RequestId = requestId,
     };
+
+    private static async Task SeedRequestRowAsync(
+        TestDatabase db,
+        long id,
+        string status,
+        long? channelId = null)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "requests"
+                ("id", "created_at", "updated_at", "source", "model_id", "request_body",
+                 "status", "channel_id", "project_id")
+            VALUES (@Id, @CreatedAt, @CreatedAt, 'api', 'gpt-4o', '{}'::jsonb, @Status,
+                    @ChannelId, 1);
+            """,
+            new { Id = id, CreatedAt, Status = status, ChannelId = channelId });
+    }
+
+    private static async Task SeedChannelRowAsync(
+        TestDatabase db,
+        long id,
+        string name,
+        long deletedAt = 0)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "channels"
+                ("id", "created_at", "updated_at", "deleted_at", "type", "name", "status",
+                 "credentials", "supported_models", "default_test_model")
+            VALUES (@Id, @CreatedAt, @CreatedAt, @DeletedAt, 'openai', @Name, 'enabled',
+                    '{}'::jsonb, 'null'::jsonb, 'gpt-4o');
+            """,
+            new { Id = id, CreatedAt, Name = name, DeletedAt = deletedAt });
+    }
+
+    private static async Task SeedProjectRowAsync(
+        TestDatabase db,
+        long id,
+        string name,
+        long deletedAt = 0)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "projects"
+                ("id", "created_at", "updated_at", "deleted_at", "name", "description", "status")
+            VALUES (@Id, @CreatedAt, @CreatedAt, @DeletedAt, @Name, '', 'active');
+            """,
+            new { Id = id, CreatedAt, Name = name, DeletedAt = deletedAt });
+    }
 }

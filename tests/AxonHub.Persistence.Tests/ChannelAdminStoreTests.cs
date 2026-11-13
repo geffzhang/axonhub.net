@@ -1,3 +1,4 @@
+using Dapper;
 using Microsoft.EntityFrameworkCore;
 
 namespace AxonHub.Persistence.Tests;
@@ -207,85 +208,68 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         var charlie = await SeedChannelAsync(
             context, "openai", "Charlie", "enabled", weight: 2, createdAt: t2, updatedAt: t2);
 
-        async Task<long[]> QueryAsync(ChannelListFilter where)
+        async Task<IReadOnlyList<long>> QueryAsync(ChannelListFilter where)
             => (await store.ListAsync(new ChannelListQuery { Where = where }))
                 .Nodes.Select(static row => row.Id).ToArray();
 
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { Id = alpha.Id }));
         Assert.Equal([bravo.Id, charlie.Id], await QueryAsync(new ChannelListFilter { IdNEQ = alpha.Id }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { IdIn = [alpha.Id, charlie.Id] }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter { IdNotIn = [alpha.Id, bravo.Id] }));
         Assert.Equal([bravo.Id, charlie.Id], await QueryAsync(new ChannelListFilter { IdGT = alpha.Id }));
-        Assert.Equal(
-            [alpha.Id, bravo.Id, charlie.Id],
+        Assert.Equal([alpha.Id, bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { IdGTE = alpha.Id }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { IdLT = bravo.Id }));
         Assert.Equal([alpha.Id, bravo.Id], await QueryAsync(new ChannelListFilter { IdLTE = bravo.Id }));
 
-        // ent.StringIn() with an empty list is false; NotIn() is true.
-        Assert.Empty(await QueryAsync(new ChannelListFilter { IdIn = [] }));
-        Assert.Equal(3, (await QueryAsync(new ChannelListFilter { IdNotIn = [] })).Length);
+        // entgql only installs In/NotIn when the list is non-empty, so an
+        // empty list is ignored.
+        Assert.Equal(3, (await QueryAsync(new ChannelListFilter { IdIn = [] })).Count);
+        Assert.Equal(3, (await QueryAsync(new ChannelListFilter { IdNotIn = [] })).Count);
 
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { CreatedAt = t0 }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { CreatedAtNEQ = t0 }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { CreatedAtIn = [t0, t2] }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { CreatedAtNotIn = [t0, t2] }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { CreatedAtGT = t0 }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { CreatedAtGTE = t1 }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { CreatedAtLT = t1 }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { CreatedAtLTE = t0 }));
 
         // updated_at mirrors created_at in this fixture.
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { UpdatedAt = t0 }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { UpdatedAtNEQ = t0 }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { UpdatedAtIn = [t0, t2] }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { UpdatedAtNotIn = [t0, t2] }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { UpdatedAtGT = t0 }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { UpdatedAtGTE = t1 }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { UpdatedAtLT = t1 }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { UpdatedAtLTE = t0 }));
 
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { OrderingWeight = 3 }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { OrderingWeightNEQ = 3 }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { OrderingWeightIn = [1, 2] }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter { OrderingWeightNotIn = [1, 2] }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { OrderingWeightLT = 2 }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { OrderingWeightLTE = 1 }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { OrderingWeightGT = 1 }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { OrderingWeightGTE = 2 }));
     }
 
@@ -332,49 +316,37 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
             defaultTestModel: "gpt-4o-mini",
             remark: "secondary");
 
-        async Task<long[]> QueryAsync(ChannelListFilter where)
+        async Task<IReadOnlyList<long>> QueryAsync(ChannelListFilter where)
             => (await store.ListAsync(new ChannelListQuery { Where = where }))
                 .Nodes.Select(static row => row.Id).ToArray();
 
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { BaseURL = "https://bravo.example/v1" }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { BaseURLNEQ = "https://bravo.example/v1" }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter { BaseURLIn = ["https://alpha.example/v1"] }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { BaseURLNotIn = ["https://alpha.example/v1"] }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { BaseURLGT = "https://b" }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter { BaseURLLTE = "https://b" }));
-        Assert.Equal(
-            [alpha.Id, bravo.Id],
+        Assert.Equal([alpha.Id, bravo.Id],
             await QueryAsync(new ChannelListFilter { BaseURLContains = "example" }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { BaseURLHasPrefix = "https://alpha" }));
-        Assert.Equal(
-            [alpha.Id, bravo.Id],
+        Assert.Equal([alpha.Id, bravo.Id],
             await QueryAsync(new ChannelListFilter { BaseURLHasSuffix = "/v1" }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter { BaseURLEqualFold = "HTTPS://ALPHA.EXAMPLE/V1" }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter { BaseURLContainsFold = "ALPHA.EXAMPLE" }));
         Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { BaseURLIsNil = true }));
-        Assert.Equal(
-            [alpha.Id, bravo.Id],
+        Assert.Equal([alpha.Id, bravo.Id],
             await QueryAsync(new ChannelListFilter { BaseURLNotNil = true }));
 
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { NameNEQ = "Alpha" }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { NameContains = "ha" }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { NameHasPrefix = "Br" }));
         Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { NameHasSuffix = "lie" }));
@@ -383,29 +355,23 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
 
         Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPattern = "claude" }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternNEQ = "claude" }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter { AutoSyncModelPatternIn = ["claude"] }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternContains = "gpt" }));
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternHasPrefix = "^" }));
         Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternHasSuffix = "claude" }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter { AutoSyncModelPatternEqualFold = "^GPT-" }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter { AutoSyncModelPatternContainsFold = "GPT" }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternIsNil = true }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { AutoSyncModelPatternNotNil = true }));
 
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { DefaultTestModelContains = "gpt-4o" }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { DefaultTestModelEqualFold = "CLAUDE-3" }));
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { DefaultTestModelNEQ = "gpt-4o" }));
 
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { ErrorMessage = "boom" }));
@@ -415,33 +381,26 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         Assert.Empty(await QueryAsync(new ChannelListFilter { ErrorMessageNEQ = "boom" }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { ErrorMessageContains = "oo" }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { ErrorMessageEqualFold = "BOOM" }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { ErrorMessageContainsFold = "OO" }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { ErrorMessageIsNil = true }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { ErrorMessageNotNil = true }));
 
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisabledAt = disabledAt }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisabledAtGT = disabledAt.AddHours(-1) }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisabledAtLT = expiresAt }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { AutoDisabledAtIn = [disabledAt] }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { AutoDisabledAtIsNil = true }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisabledAtNotNil = true }));
 
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { AutoDisableExpiresAt = expiresAt }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter { AutoDisableExpiresAtGTE = expiresAt }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { AutoDisableExpiresAtIsNil = true }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisableExpiresAtNotNil = true }));
 
@@ -452,8 +411,7 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { RemarkEqualFold = "PRIMARY" }));
         Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { RemarkContainsFold = "SECOND" }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { RemarkIsNil = true }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { RemarkNotNil = true }));
     }
 
@@ -472,34 +430,28 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         var charlie = await SeedChannelAsync(
             context, "openai", "Charlie", "enabled", weight: 2);
 
-        async Task<long[]> QueryAsync(ChannelListFilter where)
+        async Task<IReadOnlyList<long>> QueryAsync(ChannelListFilter where)
             => (await store.ListAsync(new ChannelListQuery { Where = where }))
                 .Nodes.Select(static row => row.Id).ToArray();
 
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { TypeNEQ = "openai" }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { TypeIn = ["anthropic"] }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { TypeNotIn = ["anthropic"] }));
 
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { StatusNEQ = "enabled" }));
         Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { StatusIn = ["disabled"] }));
-        Assert.Equal(
-            [alpha.Id, charlie.Id],
+        Assert.Equal([alpha.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter { StatusNotIn = ["disabled"] }));
 
-        Assert.Equal(
-            [alpha.Id, bravo.Id],
+        Assert.Equal([alpha.Id, bravo.Id],
             await QueryAsync(new ChannelListFilter { AutoSyncSupportedModels = true }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter { AutoSyncSupportedModels = false }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter { AutoSyncSupportedModelsNEQ = true }));
 
-        Assert.Equal(
-            [alpha.Id, bravo.Id],
+        Assert.Equal([alpha.Id, bravo.Id],
             await QueryAsync(new ChannelListFilter
             {
                 Or =
@@ -508,14 +460,12 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
                     new ChannelListFilter { OrderingWeightGTE = 3 },
                 ],
             }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter
             {
                 Not = new ChannelListFilter { Status = "enabled" },
             }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter
             {
                 And =
@@ -551,30 +501,25 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         await SeedQuotaAsync(
             context, charlie.Id, providerType: "codex", status: "available", ready: true);
 
-        async Task<long[]> QueryAsync(ChannelListFilter where)
+        async Task<IReadOnlyList<long>> QueryAsync(ChannelListFilter where)
             => (await store.ListAsync(new ChannelListQuery { Where = where }))
                 .Nodes.Select(static row => row.Id).ToArray();
 
-        Assert.Equal(
-            [alpha.Id, bravo.Id],
+        Assert.Equal([alpha.Id, bravo.Id],
             await QueryAsync(new ChannelListFilter { HasChannelProbes = true }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter { HasChannelProbes = false }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter
             {
                 HasChannelProbesWith = [new ChannelProbeListFilter { TotalRequestCountGTE = 5 }],
             }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter
             {
                 HasChannelProbesWith = [new ChannelProbeListFilter { AvgTokensPerSecondIsNil = true }],
             }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter
             {
                 HasChannelProbesWith =
@@ -586,32 +531,26 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
                 ],
             }));
 
-        Assert.Equal(
-            [alpha.Id, bravo.Id],
+        Assert.Equal([alpha.Id, bravo.Id],
             await QueryAsync(new ChannelListFilter { HasChannelModelPrices = true }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter { HasChannelModelPrices = false }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter
             {
                 HasChannelModelPricesWith = [new ChannelModelPriceListFilter { ModelIdContains = "gpt" }],
             }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter
             {
                 HasChannelModelPricesWith = [new ChannelModelPriceListFilter { HasVersions = true }],
             }));
-        Assert.Equal(
-            [bravo.Id],
+        Assert.Equal([bravo.Id],
             await QueryAsync(new ChannelListFilter
             {
                 HasChannelModelPricesWith = [new ChannelModelPriceListFilter { HasVersions = false }],
             }));
-        Assert.Equal(
-            [alpha.Id],
+        Assert.Equal([alpha.Id],
             await QueryAsync(new ChannelListFilter
             {
                 HasChannelModelPricesWith =
@@ -630,14 +569,11 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
                 ],
             }));
 
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter { HasProviderQuotaStatus = true }));
-        Assert.Equal(
-            [alpha.Id, bravo.Id],
+        Assert.Equal([alpha.Id, bravo.Id],
             await QueryAsync(new ChannelListFilter { HasProviderQuotaStatus = false }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter
             {
                 HasProviderQuotaStatusWith =
@@ -652,8 +588,7 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
             }));
 
         // Edges compose with the nested boolean logic exactly like scalars.
-        Assert.Equal(
-            [bravo.Id, charlie.Id],
+        Assert.Equal([bravo.Id, charlie.Id],
             await QueryAsync(new ChannelListFilter
             {
                 Or =
@@ -662,8 +597,7 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
                     new ChannelListFilter { HasProviderQuotaStatus = true },
                 ],
             }));
-        Assert.Equal(
-            [charlie.Id],
+        Assert.Equal([charlie.Id],
             await QueryAsync(new ChannelListFilter
             {
                 Not = new ChannelListFilter
@@ -675,6 +609,194 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
                     ],
                 },
             }));
+    }
+
+    [Fact]
+    public async Task ListAppliesTheRequestExecutionAndUsageLogEdges()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelAdminStore(context);
+
+        var alpha = await SeedChannelAsync(context, "openai", "Alpha", "enabled");
+        var bravo = await SeedChannelAsync(context, "anthropic", "Bravo", "enabled");
+        var charlie = await SeedChannelAsync(context, "openai", "Charlie", "enabled");
+
+        await SeedRequestRowAsync(db, 1, alpha.Id, "completed");
+        await SeedRequestRowAsync(db, 2, alpha.Id, "failed");
+        await SeedRequestRowAsync(db, 3, bravo.Id, "completed", modelId: "claude-4");
+        await SeedExecutionRowAsync(db, 1, requestId: 1, alpha.Id, "completed");
+        await SeedExecutionRowAsync(db, 2, requestId: 3, bravo.Id, "failed");
+        await SeedUsageLogRowAsync(db, 1, requestId: 1, alpha.Id, totalTokens: 10);
+        await SeedUsageLogRowAsync(db, 2, requestId: 2, alpha.Id, totalTokens: 20);
+
+        async Task<IReadOnlyList<long>> QueryAsync(ChannelListFilter where)
+            => (await store.ListAsync(new ChannelListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal([alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { HasRequests = true }));
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { HasRequests = false }));
+        Assert.Equal([alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasRequestsWith = [new RequestListFilter { Status = "completed" }],
+            }));
+        Assert.Equal([alpha.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasRequestsWith = [new RequestListFilter { Status = "failed" }],
+            }));
+        Assert.Equal([bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasRequestsWith = [new RequestListFilter { ModelIdContains = "claude" }],
+            }));
+        Assert.Equal([alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasRequestsWith = [new RequestListFilter { HasExecutions = true }],
+            }));
+
+        Assert.Equal([alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { HasExecutions = true }));
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { HasExecutions = false }));
+        Assert.Equal([bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasExecutionsWith = [new RequestExecutionListFilter { Status = "failed" }],
+            }));
+        Assert.Equal([alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasExecutionsWith =
+                [
+                    new RequestExecutionListFilter
+                    {
+                        HasRequestWith = [new RequestListFilter { Status = "completed" }],
+                    },
+                ],
+            }));
+
+        Assert.Equal([alpha.Id],
+            await QueryAsync(new ChannelListFilter { HasUsageLogs = true }));
+        Assert.Equal([bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { HasUsageLogs = false }));
+        Assert.Equal([alpha.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasUsageLogsWith = [new UsageLogListFilter { TotalTokensGTE = 20 }],
+            }));
+        Assert.Equal([alpha.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasUsageLogsWith = [new UsageLogListFilter { TotalTokensLT = 20 }],
+            }));
+        Assert.Equal([alpha.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                HasUsageLogsWith =
+                [
+                    new UsageLogListFilter
+                    {
+                        HasRequestWith = [new RequestListFilter { Status = "failed" }],
+                    },
+                ],
+            }));
+
+        // HasXWith: [] is ignored, exactly like entgql's empty predicate list.
+        Assert.Equal([alpha.Id, bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { HasRequestsWith = [] }));
+
+        Assert.Equal([charlie.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                Not = new ChannelListFilter { HasRequests = true },
+            }));
+        Assert.Equal([alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                Or =
+                [
+                    new ChannelListFilter { HasExecutions = true },
+                    new ChannelListFilter
+                    {
+                        HasUsageLogsWith = [new UsageLogListFilter { TotalTokensGTE = 20 }],
+                    },
+                ],
+            }));
+    }
+
+    private static async Task SeedRequestRowAsync(
+        TestDatabase db,
+        long id,
+        long channelId,
+        string status,
+        string modelId = "gpt-4o")
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "requests"
+                ("id", "created_at", "updated_at", "source", "model_id", "request_body",
+                 "status", "channel_id", "project_id")
+            VALUES (@Id, @CreatedAt, @CreatedAt, 'api', @ModelId, '{}'::jsonb, @Status,
+                    @ChannelId, 1);
+            """,
+            new { Id = id, CreatedAt, Status = status, ChannelId = channelId, ModelId = modelId });
+    }
+
+    private static async Task SeedExecutionRowAsync(
+        TestDatabase db,
+        long id,
+        long requestId,
+        long channelId,
+        string status)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "request_executions"
+                ("id", "created_at", "updated_at", "project_id", "model_id", "request_body",
+                 "status", "channel_id", "request_id")
+            VALUES (@Id, @CreatedAt, @CreatedAt, 1, 'gpt-4o', '{}'::jsonb, @Status,
+                    @ChannelId, @RequestId);
+            """,
+            new
+            {
+                Id = id,
+                CreatedAt,
+                Status = status,
+                ChannelId = channelId,
+                RequestId = requestId,
+            });
+    }
+
+    private static async Task SeedUsageLogRowAsync(
+        TestDatabase db,
+        long id,
+        long requestId,
+        long channelId,
+        long totalTokens)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "usage_logs"
+                ("id", "created_at", "updated_at", "model_id", "total_tokens", "project_id",
+                 "request_id", "channel_id")
+            VALUES (@Id, @CreatedAt, @CreatedAt, 'gpt-4o', @TotalTokens, 1, @RequestId,
+                    @ChannelId);
+            """,
+            new
+            {
+                Id = id,
+                CreatedAt,
+                TotalTokens = totalTokens,
+                RequestId = requestId,
+                ChannelId = channelId,
+            });
     }
 
     private static async Task<ChannelProbeRecord> SeedProbeAsync(

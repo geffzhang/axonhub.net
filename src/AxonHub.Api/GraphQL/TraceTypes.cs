@@ -1638,6 +1638,137 @@ public static class TraceMapping
             StatusNotIn = where.StatusNotIn is { Count: > 0 }
                 ? where.StatusNotIn.Select(static status => ToWireStatus(status)).ToList()
                 : null,
+            Stream = where.Stream,
+            StreamNEQ = where.StreamNEQ,
+            ClientIp = where.ClientIp,
+            ClientIpNEQ = where.ClientIpNEQ,
+            ClientIpIn = ToList(where.ClientIpIn),
+            ClientIpNotIn = ToList(where.ClientIpNotIn),
+            ClientIpGT = where.ClientIpGT,
+            ClientIpGTE = where.ClientIpGTE,
+            ClientIpLT = where.ClientIpLT,
+            ClientIpLTE = where.ClientIpLTE,
+            ClientIpContains = where.ClientIpContains,
+            ClientIpHasPrefix = where.ClientIpHasPrefix,
+            ClientIpHasSuffix = where.ClientIpHasSuffix,
+            ClientIpEqualFold = where.ClientIpEqualFold,
+            ClientIpContainsFold = where.ClientIpContainsFold,
+            UserAgent = where.UserAgent,
+            UserAgentNEQ = where.UserAgentNEQ,
+            UserAgentIn = ToList(where.UserAgentIn),
+            UserAgentNotIn = ToList(where.UserAgentNotIn),
+            UserAgentGT = where.UserAgentGT,
+            UserAgentGTE = where.UserAgentGTE,
+            UserAgentLT = where.UserAgentLT,
+            UserAgentLTE = where.UserAgentLTE,
+            UserAgentContains = where.UserAgentContains,
+            UserAgentHasPrefix = where.UserAgentHasPrefix,
+            UserAgentHasSuffix = where.UserAgentHasSuffix,
+            UserAgentEqualFold = where.UserAgentEqualFold,
+            UserAgentContainsFold = where.UserAgentContainsFold,
+            MetricsLatencyMs = where.MetricsLatencyMs,
+            MetricsLatencyMsNEQ = where.MetricsLatencyMsNEQ,
+            MetricsLatencyMsIn = ToLongList(where.MetricsLatencyMsIn),
+            MetricsLatencyMsNotIn = ToLongList(where.MetricsLatencyMsNotIn),
+            MetricsLatencyMsGT = where.MetricsLatencyMsGT,
+            MetricsLatencyMsGTE = where.MetricsLatencyMsGTE,
+            MetricsLatencyMsLT = where.MetricsLatencyMsLT,
+            MetricsLatencyMsLTE = where.MetricsLatencyMsLTE,
+            MetricsLatencyMsIsNil = where.MetricsLatencyMsIsNil,
+            MetricsLatencyMsNotNil = where.MetricsLatencyMsNotNil,
+            MetricsFirstTokenLatencyMs = where.MetricsFirstTokenLatencyMs,
+            MetricsFirstTokenLatencyMsNEQ = where.MetricsFirstTokenLatencyMsNEQ,
+            MetricsFirstTokenLatencyMsIn = ToLongList(where.MetricsFirstTokenLatencyMsIn),
+            MetricsFirstTokenLatencyMsNotIn = ToLongList(where.MetricsFirstTokenLatencyMsNotIn),
+            MetricsFirstTokenLatencyMsGT = where.MetricsFirstTokenLatencyMsGT,
+            MetricsFirstTokenLatencyMsGTE = where.MetricsFirstTokenLatencyMsGTE,
+            MetricsFirstTokenLatencyMsLT = where.MetricsFirstTokenLatencyMsLT,
+            MetricsFirstTokenLatencyMsLTE = where.MetricsFirstTokenLatencyMsLTE,
+            MetricsFirstTokenLatencyMsIsNil = where.MetricsFirstTokenLatencyMsIsNil,
+            MetricsFirstTokenLatencyMsNotNil = where.MetricsFirstTokenLatencyMsNotNil,
+            MetricsReasoningDurationMs = where.MetricsReasoningDurationMs,
+            MetricsReasoningDurationMsNEQ = where.MetricsReasoningDurationMsNEQ,
+            MetricsReasoningDurationMsIn = ToLongList(where.MetricsReasoningDurationMsIn),
+            MetricsReasoningDurationMsNotIn = ToLongList(where.MetricsReasoningDurationMsNotIn),
+            MetricsReasoningDurationMsGT = where.MetricsReasoningDurationMsGT,
+            MetricsReasoningDurationMsGTE = where.MetricsReasoningDurationMsGTE,
+            MetricsReasoningDurationMsLT = where.MetricsReasoningDurationMsLT,
+            MetricsReasoningDurationMsLTE = where.MetricsReasoningDurationMsLTE,
+            MetricsReasoningDurationMsIsNil = where.MetricsReasoningDurationMsIsNil,
+            MetricsReasoningDurationMsNotNil = where.MetricsReasoningDurationMsNotNil,
+            ContentSaved = where.ContentSaved,
+            ContentSavedNEQ = where.ContentSavedNEQ,
+            ContentStorageId = where.ContentStorageId,
+            ContentStorageIdNEQ = where.ContentStorageIdNEQ,
+            ContentStorageIdIn = ToLongList(where.ContentStorageIdIn),
+            ContentStorageIdNotIn = ToLongList(where.ContentStorageIdNotIn),
+            ContentStorageIdGT = where.ContentStorageIdGT,
+            ContentStorageIdGTE = where.ContentStorageIdGTE,
+            ContentStorageIdLT = where.ContentStorageIdLT,
+            ContentStorageIdLTE = where.ContentStorageIdLTE,
+            ContentStorageIdIsNil = where.ContentStorageIdIsNil,
+            ContentStorageIdNotNil = where.ContentStorageIdNotNil,
+            ContentStorageKey = where.ContentStorageKey,
+            ContentStorageKeyNEQ = where.ContentStorageKeyNEQ,
+            ContentStorageKeyIn = ToList(where.ContentStorageKeyIn),
+            ContentStorageKeyNotIn = ToList(where.ContentStorageKeyNotIn),
+            ContentStorageKeyGT = where.ContentStorageKeyGT,
+            ContentStorageKeyGTE = where.ContentStorageKeyGTE,
+            ContentStorageKeyLT = where.ContentStorageKeyLT,
+            ContentStorageKeyLTE = where.ContentStorageKeyLTE,
+            ContentStorageKeyContains = where.ContentStorageKeyContains,
+            ContentStorageKeyHasPrefix = where.ContentStorageKeyHasPrefix,
+            ContentStorageKeyHasSuffix = where.ContentStorageKeyHasSuffix,
+            ContentStorageKeyIsNil = where.ContentStorageKeyIsNil,
+            ContentStorageKeyNotNil = where.ContentStorageKeyNotNil,
+            ContentStorageKeyEqualFold = where.ContentStorageKeyEqualFold,
+            ContentStorageKeyContainsFold = where.ContentStorageKeyContainsFold,
+            ContentSavedAt = where.ContentSavedAt,
+            ContentSavedAtNEQ = where.ContentSavedAtNEQ,
+            ContentSavedAtIn = ToList(where.ContentSavedAtIn),
+            ContentSavedAtNotIn = ToList(where.ContentSavedAtNotIn),
+            ContentSavedAtGT = where.ContentSavedAtGT,
+            ContentSavedAtGTE = where.ContentSavedAtGTE,
+            ContentSavedAtLT = where.ContentSavedAtLT,
+            ContentSavedAtLTE = where.ContentSavedAtLTE,
+            ContentSavedAtIsNil = where.ContentSavedAtIsNil,
+            ContentSavedAtNotNil = where.ContentSavedAtNotNil,
+            HasApiKey = where.HasApiKey,
+            HasApiKeyWith = where.HasApiKeyWith?
+                .Select(static nested => ApiKeyMapping.ToFilter(nested))
+                .OfType<ApiKeyListFilter>()
+                .ToList(),
+            HasProject = where.HasProject,
+            HasProjectWith = where.HasProjectWith?
+                .Select(static nested => ProjectMapping.ToFilter(nested))
+                .OfType<ProjectListFilter>()
+                .ToList(),
+            HasTrace = where.HasTrace,
+            HasTraceWith = where.HasTraceWith?
+                .Select(static nested => TraceMapping.ToFilter(nested))
+                .OfType<TraceListFilter>()
+                .ToList(),
+            HasDataStorage = where.HasDataStorage,
+            HasDataStorageWith = where.HasDataStorageWith?
+                .Select(static nested => DataStorageMapping.ToFilter(nested))
+                .OfType<DataStorageListFilter>()
+                .ToList(),
+            HasExecutions = where.HasExecutions,
+            HasExecutionsWith = where.HasExecutionsWith?
+                .Select(static nested => RequestMapping.ToFilter(nested))
+                .OfType<RequestExecutionListFilter>()
+                .ToList(),
+            HasChannel = where.HasChannel,
+            HasChannelWith = where.HasChannelWith?
+                .Select(static nested => ChannelMapping.ToFilter(nested))
+                .OfType<ChannelListFilter>()
+                .ToList(),
+            HasUsageLogs = where.HasUsageLogs,
+            HasUsageLogsWith = where.HasUsageLogsWith?
+                .Select(static nested => RequestMapping.ToFilter(nested))
+                .OfType<UsageLogListFilter>()
+                .ToList(),
+
             Not = ToFilter(where.Not),
             And = ToList(where.And?.Select(ToFilter).OfType<RequestListFilter>().ToList()),
             Or = ToList(where.Or?.Select(ToFilter).OfType<RequestListFilter>().ToList()),
@@ -1732,6 +1863,10 @@ public static class TraceMapping
     /// <summary>Drops empty lists, matching entgql's len guard (C189).</summary>
     private static IReadOnlyList<T>? ToList<T>(IReadOnlyList<T>? values)
         => values is { Count: > 0 } ? values : null;
+
+    /// <summary>Widens the SDL's 32-bit Int lists to the store's int64 ids.</summary>
+    private static IReadOnlyList<long>? ToLongList(IReadOnlyList<int>? values)
+        => values is { Count: > 0 } ? values.Select(static value => (long)value).ToList() : null;
 
     private static PageInfoType BuildPageInfo(
         IReadOnlyList<CursorValue> cursors,

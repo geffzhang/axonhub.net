@@ -679,6 +679,24 @@ public sealed class ChannelWhereInput
 
     public IReadOnlyList<ProviderQuotaStatusWhereInput>? HasProviderQuotaStatusWith { get; set; }
 
+    [GraphQLName("hasRequests")]
+    public bool? HasRequests { get; set; }
+
+    [GraphQLName("hasRequestsWith")]
+    public IReadOnlyList<RequestWhereInput>? HasRequestsWith { get; set; }
+
+    [GraphQLName("hasExecutions")]
+    public bool? HasExecutions { get; set; }
+
+    [GraphQLName("hasExecutionsWith")]
+    public IReadOnlyList<RequestExecutionWhereInput>? HasExecutionsWith { get; set; }
+
+    [GraphQLName("hasUsageLogs")]
+    public bool? HasUsageLogs { get; set; }
+
+    [GraphQLName("hasUsageLogsWith")]
+    public IReadOnlyList<UsageLogWhereInput>? HasUsageLogsWith { get; set; }
+
     public ChannelWhereInput? Not { get; set; }
 
     public IReadOnlyList<ChannelWhereInput>? And { get; set; }

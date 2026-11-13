@@ -148,6 +148,336 @@ public sealed record UsageLogListFilter
     public IReadOnlyList<UsageLogListFilter>? And { get; init; }
 
     public IReadOnlyList<UsageLogListFilter>? Or { get; init; }
+
+    public long? ApiKeyIdGT { get; init; }
+
+    public long? ApiKeyIdGTE { get; init; }
+
+    public long? ApiKeyIdLT { get; init; }
+
+    public long? ApiKeyIdLTE { get; init; }
+
+    public string? ModelIdGT { get; init; }
+
+    public string? ModelIdGTE { get; init; }
+
+    public string? ModelIdLT { get; init; }
+
+    public string? ModelIdLTE { get; init; }
+
+    public string? ModelIdHasPrefix { get; init; }
+
+    public string? ModelIdHasSuffix { get; init; }
+
+    public string? ModelIdEqualFold { get; init; }
+
+    public long? PromptTokens { get; init; }
+
+    public long? PromptTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? PromptTokensIn { get; init; }
+
+    public IReadOnlyList<long>? PromptTokensNotIn { get; init; }
+
+    public long? PromptTokensGT { get; init; }
+
+    public long? PromptTokensGTE { get; init; }
+
+    public long? PromptTokensLT { get; init; }
+
+    public long? PromptTokensLTE { get; init; }
+
+    public long? CompletionTokens { get; init; }
+
+    public long? CompletionTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? CompletionTokensIn { get; init; }
+
+    public IReadOnlyList<long>? CompletionTokensNotIn { get; init; }
+
+    public long? CompletionTokensGT { get; init; }
+
+    public long? CompletionTokensGTE { get; init; }
+
+    public long? CompletionTokensLT { get; init; }
+
+    public long? CompletionTokensLTE { get; init; }
+
+    public long? TotalTokens { get; init; }
+
+    public long? TotalTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? TotalTokensIn { get; init; }
+
+    public IReadOnlyList<long>? TotalTokensNotIn { get; init; }
+
+    public long? TotalTokensGT { get; init; }
+
+    public long? TotalTokensGTE { get; init; }
+
+    public long? TotalTokensLT { get; init; }
+
+    public long? TotalTokensLTE { get; init; }
+
+    public long? PromptAudioTokens { get; init; }
+
+    public long? PromptAudioTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? PromptAudioTokensIn { get; init; }
+
+    public IReadOnlyList<long>? PromptAudioTokensNotIn { get; init; }
+
+    public long? PromptAudioTokensGT { get; init; }
+
+    public long? PromptAudioTokensGTE { get; init; }
+
+    public long? PromptAudioTokensLT { get; init; }
+
+    public long? PromptAudioTokensLTE { get; init; }
+
+    public bool? PromptAudioTokensIsNil { get; init; }
+
+    public bool? PromptAudioTokensNotNil { get; init; }
+
+    public long? PromptCachedTokens { get; init; }
+
+    public long? PromptCachedTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? PromptCachedTokensIn { get; init; }
+
+    public IReadOnlyList<long>? PromptCachedTokensNotIn { get; init; }
+
+    public long? PromptCachedTokensGT { get; init; }
+
+    public long? PromptCachedTokensGTE { get; init; }
+
+    public long? PromptCachedTokensLT { get; init; }
+
+    public long? PromptCachedTokensLTE { get; init; }
+
+    public bool? PromptCachedTokensIsNil { get; init; }
+
+    public bool? PromptCachedTokensNotNil { get; init; }
+
+    public long? PromptWriteCachedTokens { get; init; }
+
+    public long? PromptWriteCachedTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? PromptWriteCachedTokensIn { get; init; }
+
+    public IReadOnlyList<long>? PromptWriteCachedTokensNotIn { get; init; }
+
+    public long? PromptWriteCachedTokensGT { get; init; }
+
+    public long? PromptWriteCachedTokensGTE { get; init; }
+
+    public long? PromptWriteCachedTokensLT { get; init; }
+
+    public long? PromptWriteCachedTokensLTE { get; init; }
+
+    public bool? PromptWriteCachedTokensIsNil { get; init; }
+
+    public bool? PromptWriteCachedTokensNotNil { get; init; }
+
+    public long? PromptWriteCachedTokens5m { get; init; }
+
+    public long? PromptWriteCachedTokens5mNEQ { get; init; }
+
+    public IReadOnlyList<long>? PromptWriteCachedTokens5mIn { get; init; }
+
+    public IReadOnlyList<long>? PromptWriteCachedTokens5mNotIn { get; init; }
+
+    public long? PromptWriteCachedTokens5mGT { get; init; }
+
+    public long? PromptWriteCachedTokens5mGTE { get; init; }
+
+    public long? PromptWriteCachedTokens5mLT { get; init; }
+
+    public long? PromptWriteCachedTokens5mLTE { get; init; }
+
+    public bool? PromptWriteCachedTokens5mIsNil { get; init; }
+
+    public bool? PromptWriteCachedTokens5mNotNil { get; init; }
+
+    public long? PromptWriteCachedTokens1h { get; init; }
+
+    public long? PromptWriteCachedTokens1hNEQ { get; init; }
+
+    public IReadOnlyList<long>? PromptWriteCachedTokens1hIn { get; init; }
+
+    public IReadOnlyList<long>? PromptWriteCachedTokens1hNotIn { get; init; }
+
+    public long? PromptWriteCachedTokens1hGT { get; init; }
+
+    public long? PromptWriteCachedTokens1hGTE { get; init; }
+
+    public long? PromptWriteCachedTokens1hLT { get; init; }
+
+    public long? PromptWriteCachedTokens1hLTE { get; init; }
+
+    public bool? PromptWriteCachedTokens1hIsNil { get; init; }
+
+    public bool? PromptWriteCachedTokens1hNotNil { get; init; }
+
+    public long? CompletionAudioTokens { get; init; }
+
+    public long? CompletionAudioTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? CompletionAudioTokensIn { get; init; }
+
+    public IReadOnlyList<long>? CompletionAudioTokensNotIn { get; init; }
+
+    public long? CompletionAudioTokensGT { get; init; }
+
+    public long? CompletionAudioTokensGTE { get; init; }
+
+    public long? CompletionAudioTokensLT { get; init; }
+
+    public long? CompletionAudioTokensLTE { get; init; }
+
+    public bool? CompletionAudioTokensIsNil { get; init; }
+
+    public bool? CompletionAudioTokensNotNil { get; init; }
+
+    public long? CompletionReasoningTokens { get; init; }
+
+    public long? CompletionReasoningTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? CompletionReasoningTokensIn { get; init; }
+
+    public IReadOnlyList<long>? CompletionReasoningTokensNotIn { get; init; }
+
+    public long? CompletionReasoningTokensGT { get; init; }
+
+    public long? CompletionReasoningTokensGTE { get; init; }
+
+    public long? CompletionReasoningTokensLT { get; init; }
+
+    public long? CompletionReasoningTokensLTE { get; init; }
+
+    public bool? CompletionReasoningTokensIsNil { get; init; }
+
+    public bool? CompletionReasoningTokensNotNil { get; init; }
+
+    public long? CompletionAcceptedPredictionTokens { get; init; }
+
+    public long? CompletionAcceptedPredictionTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? CompletionAcceptedPredictionTokensIn { get; init; }
+
+    public IReadOnlyList<long>? CompletionAcceptedPredictionTokensNotIn { get; init; }
+
+    public long? CompletionAcceptedPredictionTokensGT { get; init; }
+
+    public long? CompletionAcceptedPredictionTokensGTE { get; init; }
+
+    public long? CompletionAcceptedPredictionTokensLT { get; init; }
+
+    public long? CompletionAcceptedPredictionTokensLTE { get; init; }
+
+    public bool? CompletionAcceptedPredictionTokensIsNil { get; init; }
+
+    public bool? CompletionAcceptedPredictionTokensNotNil { get; init; }
+
+    public long? CompletionRejectedPredictionTokens { get; init; }
+
+    public long? CompletionRejectedPredictionTokensNEQ { get; init; }
+
+    public IReadOnlyList<long>? CompletionRejectedPredictionTokensIn { get; init; }
+
+    public IReadOnlyList<long>? CompletionRejectedPredictionTokensNotIn { get; init; }
+
+    public long? CompletionRejectedPredictionTokensGT { get; init; }
+
+    public long? CompletionRejectedPredictionTokensGTE { get; init; }
+
+    public long? CompletionRejectedPredictionTokensLT { get; init; }
+
+    public long? CompletionRejectedPredictionTokensLTE { get; init; }
+
+    public bool? CompletionRejectedPredictionTokensIsNil { get; init; }
+
+    public bool? CompletionRejectedPredictionTokensNotNil { get; init; }
+
+    public string? FormatGT { get; init; }
+
+    public string? FormatGTE { get; init; }
+
+    public string? FormatLT { get; init; }
+
+    public string? FormatLTE { get; init; }
+
+    public string? FormatContains { get; init; }
+
+    public string? FormatHasPrefix { get; init; }
+
+    public string? FormatHasSuffix { get; init; }
+
+    public string? FormatEqualFold { get; init; }
+
+    public string? FormatContainsFold { get; init; }
+
+    public double? TotalCost { get; init; }
+
+    public double? TotalCostNEQ { get; init; }
+
+    public IReadOnlyList<double>? TotalCostIn { get; init; }
+
+    public IReadOnlyList<double>? TotalCostNotIn { get; init; }
+
+    public double? TotalCostGT { get; init; }
+
+    public double? TotalCostGTE { get; init; }
+
+    public double? TotalCostLT { get; init; }
+
+    public double? TotalCostLTE { get; init; }
+
+    public bool? TotalCostIsNil { get; init; }
+
+    public bool? TotalCostNotNil { get; init; }
+
+    public string? CostPriceReferenceId { get; init; }
+
+    public string? CostPriceReferenceIdNEQ { get; init; }
+
+    public IReadOnlyList<string>? CostPriceReferenceIdIn { get; init; }
+
+    public IReadOnlyList<string>? CostPriceReferenceIdNotIn { get; init; }
+
+    public string? CostPriceReferenceIdGT { get; init; }
+
+    public string? CostPriceReferenceIdGTE { get; init; }
+
+    public string? CostPriceReferenceIdLT { get; init; }
+
+    public string? CostPriceReferenceIdLTE { get; init; }
+
+    public string? CostPriceReferenceIdContains { get; init; }
+
+    public string? CostPriceReferenceIdHasPrefix { get; init; }
+
+    public string? CostPriceReferenceIdHasSuffix { get; init; }
+
+    public bool? CostPriceReferenceIdIsNil { get; init; }
+
+    public bool? CostPriceReferenceIdNotNil { get; init; }
+
+    public string? CostPriceReferenceIdEqualFold { get; init; }
+
+    public string? CostPriceReferenceIdContainsFold { get; init; }
+
+    public bool? HasRequest { get; init; }
+
+    public IReadOnlyList<RequestListFilter>? HasRequestWith { get; init; }
+
+    public bool? HasProject { get; init; }
+
+    public IReadOnlyList<ProjectListFilter>? HasProjectWith { get; init; }
+
+    public bool? HasChannel { get; init; }
+
+    public IReadOnlyList<ChannelListFilter>? HasChannelWith { get; init; }
 }
 
 /// <summary>Usage-log connection query, optionally scoped by its request.</summary>
@@ -406,7 +736,7 @@ public sealed class UsageLogStore(AxonHubDbContext db) : IUsageLogStore
             .Append("))))))");
     }
 
-    private static string? BuildFilter(
+    internal static string? BuildFilter(
         UsageLogListFilter? filter,
         string alias,
         SqlArguments args)
@@ -449,6 +779,161 @@ public sealed class UsageLogStore(AxonHubDbContext db) : IUsageLogStore
             predicates, filter.Format, filter.FormatNEQ, filter.FormatIn,
             filter.FormatNotIn, null, null, null, null, null, null, null, null,
             null, alias, "format", args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "api_key_id", filter.ApiKeyId, filter.ApiKeyIdNEQ, filter.ApiKeyIdIn,
+            filter.ApiKeyIdNotIn, filter.ApiKeyIdGT, filter.ApiKeyIdGTE, filter.ApiKeyIdLT, filter.ApiKeyIdLTE,
+            filter.ApiKeyIdIsNil, filter.ApiKeyIdNotNil, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "model_id", filter.ModelId, filter.ModelIdNEQ, filter.ModelIdIn,
+            filter.ModelIdNotIn, filter.ModelIdGT, filter.ModelIdGTE, filter.ModelIdLT, filter.ModelIdLTE,
+            filter.ModelIdContains, filter.ModelIdHasPrefix, filter.ModelIdHasSuffix,
+            filter.ModelIdEqualFold, filter.ModelIdContainsFold, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "prompt_tokens", filter.PromptTokens, filter.PromptTokensNEQ, filter.PromptTokensIn,
+            filter.PromptTokensNotIn, filter.PromptTokensGT, filter.PromptTokensGTE, filter.PromptTokensLT, filter.PromptTokensLTE,
+            null, null, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "completion_tokens", filter.CompletionTokens, filter.CompletionTokensNEQ, filter.CompletionTokensIn,
+            filter.CompletionTokensNotIn, filter.CompletionTokensGT, filter.CompletionTokensGTE, filter.CompletionTokensLT, filter.CompletionTokensLTE,
+            null, null, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "total_tokens", filter.TotalTokens, filter.TotalTokensNEQ, filter.TotalTokensIn,
+            filter.TotalTokensNotIn, filter.TotalTokensGT, filter.TotalTokensGTE, filter.TotalTokensLT, filter.TotalTokensLTE,
+            null, null, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "prompt_audio_tokens", filter.PromptAudioTokens, filter.PromptAudioTokensNEQ, filter.PromptAudioTokensIn,
+            filter.PromptAudioTokensNotIn, filter.PromptAudioTokensGT, filter.PromptAudioTokensGTE, filter.PromptAudioTokensLT, filter.PromptAudioTokensLTE,
+            filter.PromptAudioTokensIsNil, filter.PromptAudioTokensNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "prompt_cached_tokens", filter.PromptCachedTokens, filter.PromptCachedTokensNEQ, filter.PromptCachedTokensIn,
+            filter.PromptCachedTokensNotIn, filter.PromptCachedTokensGT, filter.PromptCachedTokensGTE, filter.PromptCachedTokensLT, filter.PromptCachedTokensLTE,
+            filter.PromptCachedTokensIsNil, filter.PromptCachedTokensNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "prompt_write_cached_tokens", filter.PromptWriteCachedTokens, filter.PromptWriteCachedTokensNEQ, filter.PromptWriteCachedTokensIn,
+            filter.PromptWriteCachedTokensNotIn, filter.PromptWriteCachedTokensGT, filter.PromptWriteCachedTokensGTE, filter.PromptWriteCachedTokensLT, filter.PromptWriteCachedTokensLTE,
+            filter.PromptWriteCachedTokensIsNil, filter.PromptWriteCachedTokensNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "prompt_write_cached_tokens_5m", filter.PromptWriteCachedTokens5m, filter.PromptWriteCachedTokens5mNEQ, filter.PromptWriteCachedTokens5mIn,
+            filter.PromptWriteCachedTokens5mNotIn, filter.PromptWriteCachedTokens5mGT, filter.PromptWriteCachedTokens5mGTE, filter.PromptWriteCachedTokens5mLT, filter.PromptWriteCachedTokens5mLTE,
+            filter.PromptWriteCachedTokens5mIsNil, filter.PromptWriteCachedTokens5mNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "prompt_write_cached_tokens_1h", filter.PromptWriteCachedTokens1h, filter.PromptWriteCachedTokens1hNEQ, filter.PromptWriteCachedTokens1hIn,
+            filter.PromptWriteCachedTokens1hNotIn, filter.PromptWriteCachedTokens1hGT, filter.PromptWriteCachedTokens1hGTE, filter.PromptWriteCachedTokens1hLT, filter.PromptWriteCachedTokens1hLTE,
+            filter.PromptWriteCachedTokens1hIsNil, filter.PromptWriteCachedTokens1hNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "completion_audio_tokens", filter.CompletionAudioTokens, filter.CompletionAudioTokensNEQ, filter.CompletionAudioTokensIn,
+            filter.CompletionAudioTokensNotIn, filter.CompletionAudioTokensGT, filter.CompletionAudioTokensGTE, filter.CompletionAudioTokensLT, filter.CompletionAudioTokensLTE,
+            filter.CompletionAudioTokensIsNil, filter.CompletionAudioTokensNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "completion_reasoning_tokens", filter.CompletionReasoningTokens, filter.CompletionReasoningTokensNEQ, filter.CompletionReasoningTokensIn,
+            filter.CompletionReasoningTokensNotIn, filter.CompletionReasoningTokensGT, filter.CompletionReasoningTokensGTE, filter.CompletionReasoningTokensLT, filter.CompletionReasoningTokensLTE,
+            filter.CompletionReasoningTokensIsNil, filter.CompletionReasoningTokensNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "completion_accepted_prediction_tokens", filter.CompletionAcceptedPredictionTokens, filter.CompletionAcceptedPredictionTokensNEQ, filter.CompletionAcceptedPredictionTokensIn,
+            filter.CompletionAcceptedPredictionTokensNotIn, filter.CompletionAcceptedPredictionTokensGT, filter.CompletionAcceptedPredictionTokensGTE, filter.CompletionAcceptedPredictionTokensLT, filter.CompletionAcceptedPredictionTokensLTE,
+            filter.CompletionAcceptedPredictionTokensIsNil, filter.CompletionAcceptedPredictionTokensNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "completion_rejected_prediction_tokens", filter.CompletionRejectedPredictionTokens, filter.CompletionRejectedPredictionTokensNEQ, filter.CompletionRejectedPredictionTokensIn,
+            filter.CompletionRejectedPredictionTokensNotIn, filter.CompletionRejectedPredictionTokensGT, filter.CompletionRejectedPredictionTokensGTE, filter.CompletionRejectedPredictionTokensLT, filter.CompletionRejectedPredictionTokensLTE,
+            filter.CompletionRejectedPredictionTokensIsNil, filter.CompletionRejectedPredictionTokensNotNil, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "format", filter.Format, filter.FormatNEQ, filter.FormatIn,
+            filter.FormatNotIn, filter.FormatGT, filter.FormatGTE, filter.FormatLT, filter.FormatLTE,
+            filter.FormatContains, filter.FormatHasPrefix, filter.FormatHasSuffix,
+            filter.FormatEqualFold, filter.FormatContainsFold, args);
+
+        ConnectionSql.AppendDoublePredicates(
+            predicates, alias, "total_cost", filter.TotalCost, filter.TotalCostNEQ, filter.TotalCostIn,
+            filter.TotalCostNotIn, filter.TotalCostGT, filter.TotalCostGTE, filter.TotalCostLT, filter.TotalCostLTE,
+            filter.TotalCostIsNil, filter.TotalCostNotNil, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "cost_price_reference_id", filter.CostPriceReferenceId, filter.CostPriceReferenceIdNEQ, filter.CostPriceReferenceIdIn,
+            filter.CostPriceReferenceIdNotIn, filter.CostPriceReferenceIdGT, filter.CostPriceReferenceIdGTE, filter.CostPriceReferenceIdLT, filter.CostPriceReferenceIdLTE,
+            filter.CostPriceReferenceIdContains, filter.CostPriceReferenceIdHasPrefix, filter.CostPriceReferenceIdHasSuffix,
+            filter.CostPriceReferenceIdEqualFold, filter.CostPriceReferenceIdContainsFold, args);
+
+        if (filter.CostPriceReferenceIdIsNil == true)
+        {
+            predicates.Add(alias + ".\"cost_price_reference_id\" IS NULL");
+        }
+
+        if (filter.CostPriceReferenceIdNotNil == true)
+        {
+            predicates.Add(alias + ".\"cost_price_reference_id\" IS NOT NULL");
+        }
+
+        if (filter.HasRequest is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"requests\" ulrq WHERE ulrq.\"id\" = " + alias + ".\"request_id\")";
+            predicates.Add(filter.HasRequest.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasRequestWith is { Count: > 0 } hasRequestFilters)
+        {
+            var withPredicates = hasRequestFilters
+                .Select(nested => RequestSegmentStore.BuildFilter(nested, "ulrq", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"requests\" ulrq WHERE ulrq.\"id\" = " + alias + ".\"request_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasProject is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"projects\" ulpr WHERE ulpr.\"id\" = " + alias + ".\"project_id\")";
+            predicates.Add(filter.HasProject.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProjectWith is { Count: > 0 } hasProjectFilters)
+        {
+            var withPredicates = hasProjectFilters
+                .Select(nested => ProjectStore.BuildFilter(nested, "ulpr", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"projects\" ulpr WHERE ulpr.\"id\" = " + alias + ".\"project_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasChannel is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channels\" ulch WHERE ulch.\"id\" = " + alias + ".\"channel_id\")";
+            predicates.Add(filter.HasChannel.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelWith is { Count: > 0 } hasChannelFilters)
+        {
+            var withPredicates = hasChannelFilters
+                .Select(nested => ChannelAdminStore.BuildFilter(nested, "ulch", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channels\" ulch WHERE ulch.\"id\" = " + alias + ".\"channel_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)
         {

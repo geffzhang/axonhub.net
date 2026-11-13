@@ -1844,6 +1844,37 @@ AdminChannelsEndpointTests 更新 2 个断言并新增 1 个 theory（4 个新 w
 台账：C135 保持 gap，残余收窄为 5 组边谓词（Channel 3、User 2）；lint 通过；
 02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
 
+§204（2026-11-13）Request / RequestExecution / UsageLog where 输入与 Channel 最后 3 组边谓词
+（C135 第六刀）。
+
+参照 ent.graphql：RequestWhereInput / RequestExecutionWhereInput / UsageLogWhereInput 分别有
+228 / 206 / 226 个字段（not / and / or 与全部边谓词 ×2 在内）；端口此前只暴露前端契约子集
+（C192）。§204 把三张输入的标量族（id / time / int / string / double / bool / 枚举与 IsNil /
+NotNil）与边谓词全部加入 GraphQL 输入与对应的 RequestListFilter / RequestExecutionListFilter /
+UsageLogListFilter：Request 的 hasAPIKey / hasProject / hasTrace / hasDataStorage /
+hasExecutions / hasUsageLogs / hasChannel（7 组），RequestExecution 的 hasRequest / hasChannel /
+hasDataStorage（3 组），UsageLog 的 hasRequest / hasProject / hasChannel（3 组）。
+
+同时把已解锁的 3 组边谓词接入 ChannelWhereInput：hasRequests / hasRequestsWith、
+hasExecutions / hasExecutionsWith、hasUsageLogs / hasUsageLogsWith（ChannelWhereInput 163/163
+个字段）。语义与 §201–§203 相同：true → EXISTS、false → NOT EXISTS；hasXWith 的谓词 AND 进
+同一个 EXISTS，空 With 列表不生成谓词，被连接实体的软删除谓词不重新应用。
+
+诊断中发现空 In / NotIn 列表的语义与 entgql 不符（entgql 只在 len > 0 时安装谓词；端口渲染为
+恒假 / 恒真），修正 ConnectionSql 的四个 In helper（C283，resolved）；直接 ent 查询在空列表时
+提前返回，保持恒假语义。
+
+测试：持久化新增 7 例（RequestSegmentStoreTests、RequestExecutionStoreTests、UsageLogStoreTests
+各 2 例，ChannelAdminStoreTests 1 例；覆盖三张输入的全部标量族、7 + 3 + 3 组边、嵌套边、软删除
+目标、空列表忽略、Not / Or 组合），并更新 7 个旧 store 测试类的空 In 断言；持久化工程全量
+400 通过（0 失败）。Api 新增 AdminRequestsEndpointTests.WhereInputsExposeEveryReferencePredicate
+（228 / 206 / 226 字段全量 introspect），更新
+AdminChannelsEndpointTests.ChannelWhereInputExposesEveryScalarPredicate（ChannelWhereInput 163
+字段），两个 introspection 测试通过。
+台账：C135 保持 gap，残余收窄为 2 组边谓词（User 的 hasChannelOverrideTemplates /
+hasOidcIdentities）；C192 的输入子集缺口关闭，剩余 dataStorage 输出边；新增 C283（resolved）；
+lint 通过；02-differences.md 已重新生成；283 条（206 accepted / 2 gap / 75 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

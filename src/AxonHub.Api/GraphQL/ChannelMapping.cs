@@ -382,6 +382,22 @@ public static class ChannelMapping
                 .Select(static quota => ToFilter(quota))
                 .OfType<ProviderQuotaStatusListFilter>()
                 .ToList(),
+            HasRequests = where.HasRequests,
+            HasRequestsWith = where.HasRequestsWith?
+                .Select(static nested => TraceMapping.ToFilter(nested))
+                .OfType<RequestListFilter>()
+                .ToList(),
+            HasExecutions = where.HasExecutions,
+            HasExecutionsWith = where.HasExecutionsWith?
+                .Select(static nested => RequestMapping.ToFilter(nested))
+                .OfType<RequestExecutionListFilter>()
+                .ToList(),
+            HasUsageLogs = where.HasUsageLogs,
+            HasUsageLogsWith = where.HasUsageLogsWith?
+                .Select(static nested => RequestMapping.ToFilter(nested))
+                .OfType<UsageLogListFilter>()
+                .ToList(),
+
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<ChannelListFilter>().ToList(),
             Or = where.Or?.Select(ToFilter).OfType<ChannelListFilter>().ToList(),

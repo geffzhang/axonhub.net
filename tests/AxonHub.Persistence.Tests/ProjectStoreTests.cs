@@ -400,7 +400,10 @@ public sealed class ProjectStoreTests(PostgresFixture fixture)
         Assert.Equal(
             ["Alpha", "Gamma"],
             await Names(new ProjectListFilter { StatusNotIn = ["archived"] }));
-        Assert.Empty(await Names(new ProjectListFilter { StatusIn = [] }));
+        // entgql ignores an empty In-list.
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            await Names(new ProjectListFilter { StatusIn = [] }));
         Assert.Equal(
             ["Alpha", "Beta", "Gamma"],
             await Names(new ProjectListFilter { StatusNotIn = [] }));

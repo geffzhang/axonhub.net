@@ -155,6 +155,274 @@ public sealed record RequestExecutionListFilter
     public IReadOnlyList<RequestExecutionListFilter>? And { get; init; }
 
     public IReadOnlyList<RequestExecutionListFilter>? Or { get; init; }
+
+    public string? ExternalIdGT { get; init; }
+
+    public string? ExternalIdGTE { get; init; }
+
+    public string? ExternalIdLT { get; init; }
+
+    public string? ExternalIdLTE { get; init; }
+
+    public string? ExternalIdContains { get; init; }
+
+    public string? ExternalIdHasPrefix { get; init; }
+
+    public string? ExternalIdHasSuffix { get; init; }
+
+    public bool? ExternalIdIsNil { get; init; }
+
+    public bool? ExternalIdNotNil { get; init; }
+
+    public string? ExternalIdEqualFold { get; init; }
+
+    public string? ExternalIdContainsFold { get; init; }
+
+    public string? ModelIdGT { get; init; }
+
+    public string? ModelIdGTE { get; init; }
+
+    public string? ModelIdLT { get; init; }
+
+    public string? ModelIdLTE { get; init; }
+
+    public string? UpstreamModelId { get; init; }
+
+    public string? UpstreamModelIdNEQ { get; init; }
+
+    public IReadOnlyList<string>? UpstreamModelIdIn { get; init; }
+
+    public IReadOnlyList<string>? UpstreamModelIdNotIn { get; init; }
+
+    public string? UpstreamModelIdGT { get; init; }
+
+    public string? UpstreamModelIdGTE { get; init; }
+
+    public string? UpstreamModelIdLT { get; init; }
+
+    public string? UpstreamModelIdLTE { get; init; }
+
+    public string? UpstreamModelIdContains { get; init; }
+
+    public string? UpstreamModelIdHasPrefix { get; init; }
+
+    public string? UpstreamModelIdHasSuffix { get; init; }
+
+    public bool? UpstreamModelIdIsNil { get; init; }
+
+    public bool? UpstreamModelIdNotNil { get; init; }
+
+    public string? UpstreamModelIdEqualFold { get; init; }
+
+    public string? UpstreamModelIdContainsFold { get; init; }
+
+    public string? FormatGT { get; init; }
+
+    public string? FormatGTE { get; init; }
+
+    public string? FormatLT { get; init; }
+
+    public string? FormatLTE { get; init; }
+
+    public string? FormatContains { get; init; }
+
+    public string? FormatHasPrefix { get; init; }
+
+    public string? FormatHasSuffix { get; init; }
+
+    public string? FormatEqualFold { get; init; }
+
+    public string? FormatContainsFold { get; init; }
+
+    public string? ReasoningEffort { get; init; }
+
+    public string? ReasoningEffortNEQ { get; init; }
+
+    public IReadOnlyList<string>? ReasoningEffortIn { get; init; }
+
+    public IReadOnlyList<string>? ReasoningEffortNotIn { get; init; }
+
+    public string? ReasoningEffortGT { get; init; }
+
+    public string? ReasoningEffortGTE { get; init; }
+
+    public string? ReasoningEffortLT { get; init; }
+
+    public string? ReasoningEffortLTE { get; init; }
+
+    public string? ReasoningEffortContains { get; init; }
+
+    public string? ReasoningEffortHasPrefix { get; init; }
+
+    public string? ReasoningEffortHasSuffix { get; init; }
+
+    public bool? ReasoningEffortIsNil { get; init; }
+
+    public bool? ReasoningEffortNotNil { get; init; }
+
+    public string? ReasoningEffortEqualFold { get; init; }
+
+    public string? ReasoningEffortContainsFold { get; init; }
+
+    public string? ErrorMessage { get; init; }
+
+    public string? ErrorMessageNEQ { get; init; }
+
+    public IReadOnlyList<string>? ErrorMessageIn { get; init; }
+
+    public IReadOnlyList<string>? ErrorMessageNotIn { get; init; }
+
+    public string? ErrorMessageGT { get; init; }
+
+    public string? ErrorMessageGTE { get; init; }
+
+    public string? ErrorMessageLT { get; init; }
+
+    public string? ErrorMessageLTE { get; init; }
+
+    public string? ErrorMessageContains { get; init; }
+
+    public string? ErrorMessageHasPrefix { get; init; }
+
+    public string? ErrorMessageHasSuffix { get; init; }
+
+    public bool? ErrorMessageIsNil { get; init; }
+
+    public bool? ErrorMessageNotNil { get; init; }
+
+    public string? ErrorMessageEqualFold { get; init; }
+
+    public string? ErrorMessageContainsFold { get; init; }
+
+    public long? ResponseStatusCode { get; init; }
+
+    public long? ResponseStatusCodeNEQ { get; init; }
+
+    public IReadOnlyList<long>? ResponseStatusCodeIn { get; init; }
+
+    public IReadOnlyList<long>? ResponseStatusCodeNotIn { get; init; }
+
+    public long? ResponseStatusCodeGT { get; init; }
+
+    public long? ResponseStatusCodeGTE { get; init; }
+
+    public long? ResponseStatusCodeLT { get; init; }
+
+    public long? ResponseStatusCodeLTE { get; init; }
+
+    public bool? ResponseStatusCodeIsNil { get; init; }
+
+    public bool? ResponseStatusCodeNotNil { get; init; }
+
+    public bool? Stream { get; init; }
+
+    public bool? StreamNEQ { get; init; }
+
+    public long? MetricsLatencyMs { get; init; }
+
+    public long? MetricsLatencyMsNEQ { get; init; }
+
+    public IReadOnlyList<long>? MetricsLatencyMsIn { get; init; }
+
+    public IReadOnlyList<long>? MetricsLatencyMsNotIn { get; init; }
+
+    public long? MetricsLatencyMsGT { get; init; }
+
+    public long? MetricsLatencyMsGTE { get; init; }
+
+    public long? MetricsLatencyMsLT { get; init; }
+
+    public long? MetricsLatencyMsLTE { get; init; }
+
+    public bool? MetricsLatencyMsIsNil { get; init; }
+
+    public bool? MetricsLatencyMsNotNil { get; init; }
+
+    public long? MetricsFirstTokenLatencyMs { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsNEQ { get; init; }
+
+    public IReadOnlyList<long>? MetricsFirstTokenLatencyMsIn { get; init; }
+
+    public IReadOnlyList<long>? MetricsFirstTokenLatencyMsNotIn { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsGT { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsGTE { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsLT { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsLTE { get; init; }
+
+    public bool? MetricsFirstTokenLatencyMsIsNil { get; init; }
+
+    public bool? MetricsFirstTokenLatencyMsNotNil { get; init; }
+
+    public long? MetricsReasoningDurationMs { get; init; }
+
+    public long? MetricsReasoningDurationMsNEQ { get; init; }
+
+    public IReadOnlyList<long>? MetricsReasoningDurationMsIn { get; init; }
+
+    public IReadOnlyList<long>? MetricsReasoningDurationMsNotIn { get; init; }
+
+    public long? MetricsReasoningDurationMsGT { get; init; }
+
+    public long? MetricsReasoningDurationMsGTE { get; init; }
+
+    public long? MetricsReasoningDurationMsLT { get; init; }
+
+    public long? MetricsReasoningDurationMsLTE { get; init; }
+
+    public bool? MetricsReasoningDurationMsIsNil { get; init; }
+
+    public bool? MetricsReasoningDurationMsNotNil { get; init; }
+
+    public string? RequestUrl { get; init; }
+
+    public string? RequestUrlNEQ { get; init; }
+
+    public IReadOnlyList<string>? RequestUrlIn { get; init; }
+
+    public IReadOnlyList<string>? RequestUrlNotIn { get; init; }
+
+    public string? RequestUrlGT { get; init; }
+
+    public string? RequestUrlGTE { get; init; }
+
+    public string? RequestUrlLT { get; init; }
+
+    public string? RequestUrlLTE { get; init; }
+
+    public string? RequestUrlContains { get; init; }
+
+    public string? RequestUrlHasPrefix { get; init; }
+
+    public string? RequestUrlHasSuffix { get; init; }
+
+    public bool? RequestUrlIsNil { get; init; }
+
+    public bool? RequestUrlNotNil { get; init; }
+
+    public string? RequestUrlEqualFold { get; init; }
+
+    public string? RequestUrlContainsFold { get; init; }
+
+    public bool? PassThroughApplied { get; init; }
+
+    public bool? PassThroughAppliedNEQ { get; init; }
+
+    public bool? HasRequest { get; init; }
+
+    public IReadOnlyList<RequestListFilter>? HasRequestWith { get; init; }
+
+    public bool? HasChannel { get; init; }
+
+    public IReadOnlyList<ChannelListFilter>? HasChannelWith { get; init; }
+
+    public bool? HasDataStorage { get; init; }
+
+    public IReadOnlyList<DataStorageListFilter>? HasDataStorageWith { get; init; }
 }
 
 /// <summary>Execution connection query scoped by its parent request.</summary>
@@ -354,7 +622,7 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
             nodes, hasNextPage, hasPreviousPage, count);
     }
 
-    private static string? BuildFilter(
+    internal static string? BuildFilter(
         RequestExecutionListFilter? filter,
         string alias,
         SqlArguments args)
@@ -420,6 +688,181 @@ public sealed class RequestExecutionStore(AxonHubDbContext db) : IRequestExecuti
             predicates, filter.ExternalId, filter.ExternalIdNEQ, filter.ExternalIdIn,
             filter.ExternalIdNotIn, null, null, null, null, null, null, null, null,
             null, alias, "external_id", args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "external_id", filter.ExternalId, filter.ExternalIdNEQ, filter.ExternalIdIn,
+            filter.ExternalIdNotIn, filter.ExternalIdGT, filter.ExternalIdGTE, filter.ExternalIdLT, filter.ExternalIdLTE,
+            filter.ExternalIdContains, filter.ExternalIdHasPrefix, filter.ExternalIdHasSuffix,
+            filter.ExternalIdEqualFold, filter.ExternalIdContainsFold, args);
+
+        if (filter.ExternalIdIsNil == true)
+        {
+            predicates.Add(alias + ".\"external_id\" IS NULL");
+        }
+
+        if (filter.ExternalIdNotNil == true)
+        {
+            predicates.Add(alias + ".\"external_id\" IS NOT NULL");
+        }
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "model_id", filter.ModelId, filter.ModelIdNEQ, filter.ModelIdIn,
+            filter.ModelIdNotIn, filter.ModelIdGT, filter.ModelIdGTE, filter.ModelIdLT, filter.ModelIdLTE,
+            filter.ModelIdContains, filter.ModelIdHasPrefix, filter.ModelIdHasSuffix,
+            filter.ModelIdEqualFold, filter.ModelIdContainsFold, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "upstream_model_id", filter.UpstreamModelId, filter.UpstreamModelIdNEQ, filter.UpstreamModelIdIn,
+            filter.UpstreamModelIdNotIn, filter.UpstreamModelIdGT, filter.UpstreamModelIdGTE, filter.UpstreamModelIdLT, filter.UpstreamModelIdLTE,
+            filter.UpstreamModelIdContains, filter.UpstreamModelIdHasPrefix, filter.UpstreamModelIdHasSuffix,
+            filter.UpstreamModelIdEqualFold, filter.UpstreamModelIdContainsFold, args);
+
+        if (filter.UpstreamModelIdIsNil == true)
+        {
+            predicates.Add(alias + ".\"upstream_model_id\" IS NULL");
+        }
+
+        if (filter.UpstreamModelIdNotNil == true)
+        {
+            predicates.Add(alias + ".\"upstream_model_id\" IS NOT NULL");
+        }
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "format", filter.Format, filter.FormatNEQ, filter.FormatIn,
+            filter.FormatNotIn, filter.FormatGT, filter.FormatGTE, filter.FormatLT, filter.FormatLTE,
+            filter.FormatContains, filter.FormatHasPrefix, filter.FormatHasSuffix,
+            filter.FormatEqualFold, filter.FormatContainsFold, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "reasoning_effort", filter.ReasoningEffort, filter.ReasoningEffortNEQ, filter.ReasoningEffortIn,
+            filter.ReasoningEffortNotIn, filter.ReasoningEffortGT, filter.ReasoningEffortGTE, filter.ReasoningEffortLT, filter.ReasoningEffortLTE,
+            filter.ReasoningEffortContains, filter.ReasoningEffortHasPrefix, filter.ReasoningEffortHasSuffix,
+            filter.ReasoningEffortEqualFold, filter.ReasoningEffortContainsFold, args);
+
+        if (filter.ReasoningEffortIsNil == true)
+        {
+            predicates.Add(alias + ".\"reasoning_effort\" IS NULL");
+        }
+
+        if (filter.ReasoningEffortNotNil == true)
+        {
+            predicates.Add(alias + ".\"reasoning_effort\" IS NOT NULL");
+        }
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "error_message", filter.ErrorMessage, filter.ErrorMessageNEQ, filter.ErrorMessageIn,
+            filter.ErrorMessageNotIn, filter.ErrorMessageGT, filter.ErrorMessageGTE, filter.ErrorMessageLT, filter.ErrorMessageLTE,
+            filter.ErrorMessageContains, filter.ErrorMessageHasPrefix, filter.ErrorMessageHasSuffix,
+            filter.ErrorMessageEqualFold, filter.ErrorMessageContainsFold, args);
+
+        if (filter.ErrorMessageIsNil == true)
+        {
+            predicates.Add(alias + ".\"error_message\" IS NULL");
+        }
+
+        if (filter.ErrorMessageNotNil == true)
+        {
+            predicates.Add(alias + ".\"error_message\" IS NOT NULL");
+        }
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "response_status_code", filter.ResponseStatusCode, filter.ResponseStatusCodeNEQ, filter.ResponseStatusCodeIn,
+            filter.ResponseStatusCodeNotIn, filter.ResponseStatusCodeGT, filter.ResponseStatusCodeGTE, filter.ResponseStatusCodeLT, filter.ResponseStatusCodeLTE,
+            filter.ResponseStatusCodeIsNil, filter.ResponseStatusCodeNotNil, args);
+
+        ConnectionSql.AppendBoolPredicates(
+            predicates, alias, "stream", filter.Stream, filter.StreamNEQ, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "metrics_latency_ms", filter.MetricsLatencyMs, filter.MetricsLatencyMsNEQ, filter.MetricsLatencyMsIn,
+            filter.MetricsLatencyMsNotIn, filter.MetricsLatencyMsGT, filter.MetricsLatencyMsGTE, filter.MetricsLatencyMsLT, filter.MetricsLatencyMsLTE,
+            filter.MetricsLatencyMsIsNil, filter.MetricsLatencyMsNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "metrics_first_token_latency_ms", filter.MetricsFirstTokenLatencyMs, filter.MetricsFirstTokenLatencyMsNEQ, filter.MetricsFirstTokenLatencyMsIn,
+            filter.MetricsFirstTokenLatencyMsNotIn, filter.MetricsFirstTokenLatencyMsGT, filter.MetricsFirstTokenLatencyMsGTE, filter.MetricsFirstTokenLatencyMsLT, filter.MetricsFirstTokenLatencyMsLTE,
+            filter.MetricsFirstTokenLatencyMsIsNil, filter.MetricsFirstTokenLatencyMsNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "metrics_reasoning_duration_ms", filter.MetricsReasoningDurationMs, filter.MetricsReasoningDurationMsNEQ, filter.MetricsReasoningDurationMsIn,
+            filter.MetricsReasoningDurationMsNotIn, filter.MetricsReasoningDurationMsGT, filter.MetricsReasoningDurationMsGTE, filter.MetricsReasoningDurationMsLT, filter.MetricsReasoningDurationMsLTE,
+            filter.MetricsReasoningDurationMsIsNil, filter.MetricsReasoningDurationMsNotNil, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "request_url", filter.RequestUrl, filter.RequestUrlNEQ, filter.RequestUrlIn,
+            filter.RequestUrlNotIn, filter.RequestUrlGT, filter.RequestUrlGTE, filter.RequestUrlLT, filter.RequestUrlLTE,
+            filter.RequestUrlContains, filter.RequestUrlHasPrefix, filter.RequestUrlHasSuffix,
+            filter.RequestUrlEqualFold, filter.RequestUrlContainsFold, args);
+
+        if (filter.RequestUrlIsNil == true)
+        {
+            predicates.Add(alias + ".\"request_url\" IS NULL");
+        }
+
+        if (filter.RequestUrlNotNil == true)
+        {
+            predicates.Add(alias + ".\"request_url\" IS NOT NULL");
+        }
+
+        ConnectionSql.AppendBoolPredicates(
+            predicates, alias, "pass_through_applied", filter.PassThroughApplied, filter.PassThroughAppliedNEQ, args);
+
+        if (filter.HasRequest is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"requests\" exrq WHERE exrq.\"id\" = " + alias + ".\"request_id\")";
+            predicates.Add(filter.HasRequest.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasRequestWith is { Count: > 0 } hasRequestFilters)
+        {
+            var withPredicates = hasRequestFilters
+                .Select(nested => RequestSegmentStore.BuildFilter(nested, "exrq", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"requests\" exrq WHERE exrq.\"id\" = " + alias + ".\"request_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasChannel is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channels\" exch WHERE exch.\"id\" = " + alias + ".\"channel_id\")";
+            predicates.Add(filter.HasChannel.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelWith is { Count: > 0 } hasChannelFilters)
+        {
+            var withPredicates = hasChannelFilters
+                .Select(nested => ChannelAdminStore.BuildFilter(nested, "exch", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channels\" exch WHERE exch.\"id\" = " + alias + ".\"channel_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasDataStorage is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"data_storages\" exds WHERE exds.\"id\" = " + alias + ".\"data_storage_id\")";
+            predicates.Add(filter.HasDataStorage.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasDataStorageWith is { Count: > 0 } hasDataStorageFilters)
+        {
+            var withPredicates = hasDataStorageFilters
+                .Select(nested => DataStorageStore.BuildFilter(nested, "exds", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"data_storages\" exds WHERE exds.\"id\" = " + alias + ".\"data_storage_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)
         {

@@ -254,13 +254,15 @@ public sealed class ChannelOverrideTemplateStoreTests(PostgresFixture fixture)
         });
         Assert.Equal(Expected("Alpha", "beta"), disjunction.Nodes.Select(row => row.Name));
 
+        // entgql only installs In when the list is non-empty, so an empty
+        // list is ignored.
         var none = await store.ListAsync(new ChannelOverrideTemplateListQuery
         {
             ScopeUserId = 1,
             Where = new ChannelOverrideTemplateListFilter { NameIn = [] },
         });
-        Assert.Empty(none.Nodes);
-        Assert.Equal(0, none.TotalCount);
+        Assert.Equal(Expected("Alpha", "beta"), none.Nodes.Select(row => row.Name));
+        Assert.Equal(2, none.TotalCount);
     }
 
     [Fact]

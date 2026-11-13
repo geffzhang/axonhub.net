@@ -254,6 +254,224 @@ public sealed record RequestListFilter
     public IReadOnlyList<RequestListFilter>? And { get; init; }
 
     public IReadOnlyList<RequestListFilter>? Or { get; init; }
+
+    public bool? Stream { get; init; }
+
+    public bool? StreamNEQ { get; init; }
+
+    public string? ClientIp { get; init; }
+
+    public string? ClientIpNEQ { get; init; }
+
+    public IReadOnlyList<string>? ClientIpIn { get; init; }
+
+    public IReadOnlyList<string>? ClientIpNotIn { get; init; }
+
+    public string? ClientIpGT { get; init; }
+
+    public string? ClientIpGTE { get; init; }
+
+    public string? ClientIpLT { get; init; }
+
+    public string? ClientIpLTE { get; init; }
+
+    public string? ClientIpContains { get; init; }
+
+    public string? ClientIpHasPrefix { get; init; }
+
+    public string? ClientIpHasSuffix { get; init; }
+
+    public string? ClientIpEqualFold { get; init; }
+
+    public string? ClientIpContainsFold { get; init; }
+
+    public string? UserAgent { get; init; }
+
+    public string? UserAgentNEQ { get; init; }
+
+    public IReadOnlyList<string>? UserAgentIn { get; init; }
+
+    public IReadOnlyList<string>? UserAgentNotIn { get; init; }
+
+    public string? UserAgentGT { get; init; }
+
+    public string? UserAgentGTE { get; init; }
+
+    public string? UserAgentLT { get; init; }
+
+    public string? UserAgentLTE { get; init; }
+
+    public string? UserAgentContains { get; init; }
+
+    public string? UserAgentHasPrefix { get; init; }
+
+    public string? UserAgentHasSuffix { get; init; }
+
+    public string? UserAgentEqualFold { get; init; }
+
+    public string? UserAgentContainsFold { get; init; }
+
+    public long? MetricsLatencyMs { get; init; }
+
+    public long? MetricsLatencyMsNEQ { get; init; }
+
+    public IReadOnlyList<long>? MetricsLatencyMsIn { get; init; }
+
+    public IReadOnlyList<long>? MetricsLatencyMsNotIn { get; init; }
+
+    public long? MetricsLatencyMsGT { get; init; }
+
+    public long? MetricsLatencyMsGTE { get; init; }
+
+    public long? MetricsLatencyMsLT { get; init; }
+
+    public long? MetricsLatencyMsLTE { get; init; }
+
+    public bool? MetricsLatencyMsIsNil { get; init; }
+
+    public bool? MetricsLatencyMsNotNil { get; init; }
+
+    public long? MetricsFirstTokenLatencyMs { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsNEQ { get; init; }
+
+    public IReadOnlyList<long>? MetricsFirstTokenLatencyMsIn { get; init; }
+
+    public IReadOnlyList<long>? MetricsFirstTokenLatencyMsNotIn { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsGT { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsGTE { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsLT { get; init; }
+
+    public long? MetricsFirstTokenLatencyMsLTE { get; init; }
+
+    public bool? MetricsFirstTokenLatencyMsIsNil { get; init; }
+
+    public bool? MetricsFirstTokenLatencyMsNotNil { get; init; }
+
+    public long? MetricsReasoningDurationMs { get; init; }
+
+    public long? MetricsReasoningDurationMsNEQ { get; init; }
+
+    public IReadOnlyList<long>? MetricsReasoningDurationMsIn { get; init; }
+
+    public IReadOnlyList<long>? MetricsReasoningDurationMsNotIn { get; init; }
+
+    public long? MetricsReasoningDurationMsGT { get; init; }
+
+    public long? MetricsReasoningDurationMsGTE { get; init; }
+
+    public long? MetricsReasoningDurationMsLT { get; init; }
+
+    public long? MetricsReasoningDurationMsLTE { get; init; }
+
+    public bool? MetricsReasoningDurationMsIsNil { get; init; }
+
+    public bool? MetricsReasoningDurationMsNotNil { get; init; }
+
+    public bool? ContentSaved { get; init; }
+
+    public bool? ContentSavedNEQ { get; init; }
+
+    public long? ContentStorageId { get; init; }
+
+    public long? ContentStorageIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? ContentStorageIdIn { get; init; }
+
+    public IReadOnlyList<long>? ContentStorageIdNotIn { get; init; }
+
+    public long? ContentStorageIdGT { get; init; }
+
+    public long? ContentStorageIdGTE { get; init; }
+
+    public long? ContentStorageIdLT { get; init; }
+
+    public long? ContentStorageIdLTE { get; init; }
+
+    public bool? ContentStorageIdIsNil { get; init; }
+
+    public bool? ContentStorageIdNotNil { get; init; }
+
+    public string? ContentStorageKey { get; init; }
+
+    public string? ContentStorageKeyNEQ { get; init; }
+
+    public IReadOnlyList<string>? ContentStorageKeyIn { get; init; }
+
+    public IReadOnlyList<string>? ContentStorageKeyNotIn { get; init; }
+
+    public string? ContentStorageKeyGT { get; init; }
+
+    public string? ContentStorageKeyGTE { get; init; }
+
+    public string? ContentStorageKeyLT { get; init; }
+
+    public string? ContentStorageKeyLTE { get; init; }
+
+    public string? ContentStorageKeyContains { get; init; }
+
+    public string? ContentStorageKeyHasPrefix { get; init; }
+
+    public string? ContentStorageKeyHasSuffix { get; init; }
+
+    public bool? ContentStorageKeyIsNil { get; init; }
+
+    public bool? ContentStorageKeyNotNil { get; init; }
+
+    public string? ContentStorageKeyEqualFold { get; init; }
+
+    public string? ContentStorageKeyContainsFold { get; init; }
+
+    public DateTime? ContentSavedAt { get; init; }
+
+    public DateTime? ContentSavedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? ContentSavedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? ContentSavedAtNotIn { get; init; }
+
+    public DateTime? ContentSavedAtGT { get; init; }
+
+    public DateTime? ContentSavedAtGTE { get; init; }
+
+    public DateTime? ContentSavedAtLT { get; init; }
+
+    public DateTime? ContentSavedAtLTE { get; init; }
+
+    public bool? ContentSavedAtIsNil { get; init; }
+
+    public bool? ContentSavedAtNotNil { get; init; }
+
+    public bool? HasApiKey { get; init; }
+
+    public IReadOnlyList<ApiKeyListFilter>? HasApiKeyWith { get; init; }
+
+    public bool? HasProject { get; init; }
+
+    public IReadOnlyList<ProjectListFilter>? HasProjectWith { get; init; }
+
+    public bool? HasTrace { get; init; }
+
+    public IReadOnlyList<TraceListFilter>? HasTraceWith { get; init; }
+
+    public bool? HasDataStorage { get; init; }
+
+    public IReadOnlyList<DataStorageListFilter>? HasDataStorageWith { get; init; }
+
+    public bool? HasExecutions { get; init; }
+
+    public IReadOnlyList<RequestExecutionListFilter>? HasExecutionsWith { get; init; }
+
+    public bool? HasChannel { get; init; }
+
+    public IReadOnlyList<ChannelListFilter>? HasChannelWith { get; init; }
+
+    public bool? HasUsageLogs { get; init; }
+
+    public IReadOnlyList<UsageLogListFilter>? HasUsageLogsWith { get; init; }
 }
 
 /// <summary>
@@ -789,6 +1007,208 @@ public sealed class RequestSegmentStore(AxonHubDbContext db) : IRequestSegmentSt
         if (filter.ExternalIdNotNil == true)
         {
             predicates.Add(alias + ".\"external_id\" IS NOT NULL");
+        }
+
+        ConnectionSql.AppendBoolPredicates(
+            predicates, alias, "stream", filter.Stream, filter.StreamNEQ, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "client_ip", filter.ClientIp, filter.ClientIpNEQ, filter.ClientIpIn,
+            filter.ClientIpNotIn, filter.ClientIpGT, filter.ClientIpGTE, filter.ClientIpLT, filter.ClientIpLTE,
+            filter.ClientIpContains, filter.ClientIpHasPrefix, filter.ClientIpHasSuffix,
+            filter.ClientIpEqualFold, filter.ClientIpContainsFold, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "user_agent", filter.UserAgent, filter.UserAgentNEQ, filter.UserAgentIn,
+            filter.UserAgentNotIn, filter.UserAgentGT, filter.UserAgentGTE, filter.UserAgentLT, filter.UserAgentLTE,
+            filter.UserAgentContains, filter.UserAgentHasPrefix, filter.UserAgentHasSuffix,
+            filter.UserAgentEqualFold, filter.UserAgentContainsFold, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "metrics_latency_ms", filter.MetricsLatencyMs, filter.MetricsLatencyMsNEQ, filter.MetricsLatencyMsIn,
+            filter.MetricsLatencyMsNotIn, filter.MetricsLatencyMsGT, filter.MetricsLatencyMsGTE, filter.MetricsLatencyMsLT, filter.MetricsLatencyMsLTE,
+            filter.MetricsLatencyMsIsNil, filter.MetricsLatencyMsNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "metrics_first_token_latency_ms", filter.MetricsFirstTokenLatencyMs, filter.MetricsFirstTokenLatencyMsNEQ, filter.MetricsFirstTokenLatencyMsIn,
+            filter.MetricsFirstTokenLatencyMsNotIn, filter.MetricsFirstTokenLatencyMsGT, filter.MetricsFirstTokenLatencyMsGTE, filter.MetricsFirstTokenLatencyMsLT, filter.MetricsFirstTokenLatencyMsLTE,
+            filter.MetricsFirstTokenLatencyMsIsNil, filter.MetricsFirstTokenLatencyMsNotNil, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "metrics_reasoning_duration_ms", filter.MetricsReasoningDurationMs, filter.MetricsReasoningDurationMsNEQ, filter.MetricsReasoningDurationMsIn,
+            filter.MetricsReasoningDurationMsNotIn, filter.MetricsReasoningDurationMsGT, filter.MetricsReasoningDurationMsGTE, filter.MetricsReasoningDurationMsLT, filter.MetricsReasoningDurationMsLTE,
+            filter.MetricsReasoningDurationMsIsNil, filter.MetricsReasoningDurationMsNotNil, args);
+
+        ConnectionSql.AppendBoolPredicates(
+            predicates, alias, "content_saved", filter.ContentSaved, filter.ContentSavedNEQ, args);
+
+        ConnectionSql.AppendLongPredicates(
+            predicates, alias, "content_storage_id", filter.ContentStorageId, filter.ContentStorageIdNEQ, filter.ContentStorageIdIn,
+            filter.ContentStorageIdNotIn, filter.ContentStorageIdGT, filter.ContentStorageIdGTE, filter.ContentStorageIdLT, filter.ContentStorageIdLTE,
+            filter.ContentStorageIdIsNil, filter.ContentStorageIdNotNil, args);
+
+        ConnectionSql.AppendStringPredicates(
+            predicates, alias, "content_storage_key", filter.ContentStorageKey, filter.ContentStorageKeyNEQ, filter.ContentStorageKeyIn,
+            filter.ContentStorageKeyNotIn, filter.ContentStorageKeyGT, filter.ContentStorageKeyGTE, filter.ContentStorageKeyLT, filter.ContentStorageKeyLTE,
+            filter.ContentStorageKeyContains, filter.ContentStorageKeyHasPrefix, filter.ContentStorageKeyHasSuffix,
+            filter.ContentStorageKeyEqualFold, filter.ContentStorageKeyContainsFold, args);
+
+        if (filter.ContentStorageKeyIsNil == true)
+        {
+            predicates.Add(alias + ".\"content_storage_key\" IS NULL");
+        }
+
+        if (filter.ContentStorageKeyNotNil == true)
+        {
+            predicates.Add(alias + ".\"content_storage_key\" IS NOT NULL");
+        }
+
+        TraceAdminStore.AppendTimeComparisons(
+            predicates, filter.ContentSavedAt, filter.ContentSavedAtNEQ, filter.ContentSavedAtIn, filter.ContentSavedAtNotIn,
+            filter.ContentSavedAtGT, filter.ContentSavedAtGTE, filter.ContentSavedAtLT, filter.ContentSavedAtLTE, alias,
+            "content_saved_at", args);
+
+        if (filter.ContentSavedAtIsNil == true)
+        {
+            predicates.Add(alias + ".\"content_saved_at\" IS NULL");
+        }
+
+        if (filter.ContentSavedAtNotNil == true)
+        {
+            predicates.Add(alias + ".\"content_saved_at\" IS NOT NULL");
+        }
+
+        if (filter.HasApiKey is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"api_keys\" rqak WHERE rqak.\"id\" = " + alias + ".\"api_key_id\")";
+            predicates.Add(filter.HasApiKey.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasApiKeyWith is { Count: > 0 } hasApiKeyFilters)
+        {
+            var withPredicates = hasApiKeyFilters
+                .Select(nested => ApiKeyStore.BuildFilter(nested, "rqak", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"api_keys\" rqak WHERE rqak.\"id\" = " + alias + ".\"api_key_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasProject is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"projects\" rqpr WHERE rqpr.\"id\" = " + alias + ".\"project_id\")";
+            predicates.Add(filter.HasProject.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProjectWith is { Count: > 0 } hasProjectFilters)
+        {
+            var withPredicates = hasProjectFilters
+                .Select(nested => ProjectStore.BuildFilter(nested, "rqpr", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"projects\" rqpr WHERE rqpr.\"id\" = " + alias + ".\"project_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasTrace is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"traces\" rqtr WHERE rqtr.\"id\" = " + alias + ".\"trace_id\")";
+            predicates.Add(filter.HasTrace.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasTraceWith is { Count: > 0 } hasTraceFilters)
+        {
+            var withPredicates = hasTraceFilters
+                .Select(nested => TraceAdminStore.BuildFilter(nested, "rqtr", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"traces\" rqtr WHERE rqtr.\"id\" = " + alias + ".\"trace_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasDataStorage is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"data_storages\" rqds WHERE rqds.\"id\" = " + alias + ".\"data_storage_id\")";
+            predicates.Add(filter.HasDataStorage.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasDataStorageWith is { Count: > 0 } hasDataStorageFilters)
+        {
+            var withPredicates = hasDataStorageFilters
+                .Select(nested => DataStorageStore.BuildFilter(nested, "rqds", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"data_storages\" rqds WHERE rqds.\"id\" = " + alias + ".\"data_storage_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasExecutions is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"request_executions\" rqex WHERE rqex.\"request_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasExecutions.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasExecutionsWith is { Count: > 0 } hasExecutionsFilters)
+        {
+            var withPredicates = hasExecutionsFilters
+                .Select(nested => RequestExecutionStore.BuildFilter(nested, "rqex", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"request_executions\" rqex WHERE rqex.\"request_id\" = " + alias + ".\"id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasChannel is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"channels\" rqch WHERE rqch.\"id\" = " + alias + ".\"channel_id\")";
+            predicates.Add(filter.HasChannel.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasChannelWith is { Count: > 0 } hasChannelFilters)
+        {
+            var withPredicates = hasChannelFilters
+                .Select(nested => ChannelAdminStore.BuildFilter(nested, "rqch", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"channels\" rqch WHERE rqch.\"id\" = " + alias + ".\"channel_id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
+        }
+
+        if (filter.HasUsageLogs is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"usage_logs\" rqul WHERE rqul.\"request_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasUsageLogs.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasUsageLogsWith is { Count: > 0 } hasUsageLogsFilters)
+        {
+            var withPredicates = hasUsageLogsFilters
+                .Select(nested => UsageLogStore.BuildFilter(nested, "rqul", args))
+                .Where(static nested => nested is not null)
+                .ToArray();
+            var withCondition = ConnectionSql.Combine(withPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"usage_logs\" rqul WHERE rqul.\"request_id\" = " + alias + ".\"id\""
+                + (withCondition is null ? string.Empty : " AND " + withCondition)
+                + ")");
         }
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)

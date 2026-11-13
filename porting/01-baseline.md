@@ -1366,6 +1366,32 @@ hasXWith 标量、嵌套 hasChannelWith / hasVersionsWith、软删除行仍匹�
 AdminChannelsEndpointTests 45 通过）。
 残余：5 组边谓词（Channel 3、User 2），继续由 C135 跟踪。
 
+2026-11-13 更新（§204）：Request / RequestExecution / UsageLog 三张 where 输入与 Channel 最后
+3 组边谓词（C135 第六刀）。
+参照 `internal/ent/gql_where_input.go` 与 `internal/server/gql/ent.graphql`：RequestWhereInput 共
+228 个字段、RequestExecutionWhereInput 206 个字段、UsageLogWhereInput 226 个字段（not / and / or
+与各自全部边谓词 ×2 在内）。端口此前只暴露前端契约子集（见 C192），§204 把三张输入的标量族
+（id / time / int / string / double / bool / 枚举与 IsNil / NotNil）与边谓词全部加入 GraphQL
+输入与对应 ListFilter：Request 的 hasAPIKey / hasProject / hasTrace / hasDataStorage /
+hasExecutions / hasUsageLogs / hasChannel（7 组），RequestExecution 的 hasRequest / hasChannel /
+hasDataStorage（3 组），UsageLog 的 hasRequest / hasProject / hasChannel（3 组）；ChannelWhereInput
+补上 hasRequests / hasExecutions / hasUsageLogs（6 个字段），163/163 个字段闭合。
+存储层复用 RequestSegmentStore / RequestExecutionStore / UsageLogStore / ChannelAdminStore 的
+BuildFilter 递归生成 EXISTS 子查询；hasXWith 的谓词 AND 进同一个 EXISTS，空 With 列表不生成
+谓词，不重新应用目标实体的软删除谓词。诊断中发现并修复 ConnectionSql 的空 In / NotIn 语义：
+entgql 只在列表非空时安装谓词，端口此前渲染为恒假 / 恒真（C283，resolved）；直接 ent 查询
+（ChannelOverrideTemplateStore.ListChannelsAsync、dashboard 的 APIKeyIDIn 等）改为空列表提前
+返回，保持 ent 的恒假语义。
+新增 7 例持久化测试（RequestSegmentStoreTests.ListAppliesTheExtendedScalarPredicates /
+ListAppliesTheEdgePredicates、RequestExecutionStoreTests.ListAppliesEveryScalarPredicate /
+ListAppliesTheEdgePredicates、UsageLogStoreTests.ListAppliesEveryScalarPredicate /
+ListAppliesTheEdgePredicates、ChannelAdminStoreTests.ListAppliesTheRequestExecutionAndUsageLogEdges），
+更新 7 个旧 store 测试类的空 In 断言；持久化全量 400 通过。Api 侧新增
+AdminRequestsEndpointTests.WhereInputsExposeEveryReferencePredicate（228 / 206 / 226 字段
+introspect）并更新 AdminChannelsEndpointTests.ChannelWhereInputExposesEveryScalarPredicate
+（163 字段），两个 introspection 测试通过。
+残余：User 的 2 组边谓词（hasChannelOverrideTemplates / hasOidcIdentities），继续由 C135 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

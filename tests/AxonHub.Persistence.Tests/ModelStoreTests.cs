@@ -144,8 +144,8 @@ public sealed class ModelStoreTests(PostgresFixture fixture)
                 Status = "enabled",
                 ModelIdIn = ["gpt-4o", "claude-3"],
             }));
-        // ent renders an empty In-list as an always-false predicate.
-        Assert.Empty(await IdsAsync(new ModelListFilter { ModelIdIn = [] }));
+        // entgql ignores an empty In-list (gamma is soft-deleted).
+        Assert.Equal([alpha, beta, delta], await IdsAsync(new ModelListFilter { ModelIdIn = [] }));
         Assert.Equal([beta], await IdsAsync(new ModelListFilter { TypeNotIn = ["chat"] }));
         Assert.Equal([alpha, delta], await IdsAsync(new ModelListFilter { RemarkIsNil = true }));
         Assert.Equal([beta], await IdsAsync(new ModelListFilter { RemarkNotNil = true }));

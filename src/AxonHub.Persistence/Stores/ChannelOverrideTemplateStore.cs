@@ -442,6 +442,13 @@ public sealed class ChannelOverrideTemplateStore(AxonHubDbContext db) : IChannel
     {
         ArgumentNullException.ThrowIfNull(ids);
 
+        // ent's IDIn() with no values renders an always-false predicate (this
+        // is a direct ent query, not an entgql WhereInput).
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
         var args = new SqlArguments();
         var predicates = new List<string?>();
         ConnectionSql.AppendIdIn(predicates, "c", "id", ids, args);

@@ -796,18 +796,7 @@ public sealed class ModelStore(AxonHubDbContext db) : IModelStore
 
         if (filter.TypeNotIn is not null)
         {
-            if (filter.TypeNotIn.Count == 0)
-            {
-                predicates.Add("TRUE");
-            }
-            else
-            {
-                var parameters = filter.TypeNotIn
-                    .Select(value => args.Add(value))
-                    .ToArray();
-                predicates.Add(
-                    alias + ".\"type\" NOT IN (" + string.Join(", ", parameters) + ")");
-            }
+            ConnectionSql.AppendStringIn(predicates, alias, "type", filter.TypeNotIn, args, negate: true);
         }
 
         if (filter.Name is not null)
@@ -832,18 +821,7 @@ public sealed class ModelStore(AxonHubDbContext db) : IModelStore
 
         if (filter.StatusNotIn is not null)
         {
-            if (filter.StatusNotIn.Count == 0)
-            {
-                predicates.Add("TRUE");
-            }
-            else
-            {
-                var parameters = filter.StatusNotIn
-                    .Select(value => args.Add(value))
-                    .ToArray();
-                predicates.Add(
-                    alias + ".\"status\" NOT IN (" + string.Join(", ", parameters) + ")");
-            }
+            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusNotIn, args, negate: true);
         }
 
         if (filter.RemarkIsNil)

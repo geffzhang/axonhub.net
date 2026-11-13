@@ -24,6 +24,12 @@ internal sealed class SqlArguments
 /// with a keyset on (order field, id) and trims the extra row fetched to detect
 /// the next/previous page.
 /// </summary>
+/// <remarks>
+/// The <c>Append*In</c> helpers model entgql's generated WhereInput, which
+/// only installs In/NotIn when the list is non-empty. Direct ent queries
+/// (<c>ent.Channel.Query().Where(channel.IDIn(ids...))</c>) instead render an
+/// always-false predicate for an empty IN list; those call sites return early.
+/// </remarks>
 internal static class ConnectionSql
 {
     public static void AppendCursor(
@@ -121,8 +127,8 @@ internal static class ConnectionSql
     }
 
     /// <summary>
-    /// Ent's IDIn/IDNotIn predicate. An empty list is <c>false</c> for IN and
-    /// <c>true</c> for NOT IN, matching the generated ent predicate.
+    /// Ent's IDIn/IDNotIn predicate. Entgql only installs the predicate when
+    /// the list is non-empty, so an empty list adds nothing to the filter.
     /// </summary>
     public static void AppendIdIn(
         List<string?> predicates,
@@ -139,7 +145,8 @@ internal static class ConnectionSql
 
         if (values.Count == 0)
         {
-            predicates.Add(negate ? "TRUE" : "FALSE");
+            // entgql's generated WhereInput only installs In/NotIn when the
+            // list is non-empty (len(...) > 0), so an empty list is a no-op.
             return;
         }
 
@@ -170,7 +177,8 @@ internal static class ConnectionSql
 
         if (values.Count == 0)
         {
-            predicates.Add(negate ? "TRUE" : "FALSE");
+            // entgql's generated WhereInput only installs In/NotIn when the
+            // list is non-empty (len(...) > 0), so an empty list is a no-op.
             return;
         }
 
@@ -201,7 +209,8 @@ internal static class ConnectionSql
 
         if (values.Count == 0)
         {
-            predicates.Add(negate ? "TRUE" : "FALSE");
+            // entgql's generated WhereInput only installs In/NotIn when the
+            // list is non-empty (len(...) > 0), so an empty list is a no-op.
             return;
         }
 
@@ -306,7 +315,8 @@ internal static class ConnectionSql
 
         if (values.Count == 0)
         {
-            predicates.Add(negate ? "TRUE" : "FALSE");
+            // entgql's generated WhereInput only installs In/NotIn when the
+            // list is non-empty (len(...) > 0), so an empty list is a no-op.
             return;
         }
 
@@ -389,6 +399,99 @@ internal static class ConnectionSql
         {
             // ent.ContainsFold: LOWER(col) LIKE LOWER('%value%').
             AppendStringFilter(predicates, alias, column, "LIKE", containsFold, args);
+        }
+    }
+
+    /// <summary>
+    /// The full ent int predicate set for one column: equality/ordering
+    /// comparisons, IN/NOT IN and the optional IsNil/NotNil pair.
+    /// </summary>
+    public static void AppendLongPredicates(
+        List<string?> predicates,
+        string alias,
+        string column,
+        long? value,
+        long? notEqual,
+        IReadOnlyList<long>? inList,
+        IReadOnlyList<long>? notInList,
+        long? greaterThan,
+        long? greaterThanOrEqual,
+        long? lessThan,
+        long? lessThanOrEqual,
+        bool? isNil,
+        bool? notNil,
+        SqlArguments args)
+    {
+        AppendComparison(predicates, alias, column, value, "=", args);
+        AppendComparison(predicates, alias, column, notEqual, "<>", args);
+        AppendIdIn(predicates, alias, column, inList, args);
+        AppendIdIn(predicates, alias, column, notInList, args, negate: true);
+        AppendComparison(predicates, alias, column, greaterThan, ">", args);
+        AppendComparison(predicates, alias, column, greaterThanOrEqual, ">=", args);
+        AppendComparison(predicates, alias, column, lessThan, "<", args);
+        AppendComparison(predicates, alias, column, lessThanOrEqual, "<=", args);
+
+        if (isNil == true)
+        {
+            predicates.Add(alias + ".\"" + column + "\" IS NULL");
+        }
+
+        if (notNil == true)
+        {
+            predicates.Add(alias + ".\"" + column + "\" IS NOT NULL");
+        }
+    }
+
+    /// <summary>Ent's BooleanEQ/BooleanNEQ predicate pair.</summary>
+    public static void AppendBoolPredicates(
+        List<string?> predicates,
+        string alias,
+        string column,
+        bool? value,
+        bool? notEqual,
+        SqlArguments args)
+    {
+        AppendComparison(predicates, alias, column, value, "=", args);
+        AppendComparison(predicates, alias, column, notEqual, "<>", args);
+    }
+
+    /// <summary>
+    /// The full ent float predicate set for one column, including the optional
+    /// IsNil/NotNil pair.
+    /// </summary>
+    public static void AppendDoublePredicates(
+        List<string?> predicates,
+        string alias,
+        string column,
+        double? value,
+        double? notEqual,
+        IReadOnlyList<double>? inList,
+        IReadOnlyList<double>? notInList,
+        double? greaterThan,
+        double? greaterThanOrEqual,
+        double? lessThan,
+        double? lessThanOrEqual,
+        bool? isNil,
+        bool? notNil,
+        SqlArguments args)
+    {
+        AppendComparison(predicates, alias, column, value, "=", args);
+        AppendComparison(predicates, alias, column, notEqual, "<>", args);
+        AppendDoubleIn(predicates, alias, column, inList, args);
+        AppendDoubleIn(predicates, alias, column, notInList, args, negate: true);
+        AppendComparison(predicates, alias, column, greaterThan, ">", args);
+        AppendComparison(predicates, alias, column, greaterThanOrEqual, ">=", args);
+        AppendComparison(predicates, alias, column, lessThan, "<", args);
+        AppendComparison(predicates, alias, column, lessThanOrEqual, "<=", args);
+
+        if (isNil == true)
+        {
+            predicates.Add(alias + ".\"" + column + "\" IS NULL");
+        }
+
+        if (notNil == true)
+        {
+            predicates.Add(alias + ".\"" + column + "\" IS NOT NULL");
         }
     }
 

@@ -443,6 +443,157 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task WhereInputsExposeEveryReferencePredicate()
+    {
+        foreach (var (typeName, names) in WhereInputExpectedFields)
+        {
+            var data = await QueryDataAsync(
+                $$"""
+                { where: __type(name: "{{typeName}}") { inputFields { name } } }
+                """);
+
+            var expected = names
+                .Split([' ', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries)
+                .OrderBy(static name => name, StringComparer.Ordinal)
+                .ToArray();
+            var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+                .Select(static field => field.GetProperty("name").GetString()!)
+                .OrderBy(static name => name, StringComparer.Ordinal)
+                .ToArray();
+
+            Assert.Equal(expected, actual);
+        }
+    }
+
+    // entgql emits one predicate per reference field (ent.graphql:
+    // RequestWhereInput 228 fields, RequestExecutionWhereInput 206,
+    // UsageLogWhereInput 226). The lists are static so an accidental removal
+    // or rename fails here before it reaches the frontend.
+    private static readonly Dictionary<string, string> WhereInputExpectedFields = new()
+    {
+        ["RequestWhereInput"] =
+            """
+            and apiKeyID apiKeyIDIn apiKeyIDIsNil apiKeyIDNEQ apiKeyIDNotIn
+            apiKeyIDNotNil channelID channelIDIn channelIDIsNil channelIDNEQ channelIDNotIn
+            channelIDNotNil clientIP clientIPContains clientIPContainsFold clientIPEqualFold clientIPGT
+            clientIPGTE clientIPHasPrefix clientIPHasSuffix clientIPIn clientIPLT clientIPLTE
+            clientIPNEQ clientIPNotIn contentSaved contentSavedAt contentSavedAtGT contentSavedAtGTE
+            contentSavedAtIn contentSavedAtIsNil contentSavedAtLT contentSavedAtLTE contentSavedAtNEQ contentSavedAtNotIn
+            contentSavedAtNotNil contentSavedNEQ contentStorageID contentStorageIDGT contentStorageIDGTE contentStorageIDIn
+            contentStorageIDIsNil contentStorageIDLT contentStorageIDLTE contentStorageIDNEQ contentStorageIDNotIn contentStorageIDNotNil
+            contentStorageKey contentStorageKeyContains contentStorageKeyContainsFold contentStorageKeyEqualFold contentStorageKeyGT contentStorageKeyGTE
+            contentStorageKeyHasPrefix contentStorageKeyHasSuffix contentStorageKeyIn contentStorageKeyIsNil contentStorageKeyLT contentStorageKeyLTE
+            contentStorageKeyNEQ contentStorageKeyNotIn contentStorageKeyNotNil createdAt createdAtGT createdAtGTE
+            createdAtIn createdAtLT createdAtLTE createdAtNEQ createdAtNotIn dataStorageID
+            dataStorageIDIn dataStorageIDIsNil dataStorageIDNEQ dataStorageIDNotIn dataStorageIDNotNil externalID
+            externalIDContains externalIDContainsFold externalIDEqualFold externalIDGT externalIDGTE externalIDHasPrefix
+            externalIDHasSuffix externalIDIn externalIDIsNil externalIDLT externalIDLTE externalIDNEQ
+            externalIDNotIn externalIDNotNil format formatContains formatContainsFold formatEqualFold
+            formatGT formatGTE formatHasPrefix formatHasSuffix formatIn formatLT
+            formatLTE formatNEQ formatNotIn hasAPIKey hasAPIKeyWith hasChannel
+            hasChannelWith hasDataStorage hasDataStorageWith hasExecutions hasExecutionsWith hasProject
+            hasProjectWith hasTrace hasTraceWith hasUsageLogs hasUsageLogsWith id
+            idGT idGTE idIn idLT idLTE idNEQ
+            idNotIn metricsFirstTokenLatencyMs metricsFirstTokenLatencyMsGT metricsFirstTokenLatencyMsGTE metricsFirstTokenLatencyMsIn metricsFirstTokenLatencyMsIsNil
+            metricsFirstTokenLatencyMsLT metricsFirstTokenLatencyMsLTE metricsFirstTokenLatencyMsNEQ metricsFirstTokenLatencyMsNotIn metricsFirstTokenLatencyMsNotNil metricsLatencyMs
+            metricsLatencyMsGT metricsLatencyMsGTE metricsLatencyMsIn metricsLatencyMsIsNil metricsLatencyMsLT metricsLatencyMsLTE
+            metricsLatencyMsNEQ metricsLatencyMsNotIn metricsLatencyMsNotNil metricsReasoningDurationMs metricsReasoningDurationMsGT metricsReasoningDurationMsGTE
+            metricsReasoningDurationMsIn metricsReasoningDurationMsIsNil metricsReasoningDurationMsLT metricsReasoningDurationMsLTE metricsReasoningDurationMsNEQ metricsReasoningDurationMsNotIn
+            metricsReasoningDurationMsNotNil modelID modelIDContains modelIDContainsFold modelIDEqualFold modelIDGT
+            modelIDGTE modelIDHasPrefix modelIDHasSuffix modelIDIn modelIDLT modelIDLTE
+            modelIDNEQ modelIDNotIn not or projectID projectIDIn
+            projectIDNEQ projectIDNotIn reasoningEffort reasoningEffortContains reasoningEffortContainsFold reasoningEffortEqualFold
+            reasoningEffortGT reasoningEffortGTE reasoningEffortHasPrefix reasoningEffortHasSuffix reasoningEffortIn reasoningEffortIsNil
+            reasoningEffortLT reasoningEffortLTE reasoningEffortNEQ reasoningEffortNotIn reasoningEffortNotNil source
+            sourceIn sourceNEQ sourceNotIn status statusIn statusNEQ
+            statusNotIn stream streamNEQ traceID traceIDIn traceIDIsNil
+            traceIDNEQ traceIDNotIn traceIDNotNil updatedAt updatedAtGT updatedAtGTE
+            updatedAtIn updatedAtLT updatedAtLTE updatedAtNEQ updatedAtNotIn userAgent
+            userAgentContains userAgentContainsFold userAgentEqualFold userAgentGT userAgentGTE userAgentHasPrefix
+            userAgentHasSuffix userAgentIn userAgentLT userAgentLTE userAgentNEQ userAgentNotIn
+            """,
+        ["RequestExecutionWhereInput"] =
+            """
+            and channelID channelIDIn channelIDIsNil channelIDNEQ channelIDNotIn
+            channelIDNotNil createdAt createdAtGT createdAtGTE createdAtIn createdAtLT
+            createdAtLTE createdAtNEQ createdAtNotIn dataStorageID dataStorageIDIn dataStorageIDIsNil
+            dataStorageIDNEQ dataStorageIDNotIn dataStorageIDNotNil errorMessage errorMessageContains errorMessageContainsFold
+            errorMessageEqualFold errorMessageGT errorMessageGTE errorMessageHasPrefix errorMessageHasSuffix errorMessageIn
+            errorMessageIsNil errorMessageLT errorMessageLTE errorMessageNEQ errorMessageNotIn errorMessageNotNil
+            externalID externalIDContains externalIDContainsFold externalIDEqualFold externalIDGT externalIDGTE
+            externalIDHasPrefix externalIDHasSuffix externalIDIn externalIDIsNil externalIDLT externalIDLTE
+            externalIDNEQ externalIDNotIn externalIDNotNil format formatContains formatContainsFold
+            formatEqualFold formatGT formatGTE formatHasPrefix formatHasSuffix formatIn
+            formatLT formatLTE formatNEQ formatNotIn hasChannel hasChannelWith
+            hasDataStorage hasDataStorageWith hasRequest hasRequestWith id idGT
+            idGTE idIn idLT idLTE idNEQ idNotIn
+            metricsFirstTokenLatencyMs metricsFirstTokenLatencyMsGT metricsFirstTokenLatencyMsGTE metricsFirstTokenLatencyMsIn metricsFirstTokenLatencyMsIsNil metricsFirstTokenLatencyMsLT
+            metricsFirstTokenLatencyMsLTE metricsFirstTokenLatencyMsNEQ metricsFirstTokenLatencyMsNotIn metricsFirstTokenLatencyMsNotNil metricsLatencyMs metricsLatencyMsGT
+            metricsLatencyMsGTE metricsLatencyMsIn metricsLatencyMsIsNil metricsLatencyMsLT metricsLatencyMsLTE metricsLatencyMsNEQ
+            metricsLatencyMsNotIn metricsLatencyMsNotNil metricsReasoningDurationMs metricsReasoningDurationMsGT metricsReasoningDurationMsGTE metricsReasoningDurationMsIn
+            metricsReasoningDurationMsIsNil metricsReasoningDurationMsLT metricsReasoningDurationMsLTE metricsReasoningDurationMsNEQ metricsReasoningDurationMsNotIn metricsReasoningDurationMsNotNil
+            modelID modelIDContains modelIDContainsFold modelIDEqualFold modelIDGT modelIDGTE
+            modelIDHasPrefix modelIDHasSuffix modelIDIn modelIDLT modelIDLTE modelIDNEQ
+            modelIDNotIn not or passThroughApplied passThroughAppliedNEQ projectID
+            projectIDGT projectIDGTE projectIDIn projectIDLT projectIDLTE projectIDNEQ
+            projectIDNotIn reasoningEffort reasoningEffortContains reasoningEffortContainsFold reasoningEffortEqualFold reasoningEffortGT
+            reasoningEffortGTE reasoningEffortHasPrefix reasoningEffortHasSuffix reasoningEffortIn reasoningEffortIsNil reasoningEffortLT
+            reasoningEffortLTE reasoningEffortNEQ reasoningEffortNotIn reasoningEffortNotNil requestID requestIDIn
+            requestIDNEQ requestIDNotIn requestURL requestURLContains requestURLContainsFold requestURLEqualFold
+            requestURLGT requestURLGTE requestURLHasPrefix requestURLHasSuffix requestURLIn requestURLIsNil
+            requestURLLT requestURLLTE requestURLNEQ requestURLNotIn requestURLNotNil responseStatusCode
+            responseStatusCodeGT responseStatusCodeGTE responseStatusCodeIn responseStatusCodeIsNil responseStatusCodeLT responseStatusCodeLTE
+            responseStatusCodeNEQ responseStatusCodeNotIn responseStatusCodeNotNil status statusIn statusNEQ
+            statusNotIn stream streamNEQ updatedAt updatedAtGT updatedAtGTE
+            updatedAtIn updatedAtLT updatedAtLTE updatedAtNEQ updatedAtNotIn upstreamModelID
+            upstreamModelIDContains upstreamModelIDContainsFold upstreamModelIDEqualFold upstreamModelIDGT upstreamModelIDGTE upstreamModelIDHasPrefix
+            upstreamModelIDHasSuffix upstreamModelIDIn upstreamModelIDIsNil upstreamModelIDLT upstreamModelIDLTE upstreamModelIDNEQ
+            upstreamModelIDNotIn upstreamModelIDNotNil
+            """,
+        ["UsageLogWhereInput"] =
+            """
+            and apiKeyID apiKeyIDGT apiKeyIDGTE apiKeyIDIn apiKeyIDIsNil
+            apiKeyIDLT apiKeyIDLTE apiKeyIDNEQ apiKeyIDNotIn apiKeyIDNotNil channelID
+            channelIDIn channelIDIsNil channelIDNEQ channelIDNotIn channelIDNotNil completionAcceptedPredictionTokens
+            completionAcceptedPredictionTokensGT completionAcceptedPredictionTokensGTE completionAcceptedPredictionTokensIn completionAcceptedPredictionTokensIsNil completionAcceptedPredictionTokensLT completionAcceptedPredictionTokensLTE
+            completionAcceptedPredictionTokensNEQ completionAcceptedPredictionTokensNotIn completionAcceptedPredictionTokensNotNil completionAudioTokens completionAudioTokensGT completionAudioTokensGTE
+            completionAudioTokensIn completionAudioTokensIsNil completionAudioTokensLT completionAudioTokensLTE completionAudioTokensNEQ completionAudioTokensNotIn
+            completionAudioTokensNotNil completionReasoningTokens completionReasoningTokensGT completionReasoningTokensGTE completionReasoningTokensIn completionReasoningTokensIsNil
+            completionReasoningTokensLT completionReasoningTokensLTE completionReasoningTokensNEQ completionReasoningTokensNotIn completionReasoningTokensNotNil completionRejectedPredictionTokens
+            completionRejectedPredictionTokensGT completionRejectedPredictionTokensGTE completionRejectedPredictionTokensIn completionRejectedPredictionTokensIsNil completionRejectedPredictionTokensLT completionRejectedPredictionTokensLTE
+            completionRejectedPredictionTokensNEQ completionRejectedPredictionTokensNotIn completionRejectedPredictionTokensNotNil completionTokens completionTokensGT completionTokensGTE
+            completionTokensIn completionTokensLT completionTokensLTE completionTokensNEQ completionTokensNotIn costPriceReferenceID
+            costPriceReferenceIDContains costPriceReferenceIDContainsFold costPriceReferenceIDEqualFold costPriceReferenceIDGT costPriceReferenceIDGTE costPriceReferenceIDHasPrefix
+            costPriceReferenceIDHasSuffix costPriceReferenceIDIn costPriceReferenceIDIsNil costPriceReferenceIDLT costPriceReferenceIDLTE costPriceReferenceIDNEQ
+            costPriceReferenceIDNotIn costPriceReferenceIDNotNil createdAt createdAtGT createdAtGTE createdAtIn
+            createdAtLT createdAtLTE createdAtNEQ createdAtNotIn format formatContains
+            formatContainsFold formatEqualFold formatGT formatGTE formatHasPrefix formatHasSuffix
+            formatIn formatLT formatLTE formatNEQ formatNotIn hasChannel
+            hasChannelWith hasProject hasProjectWith hasRequest hasRequestWith id
+            idGT idGTE idIn idLT idLTE idNEQ
+            idNotIn modelID modelIDContains modelIDContainsFold modelIDEqualFold modelIDGT
+            modelIDGTE modelIDHasPrefix modelIDHasSuffix modelIDIn modelIDLT modelIDLTE
+            modelIDNEQ modelIDNotIn not or projectID projectIDIn
+            projectIDNEQ projectIDNotIn promptAudioTokens promptAudioTokensGT promptAudioTokensGTE promptAudioTokensIn
+            promptAudioTokensIsNil promptAudioTokensLT promptAudioTokensLTE promptAudioTokensNEQ promptAudioTokensNotIn promptAudioTokensNotNil
+            promptCachedTokens promptCachedTokensGT promptCachedTokensGTE promptCachedTokensIn promptCachedTokensIsNil promptCachedTokensLT
+            promptCachedTokensLTE promptCachedTokensNEQ promptCachedTokensNotIn promptCachedTokensNotNil promptTokens promptTokensGT
+            promptTokensGTE promptTokensIn promptTokensLT promptTokensLTE promptTokensNEQ promptTokensNotIn
+            promptWriteCachedTokens promptWriteCachedTokens1h promptWriteCachedTokens1hGT promptWriteCachedTokens1hGTE promptWriteCachedTokens1hIn promptWriteCachedTokens1hIsNil
+            promptWriteCachedTokens1hLT promptWriteCachedTokens1hLTE promptWriteCachedTokens1hNEQ promptWriteCachedTokens1hNotIn promptWriteCachedTokens1hNotNil promptWriteCachedTokens5m
+            promptWriteCachedTokens5mGT promptWriteCachedTokens5mGTE promptWriteCachedTokens5mIn promptWriteCachedTokens5mIsNil promptWriteCachedTokens5mLT promptWriteCachedTokens5mLTE
+            promptWriteCachedTokens5mNEQ promptWriteCachedTokens5mNotIn promptWriteCachedTokens5mNotNil promptWriteCachedTokensGT promptWriteCachedTokensGTE promptWriteCachedTokensIn
+            promptWriteCachedTokensIsNil promptWriteCachedTokensLT promptWriteCachedTokensLTE promptWriteCachedTokensNEQ promptWriteCachedTokensNotIn promptWriteCachedTokensNotNil
+            requestID requestIDIn requestIDNEQ requestIDNotIn source sourceIn
+            sourceNEQ sourceNotIn totalCost totalCostGT totalCostGTE totalCostIn
+            totalCostIsNil totalCostLT totalCostLTE totalCostNEQ totalCostNotIn totalCostNotNil
+            totalTokens totalTokensGT totalTokensGTE totalTokensIn totalTokensLT totalTokensLTE
+            totalTokensNEQ totalTokensNotIn updatedAt updatedAtGT updatedAtGTE updatedAtIn
+            updatedAtLT updatedAtLTE updatedAtNEQ updatedAtNotIn
+            """,
+    };
+
+    [Fact]
     public async Task RequestNodeReturnsBodiesAndChunkRules()
     {
         AddProject(1);

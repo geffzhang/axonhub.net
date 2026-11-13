@@ -553,7 +553,11 @@ public sealed class ApiKeyStoreTests(PostgresFixture fixture)
         Assert.Equal(
             ["Beta", "Gamma"],
             await Names(new ApiKeyListFilter { StatusNotIn = ["enabled"] }));
-        Assert.Empty(await Names(new ApiKeyListFilter { StatusIn = [] }));
+        // entgql only installs In/NotIn when the list is non-empty, so an
+        // empty list is ignored.
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { StatusIn = [] }));
         Assert.Equal(
             ["Alpha", "Beta", "Gamma"],
             await Names(new ApiKeyListFilter { StatusNotIn = [] }));

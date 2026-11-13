@@ -354,6 +354,30 @@ public sealed record ChannelListFilter
 
     public IReadOnlyList<ProviderQuotaStatusListFilter>? HasProviderQuotaStatusWith { get; init; }
 
+    /// <summary>
+    /// Ent's <c>hasRequests</c>: true → an EXISTS over <c>requests</c>,
+    /// false → NOT EXISTS.
+    /// </summary>
+    public bool? HasRequests { get; init; }
+
+    public IReadOnlyList<RequestListFilter>? HasRequestsWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasExecutions</c>: true → an EXISTS over
+    /// <c>request_executions</c>, false → NOT EXISTS.
+    /// </summary>
+    public bool? HasExecutions { get; init; }
+
+    public IReadOnlyList<RequestExecutionListFilter>? HasExecutionsWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasUsageLogs</c>: true → an EXISTS over <c>usage_logs</c>,
+    /// false → NOT EXISTS.
+    /// </summary>
+    public bool? HasUsageLogs { get; init; }
+
+    public IReadOnlyList<UsageLogListFilter>? HasUsageLogsWith { get; init; }
+
     public ChannelListFilter? Not { get; init; }
 
     public IReadOnlyList<ChannelListFilter>? And { get; init; }
@@ -1127,6 +1151,69 @@ public sealed class ChannelAdminStore(AxonHubDbContext db) : IChannelAdminStore
                 "EXISTS (SELECT 1 FROM \"provider_quota_status\" pqs"
                 + " WHERE pqs.\"channel_id\" = " + alias + ".\"id\""
                 + (quotaCondition is null ? string.Empty : " AND " + quotaCondition)
+                + ")");
+        }
+
+        if (filter.HasRequests is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"requests\" chrq WHERE chrq.\"channel_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasRequests.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasRequestsWith is { Count: > 0 } requestFilters)
+        {
+            var requestPredicates = requestFilters
+                .Select(request => RequestSegmentStore.BuildFilter(request, "chrq", args))
+                .Where(static request => request is not null)
+                .ToArray();
+            var requestCondition = ConnectionSql.Combine(requestPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"requests\" chrq WHERE chrq.\"channel_id\" = "
+                + alias + ".\"id\""
+                + (requestCondition is null ? string.Empty : " AND " + requestCondition)
+                + ")");
+        }
+
+        if (filter.HasExecutions is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"request_executions\" chex"
+                + " WHERE chex.\"channel_id\" = " + alias + ".\"id\")";
+            predicates.Add(filter.HasExecutions.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasExecutionsWith is { Count: > 0 } executionFilters)
+        {
+            var executionPredicates = executionFilters
+                .Select(execution => RequestExecutionStore.BuildFilter(execution, "chex", args))
+                .Where(static execution => execution is not null)
+                .ToArray();
+            var executionCondition = ConnectionSql.Combine(executionPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"request_executions\" chex"
+                + " WHERE chex.\"channel_id\" = " + alias + ".\"id\""
+                + (executionCondition is null ? string.Empty : " AND " + executionCondition)
+                + ")");
+        }
+
+        if (filter.HasUsageLogs is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"usage_logs\" chul WHERE chul.\"channel_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasUsageLogs.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasUsageLogsWith is { Count: > 0 } usageFilters)
+        {
+            var usagePredicates = usageFilters
+                .Select(usage => UsageLogStore.BuildFilter(usage, "chul", args))
+                .Where(static usage => usage is not null)
+                .ToArray();
+            var usageCondition = ConnectionSql.Combine(usagePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"usage_logs\" chul WHERE chul.\"channel_id\" = "
+                + alias + ".\"id\""
+                + (usageCondition is null ? string.Empty : " AND " + usageCondition)
                 + ")");
         }
 

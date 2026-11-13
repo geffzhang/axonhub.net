@@ -151,7 +151,10 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
         Assert.Equal(
             Expected("alice@example.com", "carol@example.com"),
             await Emails(new UserListFilter { IdIn = [aliceId, carolId] }));
-        Assert.Empty(await Emails(new UserListFilter { IdIn = [] }));
+        // entgql ignores an empty In-list.
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { IdIn = [] }));
         Assert.Equal(
             Expected("alice@example.com", "bob@example.com", "carol@example.com"),
             await Emails(new UserListFilter { IdNotIn = [] }));
@@ -303,7 +306,9 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
         Assert.Equal(
             Expected("bob@example.com"),
             await Emails(new UserListFilter { StatusNotIn = ["activated"] }));
-        Assert.Empty(await Emails(new UserListFilter { StatusIn = [] }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { StatusIn = [] }));
         Assert.Equal(
             Expected("alice@example.com", "bob@example.com", "carol@example.com"),
             await Emails(new UserListFilter { StatusNotIn = [] }));

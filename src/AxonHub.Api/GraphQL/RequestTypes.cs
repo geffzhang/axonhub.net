@@ -318,6 +318,408 @@ public sealed class RequestExecutionWhereInput
 
     [GraphQLName("externalIDNotIn")]
     public IReadOnlyList<string>? ExternalIdNotIn { get; set; }
+
+    [GraphQLName("externalIDGT")]
+    public string? ExternalIdGT { get; set; }
+
+    [GraphQLName("externalIDGTE")]
+    public string? ExternalIdGTE { get; set; }
+
+    [GraphQLName("externalIDLT")]
+    public string? ExternalIdLT { get; set; }
+
+    [GraphQLName("externalIDLTE")]
+    public string? ExternalIdLTE { get; set; }
+
+    [GraphQLName("externalIDContains")]
+    public string? ExternalIdContains { get; set; }
+
+    [GraphQLName("externalIDHasPrefix")]
+    public string? ExternalIdHasPrefix { get; set; }
+
+    [GraphQLName("externalIDHasSuffix")]
+    public string? ExternalIdHasSuffix { get; set; }
+
+    [GraphQLName("externalIDIsNil")]
+    public bool? ExternalIdIsNil { get; set; }
+
+    [GraphQLName("externalIDNotNil")]
+    public bool? ExternalIdNotNil { get; set; }
+
+    [GraphQLName("externalIDEqualFold")]
+    public string? ExternalIdEqualFold { get; set; }
+
+    [GraphQLName("externalIDContainsFold")]
+    public string? ExternalIdContainsFold { get; set; }
+
+    [GraphQLName("modelIDGT")]
+    public string? ModelIdGT { get; set; }
+
+    [GraphQLName("modelIDGTE")]
+    public string? ModelIdGTE { get; set; }
+
+    [GraphQLName("modelIDLT")]
+    public string? ModelIdLT { get; set; }
+
+    [GraphQLName("modelIDLTE")]
+    public string? ModelIdLTE { get; set; }
+
+    [GraphQLName("upstreamModelID")]
+    public string? UpstreamModelId { get; set; }
+
+    [GraphQLName("upstreamModelIDNEQ")]
+    public string? UpstreamModelIdNEQ { get; set; }
+
+    [GraphQLName("upstreamModelIDIn")]
+    public IReadOnlyList<string>? UpstreamModelIdIn { get; set; }
+
+    [GraphQLName("upstreamModelIDNotIn")]
+    public IReadOnlyList<string>? UpstreamModelIdNotIn { get; set; }
+
+    [GraphQLName("upstreamModelIDGT")]
+    public string? UpstreamModelIdGT { get; set; }
+
+    [GraphQLName("upstreamModelIDGTE")]
+    public string? UpstreamModelIdGTE { get; set; }
+
+    [GraphQLName("upstreamModelIDLT")]
+    public string? UpstreamModelIdLT { get; set; }
+
+    [GraphQLName("upstreamModelIDLTE")]
+    public string? UpstreamModelIdLTE { get; set; }
+
+    [GraphQLName("upstreamModelIDContains")]
+    public string? UpstreamModelIdContains { get; set; }
+
+    [GraphQLName("upstreamModelIDHasPrefix")]
+    public string? UpstreamModelIdHasPrefix { get; set; }
+
+    [GraphQLName("upstreamModelIDHasSuffix")]
+    public string? UpstreamModelIdHasSuffix { get; set; }
+
+    [GraphQLName("upstreamModelIDIsNil")]
+    public bool? UpstreamModelIdIsNil { get; set; }
+
+    [GraphQLName("upstreamModelIDNotNil")]
+    public bool? UpstreamModelIdNotNil { get; set; }
+
+    [GraphQLName("upstreamModelIDEqualFold")]
+    public string? UpstreamModelIdEqualFold { get; set; }
+
+    [GraphQLName("upstreamModelIDContainsFold")]
+    public string? UpstreamModelIdContainsFold { get; set; }
+
+    [GraphQLName("formatGT")]
+    public string? FormatGT { get; set; }
+
+    [GraphQLName("formatGTE")]
+    public string? FormatGTE { get; set; }
+
+    [GraphQLName("formatLT")]
+    public string? FormatLT { get; set; }
+
+    [GraphQLName("formatLTE")]
+    public string? FormatLTE { get; set; }
+
+    [GraphQLName("formatContains")]
+    public string? FormatContains { get; set; }
+
+    [GraphQLName("formatHasPrefix")]
+    public string? FormatHasPrefix { get; set; }
+
+    [GraphQLName("formatHasSuffix")]
+    public string? FormatHasSuffix { get; set; }
+
+    [GraphQLName("formatEqualFold")]
+    public string? FormatEqualFold { get; set; }
+
+    [GraphQLName("formatContainsFold")]
+    public string? FormatContainsFold { get; set; }
+
+    [GraphQLName("reasoningEffort")]
+    public string? ReasoningEffort { get; set; }
+
+    [GraphQLName("reasoningEffortNEQ")]
+    public string? ReasoningEffortNEQ { get; set; }
+
+    [GraphQLName("reasoningEffortIn")]
+    public IReadOnlyList<string>? ReasoningEffortIn { get; set; }
+
+    [GraphQLName("reasoningEffortNotIn")]
+    public IReadOnlyList<string>? ReasoningEffortNotIn { get; set; }
+
+    [GraphQLName("reasoningEffortGT")]
+    public string? ReasoningEffortGT { get; set; }
+
+    [GraphQLName("reasoningEffortGTE")]
+    public string? ReasoningEffortGTE { get; set; }
+
+    [GraphQLName("reasoningEffortLT")]
+    public string? ReasoningEffortLT { get; set; }
+
+    [GraphQLName("reasoningEffortLTE")]
+    public string? ReasoningEffortLTE { get; set; }
+
+    [GraphQLName("reasoningEffortContains")]
+    public string? ReasoningEffortContains { get; set; }
+
+    [GraphQLName("reasoningEffortHasPrefix")]
+    public string? ReasoningEffortHasPrefix { get; set; }
+
+    [GraphQLName("reasoningEffortHasSuffix")]
+    public string? ReasoningEffortHasSuffix { get; set; }
+
+    [GraphQLName("reasoningEffortIsNil")]
+    public bool? ReasoningEffortIsNil { get; set; }
+
+    [GraphQLName("reasoningEffortNotNil")]
+    public bool? ReasoningEffortNotNil { get; set; }
+
+    [GraphQLName("reasoningEffortEqualFold")]
+    public string? ReasoningEffortEqualFold { get; set; }
+
+    [GraphQLName("reasoningEffortContainsFold")]
+    public string? ReasoningEffortContainsFold { get; set; }
+
+    [GraphQLName("errorMessage")]
+    public string? ErrorMessage { get; set; }
+
+    [GraphQLName("errorMessageNEQ")]
+    public string? ErrorMessageNEQ { get; set; }
+
+    [GraphQLName("errorMessageIn")]
+    public IReadOnlyList<string>? ErrorMessageIn { get; set; }
+
+    [GraphQLName("errorMessageNotIn")]
+    public IReadOnlyList<string>? ErrorMessageNotIn { get; set; }
+
+    [GraphQLName("errorMessageGT")]
+    public string? ErrorMessageGT { get; set; }
+
+    [GraphQLName("errorMessageGTE")]
+    public string? ErrorMessageGTE { get; set; }
+
+    [GraphQLName("errorMessageLT")]
+    public string? ErrorMessageLT { get; set; }
+
+    [GraphQLName("errorMessageLTE")]
+    public string? ErrorMessageLTE { get; set; }
+
+    [GraphQLName("errorMessageContains")]
+    public string? ErrorMessageContains { get; set; }
+
+    [GraphQLName("errorMessageHasPrefix")]
+    public string? ErrorMessageHasPrefix { get; set; }
+
+    [GraphQLName("errorMessageHasSuffix")]
+    public string? ErrorMessageHasSuffix { get; set; }
+
+    [GraphQLName("errorMessageIsNil")]
+    public bool? ErrorMessageIsNil { get; set; }
+
+    [GraphQLName("errorMessageNotNil")]
+    public bool? ErrorMessageNotNil { get; set; }
+
+    [GraphQLName("errorMessageEqualFold")]
+    public string? ErrorMessageEqualFold { get; set; }
+
+    [GraphQLName("errorMessageContainsFold")]
+    public string? ErrorMessageContainsFold { get; set; }
+
+    [GraphQLName("responseStatusCode")]
+    public int? ResponseStatusCode { get; set; }
+
+    [GraphQLName("responseStatusCodeNEQ")]
+    public int? ResponseStatusCodeNEQ { get; set; }
+
+    [GraphQLName("responseStatusCodeIn")]
+    public IReadOnlyList<int>? ResponseStatusCodeIn { get; set; }
+
+    [GraphQLName("responseStatusCodeNotIn")]
+    public IReadOnlyList<int>? ResponseStatusCodeNotIn { get; set; }
+
+    [GraphQLName("responseStatusCodeGT")]
+    public int? ResponseStatusCodeGT { get; set; }
+
+    [GraphQLName("responseStatusCodeGTE")]
+    public int? ResponseStatusCodeGTE { get; set; }
+
+    [GraphQLName("responseStatusCodeLT")]
+    public int? ResponseStatusCodeLT { get; set; }
+
+    [GraphQLName("responseStatusCodeLTE")]
+    public int? ResponseStatusCodeLTE { get; set; }
+
+    [GraphQLName("responseStatusCodeIsNil")]
+    public bool? ResponseStatusCodeIsNil { get; set; }
+
+    [GraphQLName("responseStatusCodeNotNil")]
+    public bool? ResponseStatusCodeNotNil { get; set; }
+
+    [GraphQLName("stream")]
+    public bool? Stream { get; set; }
+
+    [GraphQLName("streamNEQ")]
+    public bool? StreamNEQ { get; set; }
+
+    [GraphQLName("metricsLatencyMs")]
+    public int? MetricsLatencyMs { get; set; }
+
+    [GraphQLName("metricsLatencyMsNEQ")]
+    public int? MetricsLatencyMsNEQ { get; set; }
+
+    [GraphQLName("metricsLatencyMsIn")]
+    public IReadOnlyList<int>? MetricsLatencyMsIn { get; set; }
+
+    [GraphQLName("metricsLatencyMsNotIn")]
+    public IReadOnlyList<int>? MetricsLatencyMsNotIn { get; set; }
+
+    [GraphQLName("metricsLatencyMsGT")]
+    public int? MetricsLatencyMsGT { get; set; }
+
+    [GraphQLName("metricsLatencyMsGTE")]
+    public int? MetricsLatencyMsGTE { get; set; }
+
+    [GraphQLName("metricsLatencyMsLT")]
+    public int? MetricsLatencyMsLT { get; set; }
+
+    [GraphQLName("metricsLatencyMsLTE")]
+    public int? MetricsLatencyMsLTE { get; set; }
+
+    [GraphQLName("metricsLatencyMsIsNil")]
+    public bool? MetricsLatencyMsIsNil { get; set; }
+
+    [GraphQLName("metricsLatencyMsNotNil")]
+    public bool? MetricsLatencyMsNotNil { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMs")]
+    public int? MetricsFirstTokenLatencyMs { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsNEQ")]
+    public int? MetricsFirstTokenLatencyMsNEQ { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsIn")]
+    public IReadOnlyList<int>? MetricsFirstTokenLatencyMsIn { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsNotIn")]
+    public IReadOnlyList<int>? MetricsFirstTokenLatencyMsNotIn { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsGT")]
+    public int? MetricsFirstTokenLatencyMsGT { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsGTE")]
+    public int? MetricsFirstTokenLatencyMsGTE { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsLT")]
+    public int? MetricsFirstTokenLatencyMsLT { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsLTE")]
+    public int? MetricsFirstTokenLatencyMsLTE { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsIsNil")]
+    public bool? MetricsFirstTokenLatencyMsIsNil { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsNotNil")]
+    public bool? MetricsFirstTokenLatencyMsNotNil { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMs")]
+    public int? MetricsReasoningDurationMs { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsNEQ")]
+    public int? MetricsReasoningDurationMsNEQ { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsIn")]
+    public IReadOnlyList<int>? MetricsReasoningDurationMsIn { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsNotIn")]
+    public IReadOnlyList<int>? MetricsReasoningDurationMsNotIn { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsGT")]
+    public int? MetricsReasoningDurationMsGT { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsGTE")]
+    public int? MetricsReasoningDurationMsGTE { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsLT")]
+    public int? MetricsReasoningDurationMsLT { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsLTE")]
+    public int? MetricsReasoningDurationMsLTE { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsIsNil")]
+    public bool? MetricsReasoningDurationMsIsNil { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsNotNil")]
+    public bool? MetricsReasoningDurationMsNotNil { get; set; }
+
+    [GraphQLName("requestURL")]
+    public string? RequestUrl { get; set; }
+
+    [GraphQLName("requestURLNEQ")]
+    public string? RequestUrlNEQ { get; set; }
+
+    [GraphQLName("requestURLIn")]
+    public IReadOnlyList<string>? RequestUrlIn { get; set; }
+
+    [GraphQLName("requestURLNotIn")]
+    public IReadOnlyList<string>? RequestUrlNotIn { get; set; }
+
+    [GraphQLName("requestURLGT")]
+    public string? RequestUrlGT { get; set; }
+
+    [GraphQLName("requestURLGTE")]
+    public string? RequestUrlGTE { get; set; }
+
+    [GraphQLName("requestURLLT")]
+    public string? RequestUrlLT { get; set; }
+
+    [GraphQLName("requestURLLTE")]
+    public string? RequestUrlLTE { get; set; }
+
+    [GraphQLName("requestURLContains")]
+    public string? RequestUrlContains { get; set; }
+
+    [GraphQLName("requestURLHasPrefix")]
+    public string? RequestUrlHasPrefix { get; set; }
+
+    [GraphQLName("requestURLHasSuffix")]
+    public string? RequestUrlHasSuffix { get; set; }
+
+    [GraphQLName("requestURLIsNil")]
+    public bool? RequestUrlIsNil { get; set; }
+
+    [GraphQLName("requestURLNotNil")]
+    public bool? RequestUrlNotNil { get; set; }
+
+    [GraphQLName("requestURLEqualFold")]
+    public string? RequestUrlEqualFold { get; set; }
+
+    [GraphQLName("requestURLContainsFold")]
+    public string? RequestUrlContainsFold { get; set; }
+
+    [GraphQLName("passThroughApplied")]
+    public bool? PassThroughApplied { get; set; }
+
+    [GraphQLName("passThroughAppliedNEQ")]
+    public bool? PassThroughAppliedNEQ { get; set; }
+
+    [GraphQLName("hasRequest")]
+    public bool? HasRequest { get; set; }
+
+    [GraphQLName("hasRequestWith")]
+    public IReadOnlyList<RequestWhereInput>? HasRequestWith { get; set; }
+
+    [GraphQLName("hasChannel")]
+    public bool? HasChannel { get; set; }
+
+    [GraphQLName("hasChannelWith")]
+    public IReadOnlyList<ChannelWhereInput>? HasChannelWith { get; set; }
+
+    [GraphQLName("hasDataStorage")]
+    public bool? HasDataStorage { get; set; }
+
+    [GraphQLName("hasDataStorageWith")]
+    public IReadOnlyList<DataStorageWhereInput>? HasDataStorageWith { get; set; }
 }
 
 /// <summary>
@@ -519,6 +921,501 @@ public sealed class UsageLogWhereInput
     public IReadOnlyList<string>? FormatIn { get; set; }
 
     public IReadOnlyList<string>? FormatNotIn { get; set; }
+
+    [GraphQLName("apiKeyIDGT")]
+    public int? ApiKeyIdGT { get; set; }
+
+    [GraphQLName("apiKeyIDGTE")]
+    public int? ApiKeyIdGTE { get; set; }
+
+    [GraphQLName("apiKeyIDLT")]
+    public int? ApiKeyIdLT { get; set; }
+
+    [GraphQLName("apiKeyIDLTE")]
+    public int? ApiKeyIdLTE { get; set; }
+
+    [GraphQLName("modelIDGT")]
+    public string? ModelIdGT { get; set; }
+
+    [GraphQLName("modelIDGTE")]
+    public string? ModelIdGTE { get; set; }
+
+    [GraphQLName("modelIDLT")]
+    public string? ModelIdLT { get; set; }
+
+    [GraphQLName("modelIDLTE")]
+    public string? ModelIdLTE { get; set; }
+
+    [GraphQLName("modelIDHasPrefix")]
+    public string? ModelIdHasPrefix { get; set; }
+
+    [GraphQLName("modelIDHasSuffix")]
+    public string? ModelIdHasSuffix { get; set; }
+
+    [GraphQLName("modelIDEqualFold")]
+    public string? ModelIdEqualFold { get; set; }
+
+    [GraphQLName("promptTokens")]
+    public int? PromptTokens { get; set; }
+
+    [GraphQLName("promptTokensNEQ")]
+    public int? PromptTokensNEQ { get; set; }
+
+    [GraphQLName("promptTokensIn")]
+    public IReadOnlyList<int>? PromptTokensIn { get; set; }
+
+    [GraphQLName("promptTokensNotIn")]
+    public IReadOnlyList<int>? PromptTokensNotIn { get; set; }
+
+    [GraphQLName("promptTokensGT")]
+    public int? PromptTokensGT { get; set; }
+
+    [GraphQLName("promptTokensGTE")]
+    public int? PromptTokensGTE { get; set; }
+
+    [GraphQLName("promptTokensLT")]
+    public int? PromptTokensLT { get; set; }
+
+    [GraphQLName("promptTokensLTE")]
+    public int? PromptTokensLTE { get; set; }
+
+    [GraphQLName("completionTokens")]
+    public int? CompletionTokens { get; set; }
+
+    [GraphQLName("completionTokensNEQ")]
+    public int? CompletionTokensNEQ { get; set; }
+
+    [GraphQLName("completionTokensIn")]
+    public IReadOnlyList<int>? CompletionTokensIn { get; set; }
+
+    [GraphQLName("completionTokensNotIn")]
+    public IReadOnlyList<int>? CompletionTokensNotIn { get; set; }
+
+    [GraphQLName("completionTokensGT")]
+    public int? CompletionTokensGT { get; set; }
+
+    [GraphQLName("completionTokensGTE")]
+    public int? CompletionTokensGTE { get; set; }
+
+    [GraphQLName("completionTokensLT")]
+    public int? CompletionTokensLT { get; set; }
+
+    [GraphQLName("completionTokensLTE")]
+    public int? CompletionTokensLTE { get; set; }
+
+    [GraphQLName("totalTokens")]
+    public int? TotalTokens { get; set; }
+
+    [GraphQLName("totalTokensNEQ")]
+    public int? TotalTokensNEQ { get; set; }
+
+    [GraphQLName("totalTokensIn")]
+    public IReadOnlyList<int>? TotalTokensIn { get; set; }
+
+    [GraphQLName("totalTokensNotIn")]
+    public IReadOnlyList<int>? TotalTokensNotIn { get; set; }
+
+    [GraphQLName("totalTokensGT")]
+    public int? TotalTokensGT { get; set; }
+
+    [GraphQLName("totalTokensGTE")]
+    public int? TotalTokensGTE { get; set; }
+
+    [GraphQLName("totalTokensLT")]
+    public int? TotalTokensLT { get; set; }
+
+    [GraphQLName("totalTokensLTE")]
+    public int? TotalTokensLTE { get; set; }
+
+    [GraphQLName("promptAudioTokens")]
+    public int? PromptAudioTokens { get; set; }
+
+    [GraphQLName("promptAudioTokensNEQ")]
+    public int? PromptAudioTokensNEQ { get; set; }
+
+    [GraphQLName("promptAudioTokensIn")]
+    public IReadOnlyList<int>? PromptAudioTokensIn { get; set; }
+
+    [GraphQLName("promptAudioTokensNotIn")]
+    public IReadOnlyList<int>? PromptAudioTokensNotIn { get; set; }
+
+    [GraphQLName("promptAudioTokensGT")]
+    public int? PromptAudioTokensGT { get; set; }
+
+    [GraphQLName("promptAudioTokensGTE")]
+    public int? PromptAudioTokensGTE { get; set; }
+
+    [GraphQLName("promptAudioTokensLT")]
+    public int? PromptAudioTokensLT { get; set; }
+
+    [GraphQLName("promptAudioTokensLTE")]
+    public int? PromptAudioTokensLTE { get; set; }
+
+    [GraphQLName("promptAudioTokensIsNil")]
+    public bool? PromptAudioTokensIsNil { get; set; }
+
+    [GraphQLName("promptAudioTokensNotNil")]
+    public bool? PromptAudioTokensNotNil { get; set; }
+
+    [GraphQLName("promptCachedTokens")]
+    public int? PromptCachedTokens { get; set; }
+
+    [GraphQLName("promptCachedTokensNEQ")]
+    public int? PromptCachedTokensNEQ { get; set; }
+
+    [GraphQLName("promptCachedTokensIn")]
+    public IReadOnlyList<int>? PromptCachedTokensIn { get; set; }
+
+    [GraphQLName("promptCachedTokensNotIn")]
+    public IReadOnlyList<int>? PromptCachedTokensNotIn { get; set; }
+
+    [GraphQLName("promptCachedTokensGT")]
+    public int? PromptCachedTokensGT { get; set; }
+
+    [GraphQLName("promptCachedTokensGTE")]
+    public int? PromptCachedTokensGTE { get; set; }
+
+    [GraphQLName("promptCachedTokensLT")]
+    public int? PromptCachedTokensLT { get; set; }
+
+    [GraphQLName("promptCachedTokensLTE")]
+    public int? PromptCachedTokensLTE { get; set; }
+
+    [GraphQLName("promptCachedTokensIsNil")]
+    public bool? PromptCachedTokensIsNil { get; set; }
+
+    [GraphQLName("promptCachedTokensNotNil")]
+    public bool? PromptCachedTokensNotNil { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens")]
+    public int? PromptWriteCachedTokens { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensNEQ")]
+    public int? PromptWriteCachedTokensNEQ { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensIn")]
+    public IReadOnlyList<int>? PromptWriteCachedTokensIn { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensNotIn")]
+    public IReadOnlyList<int>? PromptWriteCachedTokensNotIn { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensGT")]
+    public int? PromptWriteCachedTokensGT { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensGTE")]
+    public int? PromptWriteCachedTokensGTE { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensLT")]
+    public int? PromptWriteCachedTokensLT { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensLTE")]
+    public int? PromptWriteCachedTokensLTE { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensIsNil")]
+    public bool? PromptWriteCachedTokensIsNil { get; set; }
+
+    [GraphQLName("promptWriteCachedTokensNotNil")]
+    public bool? PromptWriteCachedTokensNotNil { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5m")]
+    public int? PromptWriteCachedTokens5m { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mNEQ")]
+    public int? PromptWriteCachedTokens5mNEQ { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mIn")]
+    public IReadOnlyList<int>? PromptWriteCachedTokens5mIn { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mNotIn")]
+    public IReadOnlyList<int>? PromptWriteCachedTokens5mNotIn { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mGT")]
+    public int? PromptWriteCachedTokens5mGT { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mGTE")]
+    public int? PromptWriteCachedTokens5mGTE { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mLT")]
+    public int? PromptWriteCachedTokens5mLT { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mLTE")]
+    public int? PromptWriteCachedTokens5mLTE { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mIsNil")]
+    public bool? PromptWriteCachedTokens5mIsNil { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens5mNotNil")]
+    public bool? PromptWriteCachedTokens5mNotNil { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1h")]
+    public int? PromptWriteCachedTokens1h { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hNEQ")]
+    public int? PromptWriteCachedTokens1hNEQ { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hIn")]
+    public IReadOnlyList<int>? PromptWriteCachedTokens1hIn { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hNotIn")]
+    public IReadOnlyList<int>? PromptWriteCachedTokens1hNotIn { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hGT")]
+    public int? PromptWriteCachedTokens1hGT { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hGTE")]
+    public int? PromptWriteCachedTokens1hGTE { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hLT")]
+    public int? PromptWriteCachedTokens1hLT { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hLTE")]
+    public int? PromptWriteCachedTokens1hLTE { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hIsNil")]
+    public bool? PromptWriteCachedTokens1hIsNil { get; set; }
+
+    [GraphQLName("promptWriteCachedTokens1hNotNil")]
+    public bool? PromptWriteCachedTokens1hNotNil { get; set; }
+
+    [GraphQLName("completionAudioTokens")]
+    public int? CompletionAudioTokens { get; set; }
+
+    [GraphQLName("completionAudioTokensNEQ")]
+    public int? CompletionAudioTokensNEQ { get; set; }
+
+    [GraphQLName("completionAudioTokensIn")]
+    public IReadOnlyList<int>? CompletionAudioTokensIn { get; set; }
+
+    [GraphQLName("completionAudioTokensNotIn")]
+    public IReadOnlyList<int>? CompletionAudioTokensNotIn { get; set; }
+
+    [GraphQLName("completionAudioTokensGT")]
+    public int? CompletionAudioTokensGT { get; set; }
+
+    [GraphQLName("completionAudioTokensGTE")]
+    public int? CompletionAudioTokensGTE { get; set; }
+
+    [GraphQLName("completionAudioTokensLT")]
+    public int? CompletionAudioTokensLT { get; set; }
+
+    [GraphQLName("completionAudioTokensLTE")]
+    public int? CompletionAudioTokensLTE { get; set; }
+
+    [GraphQLName("completionAudioTokensIsNil")]
+    public bool? CompletionAudioTokensIsNil { get; set; }
+
+    [GraphQLName("completionAudioTokensNotNil")]
+    public bool? CompletionAudioTokensNotNil { get; set; }
+
+    [GraphQLName("completionReasoningTokens")]
+    public int? CompletionReasoningTokens { get; set; }
+
+    [GraphQLName("completionReasoningTokensNEQ")]
+    public int? CompletionReasoningTokensNEQ { get; set; }
+
+    [GraphQLName("completionReasoningTokensIn")]
+    public IReadOnlyList<int>? CompletionReasoningTokensIn { get; set; }
+
+    [GraphQLName("completionReasoningTokensNotIn")]
+    public IReadOnlyList<int>? CompletionReasoningTokensNotIn { get; set; }
+
+    [GraphQLName("completionReasoningTokensGT")]
+    public int? CompletionReasoningTokensGT { get; set; }
+
+    [GraphQLName("completionReasoningTokensGTE")]
+    public int? CompletionReasoningTokensGTE { get; set; }
+
+    [GraphQLName("completionReasoningTokensLT")]
+    public int? CompletionReasoningTokensLT { get; set; }
+
+    [GraphQLName("completionReasoningTokensLTE")]
+    public int? CompletionReasoningTokensLTE { get; set; }
+
+    [GraphQLName("completionReasoningTokensIsNil")]
+    public bool? CompletionReasoningTokensIsNil { get; set; }
+
+    [GraphQLName("completionReasoningTokensNotNil")]
+    public bool? CompletionReasoningTokensNotNil { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokens")]
+    public int? CompletionAcceptedPredictionTokens { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensNEQ")]
+    public int? CompletionAcceptedPredictionTokensNEQ { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensIn")]
+    public IReadOnlyList<int>? CompletionAcceptedPredictionTokensIn { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensNotIn")]
+    public IReadOnlyList<int>? CompletionAcceptedPredictionTokensNotIn { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensGT")]
+    public int? CompletionAcceptedPredictionTokensGT { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensGTE")]
+    public int? CompletionAcceptedPredictionTokensGTE { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensLT")]
+    public int? CompletionAcceptedPredictionTokensLT { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensLTE")]
+    public int? CompletionAcceptedPredictionTokensLTE { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensIsNil")]
+    public bool? CompletionAcceptedPredictionTokensIsNil { get; set; }
+
+    [GraphQLName("completionAcceptedPredictionTokensNotNil")]
+    public bool? CompletionAcceptedPredictionTokensNotNil { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokens")]
+    public int? CompletionRejectedPredictionTokens { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensNEQ")]
+    public int? CompletionRejectedPredictionTokensNEQ { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensIn")]
+    public IReadOnlyList<int>? CompletionRejectedPredictionTokensIn { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensNotIn")]
+    public IReadOnlyList<int>? CompletionRejectedPredictionTokensNotIn { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensGT")]
+    public int? CompletionRejectedPredictionTokensGT { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensGTE")]
+    public int? CompletionRejectedPredictionTokensGTE { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensLT")]
+    public int? CompletionRejectedPredictionTokensLT { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensLTE")]
+    public int? CompletionRejectedPredictionTokensLTE { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensIsNil")]
+    public bool? CompletionRejectedPredictionTokensIsNil { get; set; }
+
+    [GraphQLName("completionRejectedPredictionTokensNotNil")]
+    public bool? CompletionRejectedPredictionTokensNotNil { get; set; }
+
+    [GraphQLName("formatGT")]
+    public string? FormatGT { get; set; }
+
+    [GraphQLName("formatGTE")]
+    public string? FormatGTE { get; set; }
+
+    [GraphQLName("formatLT")]
+    public string? FormatLT { get; set; }
+
+    [GraphQLName("formatLTE")]
+    public string? FormatLTE { get; set; }
+
+    [GraphQLName("formatContains")]
+    public string? FormatContains { get; set; }
+
+    [GraphQLName("formatHasPrefix")]
+    public string? FormatHasPrefix { get; set; }
+
+    [GraphQLName("formatHasSuffix")]
+    public string? FormatHasSuffix { get; set; }
+
+    [GraphQLName("formatEqualFold")]
+    public string? FormatEqualFold { get; set; }
+
+    [GraphQLName("formatContainsFold")]
+    public string? FormatContainsFold { get; set; }
+
+    [GraphQLName("totalCost")]
+    public double? TotalCost { get; set; }
+
+    [GraphQLName("totalCostNEQ")]
+    public double? TotalCostNEQ { get; set; }
+
+    [GraphQLName("totalCostIn")]
+    public IReadOnlyList<double>? TotalCostIn { get; set; }
+
+    [GraphQLName("totalCostNotIn")]
+    public IReadOnlyList<double>? TotalCostNotIn { get; set; }
+
+    [GraphQLName("totalCostGT")]
+    public double? TotalCostGT { get; set; }
+
+    [GraphQLName("totalCostGTE")]
+    public double? TotalCostGTE { get; set; }
+
+    [GraphQLName("totalCostLT")]
+    public double? TotalCostLT { get; set; }
+
+    [GraphQLName("totalCostLTE")]
+    public double? TotalCostLTE { get; set; }
+
+    [GraphQLName("totalCostIsNil")]
+    public bool? TotalCostIsNil { get; set; }
+
+    [GraphQLName("totalCostNotNil")]
+    public bool? TotalCostNotNil { get; set; }
+
+    [GraphQLName("costPriceReferenceID")]
+    public string? CostPriceReferenceId { get; set; }
+
+    [GraphQLName("costPriceReferenceIDNEQ")]
+    public string? CostPriceReferenceIdNEQ { get; set; }
+
+    [GraphQLName("costPriceReferenceIDIn")]
+    public IReadOnlyList<string>? CostPriceReferenceIdIn { get; set; }
+
+    [GraphQLName("costPriceReferenceIDNotIn")]
+    public IReadOnlyList<string>? CostPriceReferenceIdNotIn { get; set; }
+
+    [GraphQLName("costPriceReferenceIDGT")]
+    public string? CostPriceReferenceIdGT { get; set; }
+
+    [GraphQLName("costPriceReferenceIDGTE")]
+    public string? CostPriceReferenceIdGTE { get; set; }
+
+    [GraphQLName("costPriceReferenceIDLT")]
+    public string? CostPriceReferenceIdLT { get; set; }
+
+    [GraphQLName("costPriceReferenceIDLTE")]
+    public string? CostPriceReferenceIdLTE { get; set; }
+
+    [GraphQLName("costPriceReferenceIDContains")]
+    public string? CostPriceReferenceIdContains { get; set; }
+
+    [GraphQLName("costPriceReferenceIDHasPrefix")]
+    public string? CostPriceReferenceIdHasPrefix { get; set; }
+
+    [GraphQLName("costPriceReferenceIDHasSuffix")]
+    public string? CostPriceReferenceIdHasSuffix { get; set; }
+
+    [GraphQLName("costPriceReferenceIDIsNil")]
+    public bool? CostPriceReferenceIdIsNil { get; set; }
+
+    [GraphQLName("costPriceReferenceIDNotNil")]
+    public bool? CostPriceReferenceIdNotNil { get; set; }
+
+    [GraphQLName("costPriceReferenceIDEqualFold")]
+    public string? CostPriceReferenceIdEqualFold { get; set; }
+
+    [GraphQLName("costPriceReferenceIDContainsFold")]
+    public string? CostPriceReferenceIdContainsFold { get; set; }
+
+    [GraphQLName("hasRequest")]
+    public bool? HasRequest { get; set; }
+
+    [GraphQLName("hasRequestWith")]
+    public IReadOnlyList<RequestWhereInput>? HasRequestWith { get; set; }
+
+    [GraphQLName("hasProject")]
+    public bool? HasProject { get; set; }
+
+    [GraphQLName("hasProjectWith")]
+    public IReadOnlyList<ProjectWhereInput>? HasProjectWith { get; set; }
+
+    [GraphQLName("hasChannel")]
+    public bool? HasChannel { get; set; }
+
+    [GraphQLName("hasChannelWith")]
+    public IReadOnlyList<ChannelWhereInput>? HasChannelWith { get; set; }
 }
 
 /// <summary>
@@ -765,6 +1662,343 @@ public sealed partial class RequestWhereInput
 
     [GraphQLName("externalIDContainsFold")]
     public string? ExternalIdContainsFold { get; set; }
+
+    [GraphQLName("stream")]
+    public bool? Stream { get; set; }
+
+    [GraphQLName("streamNEQ")]
+    public bool? StreamNEQ { get; set; }
+
+    [GraphQLName("clientIP")]
+    public string? ClientIp { get; set; }
+
+    [GraphQLName("clientIPNEQ")]
+    public string? ClientIpNEQ { get; set; }
+
+    [GraphQLName("clientIPIn")]
+    public IReadOnlyList<string>? ClientIpIn { get; set; }
+
+    [GraphQLName("clientIPNotIn")]
+    public IReadOnlyList<string>? ClientIpNotIn { get; set; }
+
+    [GraphQLName("clientIPGT")]
+    public string? ClientIpGT { get; set; }
+
+    [GraphQLName("clientIPGTE")]
+    public string? ClientIpGTE { get; set; }
+
+    [GraphQLName("clientIPLT")]
+    public string? ClientIpLT { get; set; }
+
+    [GraphQLName("clientIPLTE")]
+    public string? ClientIpLTE { get; set; }
+
+    [GraphQLName("clientIPContains")]
+    public string? ClientIpContains { get; set; }
+
+    [GraphQLName("clientIPHasPrefix")]
+    public string? ClientIpHasPrefix { get; set; }
+
+    [GraphQLName("clientIPHasSuffix")]
+    public string? ClientIpHasSuffix { get; set; }
+
+    [GraphQLName("clientIPEqualFold")]
+    public string? ClientIpEqualFold { get; set; }
+
+    [GraphQLName("clientIPContainsFold")]
+    public string? ClientIpContainsFold { get; set; }
+
+    [GraphQLName("userAgent")]
+    public string? UserAgent { get; set; }
+
+    [GraphQLName("userAgentNEQ")]
+    public string? UserAgentNEQ { get; set; }
+
+    [GraphQLName("userAgentIn")]
+    public IReadOnlyList<string>? UserAgentIn { get; set; }
+
+    [GraphQLName("userAgentNotIn")]
+    public IReadOnlyList<string>? UserAgentNotIn { get; set; }
+
+    [GraphQLName("userAgentGT")]
+    public string? UserAgentGT { get; set; }
+
+    [GraphQLName("userAgentGTE")]
+    public string? UserAgentGTE { get; set; }
+
+    [GraphQLName("userAgentLT")]
+    public string? UserAgentLT { get; set; }
+
+    [GraphQLName("userAgentLTE")]
+    public string? UserAgentLTE { get; set; }
+
+    [GraphQLName("userAgentContains")]
+    public string? UserAgentContains { get; set; }
+
+    [GraphQLName("userAgentHasPrefix")]
+    public string? UserAgentHasPrefix { get; set; }
+
+    [GraphQLName("userAgentHasSuffix")]
+    public string? UserAgentHasSuffix { get; set; }
+
+    [GraphQLName("userAgentEqualFold")]
+    public string? UserAgentEqualFold { get; set; }
+
+    [GraphQLName("userAgentContainsFold")]
+    public string? UserAgentContainsFold { get; set; }
+
+    [GraphQLName("metricsLatencyMs")]
+    public int? MetricsLatencyMs { get; set; }
+
+    [GraphQLName("metricsLatencyMsNEQ")]
+    public int? MetricsLatencyMsNEQ { get; set; }
+
+    [GraphQLName("metricsLatencyMsIn")]
+    public IReadOnlyList<int>? MetricsLatencyMsIn { get; set; }
+
+    [GraphQLName("metricsLatencyMsNotIn")]
+    public IReadOnlyList<int>? MetricsLatencyMsNotIn { get; set; }
+
+    [GraphQLName("metricsLatencyMsGT")]
+    public int? MetricsLatencyMsGT { get; set; }
+
+    [GraphQLName("metricsLatencyMsGTE")]
+    public int? MetricsLatencyMsGTE { get; set; }
+
+    [GraphQLName("metricsLatencyMsLT")]
+    public int? MetricsLatencyMsLT { get; set; }
+
+    [GraphQLName("metricsLatencyMsLTE")]
+    public int? MetricsLatencyMsLTE { get; set; }
+
+    [GraphQLName("metricsLatencyMsIsNil")]
+    public bool? MetricsLatencyMsIsNil { get; set; }
+
+    [GraphQLName("metricsLatencyMsNotNil")]
+    public bool? MetricsLatencyMsNotNil { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMs")]
+    public int? MetricsFirstTokenLatencyMs { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsNEQ")]
+    public int? MetricsFirstTokenLatencyMsNEQ { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsIn")]
+    public IReadOnlyList<int>? MetricsFirstTokenLatencyMsIn { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsNotIn")]
+    public IReadOnlyList<int>? MetricsFirstTokenLatencyMsNotIn { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsGT")]
+    public int? MetricsFirstTokenLatencyMsGT { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsGTE")]
+    public int? MetricsFirstTokenLatencyMsGTE { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsLT")]
+    public int? MetricsFirstTokenLatencyMsLT { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsLTE")]
+    public int? MetricsFirstTokenLatencyMsLTE { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsIsNil")]
+    public bool? MetricsFirstTokenLatencyMsIsNil { get; set; }
+
+    [GraphQLName("metricsFirstTokenLatencyMsNotNil")]
+    public bool? MetricsFirstTokenLatencyMsNotNil { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMs")]
+    public int? MetricsReasoningDurationMs { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsNEQ")]
+    public int? MetricsReasoningDurationMsNEQ { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsIn")]
+    public IReadOnlyList<int>? MetricsReasoningDurationMsIn { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsNotIn")]
+    public IReadOnlyList<int>? MetricsReasoningDurationMsNotIn { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsGT")]
+    public int? MetricsReasoningDurationMsGT { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsGTE")]
+    public int? MetricsReasoningDurationMsGTE { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsLT")]
+    public int? MetricsReasoningDurationMsLT { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsLTE")]
+    public int? MetricsReasoningDurationMsLTE { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsIsNil")]
+    public bool? MetricsReasoningDurationMsIsNil { get; set; }
+
+    [GraphQLName("metricsReasoningDurationMsNotNil")]
+    public bool? MetricsReasoningDurationMsNotNil { get; set; }
+
+    [GraphQLName("contentSaved")]
+    public bool? ContentSaved { get; set; }
+
+    [GraphQLName("contentSavedNEQ")]
+    public bool? ContentSavedNEQ { get; set; }
+
+    [GraphQLName("contentStorageID")]
+    public int? ContentStorageId { get; set; }
+
+    [GraphQLName("contentStorageIDNEQ")]
+    public int? ContentStorageIdNEQ { get; set; }
+
+    [GraphQLName("contentStorageIDIn")]
+    public IReadOnlyList<int>? ContentStorageIdIn { get; set; }
+
+    [GraphQLName("contentStorageIDNotIn")]
+    public IReadOnlyList<int>? ContentStorageIdNotIn { get; set; }
+
+    [GraphQLName("contentStorageIDGT")]
+    public int? ContentStorageIdGT { get; set; }
+
+    [GraphQLName("contentStorageIDGTE")]
+    public int? ContentStorageIdGTE { get; set; }
+
+    [GraphQLName("contentStorageIDLT")]
+    public int? ContentStorageIdLT { get; set; }
+
+    [GraphQLName("contentStorageIDLTE")]
+    public int? ContentStorageIdLTE { get; set; }
+
+    [GraphQLName("contentStorageIDIsNil")]
+    public bool? ContentStorageIdIsNil { get; set; }
+
+    [GraphQLName("contentStorageIDNotNil")]
+    public bool? ContentStorageIdNotNil { get; set; }
+
+    [GraphQLName("contentStorageKey")]
+    public string? ContentStorageKey { get; set; }
+
+    [GraphQLName("contentStorageKeyNEQ")]
+    public string? ContentStorageKeyNEQ { get; set; }
+
+    [GraphQLName("contentStorageKeyIn")]
+    public IReadOnlyList<string>? ContentStorageKeyIn { get; set; }
+
+    [GraphQLName("contentStorageKeyNotIn")]
+    public IReadOnlyList<string>? ContentStorageKeyNotIn { get; set; }
+
+    [GraphQLName("contentStorageKeyGT")]
+    public string? ContentStorageKeyGT { get; set; }
+
+    [GraphQLName("contentStorageKeyGTE")]
+    public string? ContentStorageKeyGTE { get; set; }
+
+    [GraphQLName("contentStorageKeyLT")]
+    public string? ContentStorageKeyLT { get; set; }
+
+    [GraphQLName("contentStorageKeyLTE")]
+    public string? ContentStorageKeyLTE { get; set; }
+
+    [GraphQLName("contentStorageKeyContains")]
+    public string? ContentStorageKeyContains { get; set; }
+
+    [GraphQLName("contentStorageKeyHasPrefix")]
+    public string? ContentStorageKeyHasPrefix { get; set; }
+
+    [GraphQLName("contentStorageKeyHasSuffix")]
+    public string? ContentStorageKeyHasSuffix { get; set; }
+
+    [GraphQLName("contentStorageKeyIsNil")]
+    public bool? ContentStorageKeyIsNil { get; set; }
+
+    [GraphQLName("contentStorageKeyNotNil")]
+    public bool? ContentStorageKeyNotNil { get; set; }
+
+    [GraphQLName("contentStorageKeyEqualFold")]
+    public string? ContentStorageKeyEqualFold { get; set; }
+
+    [GraphQLName("contentStorageKeyContainsFold")]
+    public string? ContentStorageKeyContainsFold { get; set; }
+
+    [GraphQLName("contentSavedAt")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? ContentSavedAt { get; set; }
+
+    [GraphQLName("contentSavedAtNEQ")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? ContentSavedAtNEQ { get; set; }
+
+    [GraphQLName("contentSavedAtIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? ContentSavedAtIn { get; set; }
+
+    [GraphQLName("contentSavedAtNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? ContentSavedAtNotIn { get; set; }
+
+    [GraphQLName("contentSavedAtGT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? ContentSavedAtGT { get; set; }
+
+    [GraphQLName("contentSavedAtGTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? ContentSavedAtGTE { get; set; }
+
+    [GraphQLName("contentSavedAtLT")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? ContentSavedAtLT { get; set; }
+
+    [GraphQLName("contentSavedAtLTE")]
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? ContentSavedAtLTE { get; set; }
+
+    [GraphQLName("contentSavedAtIsNil")]
+    [GraphQLType(typeof(GoTimeType))]
+    public bool? ContentSavedAtIsNil { get; set; }
+
+    [GraphQLName("contentSavedAtNotNil")]
+    [GraphQLType(typeof(GoTimeType))]
+    public bool? ContentSavedAtNotNil { get; set; }
+
+    [GraphQLName("hasAPIKey")]
+    public bool? HasApiKey { get; set; }
+
+    [GraphQLName("hasAPIKeyWith")]
+    public IReadOnlyList<ApiKeyWhereInput>? HasApiKeyWith { get; set; }
+
+    [GraphQLName("hasProject")]
+    public bool? HasProject { get; set; }
+
+    [GraphQLName("hasProjectWith")]
+    public IReadOnlyList<ProjectWhereInput>? HasProjectWith { get; set; }
+
+    [GraphQLName("hasTrace")]
+    public bool? HasTrace { get; set; }
+
+    [GraphQLName("hasTraceWith")]
+    public IReadOnlyList<TraceWhereInput>? HasTraceWith { get; set; }
+
+    [GraphQLName("hasDataStorage")]
+    public bool? HasDataStorage { get; set; }
+
+    [GraphQLName("hasDataStorageWith")]
+    public IReadOnlyList<DataStorageWhereInput>? HasDataStorageWith { get; set; }
+
+    [GraphQLName("hasExecutions")]
+    public bool? HasExecutions { get; set; }
+
+    [GraphQLName("hasExecutionsWith")]
+    public IReadOnlyList<RequestExecutionWhereInput>? HasExecutionsWith { get; set; }
+
+    [GraphQLName("hasChannel")]
+    public bool? HasChannel { get; set; }
+
+    [GraphQLName("hasChannelWith")]
+    public IReadOnlyList<ChannelWhereInput>? HasChannelWith { get; set; }
+
+    [GraphQLName("hasUsageLogs")]
+    public bool? HasUsageLogs { get; set; }
+
+    [GraphQLName("hasUsageLogsWith")]
+    public IReadOnlyList<UsageLogWhereInput>? HasUsageLogsWith { get; set; }
 }
 
 /// <summary>Port of TierCost (cost.graphql:1-5).</summary>
@@ -1482,6 +2716,150 @@ public static class RequestMapping
             ExternalIdNEQ = where.ExternalIdNEQ,
             ExternalIdIn = ToList(where.ExternalIdIn),
             ExternalIdNotIn = ToList(where.ExternalIdNotIn),
+            ExternalIdGT = where.ExternalIdGT,
+            ExternalIdGTE = where.ExternalIdGTE,
+            ExternalIdLT = where.ExternalIdLT,
+            ExternalIdLTE = where.ExternalIdLTE,
+            ExternalIdContains = where.ExternalIdContains,
+            ExternalIdHasPrefix = where.ExternalIdHasPrefix,
+            ExternalIdHasSuffix = where.ExternalIdHasSuffix,
+            ExternalIdIsNil = where.ExternalIdIsNil,
+            ExternalIdNotNil = where.ExternalIdNotNil,
+            ExternalIdEqualFold = where.ExternalIdEqualFold,
+            ExternalIdContainsFold = where.ExternalIdContainsFold,
+            ModelIdGT = where.ModelIdGT,
+            ModelIdGTE = where.ModelIdGTE,
+            ModelIdLT = where.ModelIdLT,
+            ModelIdLTE = where.ModelIdLTE,
+            UpstreamModelId = where.UpstreamModelId,
+            UpstreamModelIdNEQ = where.UpstreamModelIdNEQ,
+            UpstreamModelIdIn = ToList(where.UpstreamModelIdIn),
+            UpstreamModelIdNotIn = ToList(where.UpstreamModelIdNotIn),
+            UpstreamModelIdGT = where.UpstreamModelIdGT,
+            UpstreamModelIdGTE = where.UpstreamModelIdGTE,
+            UpstreamModelIdLT = where.UpstreamModelIdLT,
+            UpstreamModelIdLTE = where.UpstreamModelIdLTE,
+            UpstreamModelIdContains = where.UpstreamModelIdContains,
+            UpstreamModelIdHasPrefix = where.UpstreamModelIdHasPrefix,
+            UpstreamModelIdHasSuffix = where.UpstreamModelIdHasSuffix,
+            UpstreamModelIdIsNil = where.UpstreamModelIdIsNil,
+            UpstreamModelIdNotNil = where.UpstreamModelIdNotNil,
+            UpstreamModelIdEqualFold = where.UpstreamModelIdEqualFold,
+            UpstreamModelIdContainsFold = where.UpstreamModelIdContainsFold,
+            FormatGT = where.FormatGT,
+            FormatGTE = where.FormatGTE,
+            FormatLT = where.FormatLT,
+            FormatLTE = where.FormatLTE,
+            FormatContains = where.FormatContains,
+            FormatHasPrefix = where.FormatHasPrefix,
+            FormatHasSuffix = where.FormatHasSuffix,
+            FormatEqualFold = where.FormatEqualFold,
+            FormatContainsFold = where.FormatContainsFold,
+            ReasoningEffort = where.ReasoningEffort,
+            ReasoningEffortNEQ = where.ReasoningEffortNEQ,
+            ReasoningEffortIn = ToList(where.ReasoningEffortIn),
+            ReasoningEffortNotIn = ToList(where.ReasoningEffortNotIn),
+            ReasoningEffortGT = where.ReasoningEffortGT,
+            ReasoningEffortGTE = where.ReasoningEffortGTE,
+            ReasoningEffortLT = where.ReasoningEffortLT,
+            ReasoningEffortLTE = where.ReasoningEffortLTE,
+            ReasoningEffortContains = where.ReasoningEffortContains,
+            ReasoningEffortHasPrefix = where.ReasoningEffortHasPrefix,
+            ReasoningEffortHasSuffix = where.ReasoningEffortHasSuffix,
+            ReasoningEffortIsNil = where.ReasoningEffortIsNil,
+            ReasoningEffortNotNil = where.ReasoningEffortNotNil,
+            ReasoningEffortEqualFold = where.ReasoningEffortEqualFold,
+            ReasoningEffortContainsFold = where.ReasoningEffortContainsFold,
+            ErrorMessage = where.ErrorMessage,
+            ErrorMessageNEQ = where.ErrorMessageNEQ,
+            ErrorMessageIn = ToList(where.ErrorMessageIn),
+            ErrorMessageNotIn = ToList(where.ErrorMessageNotIn),
+            ErrorMessageGT = where.ErrorMessageGT,
+            ErrorMessageGTE = where.ErrorMessageGTE,
+            ErrorMessageLT = where.ErrorMessageLT,
+            ErrorMessageLTE = where.ErrorMessageLTE,
+            ErrorMessageContains = where.ErrorMessageContains,
+            ErrorMessageHasPrefix = where.ErrorMessageHasPrefix,
+            ErrorMessageHasSuffix = where.ErrorMessageHasSuffix,
+            ErrorMessageIsNil = where.ErrorMessageIsNil,
+            ErrorMessageNotNil = where.ErrorMessageNotNil,
+            ErrorMessageEqualFold = where.ErrorMessageEqualFold,
+            ErrorMessageContainsFold = where.ErrorMessageContainsFold,
+            ResponseStatusCode = where.ResponseStatusCode,
+            ResponseStatusCodeNEQ = where.ResponseStatusCodeNEQ,
+            ResponseStatusCodeIn = ToLongList(where.ResponseStatusCodeIn),
+            ResponseStatusCodeNotIn = ToLongList(where.ResponseStatusCodeNotIn),
+            ResponseStatusCodeGT = where.ResponseStatusCodeGT,
+            ResponseStatusCodeGTE = where.ResponseStatusCodeGTE,
+            ResponseStatusCodeLT = where.ResponseStatusCodeLT,
+            ResponseStatusCodeLTE = where.ResponseStatusCodeLTE,
+            ResponseStatusCodeIsNil = where.ResponseStatusCodeIsNil,
+            ResponseStatusCodeNotNil = where.ResponseStatusCodeNotNil,
+            Stream = where.Stream,
+            StreamNEQ = where.StreamNEQ,
+            MetricsLatencyMs = where.MetricsLatencyMs,
+            MetricsLatencyMsNEQ = where.MetricsLatencyMsNEQ,
+            MetricsLatencyMsIn = ToLongList(where.MetricsLatencyMsIn),
+            MetricsLatencyMsNotIn = ToLongList(where.MetricsLatencyMsNotIn),
+            MetricsLatencyMsGT = where.MetricsLatencyMsGT,
+            MetricsLatencyMsGTE = where.MetricsLatencyMsGTE,
+            MetricsLatencyMsLT = where.MetricsLatencyMsLT,
+            MetricsLatencyMsLTE = where.MetricsLatencyMsLTE,
+            MetricsLatencyMsIsNil = where.MetricsLatencyMsIsNil,
+            MetricsLatencyMsNotNil = where.MetricsLatencyMsNotNil,
+            MetricsFirstTokenLatencyMs = where.MetricsFirstTokenLatencyMs,
+            MetricsFirstTokenLatencyMsNEQ = where.MetricsFirstTokenLatencyMsNEQ,
+            MetricsFirstTokenLatencyMsIn = ToLongList(where.MetricsFirstTokenLatencyMsIn),
+            MetricsFirstTokenLatencyMsNotIn = ToLongList(where.MetricsFirstTokenLatencyMsNotIn),
+            MetricsFirstTokenLatencyMsGT = where.MetricsFirstTokenLatencyMsGT,
+            MetricsFirstTokenLatencyMsGTE = where.MetricsFirstTokenLatencyMsGTE,
+            MetricsFirstTokenLatencyMsLT = where.MetricsFirstTokenLatencyMsLT,
+            MetricsFirstTokenLatencyMsLTE = where.MetricsFirstTokenLatencyMsLTE,
+            MetricsFirstTokenLatencyMsIsNil = where.MetricsFirstTokenLatencyMsIsNil,
+            MetricsFirstTokenLatencyMsNotNil = where.MetricsFirstTokenLatencyMsNotNil,
+            MetricsReasoningDurationMs = where.MetricsReasoningDurationMs,
+            MetricsReasoningDurationMsNEQ = where.MetricsReasoningDurationMsNEQ,
+            MetricsReasoningDurationMsIn = ToLongList(where.MetricsReasoningDurationMsIn),
+            MetricsReasoningDurationMsNotIn = ToLongList(where.MetricsReasoningDurationMsNotIn),
+            MetricsReasoningDurationMsGT = where.MetricsReasoningDurationMsGT,
+            MetricsReasoningDurationMsGTE = where.MetricsReasoningDurationMsGTE,
+            MetricsReasoningDurationMsLT = where.MetricsReasoningDurationMsLT,
+            MetricsReasoningDurationMsLTE = where.MetricsReasoningDurationMsLTE,
+            MetricsReasoningDurationMsIsNil = where.MetricsReasoningDurationMsIsNil,
+            MetricsReasoningDurationMsNotNil = where.MetricsReasoningDurationMsNotNil,
+            RequestUrl = where.RequestUrl,
+            RequestUrlNEQ = where.RequestUrlNEQ,
+            RequestUrlIn = ToList(where.RequestUrlIn),
+            RequestUrlNotIn = ToList(where.RequestUrlNotIn),
+            RequestUrlGT = where.RequestUrlGT,
+            RequestUrlGTE = where.RequestUrlGTE,
+            RequestUrlLT = where.RequestUrlLT,
+            RequestUrlLTE = where.RequestUrlLTE,
+            RequestUrlContains = where.RequestUrlContains,
+            RequestUrlHasPrefix = where.RequestUrlHasPrefix,
+            RequestUrlHasSuffix = where.RequestUrlHasSuffix,
+            RequestUrlIsNil = where.RequestUrlIsNil,
+            RequestUrlNotNil = where.RequestUrlNotNil,
+            RequestUrlEqualFold = where.RequestUrlEqualFold,
+            RequestUrlContainsFold = where.RequestUrlContainsFold,
+            PassThroughApplied = where.PassThroughApplied,
+            PassThroughAppliedNEQ = where.PassThroughAppliedNEQ,
+            HasRequest = where.HasRequest,
+            HasRequestWith = where.HasRequestWith?
+                .Select(static nested => TraceMapping.ToFilter(nested))
+                .OfType<RequestListFilter>()
+                .ToList(),
+            HasChannel = where.HasChannel,
+            HasChannelWith = where.HasChannelWith?
+                .Select(static nested => ChannelMapping.ToFilter(nested))
+                .OfType<ChannelListFilter>()
+                .ToList(),
+            HasDataStorage = where.HasDataStorage,
+            HasDataStorageWith = where.HasDataStorageWith?
+                .Select(static nested => DataStorageMapping.ToFilter(nested))
+                .OfType<DataStorageListFilter>()
+                .ToList(),
+
             Not = ToFilter(where.Not),
             And = ToList(
                 where.And?.Select(ToFilter).OfType<RequestExecutionListFilter>().ToList()),
@@ -1561,6 +2939,181 @@ public static class RequestMapping
             FormatNEQ = where.FormatNEQ,
             FormatIn = ToList(where.FormatIn),
             FormatNotIn = ToList(where.FormatNotIn),
+            ApiKeyIdGT = where.ApiKeyIdGT,
+            ApiKeyIdGTE = where.ApiKeyIdGTE,
+            ApiKeyIdLT = where.ApiKeyIdLT,
+            ApiKeyIdLTE = where.ApiKeyIdLTE,
+            ModelIdGT = where.ModelIdGT,
+            ModelIdGTE = where.ModelIdGTE,
+            ModelIdLT = where.ModelIdLT,
+            ModelIdLTE = where.ModelIdLTE,
+            ModelIdHasPrefix = where.ModelIdHasPrefix,
+            ModelIdHasSuffix = where.ModelIdHasSuffix,
+            ModelIdEqualFold = where.ModelIdEqualFold,
+            PromptTokens = where.PromptTokens,
+            PromptTokensNEQ = where.PromptTokensNEQ,
+            PromptTokensIn = ToLongList(where.PromptTokensIn),
+            PromptTokensNotIn = ToLongList(where.PromptTokensNotIn),
+            PromptTokensGT = where.PromptTokensGT,
+            PromptTokensGTE = where.PromptTokensGTE,
+            PromptTokensLT = where.PromptTokensLT,
+            PromptTokensLTE = where.PromptTokensLTE,
+            CompletionTokens = where.CompletionTokens,
+            CompletionTokensNEQ = where.CompletionTokensNEQ,
+            CompletionTokensIn = ToLongList(where.CompletionTokensIn),
+            CompletionTokensNotIn = ToLongList(where.CompletionTokensNotIn),
+            CompletionTokensGT = where.CompletionTokensGT,
+            CompletionTokensGTE = where.CompletionTokensGTE,
+            CompletionTokensLT = where.CompletionTokensLT,
+            CompletionTokensLTE = where.CompletionTokensLTE,
+            TotalTokens = where.TotalTokens,
+            TotalTokensNEQ = where.TotalTokensNEQ,
+            TotalTokensIn = ToLongList(where.TotalTokensIn),
+            TotalTokensNotIn = ToLongList(where.TotalTokensNotIn),
+            TotalTokensGT = where.TotalTokensGT,
+            TotalTokensGTE = where.TotalTokensGTE,
+            TotalTokensLT = where.TotalTokensLT,
+            TotalTokensLTE = where.TotalTokensLTE,
+            PromptAudioTokens = where.PromptAudioTokens,
+            PromptAudioTokensNEQ = where.PromptAudioTokensNEQ,
+            PromptAudioTokensIn = ToLongList(where.PromptAudioTokensIn),
+            PromptAudioTokensNotIn = ToLongList(where.PromptAudioTokensNotIn),
+            PromptAudioTokensGT = where.PromptAudioTokensGT,
+            PromptAudioTokensGTE = where.PromptAudioTokensGTE,
+            PromptAudioTokensLT = where.PromptAudioTokensLT,
+            PromptAudioTokensLTE = where.PromptAudioTokensLTE,
+            PromptAudioTokensIsNil = where.PromptAudioTokensIsNil,
+            PromptAudioTokensNotNil = where.PromptAudioTokensNotNil,
+            PromptCachedTokens = where.PromptCachedTokens,
+            PromptCachedTokensNEQ = where.PromptCachedTokensNEQ,
+            PromptCachedTokensIn = ToLongList(where.PromptCachedTokensIn),
+            PromptCachedTokensNotIn = ToLongList(where.PromptCachedTokensNotIn),
+            PromptCachedTokensGT = where.PromptCachedTokensGT,
+            PromptCachedTokensGTE = where.PromptCachedTokensGTE,
+            PromptCachedTokensLT = where.PromptCachedTokensLT,
+            PromptCachedTokensLTE = where.PromptCachedTokensLTE,
+            PromptCachedTokensIsNil = where.PromptCachedTokensIsNil,
+            PromptCachedTokensNotNil = where.PromptCachedTokensNotNil,
+            PromptWriteCachedTokens = where.PromptWriteCachedTokens,
+            PromptWriteCachedTokensNEQ = where.PromptWriteCachedTokensNEQ,
+            PromptWriteCachedTokensIn = ToLongList(where.PromptWriteCachedTokensIn),
+            PromptWriteCachedTokensNotIn = ToLongList(where.PromptWriteCachedTokensNotIn),
+            PromptWriteCachedTokensGT = where.PromptWriteCachedTokensGT,
+            PromptWriteCachedTokensGTE = where.PromptWriteCachedTokensGTE,
+            PromptWriteCachedTokensLT = where.PromptWriteCachedTokensLT,
+            PromptWriteCachedTokensLTE = where.PromptWriteCachedTokensLTE,
+            PromptWriteCachedTokensIsNil = where.PromptWriteCachedTokensIsNil,
+            PromptWriteCachedTokensNotNil = where.PromptWriteCachedTokensNotNil,
+            PromptWriteCachedTokens5m = where.PromptWriteCachedTokens5m,
+            PromptWriteCachedTokens5mNEQ = where.PromptWriteCachedTokens5mNEQ,
+            PromptWriteCachedTokens5mIn = ToLongList(where.PromptWriteCachedTokens5mIn),
+            PromptWriteCachedTokens5mNotIn = ToLongList(where.PromptWriteCachedTokens5mNotIn),
+            PromptWriteCachedTokens5mGT = where.PromptWriteCachedTokens5mGT,
+            PromptWriteCachedTokens5mGTE = where.PromptWriteCachedTokens5mGTE,
+            PromptWriteCachedTokens5mLT = where.PromptWriteCachedTokens5mLT,
+            PromptWriteCachedTokens5mLTE = where.PromptWriteCachedTokens5mLTE,
+            PromptWriteCachedTokens5mIsNil = where.PromptWriteCachedTokens5mIsNil,
+            PromptWriteCachedTokens5mNotNil = where.PromptWriteCachedTokens5mNotNil,
+            PromptWriteCachedTokens1h = where.PromptWriteCachedTokens1h,
+            PromptWriteCachedTokens1hNEQ = where.PromptWriteCachedTokens1hNEQ,
+            PromptWriteCachedTokens1hIn = ToLongList(where.PromptWriteCachedTokens1hIn),
+            PromptWriteCachedTokens1hNotIn = ToLongList(where.PromptWriteCachedTokens1hNotIn),
+            PromptWriteCachedTokens1hGT = where.PromptWriteCachedTokens1hGT,
+            PromptWriteCachedTokens1hGTE = where.PromptWriteCachedTokens1hGTE,
+            PromptWriteCachedTokens1hLT = where.PromptWriteCachedTokens1hLT,
+            PromptWriteCachedTokens1hLTE = where.PromptWriteCachedTokens1hLTE,
+            PromptWriteCachedTokens1hIsNil = where.PromptWriteCachedTokens1hIsNil,
+            PromptWriteCachedTokens1hNotNil = where.PromptWriteCachedTokens1hNotNil,
+            CompletionAudioTokens = where.CompletionAudioTokens,
+            CompletionAudioTokensNEQ = where.CompletionAudioTokensNEQ,
+            CompletionAudioTokensIn = ToLongList(where.CompletionAudioTokensIn),
+            CompletionAudioTokensNotIn = ToLongList(where.CompletionAudioTokensNotIn),
+            CompletionAudioTokensGT = where.CompletionAudioTokensGT,
+            CompletionAudioTokensGTE = where.CompletionAudioTokensGTE,
+            CompletionAudioTokensLT = where.CompletionAudioTokensLT,
+            CompletionAudioTokensLTE = where.CompletionAudioTokensLTE,
+            CompletionAudioTokensIsNil = where.CompletionAudioTokensIsNil,
+            CompletionAudioTokensNotNil = where.CompletionAudioTokensNotNil,
+            CompletionReasoningTokens = where.CompletionReasoningTokens,
+            CompletionReasoningTokensNEQ = where.CompletionReasoningTokensNEQ,
+            CompletionReasoningTokensIn = ToLongList(where.CompletionReasoningTokensIn),
+            CompletionReasoningTokensNotIn = ToLongList(where.CompletionReasoningTokensNotIn),
+            CompletionReasoningTokensGT = where.CompletionReasoningTokensGT,
+            CompletionReasoningTokensGTE = where.CompletionReasoningTokensGTE,
+            CompletionReasoningTokensLT = where.CompletionReasoningTokensLT,
+            CompletionReasoningTokensLTE = where.CompletionReasoningTokensLTE,
+            CompletionReasoningTokensIsNil = where.CompletionReasoningTokensIsNil,
+            CompletionReasoningTokensNotNil = where.CompletionReasoningTokensNotNil,
+            CompletionAcceptedPredictionTokens = where.CompletionAcceptedPredictionTokens,
+            CompletionAcceptedPredictionTokensNEQ = where.CompletionAcceptedPredictionTokensNEQ,
+            CompletionAcceptedPredictionTokensIn = ToLongList(where.CompletionAcceptedPredictionTokensIn),
+            CompletionAcceptedPredictionTokensNotIn = ToLongList(where.CompletionAcceptedPredictionTokensNotIn),
+            CompletionAcceptedPredictionTokensGT = where.CompletionAcceptedPredictionTokensGT,
+            CompletionAcceptedPredictionTokensGTE = where.CompletionAcceptedPredictionTokensGTE,
+            CompletionAcceptedPredictionTokensLT = where.CompletionAcceptedPredictionTokensLT,
+            CompletionAcceptedPredictionTokensLTE = where.CompletionAcceptedPredictionTokensLTE,
+            CompletionAcceptedPredictionTokensIsNil = where.CompletionAcceptedPredictionTokensIsNil,
+            CompletionAcceptedPredictionTokensNotNil = where.CompletionAcceptedPredictionTokensNotNil,
+            CompletionRejectedPredictionTokens = where.CompletionRejectedPredictionTokens,
+            CompletionRejectedPredictionTokensNEQ = where.CompletionRejectedPredictionTokensNEQ,
+            CompletionRejectedPredictionTokensIn = ToLongList(where.CompletionRejectedPredictionTokensIn),
+            CompletionRejectedPredictionTokensNotIn = ToLongList(where.CompletionRejectedPredictionTokensNotIn),
+            CompletionRejectedPredictionTokensGT = where.CompletionRejectedPredictionTokensGT,
+            CompletionRejectedPredictionTokensGTE = where.CompletionRejectedPredictionTokensGTE,
+            CompletionRejectedPredictionTokensLT = where.CompletionRejectedPredictionTokensLT,
+            CompletionRejectedPredictionTokensLTE = where.CompletionRejectedPredictionTokensLTE,
+            CompletionRejectedPredictionTokensIsNil = where.CompletionRejectedPredictionTokensIsNil,
+            CompletionRejectedPredictionTokensNotNil = where.CompletionRejectedPredictionTokensNotNil,
+            FormatGT = where.FormatGT,
+            FormatGTE = where.FormatGTE,
+            FormatLT = where.FormatLT,
+            FormatLTE = where.FormatLTE,
+            FormatContains = where.FormatContains,
+            FormatHasPrefix = where.FormatHasPrefix,
+            FormatHasSuffix = where.FormatHasSuffix,
+            FormatEqualFold = where.FormatEqualFold,
+            FormatContainsFold = where.FormatContainsFold,
+            TotalCost = where.TotalCost,
+            TotalCostNEQ = where.TotalCostNEQ,
+            TotalCostIn = ToList(where.TotalCostIn),
+            TotalCostNotIn = ToList(where.TotalCostNotIn),
+            TotalCostGT = where.TotalCostGT,
+            TotalCostGTE = where.TotalCostGTE,
+            TotalCostLT = where.TotalCostLT,
+            TotalCostLTE = where.TotalCostLTE,
+            TotalCostIsNil = where.TotalCostIsNil,
+            TotalCostNotNil = where.TotalCostNotNil,
+            CostPriceReferenceId = where.CostPriceReferenceId,
+            CostPriceReferenceIdNEQ = where.CostPriceReferenceIdNEQ,
+            CostPriceReferenceIdIn = ToList(where.CostPriceReferenceIdIn),
+            CostPriceReferenceIdNotIn = ToList(where.CostPriceReferenceIdNotIn),
+            CostPriceReferenceIdGT = where.CostPriceReferenceIdGT,
+            CostPriceReferenceIdGTE = where.CostPriceReferenceIdGTE,
+            CostPriceReferenceIdLT = where.CostPriceReferenceIdLT,
+            CostPriceReferenceIdLTE = where.CostPriceReferenceIdLTE,
+            CostPriceReferenceIdContains = where.CostPriceReferenceIdContains,
+            CostPriceReferenceIdHasPrefix = where.CostPriceReferenceIdHasPrefix,
+            CostPriceReferenceIdHasSuffix = where.CostPriceReferenceIdHasSuffix,
+            CostPriceReferenceIdIsNil = where.CostPriceReferenceIdIsNil,
+            CostPriceReferenceIdNotNil = where.CostPriceReferenceIdNotNil,
+            CostPriceReferenceIdEqualFold = where.CostPriceReferenceIdEqualFold,
+            CostPriceReferenceIdContainsFold = where.CostPriceReferenceIdContainsFold,
+            HasRequest = where.HasRequest,
+            HasRequestWith = where.HasRequestWith?
+                .Select(static nested => TraceMapping.ToFilter(nested))
+                .OfType<RequestListFilter>()
+                .ToList(),
+            HasProject = where.HasProject,
+            HasProjectWith = where.HasProjectWith?
+                .Select(static nested => ProjectMapping.ToFilter(nested))
+                .OfType<ProjectListFilter>()
+                .ToList(),
+            HasChannel = where.HasChannel,
+            HasChannelWith = where.HasChannelWith?
+                .Select(static nested => ChannelMapping.ToFilter(nested))
+                .OfType<ChannelListFilter>()
+                .ToList(),
+
             Not = ToFilter(where.Not),
             And = ToList(where.And?.Select(ToFilter).OfType<UsageLogListFilter>().ToList()),
             Or = ToList(where.Or?.Select(ToFilter).OfType<UsageLogListFilter>().ToList()),

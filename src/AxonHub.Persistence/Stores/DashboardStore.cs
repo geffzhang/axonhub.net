@@ -514,6 +514,12 @@ public sealed class DashboardStore(AxonHubDbContext db) : IDashboardStore
         DateTime? createdAtLte,
         CancellationToken cancellationToken = default)
     {
+        // ent's APIKeyIDIn() with no values renders an always-false predicate.
+        if (apiKeyIds.Count == 0)
+        {
+            return [];
+        }
+
         var args = new SqlArguments();
         var predicates = new List<string?>();
         ConnectionSql.AppendIdIn(predicates, "m", "api_key_id", apiKeyIds, args);
@@ -547,6 +553,12 @@ public sealed class DashboardStore(AxonHubDbContext db) : IDashboardStore
         DateTime? createdAtLte,
         CancellationToken cancellationToken = default)
     {
+        // ent's APIKeyIDIn() with no values renders an always-false predicate.
+        if (apiKeyIds.Count == 0)
+        {
+            return [];
+        }
+
         var args = new SqlArguments();
         var predicates = new List<string?>();
         ConnectionSql.AppendIdIn(predicates, "m", "api_key_id", apiKeyIds, args);

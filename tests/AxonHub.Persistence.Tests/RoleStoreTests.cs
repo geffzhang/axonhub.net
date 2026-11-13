@@ -233,7 +233,10 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
         Assert.Equal(
             Expected("Alpha", "gamma"),
             await Names(new RoleListFilter { IdIn = [alphaId, gammaId] }));
-        Assert.Empty(await Names(new RoleListFilter { IdIn = [] }));
+        // entgql ignores an empty In-list.
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { IdIn = [] }));
         Assert.Equal(
             Expected("Alpha", "Beta", "gamma"),
             await Names(new RoleListFilter { IdNotIn = [] }));
@@ -350,7 +353,9 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
         Assert.Equal(
             Expected("Beta"),
             await Names(new RoleListFilter { LevelNotIn = ["system"] }));
-        Assert.Empty(await Names(new RoleListFilter { LevelIn = [] }));
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { LevelIn = [] }));
         Assert.Equal(
             Expected("Alpha", "Beta", "gamma"),
             await Names(new RoleListFilter { LevelNotIn = [] }));
@@ -365,7 +370,9 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
         Assert.Equal(
             Expected("Beta"),
             await Names(new RoleListFilter { ProjectIdNotIn = [0] }));
-        Assert.Empty(await Names(new RoleListFilter { ProjectIdIn = [] }));
+        Assert.Equal(
+            Expected("Alpha", "Beta", "gamma"),
+            await Names(new RoleListFilter { ProjectIdIn = [] }));
         Assert.Equal(
             Expected("Alpha", "Beta", "gamma"),
             await Names(new RoleListFilter { ProjectIdNotIn = [] }));
