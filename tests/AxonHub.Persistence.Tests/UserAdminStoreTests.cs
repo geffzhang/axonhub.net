@@ -459,6 +459,126 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesUserRoleEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var alphaId = await SeedRoleAsync(context, "alpha", "system", 0);
+        var betaId = await SeedRoleAsync(context, "beta", "system", 0);
+
+        var alice = NewUser("alice@example.com");
+        await store.CreateAsync(alice, null);
+        var bob = NewUser("bob@example.com");
+        await store.CreateAsync(bob, null);
+        var carol = NewUser("carol@example.com");
+        await store.CreateAsync(carol, null);
+
+        context.UserRoles.Add(new UserRoleRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            UserId = alice.Id,
+            RoleId = alphaId,
+        });
+        context.UserRoles.Add(new UserRoleRecord
+        {
+            // The reference declares both timestamps nillable on user_roles.
+            CreatedAt = null,
+            UpdatedAt = null,
+            UserId = bob.Id,
+            RoleId = betaId,
+        });
+        await context.SaveChangesAsync();
+
+        // A soft-deleted role keeps its user_roles link; sqlgraph.HasNeighborsWith
+        // does not re-apply the Role soft-delete predicate.
+        await using (var connection = await db.Factory.OpenAsync())
+        {
+            await connection.ExecuteAsync(
+                "UPDATE \"roles\" SET \"deleted_at\" = @DeletedAt WHERE \"id\" = @Id;",
+                new { DeletedAt = 1_700_000_000L, Id = betaId });
+        }
+
+        async Task<string[]> Emails(UserListFilter where)
+        {
+            var page = await store.ListAsync(new UserListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Email).ToArray();
+        }
+
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { HasRoles = true }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { HasRoles = false }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { HasRolesWith = [new RoleListFilter()] }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { HasRolesWith = [] }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasRolesWith = [new RoleListFilter { Name = "alpha" }],
+            }));
+        // Soft-deleted roles still match, like the generated ent predicate.
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasRolesWith = [new RoleListFilter { Name = "beta" }],
+            }));
+        // Several entries AND into one EXISTS: both names match the fold, but
+        // only "alpha" satisfies the exact name.
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasRolesWith =
+                [
+                    new RoleListFilter { NameContainsFold = "A" },
+                    new RoleListFilter { Name = "alpha" },
+                ],
+            }));
+
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { HasUserRoles = true }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { HasUserRoles = false }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasUserRolesWith = [new UserRoleListFilter { CreatedAt = CreatedAt }],
+            }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasUserRolesWith = [new UserRoleListFilter { CreatedAtIsNil = true }],
+            }));
+        // Ent reads IsNil as a plain bool: false is ignored, so the empty
+        // predicate still requires the user_roles row to exist.
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasUserRolesWith = [new UserRoleListFilter { CreatedAtIsNil = false }],
+            }));
+
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { Not = new UserListFilter { HasRoles = true } }));
+    }
+
+    [Fact]
     public async Task UpdateAppliesFieldsScopesAndRoleEdges()
     {
         await using var db = new TestDatabase(fixture);

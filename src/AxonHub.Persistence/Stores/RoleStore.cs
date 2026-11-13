@@ -15,8 +15,8 @@ public enum RoleSortField
 
 /// <summary>
 /// Port of <c>RoleWhereInput</c> (ent.graphql:5531-5615). All scalar field
-/// predicates are modeled; the three edge predicates remain a registered gap
-/// (C135).
+/// predicates plus the <c>users</c> and <c>user_roles</c> edge predicates are
+/// modeled; the <c>project</c> edge predicate remains a registered gap (C135).
 /// </summary>
 public sealed record RoleListFilter
 {
@@ -115,6 +115,23 @@ public sealed record RoleListFilter
 
     /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
     public bool ProjectIdNotNil { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasUsers</c>: true → the role has a matching <c>user_roles</c>
+    /// link, false → NOT EXISTS. Generated sqlgraph does not re-apply the User
+    /// soft-delete predicate.
+    /// </summary>
+    public bool? HasUsers { get; init; }
+
+    public IReadOnlyList<UserListFilter>? HasUsersWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasUserRoles</c>: true → the role has a <c>user_roles</c> row,
+    /// false → NOT EXISTS.
+    /// </summary>
+    public bool? HasUserRoles { get; init; }
+
+    public IReadOnlyList<UserRoleListFilter>? HasUserRolesWith { get; init; }
 
     public RoleListFilter? Not { get; init; }
 
@@ -620,7 +637,7 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
         return new ListPage<RoleRecord>(nodes, hasNextPage, hasPreviousPage, totalCount);
     }
 
-    private static string? BuildFilter(
+    internal static string? BuildFilter(
         RoleListFilter? filter,
         string alias,
         SqlArguments args)
@@ -718,6 +735,52 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
         if (filter.ProjectIdNotNil)
         {
             predicates.Add(alias + ".\"project_id\" IS NOT NULL");
+        }
+
+        if (filter.HasUsers is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"user_roles\" ur2 WHERE ur2.\"role_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasUsers.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasUsersWith is { Count: > 0 } userFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the User soft-delete
+            // predicate.
+            var userPredicates = userFilters
+                .Select(user => UserAdminStore.BuildFilter(user, "u2", args))
+                .Where(static user => user is not null)
+                .ToArray();
+            var userCondition = ConnectionSql.Combine(userPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_roles\" ur2"
+                + " JOIN \"users\" u2 ON u2.\"id\" = ur2.\"user_id\""
+                + " WHERE ur2.\"role_id\" = " + alias + ".\"id\""
+                + (userCondition is null ? string.Empty : " AND " + userCondition)
+                + ")");
+        }
+
+        if (filter.HasUserRoles is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"user_roles\" ur2 WHERE ur2.\"role_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasUserRoles.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasUserRolesWith is { Count: > 0 } userRoleFilters)
+        {
+            var userRolePredicates = userRoleFilters
+                .Select(userRole => UserRoleFilterSql.Build(userRole, "ur2", args))
+                .Where(static userRole => userRole is not null)
+                .ToArray();
+            var userRoleCondition = ConnectionSql.Combine(userRolePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_roles\" ur2"
+                + " WHERE ur2.\"role_id\" = " + alias + ".\"id\""
+                + (userRoleCondition is null ? string.Empty : " AND " + userRoleCondition)
+                + ")");
         }
 
         if (filter.Not is not null)

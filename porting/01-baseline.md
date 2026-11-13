@@ -1287,6 +1287,24 @@ QueryRolesMapsEveryScalarWherePredicate / RoleWhereInputExposesEveryScalarPredic
 AdminUsersRolesEndpointTests 26 通过）。残余：Channel 6 组、User 7 组、Role 3 组边谓词，
 依赖尚未建模（或仅子集）的被连接实体 where 输入，继续由 C135 跟踪。
 
+2026-11-13 更新（§201）：User / Role 的 user_roles 边谓词与 UserRoleWhereInput（C135 第三刀）。
+参照 `internal/server/gql/ent.graphql:7453-7505`：UserRoleWhereInput 共 31 个字段（id 8、
+createdAt 10、updatedAt 10、not / and / or），端口此前完全没有该输入。§201 新建
+`UserRoleWhereInput` / `UserRoleListFilter`，并把 UserWhereInput 的 hasRoles / hasRolesWith /
+hasUserRoles / hasUserRolesWith、RoleWhereInput 的 hasUsers / hasUsersWith / hasUserRoles /
+hasUserRolesWith 共 8 个边谓词加入 GraphQL 输入与 ListFilter（UserWhereInput 104 个字段、
+RoleWhereInput 54 个字段）。存储层按 `sqlgraph.HasNeighbors` / `HasNeighborsWith` 语义生成
+EXISTS 子查询：hasX 为 true → EXISTS、false → NOT EXISTS；hasXWith 的每个过滤器谓词 AND 进
+同一个 EXISTS，空列表不生成谓词，空过滤器退化为「存在任意链接」，且与被连接实体一样不重新
+应用软删除谓词（软删除的 Role 仍满足 hasRoles）。`UserAdminStore.BuildFilter` /
+`RoleStore.BuildFilter` 改为 internal static，供跨实体 EXISTS 复用谓词翻译。新增 2 例：
+UserAdminStoreTests 的 ListAppliesUserRoleEdgePredicates、RoleStoreTests 的
+ListAppliesUserEdgePredicates（覆盖 true / false、空 With 列表、空过滤器、精确匹配、软删除
+目标、多过滤器 AND、IsNil 组合与 Not 嵌套；UserAdminStoreTests 22 通过、RoleStoreTests
+13 通过，合计 35）。Api 侧更新 2 个 introspection 断言并新增 3 例（UserRoleWhereInput 31 个
+字段、User / Role 边谓词到 ListFilter 的映射；AdminUsersRolesEndpointTests 29 通过）。
+残余：12 组边谓词（Channel 6、User 5、Role 1），继续由 C135 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

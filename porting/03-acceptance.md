@@ -1776,6 +1776,23 @@ projectIDIsNil:false 被忽略），分别 20 / 11 通过；AdminUsersRolesEndpo
 台账：C135 保持 gap，残余收窄为 16 组边谓词（Channel 6、User 7、Role 3）；lint 通过；
 02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
 
+§201（2026-11-13）User / Role 的 user_roles 边谓词与 UserRoleWhereInput（C135 第三刀）。
+
+参照 ent.graphql:7453-7505，UserRoleWhereInput 有 31 个字段（id 8、createdAt 10、updatedAt 10、
+not / and / or）；端口新增该输入与 UserRoleListFilter，并把 UserWhereInput 的 hasRoles /
+hasRolesWith / hasUserRoles / hasUserRolesWith 与 RoleWhereInput 的 hasUsers / hasUsersWith /
+hasUserRoles / hasUserRolesWith 加入 GraphQL 输入与 ListFilter。存储层按 sqlgraph 语义生成
+EXISTS 子查询：true → EXISTS、false → NOT EXISTS；hasXWith 的谓词 AND 进同一个 EXISTS，
+空列表不生成谓词，空过滤器退化为「存在任意链接」，被连接实体的软删除谓词不重新应用。
+
+测试：UserAdminStoreTests 新增 1 例、RoleStoreTests 新增 1 例（Postgres；覆盖 true / false、
+空 With 列表、空过滤器、精确匹配、软删除目标、多过滤器 AND、IsNil 组合与 Not 嵌套），
+分别 22 / 13 通过（合计 35）；AdminUsersRolesEndpointTests 更新 2 个 introspection 断言并新增
+3 例（UserRoleWhereInput 31 个字段、User / Role 边谓词到 ListFilter 的映射；UserWhereInput
+104 个字段、RoleWhereInput 54 个字段），29 通过。
+台账：C135 保持 gap，残余收窄为 12 组边谓词（Channel 6、User 5、Role 1）；lint 通过；
+02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

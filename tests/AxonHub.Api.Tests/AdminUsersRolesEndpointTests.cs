@@ -385,6 +385,90 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task QueryUsersMapsTheUserRoleEdgePredicates()
+    {
+        SeedUser("alice@example.com", DateTime.UtcNow);
+
+        await QueryDataAsync(
+            """
+            query Users($where: UserWhereInput) {
+              users(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    hasRoles = true,
+                    hasRolesWith = new[] { new { name = "Developer", level = "system" } },
+                    hasUserRoles = false,
+                    hasUserRolesWith = new[]
+                    {
+                        new
+                        {
+                            id = "gid://axonhub/UserRole/3",
+                            createdAtGT = "2026-01-02T03:04:05Z",
+                            createdAtIsNil = true,
+                            updatedAtNotNil = true,
+                        },
+                    },
+                },
+            });
+
+        var where = _users.Queries[^1].Where!;
+        Assert.True(where.HasRoles);
+        var role = Assert.Single(where.HasRolesWith!);
+        Assert.Equal("Developer", role.Name);
+        Assert.Equal("system", role.Level);
+        Assert.False(where.HasUserRoles);
+        var link = Assert.Single(where.HasUserRolesWith!);
+        Assert.Equal(3L, link.Id);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), link.CreatedAtGT!.Value);
+        Assert.True(link.CreatedAtIsNil);
+        Assert.True(link.UpdatedAtNotNil);
+    }
+
+    [Fact]
+    public async Task QueryRolesMapsTheUserRoleEdgePredicates()
+    {
+        SeedRole("Developer", projectId: 0);
+
+        await QueryDataAsync(
+            """
+            query Roles($where: RoleWhereInput) {
+              roles(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    hasUsers = true,
+                    hasUsersWith = new[]
+                    {
+                        new { email = "alice@example.com", status = "activated" },
+                    },
+                    hasUserRoles = false,
+                    hasUserRolesWith = new[]
+                    {
+                        new { createdAt = "2026-02-03T04:05:06Z" },
+                    },
+                },
+            });
+
+        var where = _roles.Queries[^1].Where!;
+        Assert.True(where.HasUsers);
+        var user = Assert.Single(where.HasUsersWith!);
+        Assert.Equal("alice@example.com", user.Email);
+        Assert.Equal("activated", user.Status);
+        Assert.False(where.HasUserRoles);
+        var link = Assert.Single(where.HasUserRolesWith!);
+        Assert.Equal(
+            new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc),
+            link.CreatedAt!.Value);
+    }
+
+    [Fact]
     public async Task NestedRolesAreUnboundedWithoutPaginationArgs()
     {
         // entgql's User.roles edge resolver routes through Paginate, which
@@ -779,7 +863,7 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UserWhereInputExposesEveryScalarPredicate()
+    public async Task UserWhereInputExposesEveryScalarAndRoleEdgePredicate()
     {
         var data = await QueryDataAsync(
             """
@@ -819,6 +903,13 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         expected.AddRange(text.Select(static suffix => "lastName" + suffix));
         expected.AddRange(nullableText.Select(static suffix => "avatar" + suffix));
         expected.AddRange(comparison.Take(2).Select(static suffix => "isOwner" + suffix));
+        expected.AddRange(
+        [
+            "hasRoles",
+            "hasRolesWith",
+            "hasUserRoles",
+            "hasUserRolesWith",
+        ]);
 
         var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
             .Select(static field => field.GetProperty("name").GetString()!)
@@ -831,7 +922,7 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RoleWhereInputExposesEveryScalarPredicate()
+    public async Task RoleWhereInputExposesEveryScalarAndUserEdgePredicate()
     {
         var data = await QueryDataAsync(
             """
@@ -857,6 +948,44 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         expected.AddRange(comparison.Take(4).Select(static suffix => "level" + suffix));
         expected.AddRange(comparison.Take(4).Select(static suffix => "projectID" + suffix));
         expected.AddRange(new[] { "projectIDIsNil", "projectIDNotNil" });
+        expected.AddRange(
+        [
+            "hasUsers",
+            "hasUsersWith",
+            "hasUserRoles",
+            "hasUserRolesWith",
+        ]);
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
+    }
+
+    [Fact]
+    public async Task UserRoleWhereInputExposesTheReferencePredicates()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "UserRoleWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] timestamp =
+        [
+            .. comparison,
+            "IsNil",
+            "NotNil",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(timestamp.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(timestamp.Select(static suffix => "updatedAt" + suffix));
 
         var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
             .Select(static field => field.GetProperty("name").GetString()!)

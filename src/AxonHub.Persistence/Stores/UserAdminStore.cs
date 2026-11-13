@@ -15,8 +15,10 @@ public enum UserSortField
 
 /// <summary>
 /// Port of <c>UserWhereInput</c> (ent.graphql:7506-7672). All scalar field
-/// predicates are modeled; the seven edge predicates remain a registered gap
-/// (C135). <see cref="HasProjectUsersWithProjectId"/> is the
+/// predicates plus the <c>roles</c> and <c>user_roles</c> edge predicates are
+/// modeled; the remaining five edge predicates (projects, apiKeys,
+/// channelOverrideTemplates, oidcIdentities, projectUsers) are a registered
+/// gap (C135). <see cref="HasProjectUsersWithProjectId"/> is the
 /// <c>hasProjectUsersWith</c> predicate the User query policy installs.
 /// </summary>
 public sealed record UserListFilter
@@ -216,6 +218,23 @@ public sealed record UserListFilter
     public bool? IsOwner { get; init; }
 
     public bool? IsOwnerNEQ { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasRoles</c>: true → the user has a matching <c>user_roles</c>
+    /// link, false → NOT EXISTS. Generated sqlgraph does not re-apply the Role
+    /// soft-delete predicate.
+    /// </summary>
+    public bool? HasRoles { get; init; }
+
+    public IReadOnlyList<RoleListFilter>? HasRolesWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasUserRoles</c>: true → the user has a <c>user_roles</c> row,
+    /// false → NOT EXISTS.
+    /// </summary>
+    public bool? HasUserRoles { get; init; }
+
+    public IReadOnlyList<UserRoleListFilter>? HasUserRolesWith { get; init; }
 
     /// <summary>
     /// Ent's <c>WhereHasProjectUsersWith(project_id = ?)</c> predicate the
@@ -1443,7 +1462,7 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
         return new ListPage<UserRecord>(nodes, hasNextPage, hasPreviousPage, totalCount);
     }
 
-    private static string? BuildFilter(
+    internal static string? BuildFilter(
         UserListFilter? filter,
         string alias,
         SqlArguments args)
@@ -1608,6 +1627,52 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
 
         AppendComparison(predicates, alias, "is_owner", filter.IsOwner, "=", args);
         AppendComparison(predicates, alias, "is_owner", filter.IsOwnerNEQ, "<>", args);
+
+        if (filter.HasRoles is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"user_roles\" ur WHERE ur.\"user_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasRoles.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasRolesWith is { Count: > 0 } roleFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the Role soft-delete
+            // predicate.
+            var rolePredicates = roleFilters
+                .Select(role => RoleStore.BuildFilter(role, "r2", args))
+                .Where(static role => role is not null)
+                .ToArray();
+            var roleCondition = ConnectionSql.Combine(rolePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_roles\" ur"
+                + " JOIN \"roles\" r2 ON r2.\"id\" = ur.\"role_id\""
+                + " WHERE ur.\"user_id\" = " + alias + ".\"id\""
+                + (roleCondition is null ? string.Empty : " AND " + roleCondition)
+                + ")");
+        }
+
+        if (filter.HasUserRoles is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"user_roles\" ur WHERE ur.\"user_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasUserRoles.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasUserRolesWith is { Count: > 0 } userRoleFilters)
+        {
+            var userRolePredicates = userRoleFilters
+                .Select(userRole => UserRoleFilterSql.Build(userRole, "ur", args))
+                .Where(static userRole => userRole is not null)
+                .ToArray();
+            var userRoleCondition = ConnectionSql.Combine(userRolePredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_roles\" ur"
+                + " WHERE ur.\"user_id\" = " + alias + ".\"id\""
+                + (userRoleCondition is null ? string.Empty : " AND " + userRoleCondition)
+                + ")");
+        }
 
         if (filter.HasProjectUsersWithProjectId is not null)
         {

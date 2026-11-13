@@ -390,6 +390,114 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesUserEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RoleStore(context);
+
+        var alice = NewUser("alice@example.com");
+        var bob = NewUser("bob@example.com");
+        var carol = NewUser("carol@example.com");
+        context.Users.AddRange(alice, bob, carol);
+        await context.SaveChangesAsync();
+
+        var alphaId = await store.CreateAsync(NewRole("alpha", "system", 0));
+        var betaId = await store.CreateAsync(NewRole("beta", "system", 0));
+        var gammaId = await store.CreateAsync(NewRole("gamma", "system", 0));
+
+        var alphaLink = new UserRoleRecord
+        {
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+            UserId = alice.Id,
+            RoleId = alphaId,
+        };
+        var betaLink = new UserRoleRecord
+        {
+            // The reference declares both timestamps nillable on user_roles.
+            CreatedAt = null,
+            UpdatedAt = null,
+            UserId = bob.Id,
+            RoleId = betaId,
+        };
+        context.UserRoles.AddRange(alphaLink, betaLink);
+        await context.SaveChangesAsync();
+
+        async Task<string[]> Names(RoleListFilter where)
+        {
+            var page = await store.ListAsync(new RoleListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        Assert.Equal(
+            Expected("alpha", "beta"),
+            await Names(new RoleListFilter { HasUsers = true }));
+        Assert.Equal(
+            Expected("gamma"),
+            await Names(new RoleListFilter { HasUsers = false }));
+        Assert.Equal(
+            Expected("alpha", "beta", "gamma"),
+            await Names(new RoleListFilter { HasUsersWith = [] }));
+        Assert.Equal(
+            Expected("alpha"),
+            await Names(new RoleListFilter
+            {
+                HasUsersWith = [new UserListFilter { Email = "alice@example.com" }],
+            }));
+        Assert.Equal(
+            Expected("beta"),
+            await Names(new RoleListFilter
+            {
+                HasUsersWith = [new UserListFilter { EmailContainsFold = "BOB@" }],
+            }));
+        // Several entries AND into the same EXISTS subquery: bob is activated
+        // enough for the status predicate, but only alice carries that email.
+        Assert.Equal(
+            Expected("alpha"),
+            await Names(new RoleListFilter
+            {
+                HasUsersWith =
+                [
+                    new UserListFilter { Email = "alice@example.com" },
+                    new UserListFilter { Status = "activated" },
+                ],
+            }));
+
+        Assert.Equal(
+            Expected("alpha", "beta"),
+            await Names(new RoleListFilter { HasUserRoles = true }));
+        Assert.Equal(
+            Expected("gamma"),
+            await Names(new RoleListFilter { HasUserRoles = false }));
+        Assert.Equal(
+            Expected("beta"),
+            await Names(new RoleListFilter
+            {
+                HasUserRolesWith = [new UserRoleListFilter { Id = betaLink.Id }],
+            }));
+        Assert.Equal(
+            Expected("beta"),
+            await Names(new RoleListFilter
+            {
+                HasUserRolesWith = [new UserRoleListFilter { CreatedAtIsNil = true }],
+            }));
+        // Ent reads IsNil as a plain bool: false is ignored, so the empty
+        // predicate still requires the user_roles row to exist.
+        Assert.Equal(
+            Expected("alpha", "beta"),
+            await Names(new RoleListFilter
+            {
+                HasUserRolesWith = [new UserRoleListFilter { CreatedAtIsNil = false }],
+            }));
+
+        Assert.Equal(
+            Expected("gamma"),
+            await Names(new RoleListFilter { Not = new RoleListFilter { HasUsers = true } }));
+    }
+
+    [Fact]
     public async Task LastReturnsTheTailInAscendingOrder()
     {
         await using var db = new TestDatabase(fixture);
@@ -516,6 +624,18 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
     }
 
     private static T[] Expected<T>(params T[] values) => values;
+
+    private static UserRecord NewUser(string email) => new()
+    {
+        CreatedAt = CreatedAt,
+        UpdatedAt = UpdatedAt,
+        Email = email,
+        Status = "activated",
+        PreferLanguage = "en",
+        Password = "$2a$10$hashed",
+        FirstName = "First",
+        LastName = "Last",
+    };
 
     private static RoleRecord NewRole(string name, string level, long? projectId) => new()
     {
