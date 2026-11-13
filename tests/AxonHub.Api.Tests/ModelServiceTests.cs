@@ -1,3 +1,4 @@
+using AxonHub.Abstractions;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Persistence;
@@ -213,6 +214,44 @@ public sealed class ModelServiceTests
             "failed to list configured models: ent/privacy: deny rule",
             error.Message);
         Assert.True(PrivacyDenyException.IsDeny(error));
+    }
+
+    [Fact]
+    public async Task ListReadsTheEnabledChannelSnapshotNotTheStore()
+    {
+        // GetEnabledChannels reads the enabled-channel cache, not the table
+        // (C178). The store's row must stay invisible and the snapshot's row
+        // visible even though only the store was queried before §213.
+        var storeChannels = new[]
+        {
+            ModelTestSupport.Channel(1, "openai", "from-store"),
+        };
+
+        var snapshot = new[]
+        {
+            new ChannelDescriptor
+            {
+                Id = 2,
+                Name = "channel-2",
+                OrderingWeight = 0,
+                CreatedAt = ModelTestSupport.CreatedAt,
+                UpdatedAt = ModelTestSupport.CreatedAt,
+                Type = "openai",
+                SupportedModels = """["from-snapshot"]""",
+                DefaultTestModel = "from-snapshot",
+            },
+        };
+
+        var provider = new CountingEnabledChannelProvider(snapshot);
+        var (service, channels, _) = ModelTestSupport.ServiceWithStores(
+            storeChannels,
+            enabledChannels: provider);
+
+        var models = await ListAsync(service);
+
+        Assert.Equal(["from-snapshot"], models.Select(static model => model.Id));
+        Assert.Equal(1, provider.Calls);
+        Assert.Equal(0, channels.ListEnabledCalls);
     }
 
     [Fact]
@@ -759,5 +798,24 @@ public sealed class ModelServiceTests
         };
 
         return ModelTestSupport.ServiceWithStores(channels, models, settings);
+    }
+
+    /// <summary>
+    /// The enabled-channel cache: a fixed descriptor snapshot that never
+    /// touches the store. Its call count proves the model list reads the
+    /// cache, not the table (C178).
+    /// </summary>
+    private sealed class CountingEnabledChannelProvider(ChannelDescriptor[] snapshot)
+        : IEnabledChannelProvider
+    {
+        public int Calls { get; private set; }
+
+        public Task<ChannelDescriptor[]> ListEnabledAsync(
+            CancellationToken cancellationToken = default)
+        {
+            _ = cancellationToken;
+            Calls++;
+            return Task.FromResult(snapshot);
+        }
     }
 }

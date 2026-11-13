@@ -1577,6 +1577,21 @@ executor（同一 proxy 配置，不影响请求或结果）；代理配置错�
 executor、Command Code 拒绝 HTTPS→HTTP 跳转）；定向运行该类 31 通过；未跑 Api 全量回归。台账：
 新增 C286（resolved），更新 C150 与 C158 的过时表述；286 条（203 accepted / 0 gap / 83 resolved）。
 
+2026-11-14 更新（§213）：公开模型列表读取启用通道快照，缓存构建失败过滤落地（C178 / C287）。
+参照 `ModelService.ListEnabledModels` 从 `channelService.GetEnabledChannels()`（enabledChannelsCache）
+取通道；`reloadEnabledChannels`（channel.go:251-279）在换入前对每条 enabled 行调用
+`buildChannelWithOutbounds`（channel_llm.go:208-258），构建失败 `log.Warn`（channel / type / cause）
+并跳过整条通道，刷新读库失败保留旧快照。端口此前 ModelService 实时读 `IChannelStore`，grain 快照原样
+收录全部 enabled 行。本切片：ModelService 改依赖 `IEnabledChannelProvider`（快照）并映射回关联匹配与
+端点表读取的 `ChannelRecord` 形状；新增 `BuildFilteringEnabledChannelSource` 装饰
+`IEnabledChannelSource`，在 grain 换入前用 `ChannelOutboundFactory.Create` 逐端点演练构建（primary 按
+`PrimaryApiFormat`、xai 的 responses 默认端点、每个用户端点），失败记 warning 并剔除；Program.cs 注册
+Postgres 源 + 装饰器。实现差异：端口每次请求重建 outbound，校验期构建产物丢弃；用户端点按 api_format
+去重，被覆盖的重复端点不参与校验（C287）。测试：`EnabledChannelBuildFilterTests` 10 例、
+ModelServiceTests 新增快照来源 1 例；定向运行 EnabledChannelBuildFilterTests + ModelServiceTests 49
+通过、ModelsEndpointTests + GeminiEndpointTests + CodexEndpointTests 51 通过；未跑 Api 全量回归。
+台账：新增 C287（resolved），更新 C178 / C226 的过时表述；287 条（203 accepted / 0 gap / 84 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

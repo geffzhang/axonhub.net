@@ -1,3 +1,5 @@
+using AxonHub.Abstractions;
+using AxonHub.Api.GraphQL;
 using AxonHub.Api.Management;
 using AxonHub.Api.Models;
 using AxonHub.Persistence;
@@ -142,7 +144,8 @@ internal static class ModelTestSupport
             IReadOnlyList<ChannelRecord> channels,
             IReadOnlyList<ModelRecord>? models = null,
             ModelSettings? settings = null,
-            IManagementIdentity? identity = null)
+            IManagementIdentity? identity = null,
+            IEnabledChannelProvider? enabledChannels = null)
     {
         var channelStore = new FakeChannelStore();
         foreach (var channel in channels)
@@ -157,13 +160,34 @@ internal static class ModelTestSupport
         }
 
         identity ??= OwnerIdentity();
+
+        // The reference reads the enabled-channel cache, which the production
+        // wiring fills from PostgresEnabledChannelSource through the build
+        // filter (§213). The default provider projects this fixture's store,
+        // keeping the pre-cache row set the tests describe; a test that wants
+        // to prove the snapshot is authoritative passes its own provider.
+        var provider = enabledChannels ?? new StoreEnabledChannelProvider(channelStore);
         var service = new ModelService(
-            channelStore,
+            provider,
             modelStore,
             new StaticModelSettingsProvider(settings ?? ModelSettings.Default),
             identity,
             new AuthorizationScope(identity, new FakeUserAdminStore()));
 
         return (service, channelStore, modelStore);
+    }
+
+    /// <summary>
+    /// The store half of the enabled-channel cache: enabled rows projected to
+    /// descriptors in the cache's query order (ordering_weight desc).
+    /// </summary>
+    private sealed class StoreEnabledChannelProvider(FakeChannelStore store) : IEnabledChannelProvider
+    {
+        public async Task<ChannelDescriptor[]> ListEnabledAsync(
+            CancellationToken cancellationToken = default)
+        {
+            var rows = await store.ListEnabledAsync(cancellationToken).ConfigureAwait(false);
+            return [.. rows.Select(ChannelMapping.ToDescriptor)];
+        }
     }
 }

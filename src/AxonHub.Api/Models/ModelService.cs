@@ -32,13 +32,15 @@ public sealed record ModelFacade(
 /// <c>QueryAllChannelModels</c> is set it merges the channel-derived entries
 /// behind the configured ones, applying <c>ModelBlacklistRegex</c> to
 /// channel-derived IDs only.<para />
-/// The port reads the enabled channels live instead of through the reference's
-/// live cache (C149), and evaluates the scope decision explicitly instead of
-/// letting the ent privacy policy deny the configured-model query (the deny is
-/// surfaced with the reference's wrapped text, C178).
+/// The port reads the same cache through <see cref="IEnabledChannelProvider"/>:
+/// the EnabledChannelsGrain snapshot, which is filled by the source decorator
+/// that skips channels the reference cannot build (§213). The scope decision is
+/// evaluated explicitly instead of letting the ent privacy policy deny the
+/// configured-model query (the deny is surfaced with the reference's wrapped
+/// text, C178).
 /// </remarks>
 public sealed class ModelService(
-    IChannelStore channels,
+    IEnabledChannelProvider channels,
     IModelStore models,
     IModelSettingsProvider settings,
     IManagementIdentity identity,
@@ -59,10 +61,14 @@ public sealed class ModelService(
                 "failed to list configured models: " + PrivacyDenyException.DenyMessage);
         }
 
+        // GetEnabledChannels: the enabled-channel cache, not a live table read.
+        // The snapshot already excludes channels the reference cannot build
+        // (C178, §213).
         var enabledChannels = await channels.ListEnabledAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        IReadOnlyList<ChannelRecord> scopedChannels = enabledChannels;
+        IReadOnlyList<ChannelRecord> scopedChannels =
+            [.. enabledChannels.Select(ToChannelRecord)];
         IReadOnlyList<string>? allowedModelIds = null;
 
         // contexts.GetAPIKey: the key and its project edge were loaded during
@@ -267,6 +273,32 @@ public sealed class ModelService(
 
         return (facadeModels, suppressedIds);
     }
+
+    /// <summary>
+    /// Restores the row shape the association matcher and the endpoint table
+    /// read. The snapshot is the reference's built channel cache entry, so only
+    /// the fields those readers consume are carried back; the status column is
+    /// implicit because the cache only holds enabled rows.
+    /// </summary>
+    private static ChannelRecord ToChannelRecord(ChannelDescriptor channel) => new()
+    {
+        Id = channel.Id,
+        Name = channel.Name,
+        OrderingWeight = channel.OrderingWeight,
+        CreatedAt = channel.CreatedAt,
+        UpdatedAt = channel.UpdatedAt,
+        Status = "enabled",
+        Type = channel.Type,
+        BaseUrl = channel.BaseUrl,
+        Credentials = channel.Credentials,
+        DisabledApiKeys = channel.DisabledApiKeys,
+        SupportedModels = channel.SupportedModels,
+        Settings = channel.Settings,
+        Endpoints = channel.Endpoints,
+        DefaultTestModel = channel.DefaultTestModel,
+        Tags = channel.Tags,
+        Policies = channel.Policies,
+    };
 
     private static T DeserializeRow<T>(Func<T> decode, string prefix)
     {

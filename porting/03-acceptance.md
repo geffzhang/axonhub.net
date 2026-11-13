@@ -2008,6 +2008,17 @@ ChannelEndpointDetectService 注入可选 ChannelProxyExecutors，检测开始�
 该类 31 通过；未跑 Api 全量回归。台账：C286 新增 resolved；C150 / C158 更新；lint 通过；
 02-differences.md 已重新生成；286 条（203 accepted / 0 gap / 83 resolved）。
 
+§213（2026-11-14）公开模型列表读取启用通道快照，缓存构建失败过滤落地（C178 / C287）。参照
+ListEnabledModels 读 GetEnabledChannels；channel.go:251-279 的 reload 在换入前逐通道
+buildChannelWithOutbounds，失败警告并跳过整条通道，刷新失败保留旧快照。端口 ModelService 改为依赖
+IEnabledChannelProvider，并把 descriptor 映射回 ChannelRecord；新增 BuildFilteringEnabledChannelSource
+装饰 IEnabledChannelSource，用 ChannelOutboundFactory.Create 逐端点校验（primary、xai responses 默认
+端点、每个用户端点），失败告警并剔除；Program.cs 注册底层 Postgres 源与装饰器。差异：校验期构建产物
+丢弃、用户端点同格式去重导致被覆盖端点不校验（C287）。测试：新增 EnabledChannelBuildFilterTests 10 例
+与 ModelServiceTests 快照来源 1 例；定向运行 49 + 51 通过；未跑 Api 全量回归。台账：C287 新增
+resolved；C178 / C226 更新；lint 通过；02-differences.md 已重新生成；287 条
+（203 accepted / 0 gap / 84 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

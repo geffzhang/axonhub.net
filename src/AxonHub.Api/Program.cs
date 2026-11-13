@@ -58,7 +58,15 @@ builder.Services.AddSingleton<IAxonHubDbContextFactory>(
 // process (ChannelService.enabledChannelsCache, refreshed every minute and on
 // mutation). The port hosts it in EnabledChannelsGrain; this registration is
 // the grain's database half, and the selection path reads the grain snapshot.
-builder.Services.AddSingleton<IEnabledChannelSource, PostgresEnabledChannelSource>();
+// The reference builds each row's outbounds inside the refresh and skips the
+// rows whose build fails (channel.go:265-285); the port's descriptors carry no
+// outbounds, so the build check runs in the source decorator (§213).
+builder.Services.AddSingleton<PostgresEnabledChannelSource>();
+builder.Services.AddSingleton<IEnabledChannelSource>(static services =>
+    new BuildFilteringEnabledChannelSource(
+        services.GetRequiredService<PostgresEnabledChannelSource>(),
+        services.GetRequiredService<TimeProvider>(),
+        services.GetRequiredService<ILogger<BuildFilteringEnabledChannelSource>>()));
 
 // Multi-key selection state: the reference keeps apiKeyStates on the
 // process-wide ChannelService, so the round_robin rotation, the sticky

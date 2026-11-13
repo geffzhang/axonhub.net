@@ -171,8 +171,10 @@ public sealed class EnabledChannelsGrain(
         var descriptors = await source.ListEnabledAsync(token).ConfigureAwait(true);
 
         // The reference builds each channel and skips the ones whose outbound
-        // construction fails (C178); the port's descriptor projection is pure,
-        // so every enabled row lands in the snapshot.
+        // construction fails (C178, channel.go:265-285). The build check runs
+        // in the IEnabledChannelSource decorator registered ahead of this
+        // grain's source (§213), so every descriptor that arrives here has
+        // already passed it.
         _channels = [.. descriptors.Select(EnabledChannelSnapshot.FromDescriptor)];
         _lastUpdate = latestUpdate;
         _version++;
