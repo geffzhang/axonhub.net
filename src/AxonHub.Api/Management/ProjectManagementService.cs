@@ -265,7 +265,10 @@ public sealed class ProjectManagementService(
     IProjectStore projects,
     IRoleStore roles,
     IManagementIdentity identity,
-    PermissionValidator validator)
+    PermissionValidator validator,
+    ProjectPrivacy privacy,
+    RolePrivacy rolePrivacy,
+    UserProjectPrivacy userProjectPrivacy)
 {
     public const string ProjectNotFound = "ent: project not found";
 
@@ -329,17 +332,34 @@ public sealed class ProjectManagementService(
     /// initialize transaction has no request user and installs the owner it
     /// just created (biz/system.go:780-789).
     /// </summary>
+    /// <param name="bypassPrivacy">
+    /// The initialize path runs under <c>authz.WithSystemBypass</c>
+    /// (biz/system.go:723), so every policy below is skipped. The request path
+    /// leaves this false and evaluates them exactly like ent.
+    /// </param>
     public async Task<ProjectRecord> CreateForUserAsync(
         CreateProjectCommand command,
         long currentUserId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool bypassPrivacy = false)
     {
         ArgumentNullException.ThrowIfNull(command);
 
         bool exists;
         try
         {
-            exists = await projects.NameExistsAsync(command.Name, cancellationToken)
+            // client.Project.Query().Where(NameEQ).Exist runs the Project query
+            // policy (project.go:62-67); WhereID(ctx) narrows the check to the
+            // request's project.
+            long? nameScope = null;
+            if (!bypassPrivacy)
+            {
+                nameScope = await privacy.EvaluateQueryAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            exists = await projects
+                .NameExistsAsync(command.Name, cancellationToken, idScope: nameScope)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -370,6 +390,15 @@ public sealed class ProjectManagementService(
         long id;
         try
         {
+            // client.Project.Create().Save runs the Project mutation policy
+            // (project.go:81-84).
+            if (!bypassPrivacy)
+            {
+                await privacy
+                    .EvaluateMutationAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             id = await projects.CreateAsync(project, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -385,25 +414,40 @@ public sealed class ProjectManagementService(
                 AdminRoleName,
                 AdminScopes,
                 "failed to create admin role: ",
-                cancellationToken)
+                cancellationToken,
+                bypassPrivacy)
             .ConfigureAwait(false);
         await CreateRoleAsync(
                 project.Id,
                 DeveloperRoleName,
                 DeveloperScopes,
                 "failed to create developer role: ",
-                cancellationToken)
+                cancellationToken,
+                bypassPrivacy)
             .ConfigureAwait(false);
         await CreateRoleAsync(
                 project.Id,
                 ViewerRoleName,
                 ViewerScopes,
                 "failed to create viewer role: ",
-                cancellationToken)
+                cancellationToken,
+                bypassPrivacy)
             .ConfigureAwait(false);
 
         try
         {
+            // client.UserProject.Create().Save runs the UserProject mutation
+            // policy (project.go:146-154).
+            if (!bypassPrivacy)
+            {
+                await userProjectPrivacy
+                    .EvaluateMutationAsync(
+                        UserProjectMutationOp.Create,
+                        project.Id,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             await projects.AssignOwnerAsync(currentUserId, project.Id, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -432,6 +476,11 @@ public sealed class ProjectManagementService(
         ProjectRecord? updated;
         try
         {
+            // client.Project.UpdateOneID(id).Save runs the Project mutation
+            // policy (project.go:163-182).
+            await privacy
+                .EvaluateMutationAsync(cancellationToken)
+                .ConfigureAwait(false);
             updated = await projects.UpdateAsync(
                     new ProjectUpdate
                     {
@@ -464,6 +513,11 @@ public sealed class ProjectManagementService(
         ProjectRecord? updated;
         try
         {
+            // client.Project.UpdateOneID(id).Save runs the Project mutation
+            // policy (project.go:304-309).
+            await privacy
+                .EvaluateMutationAsync(cancellationToken)
+                .ConfigureAwait(false);
             updated = await projects.UpdateStatusAsync(id, status, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -494,6 +548,11 @@ public sealed class ProjectManagementService(
         ProjectRecord? updated;
         try
         {
+            // client.Project.UpdateOneID(id).SetProfiles().Save runs the
+            // Project mutation policy (project.go:245-250).
+            await privacy
+                .EvaluateMutationAsync(cancellationToken)
+                .ConfigureAwait(false);
             updated = await projects.UpdateProfilesAsync(command.Id, json, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -521,10 +580,27 @@ public sealed class ProjectManagementService(
             throw new InvalidOperationException("permission denied: " + ex.Message, ex);
         }
 
+        // The validator admits system owners only; every policy below is
+        // therefore allowed by OwnerRule. client.Project.Get still runs the
+        // Project query policy (project.go:345), whose WhereID(ctx) filters a
+        // header-scoped owner to that one project.
+        long? queryScope;
+        try
+        {
+            queryScope = await privacy.EvaluateQueryAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException("failed to get project: " + ex.Message, ex);
+        }
+
         bool deleted;
         try
         {
-            deleted = await projects.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
+            deleted = await projects
+                .DeleteAsync(id, cancellationToken, idScope: queryScope)
+                .ConfigureAwait(false);
         }
         catch (StoreFailureException ex)
         {
@@ -542,17 +618,37 @@ public sealed class ProjectManagementService(
         }
     }
 
-    public Task<ListPage<ProjectRecord>> ListAsync(
+    public async Task<ListPage<ProjectRecord>> ListAsync(
         ProjectListQuery query,
         CancellationToken cancellationToken = default)
-        => projects.ListAsync(query, cancellationToken);
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        // The Project query policy installs WhereID(ctx) before the page runs.
+        var projectScope = await privacy.EvaluateQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (projectScope is not null)
+        {
+            var scope = new ProjectListFilter { Id = projectScope.Value };
+            query = query with
+            {
+                Where = query.Where is null
+                    ? scope
+                    : new ProjectListFilter { And = [query.Where, scope] },
+            };
+        }
+
+        return await projects.ListAsync(query, cancellationToken).ConfigureAwait(false);
+    }
 
     private async Task CreateRoleAsync(
         long projectId,
         string name,
         IReadOnlyList<string> scopes,
         string failurePrefix,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool bypassPrivacy)
     {
         var now = DateTime.UtcNow;
         var role = new RoleRecord
@@ -567,6 +663,15 @@ public sealed class ProjectManagementService(
 
         try
         {
+            // client.Role.Create().Save runs the Role mutation policy
+            // (project.go:101-106).
+            if (!bypassPrivacy)
+            {
+                await rolePrivacy
+                    .EvaluateMutationAsync(RoleMutationOp.Create, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             await roles.CreateAsync(role, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

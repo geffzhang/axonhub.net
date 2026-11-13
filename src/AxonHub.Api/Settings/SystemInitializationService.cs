@@ -190,8 +190,11 @@ public sealed class SystemInitializationService(
         }
 
         // system.go:780-792: ProjectService.CreateProject as the owner. The
-        // service joins this transaction because every store shares the scoped
-        // DbContext; its own "no transaction" discipline matches the reference.
+        // reference runs Initialize under authz.WithSystemBypass
+        // (system.go:723), so every ent privacy policy is skipped; the port
+        // passes bypassPrivacy to mirror it. The service joins this transaction
+        // because every store shares the scoped DbContext; its own "no
+        // transaction" discipline matches the reference.
         try
         {
             await projects.CreateForUserAsync(
@@ -201,7 +204,8 @@ public sealed class SystemInitializationService(
                         Description = "Default project",
                     },
                     owner.Id,
-                    cancellationToken)
+                    cancellationToken,
+                    bypassPrivacy: true)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

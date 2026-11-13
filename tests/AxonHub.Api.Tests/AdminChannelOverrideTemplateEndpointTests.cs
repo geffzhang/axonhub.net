@@ -145,9 +145,10 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
         Assert.Equal("delete", Assert.Single(bodyOps).GetProperty("op").GetString());
         Assert.Equal("top_p", bodyOps[0].GetProperty("path").GetString());
 
-        var user = first.GetProperty("user");
-        Assert.Equal("gid://axonhub/User/9", user.GetProperty("id").GetString());
-        Assert.Equal("owner@example.com", user.GetProperty("email").GetString());
+        // getNilableUser (graphql.go:249-267): the gate user is a non-owner
+        // without read_users, so the User query policy ends at the default
+        // deny and the edge is nil.
+        Assert.Equal(JsonValueKind.Null, first.GetProperty("user").ValueKind);
 
         // The new fields are empty, so the legacy columns are converted.
         var legacy = edges[1].GetProperty("node");

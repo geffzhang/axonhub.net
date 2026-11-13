@@ -329,6 +329,14 @@ builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddScoped<IUserAdminStore, UserAdminStore>();
 builder.Services.AddScoped<IRoleStore, RoleStore>();
 builder.Services.AddScoped<PermissionValidator>();
+
+// User / Role / Project / UserProject ent privacy policies (§197). The
+// reference evaluates them inside every ent query/mutation; the port evaluates
+// the same decisions in the services, node/edge resolvers and stores.
+builder.Services.AddScoped<UserPrivacy>();
+builder.Services.AddScoped<RolePrivacy>();
+builder.Services.AddScoped<ProjectPrivacy>();
+builder.Services.AddScoped<UserProjectPrivacy>();
 builder.Services.AddScoped<UserManagementService>();
 builder.Services.AddScoped<RoleManagementService>();
 

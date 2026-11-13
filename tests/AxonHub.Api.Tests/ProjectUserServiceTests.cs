@@ -36,15 +36,18 @@ public sealed class ProjectUserServiceTests
         => NewService(new ManagementUser(1, IsOwner: true));
 
     private UserManagementService NewService(ManagementUser current)
-        => new(
+    {
+        var identity = new FakeManagementIdentity(current);
+        return new(
             _users,
             new PasswordHasher(),
-            new PermissionValidator(
-                new FakeManagementIdentity(current),
-                _users,
-                _roles),
-            new FakeManagementIdentity(current),
-            _roles);
+            new PermissionValidator(identity, _users, _roles),
+            identity,
+            _roles,
+            new UserPrivacy(identity, _users),
+            new UserProjectPrivacy(identity, _users),
+            new RolePrivacy(identity, _users, _roles));
+    }
 
     private async Task<UserRecord> CreateUserAsync(string email = "user@example.com")
     {
@@ -386,7 +389,10 @@ public sealed class ProjectUserServiceTests
             new PasswordHasher(),
             new PermissionValidator(identity, _users, _roles),
             identity,
-            _roles);
+            _roles,
+            new UserPrivacy(identity, _users),
+            new UserProjectPrivacy(identity, _users),
+            new RolePrivacy(identity, _users, _roles));
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => service.UpdateProjectUserAsync(new UpdateProjectUserCommand

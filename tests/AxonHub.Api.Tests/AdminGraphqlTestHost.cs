@@ -123,10 +123,16 @@ internal sealed class AdminGraphqlGateServices
 
         // Shared privacy seams: channel field gates and the summary/tag roots
         // resolve them in every fixture; the prompt-protection rule service
-        // resolves its schema policy the same way (C014).
+        // resolves its schema policy the same way (C014). The user / role /
+        // project schema policies (§197) are likewise resolved by the node and
+        // edge resolvers in every fixture.
         services.AddScoped<ChannelPrivacy>();
         services.AddScoped<PromptProtectionRulePrivacy>();
         services.AddScoped<AuthorizationScope>();
+        services.AddScoped<UserPrivacy>();
+        services.AddScoped<RolePrivacy>();
+        services.AddScoped<ProjectPrivacy>();
+        services.AddScoped<UserProjectPrivacy>();
     }
 
     /// <summary>Adds an enabled service-account key on an active project.</summary>

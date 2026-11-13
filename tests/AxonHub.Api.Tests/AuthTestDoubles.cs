@@ -456,10 +456,16 @@ internal sealed class FakeProjectStore : IProjectStore
             Rows.Where(row => row.DeletedAt == 0).OrderBy(row => row.Id).FirstOrDefault());
     }
 
-    public Task<bool> NameExistsAsync(string name, CancellationToken cancellationToken = default)
+    public Task<bool> NameExistsAsync(
+        string name,
+        CancellationToken cancellationToken = default,
+        long? idScope = null)
     {
         _ = cancellationToken;
-        return Task.FromResult(Rows.Any(row => row.DeletedAt == 0 && row.Name == name));
+        return Task.FromResult(Rows.Any(row =>
+            row.DeletedAt == 0
+            && row.Name == name
+            && (idScope is not { } scope || row.Id == scope)));
     }
 
     public Task<ListPage<ProjectRecord>> ListAsync(
@@ -640,12 +646,15 @@ internal sealed class FakeProjectStore : IProjectStore
         return Task.CompletedTask;
     }
 
-    public Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        long? idScope = null)
     {
         _ = cancellationToken;
 
         var row = Rows.SingleOrDefault(item => item.Id == id && item.DeletedAt == 0);
-        if (row is null)
+        if (row is null || (idScope is { } scope && row.Id != scope))
         {
             return Task.FromResult(false);
         }

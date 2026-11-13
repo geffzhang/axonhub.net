@@ -1703,6 +1703,35 @@ status / bulk 放行、只读成员的变更拒绝与 preview 放行、校验与
 台账：C014 保持 gap（残余收窄为其余管理实体的 schema 策略）；lint 通过；
 `02-differences.md` 已重新生成；282 条（206 accepted / 3 gap / 73 resolved）。
 
+§197（2026-11-13）接入 User / Role / Project / UserProject 四个 schema 的隐私策略
+（C014 残余）。
+
+参照 internal/ent/schema/{user,role,project,user_project}.go 与 internal/scopes/rule_*.go：
+
+- 新增 `src/AxonHub.Api/Management/UserPrivacy.cs` / `RolePrivacy.cs` / `ProjectPrivacy.cs`
+  / `UserProjectPrivacy.cs`：逐条复刻规则链、谓词与决策次序。User 的 OwnerRule 先于项目
+  规则（owner 的 users 查询不过滤）；Role / Project 的 UserProjectScopeReadRule 在前
+  （owner 带 X-Project-ID 时收窄到该项目）；UserProject 的 UserOwnedQueryRule 仅对
+  UserProjectFilter 安装 `user_id = me`。
+- Project 的变更链只有 `OwnerRule` → `UserWriteScopeRule(write_projects)`
+  （project.go:129-132）；`UserProjectScopeWriteRule` 的 `*ent.ProjectMutation` 分支
+  （rule_user_project_scope.go:242-262）在参照中对该 schema 不可达，端口不应用它：
+  项目成员身份或项目级 write_projects 不授予项目更新 / 删除。
+- 管理服务在 ent 求值点应用策略并把谓词下推到存储：`UserManagementService`、
+  `RoleManagementService`、`ProjectManagementService`、`ProjectUserService` 与
+  `AdminQuery` 的根字段 / node / 边接线；`UserProjectAccessFilter` 移入 Persistence
+  供存储层使用。
+- `Program.cs` 与测试宿主注册四个隐私服务。
+
+测试：新增 tests/AxonHub.Api.Tests/ManagementPrivacyTests.cs 30 例
+（四类策略链、owner / test 身份、项目成员与 system scope、Project 变更不读取项目成员
+关系、可见性助手、UserProject 自助过滤）与
+tests/AxonHub.Api.Tests/AdminUsersRolesProjectPrivacyEndpointTests.cs 9 例（根查询门禁、
+X-Project-ID 过滤、node / 边、变更门禁）。实测定向 39 通过 / 0 失败，相关管理面回归
+174 通过 / 0 失败（2026-11-13）。台账：C014 保持 gap（残余收窄为 Role.users 等反向边
+（C165）与 AddUserToProject 的求值次序差异）；lint 通过；`02-differences.md` 已重新
+生成；282 条（206 accepted / 3 gap / 73 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
@@ -1975,7 +2004,7 @@ status / bulk 放行、只读成员的变更拒绝与 preview 放行、校验与
 | C035：RateLimitAware 恒满分 | 已解决：`ChannelRequestTracker`（自然分钟窗口、只延长的冷却、惰性清理）、`ChannelLimiter`/`ChannelLimiterManager`（硬信号量、FIFO、配置重建）、`RateLimitAwareScorer`（RPM/TPM 与并发取最小值、-10000）接入四条策略链；RPM 准入、TPM 追踪与 429 冷却中间件挂在请求链路上；93 个用例锁定（64 grain + 29 API）。残余：C042（阻塞线程）、C043（单 InnerException）、C044（已由 §138 闭合）、C045（nil tracker 的 noop 不可达） | 已关闭；残余已登记 |
 | C013：多 API key 的 trace 粘性 | 已解决：无 trace 时的随机分配、rendezvous/FNV-1a 选择器与 `channel_api_key_suffix`/`channel_api_key_index` 审计列已按参照实现（23 例）；`ChannelApiKeyProvider` 读取 `WithTrace` 发布的 trace id（线上请求 `SessionId` 接缝），多 key 通道按 `traceID|key` 做 rendezvous 固定选择，同一 trace 在重试与跨请求间同一 key，另有 1 例编排端到端锁定；参照的 1024 项 LRU 不单独保留（它只记忆固定启用集合内的 rendezvous 结果，通道重建会新建 provider 与空缓存） | 已关闭；残余 apiKeyOverride（通道 key 测试流程）与 `trace_sticky_mode` 通道粘性未接入 |
 | C042–C045：限流的实现结构差异 | C042 等待中的请求占用线程而非 goroutine；C043 队列错误用 `Cause` 属性承载类型化原因而非多错误 Unwrap；C044 五个 OTel 限流指标已由 §138 按 System.Diagnostics.Metrics 移植，部署方订阅 axonhub Meter 即可获得 inflight/waiting/拒绝计数；C045 nil tracker 的 noop 路径不可达；C223 通用 HTTP metrics 亦已由 §139 按同名 instrument 与 provider 配置移植（默认关闭，开启后导出面一致） | 准入与打分行为等价，差异在资源模型与可观测性；已按同名 instrument 与 Snapshot 回调接入（§138、§139） |
-| C014：请求链路与通道管理面的范围裁剪 | API key 鉴权与身份传播（C023）、系统安全设置与 IP 黑名单（C028）、通道级请求改写（134 例，残余 C037–C041）、通道限流与并发准入（C035，93 例，残余 C042–C045）与 usage 成本计费（C046–C049，43 例）均已接入；管理面登录（§80）、管理员 GraphQL 鉴权（§81）、OIDC 提供方配置（§82）与登录流程（§83）、权限校验器（§84）、通道隐私与写入门禁（§175/§176）、通道写入校验（§67–§73、§75、§76、§136）、覆盖模板与 `channel_model_prices` 管理面均已接入；§196 接入 PromptProtectionRule 的 schema 策略（查询 read_channels、变更 write_channels，7 例锁定）。残余裁剪为其余管理实体的 schema 查询/变更策略（users / roles / projects 等的根查询；users/roles 变更由 §84 的校验器覆盖）与通道管理面的已接受细节（C037–C041、C149） | 剩余实体策略按管理面切片补齐；请求链路与通道管理面已达成的行为由分段测试锁定 |
+| C014：请求链路与通道管理面的范围裁剪 | API key 鉴权与身份传播（C023）、系统安全设置与 IP 黑名单（C028）、通道级请求改写（134 例，残余 C037–C041）、通道限流与并发准入（C035，93 例，残余 C042–C045）与 usage 成本计费（C046–C049，43 例）均已接入；管理面登录（§80）、管理员 GraphQL 鉴权（§81）、OIDC 提供方配置（§82）与登录流程（§83）、权限校验器（§84）、通道隐私与写入门禁（§175/§176）、通道写入校验（§67–§73、§75、§76、§136）、覆盖模板与 `channel_model_prices` 管理面均已接入；§196 接入 PromptProtectionRule 的 schema 策略（查询 read_channels、变更 write_channels，7 例锁定）；§197 接入 User / Role / Project / UserProject 四个 schema 的查询与变更策略（39 例锁定），残余裁剪收窄为 Role.users 等反向边（C165）、AddUserToProject 的策略求值次序与通道管理面的已接受细节（C037–C041、C149） | 剩余实体策略按管理面切片补齐；请求链路与通道管理面已达成的行为由分段测试锁定 |
 | C046–C049：成本计费的精度、读取与未命中语义 | C046 已接受：金额用 `System.Decimal`（约 28–29 位有效数字），参照为 shopspring 任意精度，极端乘积可能有末位差异；C047 已接受：价格按请求实时读库（注入开启时最多两次查询），参照为进程内缓存，外部改价立即生效；C048 真实缺口：`channel_model_prices` 管理面（写入、reference-id 轮换、版本表、自动定价）未移植，§67 的 createChannel 与 §68 的 updateChannel 均尚未调用 ensureChannelModelPrices（C143）；C049 推断：未命中价格时 `cost_items` 写 JSON `null`（Ent `SetCostItems(nil)` 语义，Ent 源码不可得） | 读取路径与可观察金额一致；管理面随通道管理面落地；C049 若日后用真实 Ent 数据库核对为 `[]`，只需改中间件字面量并更新条目与测试 |
 | C015：zstd 请求体与压缩错误文案 | 已解决：gzip/x-gzip/deflate/zstd 全部解码；gzip 头错误与 zlib/raw DEFLATE 分支逐字/逐分支对齐。残余差异仅损坏/截断压缩体的错误细节（缺 flate 偏移、gzip 尾部校验、zstd 内层文案） | 已关闭（ZstdSharp.Port；残余差异见 C015） |
 | C016：通道级 `retryableStatusCodes` / `retryableErrorPatterns` 未生效 | 已解决：候选携带从 settings 解析的重试规则，`CanRetry` 按参照逐条判断（传输错误、429/5xx、额外状态码、子串/正则文本） | 已关闭（16 个谓词/解析用例 + 3 个端到端用例锁定） |

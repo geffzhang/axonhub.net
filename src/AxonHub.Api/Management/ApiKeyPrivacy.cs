@@ -307,8 +307,10 @@ public sealed class ApiKeyPrivacy(
             return target;
         }
 
-        // UserOwnedQueryRule(): the last rule may only see the caller.
-        return target.Id == current.Id ? target : null;
+        // UserOwnedQueryRule(): *ent.UserFilter has no WhereUserID, so the rule
+        // skips and the policy ends at default deny — even for the caller's own
+        // row. getNilableUser turns the deny into a null edge.
+        return null;
     }
 
     /// <summary>

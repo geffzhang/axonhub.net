@@ -1204,6 +1204,29 @@ true/false、整数原样、其余数值 FormatFloat('f',-1,64)）。新增 39 �
 ent 的 `%s: %w` 形状一致，GraphQL 错误过滤统一报告 permission denied / FORBIDDEN。新增 7 例
 （定向 25 通过），相关回归 122 通过。
 
+2026-11-13 更新（§197）：User / Role / Project / UserProject 四个 schema 的隐私策略已移植
+（C014 残余收窄）。参照 `internal/ent/schema/user.go:100-115`（查询 OwnerRule →
+ProjectOwnerReadUsersRule → ProjectMemberReadUsersRule(read_users) → UserReadScopeRule(read_users)
+→ UserOwnedQueryRule；变更 OwnerRule → UserWriteScopeRule(write_users)）、`role.go:85-97`
+（查询 UserProjectScopeReadRule(read_roles) → OwnerRule → UserReadScopeRule；变更
+UserProjectScopeWriteRule(write_roles) → OwnerRule → UserWriteScopeRule）、`project.go:122-134`
+（查询与 Role 同形；变更只有 OwnerRule → UserWriteScopeRule(write_projects)）与
+`user_project.go:67-79`（查询 OwnerRule → UserProjectScopeReadRule(read_users) →
+UserOwnedQueryRule；变更 OwnerRule → UserProjectScopeWriteRule(write_users)，无
+UserWriteScopeRule），规则体按 `internal/scopes/rule_*.go` 逐分支复刻。端口新增 `UserPrivacy` /
+`RolePrivacy` / `ProjectPrivacy` / `UserProjectPrivacy`，在管理服务触碰存储的同一点求值：
+users / roles / projects 根查询、`node(User|Role|Project)`、`User.roles`、`Project.projectUsers`
+走查询策略并把谓词下推为 `UserListFilter.HasProjectUsersWithProjectId`、
+`RoleListFilter.ProjectId`、`ProjectListFilter.Id` 或 `UserProjectAccessFilter{ProjectId|UserId}`；
+create / update / status / profiles / delete、项目成员与 role 写入在写库前走变更策略，拒绝文案与
+ent 的 `%s: %w` 一致。特别注意 Project 的变更链不含 `UserProjectScopeWriteRule`，
+`rule_user_project_scope.go:242-262` 的 `*ent.ProjectMutation` 分支对该 schema 不可达：非 owner
+即使拥有目标项目的成员关系或项目级 write_projects 也被 default deny，只有 owner 或持系统级
+write_projects 的调用者可以创建 / 更新 / 删除项目。新增 39 例（ManagementPrivacyTests 30、
+AdminUsersRolesProjectPrivacyEndpointTests 9），定向 39 通过，相关管理面回归 174 通过。残余：
+Role.users 等反向边归 C165；AddUserToProject 的策略求值在端口早于存储事务（参照在事务内），
+多步骤同时失败时错误优先级可能不同，登记在 C014。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

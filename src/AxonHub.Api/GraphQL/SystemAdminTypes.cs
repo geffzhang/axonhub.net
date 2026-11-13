@@ -1,5 +1,6 @@
 using HotChocolate;
 using HotChocolate.Types;
+using AxonHub.Api.Management;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.GraphQL;
@@ -198,19 +199,18 @@ public sealed class OidcIdentityType : INode
 
     /// <summary>
     /// Port of the entgql required edge OIDCIdentity.user: the generated
-    /// resolver calls obj.User(ctx), which loads the user whose id is the
-    /// identity's user_id edge.
+    /// resolver calls obj.User(ctx), which falls back to
+    /// <c>QueryUser().Only(ctx)</c> — the User query policy runs, so a deny
+    /// propagates and a filtered-out row is ent NotFound.
     /// </summary>
     public async Task<UserType> GetUserAsync(
-        [Service] IUserAdminStore users,
+        [Service] UserPrivacy privacy,
         CancellationToken cancellationToken)
     {
-        var record = await users.GetByIdAsync(DbUserId, cancellationToken)
+        var record = await privacy.GetVisibleUserOrThrowAsync(DbUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return record is null
-            ? throw new InvalidOperationException("ent: user not found")
-            : ManagementMapping.ToGraphQL(record);
+        return ManagementMapping.ToGraphQL(record);
     }
 }
 

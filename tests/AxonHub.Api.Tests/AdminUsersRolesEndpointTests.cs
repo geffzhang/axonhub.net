@@ -1214,11 +1214,19 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
         return Task.FromResult(row);
     }
 
-    public Task RemoveProjectUserAsync(
+    public async Task RemoveProjectUserAsync(
         long userId,
         long projectId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? mutationProjectScope = null,
+        Func<CancellationToken, Task<long?>>? queryRoleScope = null,
+        Func<CancellationToken, Task>? beforeUserRoleRemoval = null)
     {
+        if (mutationProjectScope is { } mutationScope && mutationScope != projectId)
+        {
+            return;
+        }
+
         var removed = _userProjects.RemoveAll(
             up => up.UserId == userId && up.ProjectId == projectId);
 
@@ -1226,39 +1234,106 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
         // relationship matched (user.go:476-478).
         if (removed == 0)
         {
-            return Task.CompletedTask;
+            return;
+        }
+
+        long? roleScope = null;
+        if (queryRoleScope is not null)
+        {
+            try
+            {
+                roleScope = await queryRoleScope(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to query user project roles: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (roleScope is not null && roleScope.Value != projectId)
+        {
+            return;
         }
 
         if (RolesSource is FakeRoleStore fakeRoles)
         {
             // Roles of this project the removed user still has (user.go:480-485).
-            foreach (var roleId in fakeRoles.ProjectRoleIds(projectId))
+            var roleIds = fakeRoles.ProjectRoleIds(projectId)
+                .Where(roleId => fakeRoles.UserRoleIds(userId).Contains(roleId))
+                .ToList();
+            if (roleIds.Count == 0)
             {
-                if (fakeRoles.UserRoleIds(userId).Contains(roleId))
+                return;
+            }
+
+            if (beforeUserRoleRemoval is not null)
+            {
+                try
                 {
-                    fakeRoles.Unassign(userId, roleId);
+                    await beforeUserRoleRemoval(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new StoreFailureException(
+                        "failed to remove user project roles: " + ex.Message,
+                        ex);
                 }
             }
-        }
 
-        return Task.CompletedTask;
+            foreach (var roleId in roleIds)
+            {
+                fakeRoles.Unassign(userId, roleId);
+            }
+        }
     }
 
-    public Task<UserProjectRecord> UpdateProjectUserAsync(
+    public async Task<UserProjectRecord> UpdateProjectUserAsync(
         long userId,
         long projectId,
         bool? isOwner,
         IReadOnlyList<string>? scopes,
         IReadOnlyList<long> addRoleIds,
         IReadOnlyList<long> removeRoleIds,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null,
+        Func<CancellationToken, Task<long?>>? beforeUpdate = null,
+        Func<CancellationToken, Task>? beforeUserRead = null,
+        Func<CancellationToken, Task>? beforeUserRoleUpdate = null)
     {
-        var row = _userProjects.FirstOrDefault(
-            up => up.UserId == userId && up.ProjectId == projectId);
+        var row = _userProjects.FirstOrDefault(up =>
+            up.UserId == userId
+            && up.ProjectId == projectId
+            && (queryScope?.ProjectId is not { } projectScope
+                || up.ProjectId == projectScope)
+            && (queryScope?.UserId is not { } userScope || up.UserId == userScope));
         if (row is null)
         {
             throw new StoreFailureException(
                 "failed to find user project relationship: ent: user_project not found",
+                new InvalidOperationException("ent: user_project not found"));
+        }
+
+        long? mutationScope = null;
+        if (beforeUpdate is not null)
+        {
+            try
+            {
+                mutationScope = await beforeUpdate(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to update project user: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (mutationScope is { } scope && row.ProjectId != scope)
+        {
+            throw new StoreFailureException(
+                "failed to update project user: ent: user_project not found",
                 new InvalidOperationException("ent: user_project not found"));
         }
 
@@ -1274,11 +1349,39 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
 
         row.UpdatedAt = DateTime.UtcNow;
 
+        if (beforeUserRead is not null)
+        {
+            try
+            {
+                await beforeUserRead(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to get user: " + ex.Message,
+                    ex);
+            }
+        }
+
         if (Live(userId) is null)
         {
             throw new StoreFailureException(
                 "failed to get user: ent: user not found",
                 new InvalidOperationException("ent: user not found"));
+        }
+
+        if (beforeUserRoleUpdate is not null)
+        {
+            try
+            {
+                await beforeUserRoleUpdate(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to update user roles: " + ex.Message,
+                    ex);
+            }
         }
 
         if (RolesSource is FakeRoleStore fakeRoles)
@@ -1296,25 +1399,35 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
             }
         }
 
-        return Task.FromResult(row);
+        return row;
     }
 
     public Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersAsync(
         long projectId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null)
         => Task.FromResult<IReadOnlyList<UserProjectRecord>>(
-            _userProjects.Where(up => up.ProjectId == projectId).ToList());
+            _userProjects
+                .Where(up => up.ProjectId == projectId)
+                .Where(up => queryScope?.ProjectId is not { } scope || up.ProjectId == scope)
+                .Where(up => queryScope?.UserId is not { } scope || up.UserId == scope)
+                .ToList());
 
     public Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersForUserAsync(
         long userId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null)
         => Task.FromResult<IReadOnlyList<UserProjectRecord>>(
-            _userProjects.Where(up => up.UserId == userId).ToList());
+            _userProjects
+                .Where(up => up.UserId == userId)
+                .Where(up => queryScope?.ProjectId is not { } scope || up.ProjectId == scope)
+                .Where(up => queryScope?.UserId is not { } scope || up.UserId == scope)
+                .ToList());
 
     private UserRecord? Live(long id)
         => _rows.FirstOrDefault(row => row.Id == id && row.DeletedAt == 0);
 
-    private static bool Matches(UserRecord row, UserListFilter? filter)
+    private bool Matches(UserRecord row, UserListFilter? filter)
     {
         if (filter is null)
         {
@@ -1327,6 +1440,13 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
         }
 
         if (filter.IdIn is not null && !filter.IdIn.Contains(row.Id))
+        {
+            return false;
+        }
+
+        if (filter.HasProjectUsersWithProjectId is not null
+            && !_userProjects.Any(up => up.UserId == row.Id
+                && up.ProjectId == filter.HasProjectUsersWithProjectId))
         {
             return false;
         }
@@ -1484,9 +1604,11 @@ internal sealed class FakeRoleStore : IRoleStore
 
     public Task<IReadOnlyList<RoleRecord>> ListByIdsAsync(
         IReadOnlyList<long> ids,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? projectScope = null)
         => Task.FromResult<IReadOnlyList<RoleRecord>>(
             _rows.Where(row => row.DeletedAt == 0 && ids.Contains(row.Id))
+                .Where(row => projectScope is not { } scope || row.ProjectId == scope)
                 .OrderBy(static row => row.Id)
                 .ToList());
 
@@ -1494,10 +1616,11 @@ internal sealed class FakeRoleStore : IRoleStore
         long id,
         string? name,
         IReadOnlyList<string>? scopes,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? projectScope = null)
     {
         var row = Live(id);
-        if (row is null)
+        if (row is null || (projectScope is { } updateScope && row.ProjectId != updateScope))
         {
             return Task.FromResult<RoleRecord?>(null);
         }
@@ -1516,10 +1639,13 @@ internal sealed class FakeRoleStore : IRoleStore
         return Task.FromResult<RoleRecord?>(row);
     }
 
-    public Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        long? projectScope = null)
     {
         var row = Live(id);
-        if (row is null)
+        if (row is null || (projectScope is { } scope && row.ProjectId != scope))
         {
             return Task.FromResult(false);
         }
@@ -1530,12 +1656,14 @@ internal sealed class FakeRoleStore : IRoleStore
 
     public Task DeleteManyAsync(
         IReadOnlyList<long> ids,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? projectScope = null)
     {
         foreach (var id in ids)
         {
             var row = Live(id);
-            if (row is not null)
+            if (row is not null
+                && (projectScope is not { } scope || row.ProjectId == scope))
             {
                 SoftDelete(row);
             }

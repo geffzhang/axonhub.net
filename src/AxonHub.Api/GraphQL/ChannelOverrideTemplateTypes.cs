@@ -269,18 +269,15 @@ public sealed class ChannelOverrideTemplateType
     /// <summary>Port of channelOverrideTemplateResolver.User (getNilableUser).</summary>
     [GraphQLName("user")]
     public async Task<UserType?> GetUserAsync(
-        [Service] IUserStore users,
+        [Service] UserPrivacy privacy,
         CancellationToken cancellationToken)
     {
-        if (UserDbId == 0)
-        {
-            return null;
-        }
-
         UserRecord? user;
         try
         {
-            user = await users.GetByIdAsync(UserDbId, cancellationToken)
+            // getNilableUser runs client.User.Get (query policy) and turns
+            // both NotFound and deny into a null edge.
+            user = await privacy.GetVisibleUserOrNullAsync(UserDbId, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

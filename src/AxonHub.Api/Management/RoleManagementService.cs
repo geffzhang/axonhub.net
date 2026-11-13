@@ -36,7 +36,8 @@ public sealed record UpdateRoleCommand
 public sealed class RoleManagementService(
     IRoleStore roles,
     IInvitationStore invitations,
-    PermissionValidator validator)
+    PermissionValidator validator,
+    RolePrivacy privacy)
 {
     public const string LevelSystem = "system";
 
@@ -142,6 +143,11 @@ public sealed class RoleManagementService(
         long id;
         try
         {
+            // client.Role.Create().Save runs the Role mutation policy
+            // (role.go:103-111).
+            await privacy
+                .EvaluateMutationAsync(RoleMutationOp.Create, projectIdValue, cancellationToken)
+                .ConfigureAwait(false);
             id = await roles.CreateAsync(role, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -174,21 +180,16 @@ public sealed class RoleManagementService(
         // Validate new scopes if being updated (role.go:123-138).
         if (command.Scopes is not null)
         {
-            RoleRecord? role;
+            RoleRecord role;
             try
             {
-                role = await roles.GetByIdAsync(command.Id, cancellationToken)
+                // client.Role.Get runs the Role query policy (role.go:125).
+                role = await privacy.GetVisibleRoleOrThrowAsync(command.Id, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 throw new InvalidOperationException("failed to get role: " + ex.Message, ex);
-            }
-
-            if (role is null)
-            {
-                throw new InvalidOperationException(
-                    "failed to get role: " + PermissionValidator.RoleNotFound);
             }
 
             long? projectId = null;
@@ -210,10 +211,11 @@ public sealed class RoleManagementService(
 
         if (command.Name is not null)
         {
-            RoleRecord? current;
+            RoleRecord current;
             try
             {
-                current = await roles.GetByIdAsync(command.Id, cancellationToken)
+                // client.Role.Get runs the Role query policy (role.go:145).
+                current = await privacy.GetVisibleRoleOrThrowAsync(command.Id, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -221,12 +223,6 @@ public sealed class RoleManagementService(
                 throw new InvalidOperationException(
                     "failed to get current role: " + ex.Message,
                     ex);
-            }
-
-            if (current is null)
-            {
-                throw new InvalidOperationException(
-                    "failed to get current role: ent: role not found");
             }
 
             if (command.Name != current.Name)
@@ -258,11 +254,18 @@ public sealed class RoleManagementService(
         RoleRecord? updated;
         try
         {
+            // client.Role.UpdateOneID(id).Save runs the Role mutation policy
+            // (role.go:162-172); a project-scoped caller gets
+            // WhereP(project_id = ctx).
+            var mutationScope = await privacy
+                .EvaluateMutationAsync(RoleMutationOp.UpdateOne, null, cancellationToken)
+                .ConfigureAwait(false);
             updated = await roles.UpdateAsync(
                     command.Id,
                     command.Name,
                     command.Scopes,
-                    cancellationToken)
+                    cancellationToken,
+                    projectScope: mutationScope)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -280,22 +283,19 @@ public sealed class RoleManagementService(
         await roles.RunInTransactionAsync(
             async token =>
             {
-                RoleRecord? role;
+                RoleRecord role;
                 try
                 {
-                    role = await roles.GetByIdAsync(id, token).ConfigureAwait(false);
+                    // client.Role.Query().Where(IDEQ).Only runs the Role query
+                    // policy (role.go:185-190).
+                    role = await privacy.GetVisibleRoleOrThrowAsync(id, token)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     throw new InvalidOperationException(
                         "failed to check role existence: " + ex.Message,
                         ex);
-                }
-
-                if (role is null)
-                {
-                    throw new InvalidOperationException(
-                        "failed to check role existence: ent: role not found");
                 }
 
                 if (role.Name == DefaultRoleName)
@@ -308,7 +308,14 @@ public sealed class RoleManagementService(
                 bool deleted;
                 try
                 {
-                    deleted = await roles.DeleteAsync(id, token).ConfigureAwait(false);
+                    // client.Role.DeleteOneID(id).Exec runs the Role mutation
+                    // policy (role.go:201-203).
+                    var mutationScope = await privacy
+                        .EvaluateMutationAsync(RoleMutationOp.DeleteOne, null, token)
+                        .ConfigureAwait(false);
+                    deleted = await roles
+                        .DeleteAsync(id, token, projectScope: mutationScope)
+                        .ConfigureAwait(false);
                 }
                 catch (StoreFailureException ex)
                 {
@@ -346,7 +353,12 @@ public sealed class RoleManagementService(
                 IReadOnlyList<RoleRecord> found;
                 try
                 {
-                    found = await roles.ListByIdsAsync(ids, token).ConfigureAwait(false);
+                    // client.Role.Query().Where(IDIn).All runs the Role query
+                    // policy (role.go:224).
+                    var queryScope = await privacy.EvaluateQueryAsync(token)
+                        .ConfigureAwait(false);
+                    found = await roles.ListByIdsAsync(ids, token, projectScope: queryScope)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -372,7 +384,13 @@ public sealed class RoleManagementService(
 
                 try
                 {
-                    await roles.DeleteManyAsync(ids, token).ConfigureAwait(false);
+                    // client.Role.Delete().Where(IDIn).Exec runs the Role
+                    // mutation policy (role.go:243-245).
+                    var mutationScope = await privacy
+                        .EvaluateMutationAsync(RoleMutationOp.Delete, null, token)
+                        .ConfigureAwait(false);
+                    await roles.DeleteManyAsync(ids, token, projectScope: mutationScope)
+                        .ConfigureAwait(false);
                 }
                 catch (StoreFailureException ex)
                 {
@@ -414,22 +432,59 @@ public sealed class RoleManagementService(
     {
         if (level == LevelSystem)
         {
+            // client.Role.Query().Exist runs the Role query policy
+            // (role.go:274-279); its WhereProjectID(ctx) predicate cannot
+            // match a system role (project_id 0).
+            var projectScope = await privacy.EvaluateQueryAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (projectScope is not null)
+            {
+                return false;
+            }
+
             return await roles.NameExistsAsync(name, 0, cancellationToken).ConfigureAwait(false);
         }
 
         if (projectId is null)
         {
+            // The reference returns this before running the query (role.go:282).
             throw new InvalidOperationException("project ID is required for project roles");
+        }
+
+        var scope = await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+        if (scope is not null && scope.Value != projectId.Value)
+        {
+            return false;
         }
 
         return await roles.NameExistsAsync(name, projectId.Value, cancellationToken)
             .ConfigureAwait(false);
     }
 
-    public Task<ListPage<RoleRecord>> ListAsync(
+    public async Task<ListPage<RoleRecord>> ListAsync(
         RoleListQuery query,
         CancellationToken cancellationToken = default)
-        => roles.ListAsync(query, cancellationToken);
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        // The Role query policy installs WhereProjectID(ctx) for project owners
+        // and project members before the page runs.
+        var projectScope = await privacy.EvaluateQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (projectScope is not null)
+        {
+            var scope = new RoleListFilter { ProjectId = projectScope.Value };
+            query = query with
+            {
+                Where = query.Where is null
+                    ? scope
+                    : new RoleListFilter { And = [query.Where, scope] },
+            };
+        }
+
+        return await roles.ListAsync(query, cancellationToken).ConfigureAwait(false);
+    }
 
     public static bool IsValidLevel(string level)
         => level is LevelSystem or LevelProject;

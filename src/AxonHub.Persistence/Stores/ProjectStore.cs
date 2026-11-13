@@ -82,7 +82,14 @@ public interface IProjectStore
     Task<ProjectRecord?> GetFirstAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Port of ProjectService.CreateProject's duplicate check (live rows only).</summary>
-    Task<bool> NameExistsAsync(string name, CancellationToken cancellationToken = default);
+    /// <param name="idScope">
+    /// The <c>WhereID(ctx)</c> predicate the Project query policy installs; a
+    /// project outside the scope cannot match.
+    /// </param>
+    Task<bool> NameExistsAsync(
+        string name,
+        CancellationToken cancellationToken = default,
+        long? idScope = null);
 
     Task<ListPage<ProjectRecord>> ListAsync(
         ProjectListQuery query,
@@ -123,7 +130,15 @@ public interface IProjectStore
     /// user_roles rows of the project roles are left untouched, like the
     /// reference. Returns false when the project is missing.
     /// </summary>
-    Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default);
+    /// <param name="idScope">
+    /// The <c>WhereID(ctx)</c> predicate the Project query policy installs on
+    /// the initial <c>Project.Get</c>; a project outside the scope reads as
+    /// missing.
+    /// </param>
+    Task<bool> DeleteAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        long? idScope = null);
 }
 
 /// <summary>
@@ -177,12 +192,14 @@ public sealed class ProjectStore(AxonHubDbContext db) : IProjectStore
 
     public async Task<bool> NameExistsAsync(
         string name,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? idScope = null)
     {
         const string sql = """
             SELECT EXISTS (
                 SELECT 1 FROM "projects"
                 WHERE "deleted_at" = 0 AND "name" = @Name
+                  AND (@IdScope IS NULL OR "id" = @IdScope)
             );
             """;
 
@@ -190,7 +207,7 @@ public sealed class ProjectStore(AxonHubDbContext db) : IProjectStore
         return await connection.ExecuteScalarAsync<bool>(
             new CommandDefinition(
                 sql,
-                new { Name = name },
+                new { Name = name, IdScope = idScope },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
@@ -432,7 +449,10 @@ public sealed class ProjectStore(AxonHubDbContext db) : IProjectStore
         }
     }
 
-    public async Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        long? idScope = null)
     {
         await using var transaction = await db.Database
             .BeginTransactionAsync(cancellationToken)
@@ -441,9 +461,16 @@ public sealed class ProjectStore(AxonHubDbContext db) : IProjectStore
         ProjectRecord? project;
         try
         {
-            project = await db.Projects.SingleOrDefaultAsync(
-                row => row.Id == id && row.DeletedAt == 0,
-                cancellationToken).ConfigureAwait(false);
+            var lookup = db.Projects.Where(row => row.Id == id && row.DeletedAt == 0);
+            if (idScope is { } scope)
+            {
+                // Project query policy: WhereID(ctx).
+                lookup = lookup.Where(row => row.Id == scope);
+            }
+
+            project = await lookup
+                .SingleOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

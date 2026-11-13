@@ -56,23 +56,23 @@ public sealed class UserProjectType : INode
     /// <summary>Port of the entgql edge resolver UserProject.user.</summary>
     [GraphQLName("user")]
     public async Task<UserType> GetUserAsync(
-        [Service] IUserAdminStore users,
+        [Service] UserPrivacy privacy,
         CancellationToken cancellationToken)
     {
-        var user = await users.GetByIdAsync(UserDbId, cancellationToken)
+        // obj.QueryUser().Only runs the User query policy.
+        var user = await privacy.GetVisibleUserOrThrowAsync(UserDbId, cancellationToken)
             .ConfigureAwait(false);
-        return user is null
-            ? throw new InvalidOperationException("ent: user not found")
-            : ManagementMapping.ToGraphQL(user);
+        return ManagementMapping.ToGraphQL(user);
     }
 
     /// <summary>Port of the entgql edge resolver UserProject.project.</summary>
     [GraphQLName("project")]
     public async Task<ProjectType> GetProjectAsync(
-        [Service] IProjectStore projects,
+        [Service] ProjectPrivacy privacy,
         CancellationToken cancellationToken)
     {
-        var project = await projects.GetByIdAsync(ProjectDbId, cancellationToken)
+        // obj.QueryProject().Only runs the Project query policy.
+        var project = await privacy.GetVisibleProjectAsync(ProjectDbId, cancellationToken)
             .ConfigureAwait(false);
         return project is null
             ? throw new InvalidOperationException("ent: project not found")
@@ -148,9 +148,16 @@ public sealed class ProjectTypeExtensions
     public async Task<IReadOnlyList<UserProjectType>?> GetProjectUsersAsync(
         [Parent] ProjectType project,
         [Service] IUserAdminStore users,
+        [Service] UserProjectPrivacy privacy,
         CancellationToken cancellationToken)
     {
-        var rows = await users.ListProjectUsersAsync(project.DbId, cancellationToken)
+        // obj.QueryProjectUsers().All runs the UserProject query policy: a
+        // project-scoped caller sees the project's rows, a scope-less caller
+        // only their own.
+        var queryScope = await privacy.EvaluateQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var rows = await users
+            .ListProjectUsersAsync(project.DbId, cancellationToken, queryScope)
             .ConfigureAwait(false);
         return [.. rows.Select(ProjectUserMapping.ToGraphQL)];
     }
@@ -168,9 +175,15 @@ public sealed class UserTypeExtensions
     public async Task<IReadOnlyList<UserProjectType>?> GetProjectUsersAsync(
         [Parent] UserType user,
         [Service] IUserAdminStore users,
+        [Service] UserProjectPrivacy privacy,
         CancellationToken cancellationToken)
     {
-        var rows = await users.ListProjectUsersForUserAsync(user.DbId, cancellationToken)
+        // obj.QueryProjectUsers().All runs the UserProject query policy (see
+        // ProjectTypeExtensions.GetProjectUsersAsync).
+        var queryScope = await privacy.EvaluateQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var rows = await users
+            .ListProjectUsersForUserAsync(user.DbId, cancellationToken, queryScope)
             .ConfigureAwait(false);
         return [.. rows.Select(ProjectUserMapping.ToGraphQL)];
     }

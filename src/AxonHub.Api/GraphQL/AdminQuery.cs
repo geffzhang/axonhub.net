@@ -1466,8 +1466,8 @@ public sealed class AdminQuery
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
         [GraphQLType(typeof(IdType))] string id,
-        [Service] IProjectStore projects,
-        [Service] IUserAdminStore users,
+        [Service] ProjectPrivacy projectPrivacy,
+        [Service] UserPrivacy userPrivacy,
         [Service] IServiceProvider services,
         CancellationToken cancellationToken)
     {
@@ -1477,7 +1477,10 @@ public sealed class AdminQuery
         {
             case "Project":
                 {
-                    var project = await projects.GetByIdAsync(gid.Id, cancellationToken)
+                    // client.Noder dispatches to Project.Get, so the Project
+                    // query policy (WhereID(ctx)) runs.
+                    var project = await projectPrivacy
+                        .GetVisibleProjectAsync(gid.Id, cancellationToken)
                         .ConfigureAwait(false);
                     return project is null
                         ? throw new InvalidOperationException("ent: project not found")
@@ -1486,11 +1489,13 @@ public sealed class AdminQuery
 
             case "User":
                 {
-                    var user = await users.GetByIdAsync(gid.Id, cancellationToken)
+                    // client.Noder dispatches to User.Get, so the User query
+                    // policy runs; a filtered-out row is ent NotFound and a
+                    // deny propagates.
+                    var user = await userPrivacy
+                        .GetVisibleUserOrThrowAsync(gid.Id, cancellationToken)
                         .ConfigureAwait(false);
-                    return user is null
-                        ? throw new InvalidOperationException("ent: user not found")
-                        : ManagementMapping.ToGraphQL(user);
+                    return ManagementMapping.ToGraphQL(user);
                 }
 
             case "APIKey":

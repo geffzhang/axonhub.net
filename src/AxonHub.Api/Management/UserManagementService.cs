@@ -93,7 +93,10 @@ public sealed class UserManagementService(
     IPasswordHasher passwords,
     PermissionValidator validator,
     IManagementIdentity identity,
-    IRoleStore roles)
+    IRoleStore roles,
+    UserPrivacy privacy,
+    UserProjectPrivacy userProjectPrivacy,
+    RolePrivacy rolePrivacy)
 {
     /// <summary>Port of UserService.CreateUser.</summary>
     public async Task<UserRecord> CreateAsync(
@@ -126,6 +129,8 @@ public sealed class UserManagementService(
         long id;
         try
         {
+            // The ent create runs the User mutation policy before inserting.
+            await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
             id = await users.CreateAsync(user, command.RoleIds, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -197,6 +202,8 @@ public sealed class UserManagementService(
         UserRecord? updated;
         try
         {
+            // The ent UpdateOneID runs the User mutation policy before the update.
+            await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
             updated = await users.UpdateAsync(
                     new UserUpdate
                     {
@@ -237,6 +244,8 @@ public sealed class UserManagementService(
         UserRecord? updated;
         try
         {
+            // The ent UpdateOneID runs the User mutation policy before the update.
+            await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
             updated = await users.UpdateStatusAsync(id, status, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -379,6 +388,51 @@ public sealed class UserManagementService(
             }
         }
 
+        // The reference evaluates these policies inside its transaction, in
+        // this order: UserProject.Create → (when roles are added) User.Get →
+        // User.Update().AddRoleIDs. The port evaluates them before the store
+        // call; the store's transaction still rolls back as a unit, so only the
+        // error precedence differs when several steps would fail at once.
+        try
+        {
+            await userProjectPrivacy
+                .EvaluateMutationAsync(
+                    UserProjectMutationOp.Create,
+                    command.ProjectId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to add user to project: " + ex.Message,
+                ex);
+        }
+
+        if (command.RoleIds.Count > 0)
+        {
+            try
+            {
+                await privacy.GetVisibleUserOrThrowAsync(command.UserId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException("failed to get user: " + ex.Message, ex);
+            }
+
+            try
+            {
+                await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    "failed to add roles to user: " + ex.Message,
+                    ex);
+            }
+        }
+
         UserProjectRecord? created;
         try
         {
@@ -415,9 +469,37 @@ public sealed class UserManagementService(
         long projectId,
         CancellationToken cancellationToken = default)
     {
+        // UserProject.Delete runs the UserProject mutation policy first
+        // (user.go:468-473); its WhereP(project_id = ctx) narrows the delete.
+        long? mutationScope;
         try
         {
-            await users.RemoveProjectUserAsync(userId, projectId, cancellationToken)
+            mutationScope = await userProjectPrivacy
+                .EvaluateMutationAsync(
+                    UserProjectMutationOp.Delete,
+                    projectId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to remove user from project: " + ex.Message,
+                ex);
+        }
+
+        try
+        {
+            await users.RemoveProjectUserAsync(
+                    userId,
+                    projectId,
+                    cancellationToken,
+                    mutationProjectScope: mutationScope,
+                    // Role.Query().IDs() runs the Role query policy
+                    // (user.go:480-485); User.UpdateOneID runs the User
+                    // mutation policy (user.go:489-492).
+                    queryRoleScope: rolePrivacy.EvaluateQueryAsync,
+                    beforeUserRoleRemoval: privacy.EvaluateMutationAsync)
                 .ConfigureAwait(false);
         }
         catch (StoreFailureException ex)
@@ -484,6 +566,21 @@ public sealed class UserManagementService(
             }
         }
 
+        // UserProject.Query().Where(user, project).Only runs the UserProject
+        // query policy (user.go:540-547).
+        UserProjectAccessFilter? queryScope;
+        try
+        {
+            queryScope = await userProjectPrivacy.EvaluateQueryAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to find user project relationship: " + ex.Message,
+                ex);
+        }
+
         UserProjectRecord? updated;
         try
         {
@@ -494,7 +591,20 @@ public sealed class UserManagementService(
                     command.Scopes,
                     command.AddRoleIds,
                     command.RemoveRoleIds,
-                    cancellationToken)
+                    cancellationToken,
+                    queryScope: queryScope,
+                    // mut.Save runs the UserProject mutation policy
+                    // (user.go:557), client.User.Get the User query policy
+                    // (user.go:556), user.Update() the User mutation policy
+                    // (user.go:562-572).
+                    beforeUpdate: token => userProjectPrivacy.EvaluateMutationAsync(
+                        UserProjectMutationOp.Update,
+                        command.ProjectId,
+                        token),
+                    beforeUserRead: token => privacy.GetVisibleUserOrThrowAsync(
+                        command.UserId,
+                        token),
+                    beforeUserRoleUpdate: privacy.EvaluateMutationAsync)
                 .ConfigureAwait(false);
         }
         catch (StoreFailureException ex)
@@ -519,10 +629,33 @@ public sealed class UserManagementService(
     public Task<UserRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => users.GetByIdAsync(id, cancellationToken);
 
-    public Task<ListPage<UserRecord>> ListAsync(
+    public async Task<ListPage<UserRecord>> ListAsync(
         UserListQuery query,
         CancellationToken cancellationToken = default)
-        => users.ListAsync(query, cancellationToken);
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        // The User query policy installs WhereHasProjectUsersWith(project_id)
+        // for project owners and project members before the page runs.
+        var projectScope = await privacy.EvaluateQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (projectScope is not null)
+        {
+            var scope = new UserListFilter
+            {
+                HasProjectUsersWithProjectId = projectScope.Value,
+            };
+            query = query with
+            {
+                Where = query.Where is null
+                    ? scope
+                    : new UserListFilter { And = [query.Where, scope] },
+            };
+        }
+
+        return await users.ListAsync(query, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>The reference wraps every validator failure in "permission denied: %w".</summary>
     private static InvalidOperationException PermissionDenied(Exception inner)

@@ -90,23 +90,45 @@ public interface IRoleStore
         RoleListQuery query,
         CancellationToken cancellationToken = default);
 
+    /// <param name="projectScope">
+    /// The <c>WhereP(project_id = ctx)</c> predicate the Role query policy
+    /// installs; a row of another project is filtered out.
+    /// </param>
     Task<IReadOnlyList<RoleRecord>> ListByIdsAsync(
         IReadOnlyList<long> ids,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        long? projectScope = null);
 
+    /// <param name="projectScope">
+    /// The <c>WhereP(project_id = ctx)</c> predicate the Role mutation policy
+    /// installs; a mismatch updates no row (ent NotFound).
+    /// </param>
     Task<RoleRecord?> UpdateAsync(
         long id,
         string? name,
         IReadOnlyList<string>? scopes,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        long? projectScope = null);
 
     /// <summary>Deletes the role's user_roles rows and soft-deletes the role.</summary>
-    Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default);
+    /// <param name="projectScope">
+    /// The <c>WhereP(project_id = ctx)</c> predicate the Role mutation policy
+    /// installs; a mismatch deletes nothing (ent NotFound).
+    /// </param>
+    Task<bool> DeleteAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        long? projectScope = null);
 
     /// <summary>Deletes user_roles rows and soft-deletes every listed role.</summary>
+    /// <param name="projectScope">
+    /// The <c>WhereP(project_id = ctx)</c> predicate the Role mutation policy
+    /// installs; rows of other projects are left untouched.
+    /// </param>
     Task DeleteManyAsync(
         IReadOnlyList<long> ids,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        long? projectScope = null);
 }
 
 /// <summary>
@@ -249,7 +271,8 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
 
     public async Task<IReadOnlyList<RoleRecord>> ListByIdsAsync(
         IReadOnlyList<long> ids,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? projectScope = null)
     {
         if (ids.Count == 0)
         {
@@ -259,6 +282,11 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
         var args = new SqlArguments();
         var predicates = new List<string?>();
         ConnectionSql.AppendIdIn(predicates, "r", "id", ids, args);
+        if (projectScope is not null)
+        {
+            // Role query policy: WhereProjectID(ctx).
+            predicates.Add("r.\"project_id\" = " + args.Add(projectScope.Value));
+        }
 
         var sql = "SELECT " + Columns + " FROM \"roles\" r WHERE r.\"deleted_at\" = 0 AND "
             + ConnectionSql.Combine(predicates) + " ORDER BY r.\"id\" ASC;";
@@ -276,11 +304,19 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
         long id,
         string? name,
         IReadOnlyList<string>? scopes,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? projectScope = null)
     {
-        var role = await db.Roles.SingleOrDefaultAsync(
-            row => row.Id == id && row.DeletedAt == 0,
-            cancellationToken).ConfigureAwait(false);
+        var lookup = db.Roles.Where(row => row.Id == id && row.DeletedAt == 0);
+        if (projectScope is { } scope)
+        {
+            // Role mutation policy: WhereP(project_id = ctx).
+            lookup = lookup.Where(row => row.ProjectId == scope);
+        }
+
+        var role = await lookup
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
         if (role is null)
         {
             return null;
@@ -348,14 +384,24 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
             cancellationToken);
     }
 
-    public async Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        long? projectScope = null)
     {
         return await RunInTransactionAsync(
             async token =>
             {
-                var role = await db.Roles.SingleOrDefaultAsync(
-                    row => row.Id == id && row.DeletedAt == 0,
-                    token).ConfigureAwait(false);
+                var lookup = db.Roles.Where(row => row.Id == id && row.DeletedAt == 0);
+                if (projectScope is { } scope)
+                {
+                    // Role mutation policy: WhereP(project_id = ctx).
+                    lookup = lookup.Where(row => row.ProjectId == scope);
+                }
+
+                var role = await lookup
+                    .SingleOrDefaultAsync(token)
+                    .ConfigureAwait(false);
                 if (role is null)
                 {
                     return false;
@@ -395,7 +441,8 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
 
     public async Task DeleteManyAsync(
         IReadOnlyList<long> ids,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? projectScope = null)
     {
         if (ids.Count == 0)
         {
@@ -405,10 +452,28 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
         await RunInTransactionAsync(
             async token =>
             {
+                // Ent's bulk delete selects the matched ids first (the Role
+                // mutation policy's WhereP(project_id = ctx) included), clears
+                // their edges, then updates the nodes.
+                var lookup = db.Roles.Where(row => ids.Contains(row.Id) && row.DeletedAt == 0);
+                if (projectScope is { } scope)
+                {
+                    lookup = lookup.Where(row => row.ProjectId == scope);
+                }
+
+                var matched = await lookup
+                    .Select(row => row.Id)
+                    .ToListAsync(token)
+                    .ConfigureAwait(false);
+                if (matched.Count == 0)
+                {
+                    return;
+                }
+
                 try
                 {
                     await db.UserRoles
-                        .Where(row => ids.Contains(row.RoleId))
+                        .Where(row => matched.Contains(row.RoleId))
                         .ExecuteDeleteAsync(token)
                         .ConfigureAwait(false);
                 }
@@ -425,7 +490,7 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
                 try
                 {
                     await db.Roles
-                        .Where(row => ids.Contains(row.Id) && row.DeletedAt == 0)
+                        .Where(row => matched.Contains(row.Id))
                         .ExecuteUpdateAsync(
                             setters => setters
                                 .SetProperty(row => row.DeletedAt, deletedAt)

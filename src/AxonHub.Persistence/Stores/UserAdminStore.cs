@@ -25,6 +25,13 @@ public sealed record UserListFilter
 
     public IReadOnlyList<string>? StatusIn { get; init; }
 
+    /// <summary>
+    /// Ent's <c>WhereHasProjectUsersWith(project_id = ?)</c> predicate the
+    /// User query policy installs for project owners and project members
+    /// (internal/scopes/rule_user_project_scope.go:91,124).
+    /// </summary>
+    public long? HasProjectUsersWithProjectId { get; init; }
+
     public UserListFilter? Not { get; init; }
 
     public IReadOnlyList<UserListFilter>? And { get; init; }
@@ -97,6 +104,19 @@ public sealed record PermissionUser(
     IReadOnlyList<UserProjectRecord> ProjectUsers);
 
 /// <summary>
+/// The predicates the UserProject query policy installs: at most one of
+/// <see cref="ProjectId"/> (<c>project_id = ctx</c>) and <see cref="UserId"/>
+/// (<c>user_id = me</c>), or neither when the query is unfiltered.
+/// (internal/scopes/rule_user_project_scope.go, rule_user_owned.go).
+/// </summary>
+public sealed record UserProjectAccessFilter
+{
+    public long? ProjectId { get; init; }
+
+    public long? UserId { get; init; }
+}
+
+/// <summary>
 /// Management persistence seam for users and their relation tables. Kept apart
 /// from <see cref="IUserStore"/> so the authentication slice's fake stays small.
 /// </summary>
@@ -152,10 +172,25 @@ public interface IUserAdminStore
     /// cleanup. Otherwise removes the user_roles links of every live project
     /// role of the project the user still has.
     /// </summary>
+    /// <param name="mutationProjectScope">
+    /// The <c>WhereP(project_id = ctx)</c> predicate the UserProject mutation
+    /// policy installs; a mismatch deletes nothing.
+    /// </param>
+    /// <param name="queryRoleScope">
+    /// Evaluates the Role query policy at the reference's role lookup
+    /// (user.go:480-485); the returned project predicate narrows the query.
+    /// </param>
+    /// <param name="beforeUserRoleRemoval">
+    /// Evaluates the User mutation policy before
+    /// <c>User.UpdateOneID(...).RemoveRoleIDs(...)</c> (user.go:489-492).
+    /// </param>
     Task RemoveProjectUserAsync(
         long userId,
         long projectId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        long? mutationProjectScope = null,
+        Func<CancellationToken, Task<long?>>? queryRoleScope = null,
+        Func<CancellationToken, Task>? beforeUserRoleRemoval = null);
 
     /// <summary>
     /// Port of UserService.UpdateProjectUser's store steps (user.go:525-573):
@@ -163,6 +198,17 @@ public interface IUserAdminStore
     /// wording "failed to find user project relationship: %w"), then applies the
     /// role adds before the removals on the user.
     /// </summary>
+    /// <param name="queryScope">
+    /// The predicate the UserProject query policy installs on the relationship
+    /// lookup (user.go:540-547).
+    /// </param>
+    /// <param name="beforeUpdate">
+    /// Evaluates the UserProject mutation policy and returns the
+    /// <c>WhereP(project_id = ctx)</c> predicate it installed on
+    /// <c>mut.Save</c> (user.go:557); null means none.
+    /// </param>
+    /// <param name="beforeUserRead">Evaluates the User query policy.</param>
+    /// <param name="beforeUserRoleUpdate">Evaluates the User mutation policy.</param>
     Task<UserProjectRecord> UpdateProjectUserAsync(
         long userId,
         long projectId,
@@ -170,17 +216,23 @@ public interface IUserAdminStore
         IReadOnlyList<string>? scopes,
         IReadOnlyList<long> addRoleIds,
         IReadOnlyList<long> removeRoleIds,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null,
+        Func<CancellationToken, Task<long?>>? beforeUpdate = null,
+        Func<CancellationToken, Task>? beforeUserRead = null,
+        Func<CancellationToken, Task>? beforeUserRoleUpdate = null);
 
     /// <summary>Port of <c>Project.QueryProjectUsers().All()</c> (no ordering).</summary>
     Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersAsync(
         long projectId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null);
 
     /// <summary>Port of <c>User.QueryProjectUsers().All()</c> (no ordering).</summary>
     Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersForUserAsync(
         long userId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null);
 }
 
 /// <summary>
@@ -649,13 +701,23 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
     public async Task RemoveProjectUserAsync(
         long userId,
         long projectId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? mutationProjectScope = null,
+        Func<CancellationToken, Task<long?>>? queryRoleScope = null,
+        Func<CancellationToken, Task>? beforeUserRoleRemoval = null)
     {
         int deleted;
         try
         {
-            deleted = await db.UserProjects
-                .Where(row => row.UserId == userId && row.ProjectId == projectId)
+            var query = db.UserProjects
+                .Where(row => row.UserId == userId && row.ProjectId == projectId);
+            if (mutationProjectScope is { } scope)
+            {
+                // UserProject mutation policy: WhereP(project_id = ctx).
+                query = query.Where(row => row.ProjectId == scope);
+            }
+
+            deleted = await query
                 .ExecuteDeleteAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -676,7 +738,29 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
         // Reference (user.go:480-482): Role.Query().
         //   Where(ProjectIDEQ(projectID), HasUsersWith(IDEQ(userID))).IDs()
         // — the roles of this project the removed user still has. Links of
-        // system roles (NULL project_id) never match ProjectIDEQ.
+        // system roles (NULL project_id) never match ProjectIDEQ. The Role
+        // query policy runs first and may install WhereP(project_id = ctx).
+        long? roleScope = null;
+        if (queryRoleScope is not null)
+        {
+            try
+            {
+                roleScope = await queryRoleScope(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to query user project roles: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (roleScope is not null && roleScope.Value != projectId)
+        {
+            // WhereProjectID(ctx) filters every row of this project out.
+            return;
+        }
+
         List<long> roleIds;
         try
         {
@@ -702,6 +786,21 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
 
         if (roleIds.Count > 0)
         {
+            // User mutation policy on User.UpdateOneID(...).RemoveRoleIDs(...).
+            if (beforeUserRoleRemoval is not null)
+            {
+                try
+                {
+                    await beforeUserRoleRemoval(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new StoreFailureException(
+                        "failed to remove user project roles: " + ex.Message,
+                        ex);
+                }
+            }
+
             try
             {
                 await db.UserRoles
@@ -725,17 +824,56 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
         IReadOnlyList<string>? scopes,
         IReadOnlyList<long> addRoleIds,
         IReadOnlyList<long> removeRoleIds,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null,
+        Func<CancellationToken, Task<long?>>? beforeUpdate = null,
+        Func<CancellationToken, Task>? beforeUserRead = null,
+        Func<CancellationToken, Task>? beforeUserRoleUpdate = null)
     {
-        var row = await db.UserProjects
-            .SingleOrDefaultAsync(
-                row => row.UserId == userId && row.ProjectId == projectId,
-                cancellationToken)
+        // UserProject query policy: WhereUserID(me) / WhereProjectID(ctx).
+        var lookup = db.UserProjects
+            .Where(row => row.UserId == userId && row.ProjectId == projectId);
+        if (queryScope?.ProjectId is { } scopeProject)
+        {
+            lookup = lookup.Where(row => row.ProjectId == scopeProject);
+        }
+
+        if (queryScope?.UserId is { } scopeUser)
+        {
+            lookup = lookup.Where(row => row.UserId == scopeUser);
+        }
+
+        var row = await lookup
+            .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
         if (row is null)
         {
             throw new StoreFailureException(
                 "failed to find user project relationship: ent: user_project not found",
+                new InvalidOperationException("ent: user_project not found"));
+        }
+
+        // UserProject mutation policy, evaluated at mut.Save (user.go:557).
+        long? mutationScope = null;
+        if (beforeUpdate is not null)
+        {
+            try
+            {
+                mutationScope = await beforeUpdate(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to update project user: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (mutationScope is { } scope && row.ProjectId != scope)
+        {
+            // WhereP(project_id = ctx) matched no row.
+            throw new StoreFailureException(
+                "failed to update project user: ent: user_project not found",
                 new InvalidOperationException("ent: user_project not found"));
         }
 
@@ -761,6 +899,21 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
                 ex);
         }
 
+        // User query policy on client.User.Get (user.go:556).
+        if (beforeUserRead is not null)
+        {
+            try
+            {
+                await beforeUserRead(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to get user: " + ex.Message,
+                    ex);
+            }
+        }
+
         var user = await db.Users
             .SingleOrDefaultAsync(
                 row => row.Id == userId && row.DeletedAt == 0,
@@ -771,6 +924,22 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
             throw new StoreFailureException(
                 "failed to get user: ent: user not found",
                 new InvalidOperationException("ent: user not found"));
+        }
+
+        // User mutation policy on user.Update() (user.go:562-572); the
+        // reference always runs Exec, even with both lists empty.
+        if (beforeUserRoleUpdate is not null)
+        {
+            try
+            {
+                await beforeUserRoleUpdate(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new StoreFailureException(
+                    "failed to update user roles: " + ex.Message,
+                    ex);
+            }
         }
 
         await UpdateUserRolesAsync(
@@ -785,16 +954,34 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
 
     public async Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersAsync(
         long projectId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null)
     {
-        const string sql = "SELECT " + UserProjectColumns
-            + " FROM \"user_projects\" WHERE \"project_id\" = @ProjectId;";
+        var sql = "SELECT " + UserProjectColumns
+            + " FROM \"user_projects\" WHERE \"project_id\" = @ProjectId";
+        var parameters = new DynamicParameters();
+        parameters.Add("ProjectId", projectId);
+
+        // UserProject query policy: WhereProjectID(ctx) / WhereUserID(me).
+        if (queryScope?.ProjectId is { } scopeProject)
+        {
+            sql += " AND \"project_id\" = @ScopeProjectId";
+            parameters.Add("ScopeProjectId", scopeProject);
+        }
+
+        if (queryScope?.UserId is { } scopeUser)
+        {
+            sql += " AND \"user_id\" = @ScopeUserId";
+            parameters.Add("ScopeUserId", scopeUser);
+        }
+
+        sql += ";";
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
         var rows = await connection.QueryAsync<UserProjectRecord>(
             new CommandDefinition(
                 sql,
-                new { ProjectId = projectId },
+                parameters,
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
 
@@ -803,16 +990,34 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
 
     public async Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersForUserAsync(
         long userId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null)
     {
-        const string sql = "SELECT " + UserProjectColumns
-            + " FROM \"user_projects\" WHERE \"user_id\" = @UserId;";
+        var sql = "SELECT " + UserProjectColumns
+            + " FROM \"user_projects\" WHERE \"user_id\" = @UserId";
+        var parameters = new DynamicParameters();
+        parameters.Add("UserId", userId);
+
+        // UserProject query policy: WhereProjectID(ctx) / WhereUserID(me).
+        if (queryScope?.ProjectId is { } scopeProject)
+        {
+            sql += " AND \"project_id\" = @ScopeProjectId";
+            parameters.Add("ScopeProjectId", scopeProject);
+        }
+
+        if (queryScope?.UserId is { } scopeUser)
+        {
+            sql += " AND \"user_id\" = @ScopeUserId";
+            parameters.Add("ScopeUserId", scopeUser);
+        }
+
+        sql += ";";
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
         var rows = await connection.QueryAsync<UserProjectRecord>(
             new CommandDefinition(
                 sql,
-                new { UserId = userId },
+                parameters,
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
 
@@ -1027,6 +1232,16 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
         if (filter.StatusIn is not null)
         {
             ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+        }
+
+        if (filter.HasProjectUsersWithProjectId is not null)
+        {
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_projects\" up WHERE up.\"user_id\" = "
+                + alias
+                + ".\"id\" AND up.\"project_id\" = "
+                + args.Add(filter.HasProjectUsersWithProjectId.Value)
+                + ")");
         }
 
         if (filter.Not is not null)

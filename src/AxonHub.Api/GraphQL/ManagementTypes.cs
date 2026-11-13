@@ -301,18 +301,33 @@ public sealed class UserType : INode
         RoleOrder? orderBy,
         RoleWhereInput? where,
         [Service] IRoleStore roles,
+        [Service] RolePrivacy privacy,
         CancellationToken cancellationToken)
     {
         // entgql's generated edge resolver routes through RoleQuery.Paginate,
         // which validates first/last but allows both to be nil (unbounded).
         ManagementValidation.ValidateFirstLast(first, last);
 
+        // The Role query policy installs WhereProjectID(ctx) before the edge
+        // page runs (ent.graphql User.roles → obj.QueryRoles()).
+        var projectScope = await privacy.EvaluateQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var filter = ManagementMapping.ToFilter(where);
+        if (projectScope is not null)
+        {
+            var scope = new RoleListFilter { ProjectId = projectScope.Value };
+            filter = filter is null
+                ? scope
+                : new RoleListFilter { And = [filter, scope] };
+        }
+
         var sortField = ManagementMapping.ToRoleSortField(orderBy);
         var page = await roles.ListAsync(
                 new RoleListQuery
                 {
                     UserId = DbId,
-                    Where = ManagementMapping.ToFilter(where),
+                    Where = filter,
                     SortField = sortField,
                     Direction = ManagementMapping.ToSortDirection(orderBy),
                     After = ManagementMapping.ToListCursor(after),

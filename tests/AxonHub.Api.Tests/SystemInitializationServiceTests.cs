@@ -44,7 +44,10 @@ public sealed class SystemInitializationServiceTests
                 _projects,
                 _roles,
                 identity,
-                new PermissionValidator(identity, _adminUsers, _roles)),
+                new PermissionValidator(identity, _adminUsers, _roles),
+                new ProjectPrivacy(identity, _adminUsers, _projects),
+                new RolePrivacy(identity, _adminUsers, _roles),
+                new UserProjectPrivacy(identity, _adminUsers)),
             _hasher,
             new SystemSettingsAdminService(_systems),
             _clock);

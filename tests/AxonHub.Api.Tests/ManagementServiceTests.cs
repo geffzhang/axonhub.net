@@ -22,8 +22,20 @@ public sealed class ManagementServiceTests
     public ManagementServiceTests()
     {
         _validator = new PermissionValidator(_identity, _users, _roles);
-        _userService = new UserManagementService(_users, new PasswordHasher(), _validator, _identity, _roles);
-        _roleService = new RoleManagementService(_roles, _invitations, _validator);
+        _userService = new UserManagementService(
+            _users,
+            new PasswordHasher(),
+            _validator,
+            _identity,
+            _roles,
+            new UserPrivacy(_identity, _users),
+            new UserProjectPrivacy(_identity, _users),
+            new RolePrivacy(_identity, _users, _roles));
+        _roleService = new RoleManagementService(
+            _roles,
+            _invitations,
+            _validator,
+            new RolePrivacy(_identity, _users, _roles));
     }
 
     [Fact]
@@ -342,8 +354,20 @@ public sealed class ManagementServiceTests
         var roles = new FakeRoleStore();
         var identity = new FakeManagementIdentity(new ManagementUser(1, IsOwner: false));
         var validator = new PermissionValidator(identity, users, roles);
-        var userService = new UserManagementService(users, new PasswordHasher(), validator, identity, roles);
-        var roleService = new RoleManagementService(roles, new FakeInvitationStore(), validator);
+        var userService = new UserManagementService(
+            users,
+            new PasswordHasher(),
+            validator,
+            identity,
+            roles,
+            new UserPrivacy(identity, users),
+            new UserProjectPrivacy(identity, users),
+            new RolePrivacy(identity, users, roles));
+        var roleService = new RoleManagementService(
+            roles,
+            new FakeInvitationStore(),
+            validator,
+            new RolePrivacy(identity, users, roles));
 
         users.CreateAsync(new UserRecord
         {

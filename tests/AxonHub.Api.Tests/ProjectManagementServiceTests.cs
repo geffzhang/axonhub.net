@@ -31,7 +31,10 @@ public sealed class ProjectManagementServiceTests
             _projects,
             _roles,
             identity,
-            new PermissionValidator(identity, _users, _roles));
+            new PermissionValidator(identity, _users, _roles),
+            new ProjectPrivacy(identity, _users, _projects),
+            new RolePrivacy(identity, _users, _roles),
+            new UserProjectPrivacy(identity, _users));
 
     [Fact]
     public async Task CreateWritesTheProjectRolesAndOwnerRowInReferenceOrder()
