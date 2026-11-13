@@ -1685,6 +1685,124 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         Assert.False(await verify.Channels.AnyAsync(row => row.Name == "HookImport"));
     }
 
+    [Fact]
+    public async Task CredentialCleanupCandidatesAreLiveEnabledOrDisabledChannelsInIdOrder()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var enabled = await SeedChannelAsync(context, name: "Enabled", status: "enabled");
+        var disabled = await SeedChannelAsync(context, name: "Disabled", status: "disabled");
+        await SeedChannelAsync(context, name: "Archived", status: "archived");
+        await SeedChannelAsync(context, name: "Deleted", status: "enabled", deletedAt: 77);
+
+        // ent: Channel.Query().Where(StatusIn(enabled, disabled)).IDs(ctx).
+        // The port orders by id; archived and soft-deleted rows are filtered.
+        var ids = await store.ListCredentialCleanupChannelIdsAsync();
+
+        Assert.Equal([enabled.Id, disabled.Id], ids);
+    }
+
+    [Fact]
+    public async Task ExpiredAutoDisabledCandidatesRequireBothMarkersAndAnElapsedDeadline()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var now = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        var expired = await SeedChannelAsync(
+            context,
+            name: "Expired",
+            status: "disabled",
+            autoDisabledAt: now.AddHours(-2),
+            autoDisableExpiresAt: now.AddHours(-1));
+        await SeedChannelAsync(
+            context,
+            name: "Future",
+            status: "disabled",
+            autoDisabledAt: now,
+            autoDisableExpiresAt: now.AddHours(1));
+        await SeedChannelAsync(
+            context,
+            name: "NoDeadline",
+            status: "disabled",
+            autoDisabledAt: now.AddHours(-2));
+        await SeedChannelAsync(
+            context,
+            name: "NoDisabledAt",
+            status: "disabled",
+            autoDisableExpiresAt: now.AddHours(-1));
+        await SeedChannelAsync(
+            context,
+            name: "Enabled",
+            status: "enabled",
+            autoDisabledAt: now.AddHours(-2),
+            autoDisableExpiresAt: now.AddHours(-1));
+        await SeedChannelAsync(
+            context,
+            name: "Deleted",
+            status: "disabled",
+            autoDisabledAt: now.AddHours(-2),
+            autoDisableExpiresAt: now.AddHours(-1),
+            deletedAt: 77);
+
+        var ids = await store.ListExpiredAutoDisabledChannelIdsAsync(now);
+
+        Assert.Equal([expired.Id], ids);
+    }
+
+    [Fact]
+    public async Task RecoverExpiredAutoDisabledChannelUpdatesOnlyWhileThePredicatesHold()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelWriteStore(context);
+
+        var now = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        var channel = await SeedChannelAsync(
+            context,
+            name: "Expired",
+            status: "disabled",
+            errorMessage: "boom",
+            autoDisabledAt: now.AddHours(-2),
+            autoDisableExpiresAt: now.AddHours(-1));
+        var future = await SeedChannelAsync(
+            context,
+            name: "Future",
+            status: "disabled",
+            errorMessage: "boom",
+            autoDisabledAt: now,
+            autoDisableExpiresAt: now.AddHours(1));
+
+        Assert.True(await store.RecoverExpiredAutoDisabledChannelAsync(channel.Id, now));
+
+        await using (var verify = db.Factory.CreateDbContext())
+        {
+            var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
+            Assert.Equal("enabled", reloaded.Status);
+            Assert.Null(reloaded.ErrorMessage);
+            Assert.Null(reloaded.AutoDisabledAt);
+            Assert.Null(reloaded.AutoDisableExpiresAt);
+            Assert.True(reloaded.UpdatedAt > UpdatedAt);
+        }
+
+        // The row no longer matches status=disabled: a concurrent recovery or
+        // a second pass matches zero rows (ent affected == 0).
+        Assert.False(await store.RecoverExpiredAutoDisabledChannelAsync(channel.Id, now));
+
+        // The deadline predicate is re-checked inside the update itself.
+        Assert.False(await store.RecoverExpiredAutoDisabledChannelAsync(future.Id, now));
+        await using var after = db.Factory.CreateDbContext();
+        var stillDisabled = await after.Channels.SingleAsync(row => row.Id == future.Id);
+        Assert.Equal("disabled", stillDisabled.Status);
+        Assert.Equal("boom", stillDisabled.ErrorMessage);
+    }
+
     private static ChannelRecord CreateRecord(string name) => new()
     {
         CreatedAt = CreatedAt,

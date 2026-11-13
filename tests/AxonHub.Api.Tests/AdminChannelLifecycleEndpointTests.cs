@@ -929,6 +929,9 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public Exception? GetFailure { get; set; }
 
+    /// <summary>Per-id read failures for the credential cleanup isolation test.</summary>
+    public Dictionary<long, Exception> GetFailuresById { get; } = [];
+
     public Exception? GetSettingsVersionFailure { get; set; }
 
     public Exception? SaveEndpointsFailure { get; set; }
@@ -937,6 +940,17 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     /// <summary>Simulates the row disappearing between the read and the write.</summary>
     public bool ApiKeyStateRowMissing { get; set; }
+
+    /// <summary>Fails the expired-credential cleanup's candidate query.</summary>
+    public Exception? CleanupQueryFailure { get; set; }
+
+    /// <summary>Fails the expired auto-disable candidate query.</summary>
+    public Exception? ExpiredAutoDisableQueryFailure { get; set; }
+
+    /// <summary>Fails every conditional auto-disable recovery.</summary>
+    public Exception? ExpiredAutoDisableRecoverFailure { get; set; }
+
+    public List<(long Id, DateTime Now)> ExpiredAutoDisableRecoveries { get; } = [];
 
     public Exception? NameCheckFailure { get; set; }
 
@@ -1031,6 +1045,11 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
         if (GetFailure is not null)
         {
             throw GetFailure;
+        }
+
+        if (GetFailuresById.TryGetValue(id, out var failure))
+        {
+            throw failure;
         }
 
         return Task.FromResult(
@@ -1218,6 +1237,73 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
             row.AutoDisableExpiresAt = null;
         }
 
+        row.UpdatedAt = DateTime.UtcNow;
+        return Task.FromResult(true);
+    }
+
+    public Task<IReadOnlyList<long>> ListCredentialCleanupChannelIdsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (CleanupQueryFailure is not null)
+        {
+            throw CleanupQueryFailure;
+        }
+
+        return Task.FromResult<IReadOnlyList<long>>(
+            _rows.Where(row => row.DeletedAt == 0
+                    && (row.Status == "enabled" || row.Status == "disabled"))
+                .OrderBy(row => row.Id)
+                .Select(row => row.Id)
+                .ToList());
+    }
+
+    public Task<IReadOnlyList<long>> ListExpiredAutoDisabledChannelIdsAsync(
+        DateTime now,
+        CancellationToken cancellationToken = default)
+    {
+        if (ExpiredAutoDisableQueryFailure is not null)
+        {
+            throw ExpiredAutoDisableQueryFailure;
+        }
+
+        return Task.FromResult<IReadOnlyList<long>>(
+            _rows.Where(row => row.DeletedAt == 0
+                    && row.Status == "disabled"
+                    && row.AutoDisabledAt is not null
+                    && row.AutoDisableExpiresAt is not null
+                    && row.AutoDisableExpiresAt <= now)
+                .OrderBy(row => row.Id)
+                .Select(row => row.Id)
+                .ToList());
+    }
+
+    public Task<bool> RecoverExpiredAutoDisabledChannelAsync(
+        long id,
+        DateTime now,
+        CancellationToken cancellationToken = default)
+    {
+        if (ExpiredAutoDisableRecoverFailure is not null)
+        {
+            throw ExpiredAutoDisableRecoverFailure;
+        }
+
+        var row = _rows.SingleOrDefault(candidate =>
+            candidate.Id == id
+            && candidate.DeletedAt == 0
+            && candidate.Status == "disabled"
+            && candidate.AutoDisabledAt is not null
+            && candidate.AutoDisableExpiresAt is not null
+            && candidate.AutoDisableExpiresAt <= now);
+        if (row is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        ExpiredAutoDisableRecoveries.Add((id, now));
+        row.Status = "enabled";
+        row.ErrorMessage = null;
+        row.AutoDisabledAt = null;
+        row.AutoDisableExpiresAt = null;
         row.UpdatedAt = DateTime.UtcNow;
         return Task.FromResult(true);
     }

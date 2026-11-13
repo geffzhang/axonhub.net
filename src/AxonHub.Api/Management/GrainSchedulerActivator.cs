@@ -11,9 +11,11 @@ namespace AxonHub.Api.Management;
 /// quota cron
 /// (<c>ProviderQuotaService.RegisterScheduledTasks</c>, provider_quota.go:401-409),
 /// the video-storage fixed-rate scan
-/// (<c>video_storage.Worker.RegisterScheduledTasks</c>, worker.go:54-71) and
-/// the channel-probe minute task
-/// (<c>ChannelProbeService.RegisterScheduledTasks</c>, channel_probe.go:70-79).
+/// (<c>video_storage.Worker.RegisterScheduledTasks</c>, worker.go:54-71), the
+/// channel-probe minute task
+/// (<c>ChannelProbeService.RegisterScheduledTasks</c>, channel_probe.go:70-79)
+/// and the expired-credential / auto-disable recovery minute task
+/// (<c>ChannelService.RegisterScheduledTasks</c>, channel.go:204-223).
 /// </summary>
 /// <remarks>
 /// Orleans' in-memory reminder table does not survive a silo stop and never
@@ -57,6 +59,10 @@ public sealed class GrainSchedulerActivator(
                 .ConfigureAwait(false);
             await grainFactory
                 .GetGrain<IChannelProbeGrain>(IChannelProbeGrain.SingletonKey)
+                .EnsureScheduledAsync(now)
+                .ConfigureAwait(false);
+            await grainFactory
+                .GetGrain<IChannelCredentialRecoveryGrain>(IChannelCredentialRecoveryGrain.SingletonKey)
                 .EnsureScheduledAsync(now)
                 .ConfigureAwait(false);
         }

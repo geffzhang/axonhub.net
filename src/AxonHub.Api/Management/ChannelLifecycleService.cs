@@ -69,6 +69,49 @@ public sealed class ChannelLifecycleService(
             "failed to synchronously reload channels after API key exhaustion "
             + "channel_id={ChannelId}");
 
+    private static readonly Action<ILogger, Exception?> LogCleanupQueryFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "ChannelExpiredApiKeyCleanupQueryFailed"),
+            "Failed to query channels for expired API key cleanup");
+
+    private static readonly Action<ILogger, long, Exception?> LogCleanupChannelFailed =
+        LoggerMessage.Define<long>(
+            LogLevel.Error,
+            new EventId(0, "ChannelExpiredApiKeyCleanupFailed"),
+            "Failed to cleanup expired disabled API keys channel_id={ChannelId}");
+
+    private static readonly Action<ILogger, long, int, Exception?> LogCleanedExpiredKeys =
+        LoggerMessage.Define<long, int>(
+            LogLevel.Information,
+            new EventId(0, "ChannelExpiredApiKeysCleaned"),
+            "Cleaned up expired disabled API keys channel_id={ChannelId} removed={Removed}");
+
+    private static readonly Action<ILogger, Exception?> LogExpiredAutoDisableQueryFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "ChannelExpiredAutoDisableQueryFailed"),
+            "Failed to query expired auto-disabled channels");
+
+    private static readonly Action<ILogger, long, Exception?> LogExpiredAutoDisableRecoverFailed =
+        LoggerMessage.Define<long>(
+            LogLevel.Error,
+            new EventId(0, "ChannelExpiredAutoDisableRecoverFailed"),
+            "Failed to recover expired auto-disabled channel channel_id={ChannelId}");
+
+    private static readonly Action<ILogger, long, Exception?> LogRecoveredAfterAutoDisableExpiry =
+        LoggerMessage.Define<long>(
+            LogLevel.Information,
+            new EventId(0, "ChannelRecoveredAfterAutoDisableExpiry"),
+            "Recovered channel after auto-disable expiry channel_id={ChannelId}");
+
+    private static readonly Action<ILogger, long, string, Exception?> LogRecoveredAfterApiKeyAvailability =
+        LoggerMessage.Define<long, string>(
+            LogLevel.Information,
+            new EventId(0, "ChannelRecoveredAfterApiKeyAvailability"),
+            "Re-enabled channel after API key availability recovered "
+            + "channel_id={ChannelId} channel_name={ChannelName}");
+
     /// <summary>
     /// Port of ChannelService.CreateChannel (channel.go:633-671) over the frozen
     /// createChannel pipeline (channel.go:547-631), extended with the live
@@ -2102,17 +2145,221 @@ public sealed class ChannelLifecycleService(
     }
 
     /// <summary>
+    /// Port of ChannelService.cleanupExpiredDisabledAPIKeys
+    /// (channel_apikey.go:393-436): the <c>"channel-disabled-api-key-cleanup"</c>
+    /// minute task. Under the reference's system bypass it prunes elapsed
+    /// temporary disable records, recovers channels disabled only because every
+    /// credential was unavailable, recovers channels whose auto-disable
+    /// deadline has passed, and asks for one enabled-channel reload when either
+    /// pass changed a row.
+    /// </summary>
+    /// <remarks>
+    /// The reference wraps the pass in a 30 second context timeout; the port
+    /// links the runner's token to a 30 second deadline. The pass captures one
+    /// UTC instant for every expiry comparison (the reference's successive
+    /// <c>time.Now()</c> calls are within the same instant for any observable
+    /// outcome).
+    /// </remarks>
+    public async Task CleanupExpiredDisabledApiKeysAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        var token = timeout.Token;
+        var now = DateTime.UtcNow;
+
+        IReadOnlyList<long> channelIds;
+        try
+        {
+            channelIds = await channels.ListCredentialCleanupChannelIdsAsync(token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (logger is not null)
+            {
+                LogCleanupQueryFailed(logger, ex);
+            }
+
+            return;
+        }
+
+        var needsReload = false;
+        foreach (var channelId in channelIds)
+        {
+            try
+            {
+                var (cleaned, removed) = await CleanupChannelExpiredDisabledApiKeysAsync(
+                        channelId,
+                        now,
+                        token)
+                    .ConfigureAwait(false);
+                if (!cleaned)
+                {
+                    continue;
+                }
+
+                if (logger is not null)
+                {
+                    LogCleanedExpiredKeys(logger, channelId, removed, null);
+                }
+
+                needsReload = true;
+            }
+            catch (Exception ex)
+            {
+                // The reference logs the per-channel failure and continues with
+                // the remaining channels (channel_apikey.go:410-417).
+                if (logger is not null)
+                {
+                    LogCleanupChannelFailed(logger, channelId, ex);
+                }
+            }
+        }
+
+        if (await CleanupExpiredAutoDisabledChannelsAsync(now, token).ConfigureAwait(false))
+        {
+            needsReload = true;
+        }
+
+        if (needsReload)
+        {
+            // channel_apikey.go:433-435: asyncReloadChannels.
+            RequestEnabledChannelsRefresh();
+        }
+    }
+
+    /// <summary>
+    /// Port of cleanupChannelExpiredDisabledAPIKeys (channel_apikey.go:491-516):
+    /// under <c>apiKeyOpsLock</c>, drops every elapsed disable record, writes the
+    /// surviving list and applies applyRecoveredChannelStatus. Returns whether a
+    /// write happened and how many records were removed.
+    /// </summary>
+    private async Task<(bool Cleaned, int Removed)> CleanupChannelExpiredDisabledApiKeysAsync(
+        long channelId,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        // The reference mutex (sync.Mutex) is not cancellable; block until it is free.
+        await ApiKeyOpsLock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            var snapshot = await GetChannelForApiKeyOpAsync(channelId, cancellationToken)
+                .ConfigureAwait(false);
+            var disabledKeys = ParseDisabledKeys(snapshot);
+
+            var active = new List<DisabledApiKey>(disabledKeys.Count);
+            var nowOffset = new DateTimeOffset(now, TimeSpan.Zero);
+            foreach (var disabled in disabledKeys)
+            {
+                if (!disabled.IsExpired(nowOffset))
+                {
+                    active.Add(disabled);
+                }
+            }
+
+            var removed = disabledKeys.Count - active.Count;
+            if (removed == 0)
+            {
+                return (false, 0);
+            }
+
+            await SaveApiKeyStateAsync(
+                    BuildEnableState(snapshot, snapshot.Credentials, null, active, now),
+                    "failed to update channel",
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return (true, removed);
+        }
+        finally
+        {
+            ApiKeyOpsLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Port of cleanupExpiredAutoDisabledChannels (channel_apikey.go:438-489):
+    /// every disabled channel whose auto-disable deadline has passed is switched
+    /// back to enabled and its error / auto-disable markers are cleared. The
+    /// per-row update re-checks the predicates so a concurrent manual status
+    /// change wins.
+    /// </summary>
+    private async Task<bool> CleanupExpiredAutoDisabledChannelsAsync(
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<long> channelIds;
+        try
+        {
+            channelIds = await channels
+                .ListExpiredAutoDisabledChannelIdsAsync(now, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (logger is not null)
+            {
+                LogExpiredAutoDisableQueryFailed(logger, ex);
+            }
+
+            return false;
+        }
+
+        if (channelIds.Count == 0)
+        {
+            return false;
+        }
+
+        var recovered = false;
+        foreach (var channelId in channelIds)
+        {
+            bool affected;
+            try
+            {
+                affected = await channels
+                    .RecoverExpiredAutoDisabledChannelAsync(channelId, now, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (logger is not null)
+                {
+                    LogExpiredAutoDisableRecoverFailed(logger, channelId, ex);
+                }
+
+                continue;
+            }
+
+            if (!affected)
+            {
+                continue;
+            }
+
+            if (logger is not null)
+            {
+                LogRecoveredAfterAutoDisableExpiry(logger, channelId, null);
+            }
+
+            recovered = true;
+        }
+
+        return recovered;
+    }
+
+    /// <summary>
     /// Builds the state row shared by the enable/delete operations: writes the
     /// new disabled list, optionally rewrites credentials, and applies
     /// applyRecoveredChannelStatus (channel_apikey.go:372-391).
     /// </summary>
-    private static ChannelApiKeyStateRecord BuildEnableState(
+    private ChannelApiKeyStateRecord BuildEnableState(
         ChannelRecord snapshot,
         string credentialsJsonForRefs,
         string? credentialsJsonToWrite,
-        IReadOnlyList<DisabledApiKey> disabledKeys)
+        IReadOnlyList<DisabledApiKey> disabledKeys,
+        DateTime? now = null)
     {
-        var now = DateTime.UtcNow;
+        var current = now ?? DateTime.UtcNow;
         var state = new ChannelApiKeyStateRecord
         {
             Id = snapshot.Id,
@@ -2128,9 +2375,15 @@ public sealed class ChannelLifecycleService(
             || ChannelCredentials.GetEnabledCredentialRefs(
                 credentialsJsonForRefs,
                 disabledKeys,
-                new DateTimeOffset(now)).Count == 0)
+                new DateTimeOffset(DateTime.SpecifyKind(current, DateTimeKind.Utc))).Count == 0)
         {
             return state;
+        }
+
+        if (logger is not null)
+        {
+            // channel_apikey.go:385-388.
+            LogRecoveredAfterApiKeyAvailability(logger, snapshot.Id, snapshot.Name, null);
         }
 
         state.Status = "enabled";

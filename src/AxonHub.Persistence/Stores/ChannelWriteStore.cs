@@ -204,6 +204,50 @@ public interface IChannelWriteStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of the expired-credential cleanup's candidate query
+    /// (channel_apikey.go:400-406): the live ids of every enabled or disabled
+    /// channel. ent's <c>IDs()</c> carries no ORDER BY; the port orders by id so
+    /// the pass is deterministic (the reference's per-channel work is
+    /// order-independent).
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The query failed; the message is the raw provider error (the caller logs
+    /// the reference's "Failed to query channels for expired API key cleanup").
+    /// </exception>
+    Task<IReadOnlyList<long>> ListCredentialCleanupChannelIdsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of cleanupExpiredAutoDisabledChannels' candidate query
+    /// (channel_apikey.go:440-451): the live disabled ids whose auto-disable
+    /// markers are both set and whose deadline has passed. Ordered by id for
+    /// determinism, like the ids query above.
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The query failed; the message is the raw provider error (the caller logs
+    /// the reference's "Failed to query expired auto-disabled channels").
+    /// </exception>
+    Task<IReadOnlyList<long>> ListExpiredAutoDisabledChannelIdsAsync(
+        DateTime now,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of cleanupExpiredAutoDisabledChannels' conditional update
+    /// (channel_apikey.go:458-470): re-checks the same predicates and switches
+    /// the row to enabled while clearing error_message, auto_disabled_at and
+    /// auto_disable_expires_at. Returns false when no row matched (ent
+    /// affected == 0: a concurrent recovery won the race).
+    /// </summary>
+    /// <exception cref="StoreFailureException">
+    /// The update failed; the message is the raw provider error (the caller logs
+    /// the reference's "Failed to recover expired auto-disabled channel").
+    /// </exception>
+    Task<bool> RecoverExpiredAutoDisabledChannelAsync(
+        long id,
+        DateTime now,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of the conditional update in markChannelUnavailable
     /// (channel_auto_disable.go:57-70): only a live, still-enabled channel is
     /// disabled, and the expires column is overwritten (a null clears it).
@@ -729,6 +773,92 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
         {
             // The caller wraps this with the operation-specific reference
             // prefix ("failed to disable api key: ...").
+            throw new StoreFailureException(ex.Message, ex);
+        }
+
+        return affected > 0;
+    }
+
+    public async Task<IReadOnlyList<long>> ListCredentialCleanupChannelIdsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // ent: Channel.Query().Where(StatusIn(enabled, disabled)).IDs(ctx).
+            return await db.Channels
+                .AsNoTracking()
+                .Where(row => row.DeletedAt == 0
+                    && (row.Status == "enabled" || row.Status == "disabled"))
+                .OrderBy(row => row.Id)
+                .Select(row => row.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(ex.Message, ex);
+        }
+    }
+
+    public async Task<IReadOnlyList<long>> ListExpiredAutoDisabledChannelIdsAsync(
+        DateTime now,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // ent: StatusEQ(disabled), AutoDisabledAtNotNil(),
+            // AutoDisableExpiresAtNotNil(), AutoDisableExpiresAtLTE(now).
+            return await db.Channels
+                .AsNoTracking()
+                .Where(row => row.DeletedAt == 0
+                    && row.Status == "disabled"
+                    && row.AutoDisabledAt != null
+                    && row.AutoDisableExpiresAt != null
+                    && row.AutoDisableExpiresAt <= now)
+                .OrderBy(row => row.Id)
+                .Select(row => row.Id)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new StoreFailureException(ex.Message, ex);
+        }
+    }
+
+    public async Task<bool> RecoverExpiredAutoDisabledChannelAsync(
+        long id,
+        DateTime now,
+        CancellationToken cancellationToken = default)
+    {
+        var updatedAt = DateTime.UtcNow;
+
+        int affected;
+        try
+        {
+            // ent: Channel.Update().Where(ID, StatusEQ(disabled),
+            // AutoDisabledAtNotNil(), AutoDisableExpiresAtNotNil(),
+            // AutoDisableExpiresAtLTE(now)).SetStatus(enabled).
+            // ClearErrorMessage().ClearAutoDisabledAt().ClearAutoDisableExpiresAt().Save(ctx).
+            affected = await db.Channels
+                .Where(row => row.Id == id
+                    && row.DeletedAt == 0
+                    && row.Status == "disabled"
+                    && row.AutoDisabledAt != null
+                    && row.AutoDisableExpiresAt != null
+                    && row.AutoDisableExpiresAt <= now)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(row => row.Status, "enabled")
+                        .SetProperty(row => row.ErrorMessage, (string?)null)
+                        .SetProperty(row => row.AutoDisabledAt, (DateTime?)null)
+                        .SetProperty(row => row.AutoDisableExpiresAt, (DateTime?)null)
+                        .SetProperty(row => row.UpdatedAt, updatedAt),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
             throw new StoreFailureException(ex.Message, ex);
         }
 

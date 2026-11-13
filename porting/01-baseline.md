@@ -1543,6 +1543,26 @@ AdminResidualEdgesEndpointTests 五例（APIKey 边作用域与 CREATED_AT 边�
 台账：新增 C284（resolved），更新 C196 (4)、C176 (6) 与 C014 的过时表述；284 条
 （203 accepted / 0 gap / 81 resolved）。
 
+2026-11-14 更新（§211）：每分钟清理过期禁用凭证并恢复自动禁用通道（C285）。
+参照 `internal/server/biz/channel.go:204-223` 的 `channel-disabled-api-key-cleanup`（`* * * * *`、
+UTC）与 `channel_apikey.go:393-516`：system bypass + 30 秒超时下查 status ∈ {enabled, disabled} 的
+通道，逐个在 `apiKeyOpsLock` 内剔除 `IsExpired()` 的禁用记录、写回 `disabled_api_keys`，并在
+`error_message` 以 "All API keys disabled" 开头且恢复后仍有启用凭证时按 applyRecoveredChannelStatus
+置 enabled 并清 error / autoDisabledAt / autoDisableExpiresAt；随后把 status=disabled、两个自动禁用
+标记非空且 `auto_disable_expires_at <= now` 的通道条件更新为 enabled 并清三列；单通道或查询失败只记
+日志，任一路径有变化才 `asyncReloadChannels`。端口新增
+`ChannelLifecycleService.CleanupExpiredDisabledApiKeysAsync`、`IChannelCredentialRecoveryGrain`
+（singleton / reminder 名 "channel-disabled-api-key-cleanup"，UTC 分钟边界、先 re-arm 再执行、stale
+tick 跳过）、`GrainChannelCredentialRecoveryRunner`（新建 scope 取 scoped 服务）与 `IChannelWriteStore`
+的三个 EF 方法（两个候选 id 查询 + 条件恢复）；`GrainSchedulerActivator` 启动时
+`EnsureScheduledAsync`。实现差异：候选 id 按 id 升序（参照 ent 的 `IDs()` 无 ORDER BY，逐通道工作与
+顺序无关）；一次 pass 捕获一个 UTC now；30 秒超时用 linked CTS；恢复日志并入共享
+`BuildEnableState` 路径（enable / enableAll / delete / cleanup 共用）。测试：Api
+ChannelCredentialRecoveryTests 11 例、Grains ChannelCredentialRecoveryGrainTests 6 例、Persistence
+ChannelWriteStoreTests 三例；定向运行 Persistence ChannelWriteStoreTests 56、Api 新类 11、Grains 新类
+6 通过；未跑 Api 全量回归。台账：新增 C285（resolved），更新 C132 的过时表述（GcCronSchedule 已实现
+Next，恢复运行时由 §211 接线）；285 条（203 accepted / 0 gap / 82 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

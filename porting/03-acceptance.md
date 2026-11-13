@@ -1984,6 +1984,20 @@ Persistence 3、受影响 8 类 147 通过；未跑 Api 全量回归。台账：
 C176 (6) / C014 更新；lint 通过；02-differences.md 已重新生成；284 条
 （203 accepted / 0 gap / 81 resolved）。
 
+§211（2026-11-14）每分钟清理过期禁用凭证并恢复自动禁用通道（C285）。参照 channel.go:204-223 的
+"channel-disabled-api-key-cleanup"（`* * * * *` UTC）与 channel_apikey.go:393-516：system bypass +
+30 秒超时下列出 enabled/disabled 通道，逐个在 apiKeyOpsLock 内剔除过期禁用记录、写回
+disabled_api_keys，并在 all-keys-disabled 标记失效后恢复通道；再把自动禁用到期（status=disabled、
+两个标记非空、expires_at<=now）的通道条件更新为 enabled 并清 error / autoDisabledAt /
+autoDisableExpiresAt；失败只记日志，有变化才请求一次 enabled-channel 刷新。端口新增
+ChannelLifecycleService.CleanupExpiredDisabledApiKeysAsync、IChannelCredentialRecoveryGrain（UTC
+分钟 reminder，先 re-arm 再执行，stale tick 跳过）、GrainChannelCredentialRecoveryRunner 与
+IChannelWriteStore 的三个 EF 方法；启动时由 GrainSchedulerActivator 武装。差异：候选 id 按 id 升序
+（参照无 ORDER BY）、一次 pass 一个 UTC now、30 秒 linked CTS、恢复日志并入共享 BuildEnableState。
+测试：新增 Api 11 例、Grains 6 例、Persistence 3 例；定向运行 Persistence 56、Api 新类 11、Grains
+新类 6 通过；未跑 Api 全量回归。台账：C285 新增 resolved；C132 更新；lint 通过；
+02-differences.md 已重新生成；285 条（203 accepted / 0 gap / 82 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

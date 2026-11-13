@@ -410,6 +410,13 @@ builder.Services.AddScoped<ChannelQueryService>();
 builder.Services.AddScoped<IChannelWriteStore, ChannelWriteStore>();
 builder.Services.AddScoped<ChannelLifecycleService>();
 
+// The reference's "channel-disabled-api-key-cleanup" minute task
+// (channel.go:204-223): the grain owns the cadence, the runner opens a fresh
+// scope around the scoped lifecycle service. The reference runs the pass under
+// authz.WithSystemBypass (channel_apikey.go:398); the cleanup path performs no
+// Channel query policy evaluation.
+builder.Services.AddSingleton<IChannelCredentialRecoveryRunner, GrainChannelCredentialRecoveryRunner>();
+
 // Automatic credential/channel disabling (biz/channel_auto_disable.go, C236):
 // the counter maps live for the process lifetime like the reference's
 // ChannelService fields, the engine evaluates one failure at a time through the

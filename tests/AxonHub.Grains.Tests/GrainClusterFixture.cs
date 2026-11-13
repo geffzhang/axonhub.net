@@ -69,6 +69,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
     /// <summary>The channel-probe minute task's runner seam (C249).</summary>
     public FakeChannelProbeRunRunner ChannelProbeRun { get; } = new();
 
+    /// <summary>The expired-credential recovery minute task's runner seam (§211).</summary>
+    public FakeChannelCredentialRecoveryRunner ChannelCredentialRecovery { get; } = new();
+
     public async Task InitializeAsync()
     {
         GrainTestSiloConfigurator.ChannelProvider = Channels;
@@ -86,6 +89,7 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.VideoStorageSchedule = VideoStorageSchedule;
         GrainTestSiloConfigurator.VideoStorageScan = VideoStorageScan;
         GrainTestSiloConfigurator.ChannelProbeRun = ChannelProbeRun;
+        GrainTestSiloConfigurator.ChannelCredentialRecovery = ChannelCredentialRecovery;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -112,6 +116,7 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.VideoStorageSchedule = null;
         GrainTestSiloConfigurator.VideoStorageScan = null;
         GrainTestSiloConfigurator.ChannelProbeRun = null;
+        GrainTestSiloConfigurator.ChannelCredentialRecovery = null;
     }
 }
 
@@ -147,6 +152,8 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static FakeChannelProbeRunRunner? ChannelProbeRun { get; set; }
 
+    public static FakeChannelCredentialRecoveryRunner? ChannelCredentialRecovery { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
@@ -173,6 +180,7 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton<IVideoStorageScheduleSource>(VideoStorageSchedule!);
             services.AddSingleton<IVideoStorageScanRunner>(VideoStorageScan!);
             services.AddSingleton<IChannelProbeRunRunner>(ChannelProbeRun!);
+            services.AddSingleton<IChannelCredentialRecoveryRunner>(ChannelCredentialRecovery!);
         });
     }
 }
