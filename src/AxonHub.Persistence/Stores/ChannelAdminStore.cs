@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
+using static AxonHub.Persistence.ConnectionSql;
 
 namespace AxonHub.Persistence;
 
@@ -16,32 +17,316 @@ public enum ChannelSortField
     OrderingWeight,
 }
 
-/// <summary>Subset of ent.ChannelWhereInput used by the management frontend.</summary>
+/// <summary>Port of the scalar predicates of ent.ChannelWhereInput.</summary>
 public sealed record ChannelListFilter
 {
     public long? Id { get; init; }
 
+    public long? IdNEQ { get; init; }
+
     public IReadOnlyList<long>? IdIn { get; init; }
+
+    public IReadOnlyList<long>? IdNotIn { get; init; }
+
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
 
     public string? Type { get; init; }
 
+    public string? TypeNEQ { get; init; }
+
     public IReadOnlyList<string>? TypeIn { get; init; }
+
+    public IReadOnlyList<string>? TypeNotIn { get; init; }
+
+    public string? BaseURL { get; init; }
+
+    public string? BaseURLNEQ { get; init; }
+
+    public IReadOnlyList<string>? BaseURLIn { get; init; }
+
+    public IReadOnlyList<string>? BaseURLNotIn { get; init; }
+
+    public string? BaseURLGT { get; init; }
+
+    public string? BaseURLGTE { get; init; }
+
+    public string? BaseURLLT { get; init; }
+
+    public string? BaseURLLTE { get; init; }
+
+    public string? BaseURLContains { get; init; }
+
+    public string? BaseURLHasPrefix { get; init; }
+
+    public string? BaseURLHasSuffix { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool BaseURLIsNil { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool BaseURLNotNil { get; init; }
+
+    public string? BaseURLEqualFold { get; init; }
+
+    public string? BaseURLContainsFold { get; init; }
 
     public string? Name { get; init; }
 
+    public string? NameNEQ { get; init; }
+
     public IReadOnlyList<string>? NameIn { get; init; }
+
+    public IReadOnlyList<string>? NameNotIn { get; init; }
+
+    public string? NameGT { get; init; }
+
+    public string? NameGTE { get; init; }
+
+    public string? NameLT { get; init; }
+
+    public string? NameLTE { get; init; }
+
+    public string? NameContains { get; init; }
+
+    public string? NameHasPrefix { get; init; }
+
+    public string? NameHasSuffix { get; init; }
+
+    public string? NameEqualFold { get; init; }
 
     public string? NameContainsFold { get; init; }
 
     public string? Status { get; init; }
 
+    public string? StatusNEQ { get; init; }
+
     public IReadOnlyList<string>? StatusIn { get; init; }
+
+    public IReadOnlyList<string>? StatusNotIn { get; init; }
+
+    public bool? AutoSyncSupportedModels { get; init; }
+
+    public bool? AutoSyncSupportedModelsNEQ { get; init; }
+
+    public string? AutoSyncModelPattern { get; init; }
+
+    public string? AutoSyncModelPatternNEQ { get; init; }
+
+    public IReadOnlyList<string>? AutoSyncModelPatternIn { get; init; }
+
+    public IReadOnlyList<string>? AutoSyncModelPatternNotIn { get; init; }
+
+    public string? AutoSyncModelPatternGT { get; init; }
+
+    public string? AutoSyncModelPatternGTE { get; init; }
+
+    public string? AutoSyncModelPatternLT { get; init; }
+
+    public string? AutoSyncModelPatternLTE { get; init; }
+
+    public string? AutoSyncModelPatternContains { get; init; }
+
+    public string? AutoSyncModelPatternHasPrefix { get; init; }
+
+    public string? AutoSyncModelPatternHasSuffix { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AutoSyncModelPatternIsNil { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AutoSyncModelPatternNotNil { get; init; }
+
+    public string? AutoSyncModelPatternEqualFold { get; init; }
+
+    public string? AutoSyncModelPatternContainsFold { get; init; }
+
+    public string? DefaultTestModel { get; init; }
+
+    public string? DefaultTestModelNEQ { get; init; }
+
+    public IReadOnlyList<string>? DefaultTestModelIn { get; init; }
+
+    public IReadOnlyList<string>? DefaultTestModelNotIn { get; init; }
+
+    public string? DefaultTestModelGT { get; init; }
+
+    public string? DefaultTestModelGTE { get; init; }
+
+    public string? DefaultTestModelLT { get; init; }
+
+    public string? DefaultTestModelLTE { get; init; }
+
+    public string? DefaultTestModelContains { get; init; }
+
+    public string? DefaultTestModelHasPrefix { get; init; }
+
+    public string? DefaultTestModelHasSuffix { get; init; }
+
+    public string? DefaultTestModelEqualFold { get; init; }
+
+    public string? DefaultTestModelContainsFold { get; init; }
+
+    public long? OrderingWeight { get; init; }
+
+    public long? OrderingWeightNEQ { get; init; }
+
+    public IReadOnlyList<long>? OrderingWeightIn { get; init; }
+
+    public IReadOnlyList<long>? OrderingWeightNotIn { get; init; }
+
+    public long? OrderingWeightGT { get; init; }
+
+    public long? OrderingWeightGTE { get; init; }
+
+    public long? OrderingWeightLT { get; init; }
+
+    public long? OrderingWeightLTE { get; init; }
+
+    public string? ErrorMessage { get; init; }
+
+    public string? ErrorMessageNEQ { get; init; }
+
+    public IReadOnlyList<string>? ErrorMessageIn { get; init; }
+
+    public IReadOnlyList<string>? ErrorMessageNotIn { get; init; }
+
+    public string? ErrorMessageGT { get; init; }
+
+    public string? ErrorMessageGTE { get; init; }
+
+    public string? ErrorMessageLT { get; init; }
+
+    public string? ErrorMessageLTE { get; init; }
+
+    public string? ErrorMessageContains { get; init; }
+
+    public string? ErrorMessageHasPrefix { get; init; }
+
+    public string? ErrorMessageHasSuffix { get; init; }
 
     /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
     public bool ErrorMessageIsNil { get; init; }
 
     /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
     public bool ErrorMessageNotNil { get; init; }
+
+    public string? ErrorMessageEqualFold { get; init; }
+
+    public string? ErrorMessageContainsFold { get; init; }
+
+    public DateTime? AutoDisabledAt { get; init; }
+
+    public DateTime? AutoDisabledAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? AutoDisabledAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? AutoDisabledAtNotIn { get; init; }
+
+    public DateTime? AutoDisabledAtGT { get; init; }
+
+    public DateTime? AutoDisabledAtGTE { get; init; }
+
+    public DateTime? AutoDisabledAtLT { get; init; }
+
+    public DateTime? AutoDisabledAtLTE { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AutoDisabledAtIsNil { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AutoDisabledAtNotNil { get; init; }
+
+    public DateTime? AutoDisableExpiresAt { get; init; }
+
+    public DateTime? AutoDisableExpiresAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? AutoDisableExpiresAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? AutoDisableExpiresAtNotIn { get; init; }
+
+    public DateTime? AutoDisableExpiresAtGT { get; init; }
+
+    public DateTime? AutoDisableExpiresAtGTE { get; init; }
+
+    public DateTime? AutoDisableExpiresAtLT { get; init; }
+
+    public DateTime? AutoDisableExpiresAtLTE { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AutoDisableExpiresAtIsNil { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool AutoDisableExpiresAtNotNil { get; init; }
+
+    public string? Remark { get; init; }
+
+    public string? RemarkNEQ { get; init; }
+
+    public IReadOnlyList<string>? RemarkIn { get; init; }
+
+    public IReadOnlyList<string>? RemarkNotIn { get; init; }
+
+    public string? RemarkGT { get; init; }
+
+    public string? RemarkGTE { get; init; }
+
+    public string? RemarkLT { get; init; }
+
+    public string? RemarkLTE { get; init; }
+
+    public string? RemarkContains { get; init; }
+
+    public string? RemarkHasPrefix { get; init; }
+
+    public string? RemarkHasSuffix { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool RemarkIsNil { get; init; }
+
+    /// <summary>Ent reads the GraphQL field as a plain bool, so only true applies.</summary>
+    public bool RemarkNotNil { get; init; }
+
+    public string? RemarkEqualFold { get; init; }
+
+    public string? RemarkContainsFold { get; init; }
 
     public ChannelListFilter? Not { get; init; }
 
@@ -453,57 +738,214 @@ public sealed class ChannelAdminStore(AxonHubDbContext db) : IChannelAdminStore
 
         var predicates = new List<string?>();
 
-        if (filter.Id is not null)
-        {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
-        }
-
+        AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
         if (filter.IdIn is not null)
         {
-            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+            AppendIdIn(predicates, alias, "id", filter.IdIn, args);
         }
 
-        if (filter.Type is not null)
+        if (filter.IdNotIn is not null)
         {
-            predicates.Add(alias + ".\"type\" = " + args.Add(filter.Type));
+            AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
         }
 
+        AppendComparison(predicates, alias, "id", filter.IdGT, ">", args);
+        AppendComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
+        AppendComparison(predicates, alias, "id", filter.IdLT, "<", args);
+        AppendComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAt, "=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtIn, args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAt, "=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtIn, args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLTE, "<=", args);
+
+        AppendComparison(predicates, alias, "type", filter.Type, "=", args);
+        AppendComparison(predicates, alias, "type", filter.TypeNEQ, "<>", args);
         if (filter.TypeIn is not null)
         {
-            ConnectionSql.AppendStringIn(predicates, alias, "type", filter.TypeIn, args);
+            AppendStringIn(predicates, alias, "type", filter.TypeIn, args);
         }
 
-        if (filter.Name is not null)
+        if (filter.TypeNotIn is not null)
         {
-            predicates.Add(alias + ".\"name\" = " + args.Add(filter.Name));
+            AppendStringIn(predicates, alias, "type", filter.TypeNotIn, args, negate: true);
         }
 
-        if (filter.NameIn is not null)
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "base_url",
+            filter.BaseURL,
+            filter.BaseURLNEQ,
+            filter.BaseURLIn,
+            filter.BaseURLNotIn,
+            filter.BaseURLGT,
+            filter.BaseURLGTE,
+            filter.BaseURLLT,
+            filter.BaseURLLTE,
+            filter.BaseURLContains,
+            filter.BaseURLHasPrefix,
+            filter.BaseURLHasSuffix,
+            filter.BaseURLEqualFold,
+            filter.BaseURLContainsFold,
+            args);
+        if (filter.BaseURLIsNil)
         {
-            ConnectionSql.AppendStringIn(predicates, alias, "name", filter.NameIn, args);
+            predicates.Add(alias + ".\"base_url\" IS NULL");
         }
 
-        if (filter.NameContainsFold is not null)
+        if (filter.BaseURLNotNil)
         {
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                "name",
-                "LIKE",
-                filter.NameContainsFold,
-                args);
+            predicates.Add(alias + ".\"base_url\" IS NOT NULL");
         }
 
-        if (filter.Status is not null)
-        {
-            predicates.Add(alias + ".\"status\" = " + args.Add(filter.Status));
-        }
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "name",
+            filter.Name,
+            filter.NameNEQ,
+            filter.NameIn,
+            filter.NameNotIn,
+            filter.NameGT,
+            filter.NameGTE,
+            filter.NameLT,
+            filter.NameLTE,
+            filter.NameContains,
+            filter.NameHasPrefix,
+            filter.NameHasSuffix,
+            filter.NameEqualFold,
+            filter.NameContainsFold,
+            args);
 
+        AppendComparison(predicates, alias, "status", filter.Status, "=", args);
+        AppendComparison(predicates, alias, "status", filter.StatusNEQ, "<>", args);
         if (filter.StatusIn is not null)
         {
-            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+            AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
         }
 
+        if (filter.StatusNotIn is not null)
+        {
+            AppendStringIn(predicates, alias, "status", filter.StatusNotIn, args, negate: true);
+        }
+
+        if (filter.AutoSyncSupportedModels is not null)
+        {
+            predicates.Add(
+                alias + ".\"auto_sync_supported_models\" = "
+                + args.Add(filter.AutoSyncSupportedModels.Value));
+        }
+
+        if (filter.AutoSyncSupportedModelsNEQ is not null)
+        {
+            predicates.Add(
+                alias + ".\"auto_sync_supported_models\" <> "
+                + args.Add(filter.AutoSyncSupportedModelsNEQ.Value));
+        }
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "auto_sync_model_pattern",
+            filter.AutoSyncModelPattern,
+            filter.AutoSyncModelPatternNEQ,
+            filter.AutoSyncModelPatternIn,
+            filter.AutoSyncModelPatternNotIn,
+            filter.AutoSyncModelPatternGT,
+            filter.AutoSyncModelPatternGTE,
+            filter.AutoSyncModelPatternLT,
+            filter.AutoSyncModelPatternLTE,
+            filter.AutoSyncModelPatternContains,
+            filter.AutoSyncModelPatternHasPrefix,
+            filter.AutoSyncModelPatternHasSuffix,
+            filter.AutoSyncModelPatternEqualFold,
+            filter.AutoSyncModelPatternContainsFold,
+            args);
+        if (filter.AutoSyncModelPatternIsNil)
+        {
+            predicates.Add(alias + ".\"auto_sync_model_pattern\" IS NULL");
+        }
+
+        if (filter.AutoSyncModelPatternNotNil)
+        {
+            predicates.Add(alias + ".\"auto_sync_model_pattern\" IS NOT NULL");
+        }
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "default_test_model",
+            filter.DefaultTestModel,
+            filter.DefaultTestModelNEQ,
+            filter.DefaultTestModelIn,
+            filter.DefaultTestModelNotIn,
+            filter.DefaultTestModelGT,
+            filter.DefaultTestModelGTE,
+            filter.DefaultTestModelLT,
+            filter.DefaultTestModelLTE,
+            filter.DefaultTestModelContains,
+            filter.DefaultTestModelHasPrefix,
+            filter.DefaultTestModelHasSuffix,
+            filter.DefaultTestModelEqualFold,
+            filter.DefaultTestModelContainsFold,
+            args);
+
+        AppendComparison(predicates, alias, "ordering_weight", filter.OrderingWeight, "=", args);
+        AppendComparison(predicates, alias, "ordering_weight", filter.OrderingWeightNEQ, "<>", args);
+        if (filter.OrderingWeightIn is not null)
+        {
+            AppendIdIn(predicates, alias, "ordering_weight", filter.OrderingWeightIn, args);
+        }
+
+        if (filter.OrderingWeightNotIn is not null)
+        {
+            AppendIdIn(
+                predicates,
+                alias,
+                "ordering_weight",
+                filter.OrderingWeightNotIn,
+                args,
+                negate: true);
+        }
+
+        AppendComparison(predicates, alias, "ordering_weight", filter.OrderingWeightGT, ">", args);
+        AppendComparison(predicates, alias, "ordering_weight", filter.OrderingWeightGTE, ">=", args);
+        AppendComparison(predicates, alias, "ordering_weight", filter.OrderingWeightLT, "<", args);
+        AppendComparison(predicates, alias, "ordering_weight", filter.OrderingWeightLTE, "<=", args);
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "error_message",
+            filter.ErrorMessage,
+            filter.ErrorMessageNEQ,
+            filter.ErrorMessageIn,
+            filter.ErrorMessageNotIn,
+            filter.ErrorMessageGT,
+            filter.ErrorMessageGTE,
+            filter.ErrorMessageLT,
+            filter.ErrorMessageLTE,
+            filter.ErrorMessageContains,
+            filter.ErrorMessageHasPrefix,
+            filter.ErrorMessageHasSuffix,
+            filter.ErrorMessageEqualFold,
+            filter.ErrorMessageContainsFold,
+            args);
         if (filter.ErrorMessageIsNil)
         {
             predicates.Add(alias + ".\"error_message\" IS NULL");
@@ -512,6 +954,88 @@ public sealed class ChannelAdminStore(AxonHubDbContext db) : IChannelAdminStore
         if (filter.ErrorMessageNotNil)
         {
             predicates.Add(alias + ".\"error_message\" IS NOT NULL");
+        }
+
+        AppendComparison(predicates, alias, "auto_disabled_at", filter.AutoDisabledAt, "=", args);
+        AppendComparison(predicates, alias, "auto_disabled_at", filter.AutoDisabledAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "auto_disabled_at", filter.AutoDisabledAtIn, args);
+        AppendTimeIn(predicates, alias, "auto_disabled_at", filter.AutoDisabledAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "auto_disabled_at", filter.AutoDisabledAtGT, ">", args);
+        AppendComparison(predicates, alias, "auto_disabled_at", filter.AutoDisabledAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "auto_disabled_at", filter.AutoDisabledAtLT, "<", args);
+        AppendComparison(predicates, alias, "auto_disabled_at", filter.AutoDisabledAtLTE, "<=", args);
+        if (filter.AutoDisabledAtIsNil)
+        {
+            predicates.Add(alias + ".\"auto_disabled_at\" IS NULL");
+        }
+
+        if (filter.AutoDisabledAtNotNil)
+        {
+            predicates.Add(alias + ".\"auto_disabled_at\" IS NOT NULL");
+        }
+
+        AppendComparison(
+            predicates,
+            alias,
+            "auto_disable_expires_at",
+            filter.AutoDisableExpiresAt,
+            "=",
+            args);
+        AppendComparison(
+            predicates,
+            alias,
+            "auto_disable_expires_at",
+            filter.AutoDisableExpiresAtNEQ,
+            "<>",
+            args);
+        AppendTimeIn(predicates, alias, "auto_disable_expires_at", filter.AutoDisableExpiresAtIn, args);
+        AppendTimeIn(
+            predicates,
+            alias,
+            "auto_disable_expires_at",
+            filter.AutoDisableExpiresAtNotIn,
+            args,
+            negate: true);
+        AppendComparison(predicates, alias, "auto_disable_expires_at", filter.AutoDisableExpiresAtGT, ">", args);
+        AppendComparison(predicates, alias, "auto_disable_expires_at", filter.AutoDisableExpiresAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "auto_disable_expires_at", filter.AutoDisableExpiresAtLT, "<", args);
+        AppendComparison(predicates, alias, "auto_disable_expires_at", filter.AutoDisableExpiresAtLTE, "<=", args);
+        if (filter.AutoDisableExpiresAtIsNil)
+        {
+            predicates.Add(alias + ".\"auto_disable_expires_at\" IS NULL");
+        }
+
+        if (filter.AutoDisableExpiresAtNotNil)
+        {
+            predicates.Add(alias + ".\"auto_disable_expires_at\" IS NOT NULL");
+        }
+
+        AppendStringPredicates(
+            predicates,
+            alias,
+            "remark",
+            filter.Remark,
+            filter.RemarkNEQ,
+            filter.RemarkIn,
+            filter.RemarkNotIn,
+            filter.RemarkGT,
+            filter.RemarkGTE,
+            filter.RemarkLT,
+            filter.RemarkLTE,
+            filter.RemarkContains,
+            filter.RemarkHasPrefix,
+            filter.RemarkHasSuffix,
+            filter.RemarkEqualFold,
+            filter.RemarkContainsFold,
+            args);
+        if (filter.RemarkIsNil)
+        {
+            predicates.Add(alias + ".\"remark\" IS NULL");
+        }
+
+        if (filter.RemarkNotNil)
+        {
+            predicates.Add(alias + ".\"remark\" IS NOT NULL");
         }
 
         if (filter.Not is not null)

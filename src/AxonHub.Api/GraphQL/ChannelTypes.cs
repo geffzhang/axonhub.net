@@ -289,38 +289,383 @@ public sealed class ChannelOrder
 }
 
 /// <summary>
-/// Port of the subset of <c>ChannelWhereInput</c> used by the management
-/// frontend (id/idIn, type/typeIn, name/nameIn/nameContainsFold,
-/// status/statusIn, errorMessageIsNil/NotNil, and/or/not). The remaining ent
-/// predicates are a registered gap (C135).
+/// Port of <c>ChannelWhereInput</c> (ent.graphql:1349-1576). All scalar field
+/// predicates are modeled; the six edge predicates (hasRequests, hasExecutions,
+/// hasUsageLogs, hasChannelProbes, hasChannelModelPrices,
+/// hasProviderQuotaStatus) remain a registered gap (C135).
 /// </summary>
 public sealed class ChannelWhereInput
 {
+    [GraphQLName("id")]
     [GraphQLType(typeof(IdType))]
     public string? Id { get; set; }
 
+    [GraphQLName("idNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLName("idIn")]
     [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
     public IReadOnlyList<string>? IdIn { get; set; }
 
+    [GraphQLName("idNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLName("idGT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLName("idGTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLName("idLT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLName("idLTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
     public ChannelTypeValue? Type { get; set; }
+
+    public ChannelTypeValue? TypeNEQ { get; set; }
 
     public IReadOnlyList<ChannelTypeValue>? TypeIn { get; set; }
 
+    public IReadOnlyList<ChannelTypeValue>? TypeNotIn { get; set; }
+
+    [GraphQLName("baseURL")]
+    public string? BaseURL { get; set; }
+
+    [GraphQLName("baseURLNEQ")]
+    public string? BaseURLNEQ { get; set; }
+
+    [GraphQLName("baseURLIn")]
+    public IReadOnlyList<string>? BaseURLIn { get; set; }
+
+    [GraphQLName("baseURLNotIn")]
+    public IReadOnlyList<string>? BaseURLNotIn { get; set; }
+
+    [GraphQLName("baseURLGT")]
+    public string? BaseURLGT { get; set; }
+
+    [GraphQLName("baseURLGTE")]
+    public string? BaseURLGTE { get; set; }
+
+    [GraphQLName("baseURLLT")]
+    public string? BaseURLLT { get; set; }
+
+    [GraphQLName("baseURLLTE")]
+    public string? BaseURLLTE { get; set; }
+
+    [GraphQLName("baseURLContains")]
+    public string? BaseURLContains { get; set; }
+
+    [GraphQLName("baseURLHasPrefix")]
+    public string? BaseURLHasPrefix { get; set; }
+
+    [GraphQLName("baseURLHasSuffix")]
+    public string? BaseURLHasSuffix { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    [GraphQLName("baseURLIsNil")]
+    public bool? BaseURLIsNil { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    [GraphQLName("baseURLNotNil")]
+    public bool? BaseURLNotNil { get; set; }
+
+    [GraphQLName("baseURLEqualFold")]
+    public string? BaseURLEqualFold { get; set; }
+
+    [GraphQLName("baseURLContainsFold")]
+    public string? BaseURLContainsFold { get; set; }
+
     public string? Name { get; set; }
 
+    public string? NameNEQ { get; set; }
+
     public IReadOnlyList<string>? NameIn { get; set; }
+
+    public IReadOnlyList<string>? NameNotIn { get; set; }
+
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
+    public string? NameContains { get; set; }
+
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
 
     public string? NameContainsFold { get; set; }
 
     public ChannelStatusValue? Status { get; set; }
 
+    public ChannelStatusValue? StatusNEQ { get; set; }
+
     public IReadOnlyList<ChannelStatusValue>? StatusIn { get; set; }
+
+    public IReadOnlyList<ChannelStatusValue>? StatusNotIn { get; set; }
+
+    public bool? AutoSyncSupportedModels { get; set; }
+
+    public bool? AutoSyncSupportedModelsNEQ { get; set; }
+
+    public string? AutoSyncModelPattern { get; set; }
+
+    public string? AutoSyncModelPatternNEQ { get; set; }
+
+    public IReadOnlyList<string>? AutoSyncModelPatternIn { get; set; }
+
+    public IReadOnlyList<string>? AutoSyncModelPatternNotIn { get; set; }
+
+    public string? AutoSyncModelPatternGT { get; set; }
+
+    public string? AutoSyncModelPatternGTE { get; set; }
+
+    public string? AutoSyncModelPatternLT { get; set; }
+
+    public string? AutoSyncModelPatternLTE { get; set; }
+
+    public string? AutoSyncModelPatternContains { get; set; }
+
+    public string? AutoSyncModelPatternHasPrefix { get; set; }
+
+    public string? AutoSyncModelPatternHasSuffix { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? AutoSyncModelPatternIsNil { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? AutoSyncModelPatternNotNil { get; set; }
+
+    public string? AutoSyncModelPatternEqualFold { get; set; }
+
+    public string? AutoSyncModelPatternContainsFold { get; set; }
+
+    public string? DefaultTestModel { get; set; }
+
+    public string? DefaultTestModelNEQ { get; set; }
+
+    public IReadOnlyList<string>? DefaultTestModelIn { get; set; }
+
+    public IReadOnlyList<string>? DefaultTestModelNotIn { get; set; }
+
+    public string? DefaultTestModelGT { get; set; }
+
+    public string? DefaultTestModelGTE { get; set; }
+
+    public string? DefaultTestModelLT { get; set; }
+
+    public string? DefaultTestModelLTE { get; set; }
+
+    public string? DefaultTestModelContains { get; set; }
+
+    public string? DefaultTestModelHasPrefix { get; set; }
+
+    public string? DefaultTestModelHasSuffix { get; set; }
+
+    public string? DefaultTestModelEqualFold { get; set; }
+
+    public string? DefaultTestModelContainsFold { get; set; }
+
+    public int? OrderingWeight { get; set; }
+
+    public int? OrderingWeightNEQ { get; set; }
+
+    public IReadOnlyList<int>? OrderingWeightIn { get; set; }
+
+    public IReadOnlyList<int>? OrderingWeightNotIn { get; set; }
+
+    public int? OrderingWeightGT { get; set; }
+
+    public int? OrderingWeightGTE { get; set; }
+
+    public int? OrderingWeightLT { get; set; }
+
+    public int? OrderingWeightLTE { get; set; }
+
+    public string? ErrorMessage { get; set; }
+
+    public string? ErrorMessageNEQ { get; set; }
+
+    public IReadOnlyList<string>? ErrorMessageIn { get; set; }
+
+    public IReadOnlyList<string>? ErrorMessageNotIn { get; set; }
+
+    public string? ErrorMessageGT { get; set; }
+
+    public string? ErrorMessageGTE { get; set; }
+
+    public string? ErrorMessageLT { get; set; }
+
+    public string? ErrorMessageLTE { get; set; }
+
+    public string? ErrorMessageContains { get; set; }
+
+    public string? ErrorMessageHasPrefix { get; set; }
+
+    public string? ErrorMessageHasSuffix { get; set; }
 
     /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
     public bool? ErrorMessageIsNil { get; set; }
 
     /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
     public bool? ErrorMessageNotNil { get; set; }
+
+    public string? ErrorMessageEqualFold { get; set; }
+
+    public string? ErrorMessageContainsFold { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisabledAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisabledAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? AutoDisabledAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? AutoDisabledAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisabledAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisabledAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisabledAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisabledAtLTE { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? AutoDisabledAtIsNil { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? AutoDisabledAtNotNil { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisableExpiresAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisableExpiresAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? AutoDisableExpiresAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? AutoDisableExpiresAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisableExpiresAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisableExpiresAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisableExpiresAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? AutoDisableExpiresAtLTE { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? AutoDisableExpiresAtIsNil { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? AutoDisableExpiresAtNotNil { get; set; }
+
+    public string? Remark { get; set; }
+
+    public string? RemarkNEQ { get; set; }
+
+    public IReadOnlyList<string>? RemarkIn { get; set; }
+
+    public IReadOnlyList<string>? RemarkNotIn { get; set; }
+
+    public string? RemarkGT { get; set; }
+
+    public string? RemarkGTE { get; set; }
+
+    public string? RemarkLT { get; set; }
+
+    public string? RemarkLTE { get; set; }
+
+    public string? RemarkContains { get; set; }
+
+    public string? RemarkHasPrefix { get; set; }
+
+    public string? RemarkHasSuffix { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? RemarkIsNil { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool? RemarkNotNil { get; set; }
+
+    public string? RemarkEqualFold { get; set; }
+
+    public string? RemarkContainsFold { get; set; }
 
     public ChannelWhereInput? Not { get; set; }
 

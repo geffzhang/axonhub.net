@@ -1747,6 +1747,20 @@ AdminUsersRolesProjectPrivacyEndpointTests 新增 3 例（重复成员报告插�
 回归 182 通过 / 0 失败（2026-11-13）。台账：C014 由 gap 改为 resolved；lint 通过；
 `02-differences.md` 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
 
+§199（2026-11-13）ChannelWhereInput 标量谓词全量建模（C135 第一刀）。
+
+参照 ent.graphql:1349-1576 的 ChannelWhereInput 有 148 个标量谓词；端口此前只建模前端
+实际使用的 14 个字段。§199 把 15 个字段族的 148 个谓词全部加入 GraphQL 输入与
+ChannelListFilter，GID / Time / 枚举 / int→long / IsNil 布尔映射逐项对齐；存储层把
+ApiKeyProfileTemplateStore 内部的 ent 谓词翻译 helper 上提到 ConnectionSql 共用，语义保持
+LIKE / LOWER / IN / NOT IN 与空列表 false / true、NULL 行排除。
+
+测试：ChannelAdminStoreTests 新增 3 例（Postgres），7 通过；AdminChannelsEndpointTests 新增
+2 例（逐族映射 + introspection 字段名集合），41 通过；ApiKeyProfileTemplate 持久化 4 通过
+（helper 上提后行为不变）。台账：C135 保持 gap，剩余 6 组边谓词与 User / RoleWhereInput 的
+全量谓词；lint 通过；02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74
+resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

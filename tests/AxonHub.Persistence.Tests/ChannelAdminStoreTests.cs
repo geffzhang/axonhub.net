@@ -188,6 +188,344 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         Assert.Equal(3, emptyStatuses.Sum(static row => row.Count));
     }
 
+    [Fact]
+    public async Task ListAppliesIdTimeAndOrderingWeightPredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelAdminStore(context);
+
+        var t0 = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+        var t1 = new DateTime(2026, 3, 2, 0, 0, 0, DateTimeKind.Utc);
+        var t2 = new DateTime(2026, 3, 3, 0, 0, 0, DateTimeKind.Utc);
+
+        var alpha = await SeedChannelAsync(
+            context, "openai", "Alpha", "enabled", weight: 3, createdAt: t0, updatedAt: t0);
+        var bravo = await SeedChannelAsync(
+            context, "anthropic", "Bravo", "disabled", weight: 1, createdAt: t1, updatedAt: t1);
+        var charlie = await SeedChannelAsync(
+            context, "openai", "Charlie", "enabled", weight: 2, createdAt: t2, updatedAt: t2);
+
+        async Task<long[]> QueryAsync(ChannelListFilter where)
+            => (await store.ListAsync(new ChannelListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { Id = alpha.Id }));
+        Assert.Equal([bravo.Id, charlie.Id], await QueryAsync(new ChannelListFilter { IdNEQ = alpha.Id }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { IdIn = [alpha.Id, charlie.Id] }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter { IdNotIn = [alpha.Id, bravo.Id] }));
+        Assert.Equal([bravo.Id, charlie.Id], await QueryAsync(new ChannelListFilter { IdGT = alpha.Id }));
+        Assert.Equal(
+            [alpha.Id, bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { IdGTE = alpha.Id }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { IdLT = bravo.Id }));
+        Assert.Equal([alpha.Id, bravo.Id], await QueryAsync(new ChannelListFilter { IdLTE = bravo.Id }));
+
+        // ent.StringIn() with an empty list is false; NotIn() is true.
+        Assert.Empty(await QueryAsync(new ChannelListFilter { IdIn = [] }));
+        Assert.Equal(3, (await QueryAsync(new ChannelListFilter { IdNotIn = [] })).Length);
+
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { CreatedAt = t0 }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { CreatedAtNEQ = t0 }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { CreatedAtIn = [t0, t2] }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { CreatedAtNotIn = [t0, t2] }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { CreatedAtGT = t0 }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { CreatedAtGTE = t1 }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { CreatedAtLT = t1 }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { CreatedAtLTE = t0 }));
+
+        // updated_at mirrors created_at in this fixture.
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { UpdatedAt = t0 }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { UpdatedAtNEQ = t0 }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { UpdatedAtIn = [t0, t2] }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { UpdatedAtNotIn = [t0, t2] }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { UpdatedAtGT = t0 }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { UpdatedAtGTE = t1 }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { UpdatedAtLT = t1 }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { UpdatedAtLTE = t0 }));
+
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { OrderingWeight = 3 }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { OrderingWeightNEQ = 3 }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { OrderingWeightIn = [1, 2] }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter { OrderingWeightNotIn = [1, 2] }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { OrderingWeightLT = 2 }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { OrderingWeightLTE = 1 }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { OrderingWeightGT = 1 }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { OrderingWeightGTE = 2 }));
+    }
+
+    [Fact]
+    public async Task ListAppliesNullableStringPredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelAdminStore(context);
+
+        var disabledAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+        var expiresAt = new DateTime(2026, 4, 2, 0, 0, 0, DateTimeKind.Utc);
+
+        var alpha = await SeedChannelAsync(
+            context,
+            "openai",
+            "Alpha",
+            "enabled",
+            baseUrl: "https://alpha.example/v1",
+            autoSyncSupportedModels: true,
+            autoSyncModelPattern: "^gpt-",
+            defaultTestModel: "gpt-4o",
+            remark: "primary");
+        var bravo = await SeedChannelAsync(
+            context,
+            "anthropic",
+            "Bravo",
+            "disabled",
+            baseUrl: "https://bravo.example/v1",
+            autoSyncSupportedModels: true,
+            autoSyncModelPattern: null,
+            defaultTestModel: "claude-3",
+            errorMessage: "boom",
+            autoDisabledAt: disabledAt,
+            autoDisableExpiresAt: expiresAt);
+        var charlie = await SeedChannelAsync(
+            context,
+            "openai",
+            "Charlie",
+            "enabled",
+            baseUrl: null,
+            autoSyncModelPattern: "claude",
+            defaultTestModel: "gpt-4o-mini",
+            remark: "secondary");
+
+        async Task<long[]> QueryAsync(ChannelListFilter where)
+            => (await store.ListAsync(new ChannelListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { BaseURL = "https://bravo.example/v1" }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { BaseURLNEQ = "https://bravo.example/v1" }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLIn = ["https://alpha.example/v1"] }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLNotIn = ["https://alpha.example/v1"] }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLGT = "https://b" }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLLTE = "https://b" }));
+        Assert.Equal(
+            [alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLContains = "example" }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { BaseURLHasPrefix = "https://alpha" }));
+        Assert.Equal(
+            [alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLHasSuffix = "/v1" }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLEqualFold = "HTTPS://ALPHA.EXAMPLE/V1" }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLContainsFold = "ALPHA.EXAMPLE" }));
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { BaseURLIsNil = true }));
+        Assert.Equal(
+            [alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { BaseURLNotNil = true }));
+
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { NameNEQ = "Alpha" }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { NameContains = "ha" }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { NameHasPrefix = "Br" }));
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { NameHasSuffix = "lie" }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { NameEqualFold = "alpha" }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { NameContainsFold = "ALPH" }));
+
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPattern = "claude" }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternNEQ = "claude" }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter { AutoSyncModelPatternIn = ["claude"] }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternContains = "gpt" }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternHasPrefix = "^" }));
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternHasSuffix = "claude" }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter { AutoSyncModelPatternEqualFold = "^GPT-" }));
+        Assert.Equal(
+            [alpha.Id],
+            await QueryAsync(new ChannelListFilter { AutoSyncModelPatternContainsFold = "GPT" }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoSyncModelPatternIsNil = true }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { AutoSyncModelPatternNotNil = true }));
+
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { DefaultTestModelContains = "gpt-4o" }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { DefaultTestModelEqualFold = "CLAUDE-3" }));
+        Assert.Equal(
+            [bravo.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { DefaultTestModelNEQ = "gpt-4o" }));
+
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { ErrorMessage = "boom" }));
+
+        // SQL <> excludes NULL rows; ent's NotEQ behaves the same way, so the
+        // two channels without an error message are not returned here.
+        Assert.Empty(await QueryAsync(new ChannelListFilter { ErrorMessageNEQ = "boom" }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { ErrorMessageContains = "oo" }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { ErrorMessageEqualFold = "BOOM" }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { ErrorMessageContainsFold = "OO" }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { ErrorMessageIsNil = true }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { ErrorMessageNotNil = true }));
+
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisabledAt = disabledAt }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisabledAtGT = disabledAt.AddHours(-1) }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisabledAtLT = expiresAt }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { AutoDisabledAtIn = [disabledAt] }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { AutoDisabledAtIsNil = true }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisabledAtNotNil = true }));
+
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { AutoDisableExpiresAt = expiresAt }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter { AutoDisableExpiresAtGTE = expiresAt }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { AutoDisableExpiresAtIsNil = true }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { AutoDisableExpiresAtNotNil = true }));
+
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { Remark = "primary" }));
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { RemarkContains = "second" }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { RemarkHasPrefix = "pri" }));
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { RemarkHasSuffix = "dary" }));
+        Assert.Equal([alpha.Id], await QueryAsync(new ChannelListFilter { RemarkEqualFold = "PRIMARY" }));
+        Assert.Equal([charlie.Id], await QueryAsync(new ChannelListFilter { RemarkContainsFold = "SECOND" }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { RemarkIsNil = true }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { RemarkNotNil = true }));
+    }
+
+    [Fact]
+    public async Task ListAppliesEnumBooleanAndNestedLogicPredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ChannelAdminStore(context);
+
+        var alpha = await SeedChannelAsync(
+            context, "openai", "Alpha", "enabled", weight: 3, autoSyncSupportedModels: true);
+        var bravo = await SeedChannelAsync(
+            context, "anthropic", "Bravo", "disabled", weight: 1, autoSyncSupportedModels: true);
+        var charlie = await SeedChannelAsync(
+            context, "openai", "Charlie", "enabled", weight: 2);
+
+        async Task<long[]> QueryAsync(ChannelListFilter where)
+            => (await store.ListAsync(new ChannelListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { TypeNEQ = "openai" }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { TypeIn = ["anthropic"] }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { TypeNotIn = ["anthropic"] }));
+
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { StatusNEQ = "enabled" }));
+        Assert.Equal([bravo.Id], await QueryAsync(new ChannelListFilter { StatusIn = ["disabled"] }));
+        Assert.Equal(
+            [alpha.Id, charlie.Id],
+            await QueryAsync(new ChannelListFilter { StatusNotIn = ["disabled"] }));
+
+        Assert.Equal(
+            [alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter { AutoSyncSupportedModels = true }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter { AutoSyncSupportedModels = false }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter { AutoSyncSupportedModelsNEQ = true }));
+
+        Assert.Equal(
+            [alpha.Id, bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                Or =
+                [
+                    new ChannelListFilter { TypeIn = ["anthropic"] },
+                    new ChannelListFilter { OrderingWeightGTE = 3 },
+                ],
+            }));
+        Assert.Equal(
+            [bravo.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                Not = new ChannelListFilter { Status = "enabled" },
+            }));
+        Assert.Equal(
+            [charlie.Id],
+            await QueryAsync(new ChannelListFilter
+            {
+                And =
+                [
+                    new ChannelListFilter { Type = "openai" },
+                    new ChannelListFilter { OrderingWeightLT = 3 },
+                ],
+            }));
+    }
+
     private static async Task<ChannelRecord> SeedChannelAsync(
         AxonHubDbContext context,
         string type,
@@ -195,22 +533,38 @@ public sealed class ChannelAdminStoreTests(PostgresFixture fixture)
         string status,
         long weight = 0,
         string? tags = null,
-        long deletedAt = 0)
+        long deletedAt = 0,
+        string? baseUrl = null,
+        bool autoSyncSupportedModels = false,
+        string? autoSyncModelPattern = "",
+        string? defaultTestModel = "",
+        string? errorMessage = null,
+        DateTime? autoDisabledAt = null,
+        DateTime? autoDisableExpiresAt = null,
+        string? remark = null,
+        DateTime? createdAt = null,
+        DateTime? updatedAt = null)
     {
         var channel = new ChannelRecord
         {
-            CreatedAt = CreatedAt,
-            UpdatedAt = UpdatedAt,
+            CreatedAt = createdAt ?? CreatedAt,
+            UpdatedAt = updatedAt ?? UpdatedAt,
             DeletedAt = deletedAt,
             Type = type,
+            BaseUrl = baseUrl,
             Name = name,
             Status = status,
             Credentials = "{}",
             SupportedModels = "null",
-            AutoSyncModelPattern = "",
-            DefaultTestModel = "",
+            AutoSyncSupportedModels = autoSyncSupportedModels,
+            AutoSyncModelPattern = autoSyncModelPattern,
+            DefaultTestModel = defaultTestModel ?? string.Empty,
             Tags = tags,
             OrderingWeight = weight,
+            ErrorMessage = errorMessage,
+            AutoDisabledAt = autoDisabledAt,
+            AutoDisableExpiresAt = autoDisableExpiresAt,
+            Remark = remark,
         };
 
         context.Channels.Add(channel);

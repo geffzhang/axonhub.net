@@ -329,6 +329,133 @@ public sealed class AdminChannelsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task QueryChannelsMapsEveryScalarWherePredicate()
+    {
+        SeedChannel(type: "openai", name: "Alpha");
+
+        await QueryDataAsync(
+            """
+            query QueryChannels($input: QueryChannelInput!) {
+              queryChannels(input: $input) { totalCount }
+            }
+            """,
+            new
+            {
+                input = new
+                {
+                    first = 10,
+                    where = new
+                    {
+                        id = "gid://axonhub/Channel/4",
+                        idGT = "gid://axonhub/Channel/5",
+                        idNotIn = new[] { "gid://axonhub/Channel/1" },
+                        createdAt = "2026-01-02T03:04:05Z",
+                        createdAtGTE = "2026-01-02T03:04:05Z",
+                        updatedAtLT = "2026-02-03T04:05:06Z",
+                        typeNEQ = "anthropic",
+                        typeNotIn = new[] { "gemini" },
+                        baseURLContains = "example",
+                        baseURLIsNil = false,
+                        nameHasSuffix = "ha",
+                        statusNEQ = "disabled",
+                        statusNotIn = new[] { "archived" },
+                        autoSyncSupportedModelsNEQ = true,
+                        autoSyncModelPatternNotNil = true,
+                        defaultTestModelEqualFold = "GPT-4O",
+                        orderingWeightGTE = 2,
+                        orderingWeightIn = new[] { 1, 2 },
+                        errorMessageContainsFold = "BOOM",
+                        autoDisabledAtGT = "2026-04-01T00:00:00Z",
+                        autoDisableExpiresAtNotNil = true,
+                        remarkHasPrefix = "pri",
+                        and = new[] { new { nameContains = "a" } },
+                        or = new[] { new { nameContains = "A" } },
+                        not = new { name = "Nope" },
+                    },
+                },
+            });
+
+        var captured = _channels.Queries[^1];
+        var where = captured.Where!;
+        Assert.Equal(4L, where.Id!.Value);
+        Assert.Equal(5L, where.IdGT!.Value);
+        Assert.Equal([1L], where.IdNotIn!);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), where.CreatedAt!.Value);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), where.CreatedAtGTE!.Value);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc), where.UpdatedAtLT!.Value);
+        Assert.Equal("anthropic", where.TypeNEQ);
+        Assert.Equal(["gemini"], where.TypeNotIn!);
+        Assert.Equal("example", where.BaseURLContains);
+        Assert.False(where.BaseURLIsNil);
+        Assert.Equal("ha", where.NameHasSuffix);
+        Assert.Equal("disabled", where.StatusNEQ);
+        Assert.Equal(["archived"], where.StatusNotIn!);
+        Assert.True(where.AutoSyncSupportedModelsNEQ);
+        Assert.True(where.AutoSyncModelPatternNotNil);
+        Assert.Equal("GPT-4O", where.DefaultTestModelEqualFold);
+        Assert.Equal(2L, where.OrderingWeightGTE!.Value);
+        Assert.Equal([1L, 2L], where.OrderingWeightIn!);
+        Assert.Equal("BOOM", where.ErrorMessageContainsFold);
+        Assert.Equal(new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc), where.AutoDisabledAtGT!.Value);
+        Assert.True(where.AutoDisableExpiresAtNotNil);
+        Assert.Equal("pri", where.RemarkHasPrefix);
+
+        Assert.Equal("a", Assert.Single(where.And!).NameContains);
+        Assert.Equal("A", Assert.Single(where.Or!).NameContains);
+        Assert.Equal("Nope", where.Not!.Name);
+    }
+
+    [Fact]
+    public async Task ChannelWhereInputExposesEveryScalarPredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "ChannelWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text = [.. comparison, "Contains", "HasPrefix", "HasSuffix", "EqualFold", "ContainsFold"];
+        string[] nullableText =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "IsNil",
+            "NotNil",
+            "EqualFold",
+            "ContainsFold",
+        ];
+        string[] nullableTime = [.. comparison, "IsNil", "NotNil"];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "type" + suffix));
+        expected.AddRange(nullableText.Select(static suffix => "baseURL" + suffix));
+        expected.AddRange(text.Select(static suffix => "name" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "status" + suffix));
+        expected.AddRange(comparison.Take(2).Select(static suffix => "autoSyncSupportedModels" + suffix));
+        expected.AddRange(nullableText.Select(static suffix => "autoSyncModelPattern" + suffix));
+        expected.AddRange(text.Select(static suffix => "defaultTestModel" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "orderingWeight" + suffix));
+        expected.AddRange(nullableText.Select(static suffix => "errorMessage" + suffix));
+        expected.AddRange(nullableTime.Select(static suffix => "autoDisabledAt" + suffix));
+        expected.AddRange(nullableTime.Select(static suffix => "autoDisableExpiresAt" + suffix));
+        expected.AddRange(nullableText.Select(static suffix => "remark" + suffix));
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
+    }
+
+    [Fact]
     public async Task QueryChannelsModelBranchIgnoresPaginationAndValidation()
     {
         var supporting = SeedChannel(

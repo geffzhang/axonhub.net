@@ -2,6 +2,7 @@ using System.Text;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using static AxonHub.Persistence.ConnectionSql;
 
 namespace AxonHub.Persistence;
 
@@ -749,34 +750,34 @@ public sealed class ApiKeyProfileTemplateStore(AxonHubDbContext db) : IApiKeyPro
 
         var predicates = new List<string?>();
 
-        AddLongComparison(predicates, alias, "id", filter.Id, "=", args);
-        AddLongComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
-        AddIdIn(predicates, alias, "id", filter.IdIn, negate: false, args);
-        AddIdIn(predicates, alias, "id", filter.IdNotIn, negate: true, args);
-        AddLongComparison(predicates, alias, "id", filter.IdGT, ">", args);
-        AddLongComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
-        AddLongComparison(predicates, alias, "id", filter.IdLT, "<", args);
-        AddLongComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
+        AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
+        AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+        AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "id", filter.IdGT, ">", args);
+        AppendComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
+        AppendComparison(predicates, alias, "id", filter.IdLT, "<", args);
+        AppendComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
 
-        AddTimeComparison(predicates, alias, "created_at", filter.CreatedAt, "=", args);
-        AddTimeComparison(predicates, alias, "created_at", filter.CreatedAtNEQ, "<>", args);
-        AddTimeIn(predicates, alias, "created_at", filter.CreatedAtIn, negate: false, args);
-        AddTimeIn(predicates, alias, "created_at", filter.CreatedAtNotIn, negate: true, args);
-        AddTimeComparison(predicates, alias, "created_at", filter.CreatedAtGT, ">", args);
-        AddTimeComparison(predicates, alias, "created_at", filter.CreatedAtGTE, ">=", args);
-        AddTimeComparison(predicates, alias, "created_at", filter.CreatedAtLT, "<", args);
-        AddTimeComparison(predicates, alias, "created_at", filter.CreatedAtLTE, "<=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAt, "=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtIn, args);
+        AppendTimeIn(predicates, alias, "created_at", filter.CreatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "created_at", filter.CreatedAtLTE, "<=", args);
 
-        AddTimeComparison(predicates, alias, "updated_at", filter.UpdatedAt, "=", args);
-        AddTimeComparison(predicates, alias, "updated_at", filter.UpdatedAtNEQ, "<>", args);
-        AddTimeIn(predicates, alias, "updated_at", filter.UpdatedAtIn, negate: false, args);
-        AddTimeIn(predicates, alias, "updated_at", filter.UpdatedAtNotIn, negate: true, args);
-        AddTimeComparison(predicates, alias, "updated_at", filter.UpdatedAtGT, ">", args);
-        AddTimeComparison(predicates, alias, "updated_at", filter.UpdatedAtGTE, ">=", args);
-        AddTimeComparison(predicates, alias, "updated_at", filter.UpdatedAtLT, "<", args);
-        AddTimeComparison(predicates, alias, "updated_at", filter.UpdatedAtLTE, "<=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAt, "=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtNEQ, "<>", args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtIn, args);
+        AppendTimeIn(predicates, alias, "updated_at", filter.UpdatedAtNotIn, args, negate: true);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGT, ">", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtGTE, ">=", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLT, "<", args);
+        AppendComparison(predicates, alias, "updated_at", filter.UpdatedAtLTE, "<=", args);
 
-        AddStringPredicates(
+        AppendStringPredicates(
             predicates,
             alias,
             "name",
@@ -795,7 +796,7 @@ public sealed class ApiKeyProfileTemplateStore(AxonHubDbContext db) : IApiKeyPro
             filter.NameContainsFold,
             args);
 
-        AddStringPredicates(
+        AppendStringPredicates(
             predicates,
             alias,
             "description",
@@ -814,10 +815,10 @@ public sealed class ApiKeyProfileTemplateStore(AxonHubDbContext db) : IApiKeyPro
             filter.DescriptionContainsFold,
             args);
 
-        AddLongComparison(predicates, alias, "project_id", filter.ProjectId, "=", args);
-        AddLongComparison(predicates, alias, "project_id", filter.ProjectIdNEQ, "<>", args);
-        AddIdIn(predicates, alias, "project_id", filter.ProjectIdIn, negate: false, args);
-        AddIdIn(predicates, alias, "project_id", filter.ProjectIdNotIn, negate: true, args);
+        AppendComparison(predicates, alias, "project_id", filter.ProjectId, "=", args);
+        AppendComparison(predicates, alias, "project_id", filter.ProjectIdNEQ, "<>", args);
+        AppendIdIn(predicates, alias, "project_id", filter.ProjectIdIn, args);
+        AppendIdIn(predicates, alias, "project_id", filter.ProjectIdNotIn, args, negate: true);
 
         if (filter.HasProject is not null)
         {
@@ -894,12 +895,12 @@ public sealed class ApiKeyProfileTemplateStore(AxonHubDbContext db) : IApiKeyPro
 
         var predicates = new List<string?>();
 
-        AddLongComparison(predicates, alias, "id", filter.Id, "=", args);
-        AddLongComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
-        AddIdIn(predicates, alias, "id", filter.IdIn, negate: false, args);
-        AddIdIn(predicates, alias, "id", filter.IdNotIn, negate: true, args);
+        AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
+        AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+        AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
 
-        AddStringComparison(predicates, alias, "name", filter.Name, "=", args);
+        AppendComparison(predicates, alias, "name", filter.Name, "=", args);
         if (filter.NameContainsFold is not null)
         {
             // ent.ContainsFold: LOWER(col) LIKE LOWER('%value%').
@@ -912,8 +913,8 @@ public sealed class ApiKeyProfileTemplateStore(AxonHubDbContext db) : IApiKeyPro
                 args);
         }
 
-        AddStringComparison(predicates, alias, "status", filter.Status, "=", args);
-        AddStringIn(predicates, alias, "status", filter.StatusIn, negate: false, args);
+        AppendComparison(predicates, alias, "status", filter.Status, "=", args);
+        AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
 
         if (filter.Not is not null)
         {
@@ -946,203 +947,6 @@ public sealed class ApiKeyProfileTemplateStore(AxonHubDbContext db) : IApiKeyPro
         }
 
         return ConnectionSql.Combine(predicates);
-    }
-
-    private static void AddStringPredicates(
-        List<string?> predicates,
-        string alias,
-        string column,
-        string? equal,
-        string? notEqual,
-        IReadOnlyList<string>? @in,
-        IReadOnlyList<string>? notIn,
-        string? greater,
-        string? greaterOrEqual,
-        string? less,
-        string? lessOrEqual,
-        string? contains,
-        string? hasPrefix,
-        string? hasSuffix,
-        string? equalFold,
-        string? containsFold,
-        SqlArguments args)
-    {
-        AddStringComparison(predicates, alias, column, equal, "=", args);
-        AddStringComparison(predicates, alias, column, notEqual, "<>", args);
-        AddStringIn(predicates, alias, column, @in, negate: false, args);
-        AddStringIn(predicates, alias, column, notIn, negate: true, args);
-        AddStringComparison(predicates, alias, column, greater, ">", args);
-        AddStringComparison(predicates, alias, column, greaterOrEqual, ">=", args);
-        AddStringComparison(predicates, alias, column, less, "<", args);
-        AddStringComparison(predicates, alias, column, lessOrEqual, "<=", args);
-
-        if (contains is not null)
-        {
-            predicates.Add(
-                alias + ".\"" + column + "\" LIKE " + args.Add("%" + contains + "%"));
-        }
-
-        if (hasPrefix is not null)
-        {
-            predicates.Add(alias + ".\"" + column + "\" LIKE " + args.Add(hasPrefix + "%"));
-        }
-
-        if (hasSuffix is not null)
-        {
-            predicates.Add(alias + ".\"" + column + "\" LIKE " + args.Add("%" + hasSuffix));
-        }
-
-        if (equalFold is not null)
-        {
-            var parameter = args.Add(equalFold);
-            predicates.Add(
-                "LOWER(" + alias + ".\"" + column + "\") = LOWER(" + parameter + ")");
-        }
-
-        if (containsFold is not null)
-        {
-            // ent.ContainsFold: LOWER(col) LIKE LOWER('%value%').
-            ConnectionSql.AppendStringFilter(
-                predicates,
-                alias,
-                column,
-                "LIKE",
-                containsFold,
-                args);
-        }
-    }
-
-    private static void AddStringIn(
-        List<string?> predicates,
-        string alias,
-        string column,
-        IReadOnlyList<string>? values,
-        bool negate,
-        SqlArguments args)
-    {
-        if (values is null)
-        {
-            return;
-        }
-
-        if (values.Count == 0)
-        {
-            predicates.Add(negate ? "TRUE" : "FALSE");
-            return;
-        }
-
-        var parameters = new string[values.Count];
-        for (var i = 0; i < values.Count; i++)
-        {
-            parameters[i] = args.Add(values[i]);
-        }
-
-        predicates.Add(
-            alias + ".\"" + column + "\" " + (negate ? "NOT IN" : "IN")
-            + " (" + string.Join(", ", parameters) + ")");
-    }
-
-    private static void AddIdIn(
-        List<string?> predicates,
-        string alias,
-        string column,
-        IReadOnlyList<long>? values,
-        bool negate,
-        SqlArguments args)
-    {
-        if (values is null)
-        {
-            return;
-        }
-
-        if (values.Count == 0)
-        {
-            predicates.Add(negate ? "TRUE" : "FALSE");
-            return;
-        }
-
-        var parameters = new string[values.Count];
-        for (var i = 0; i < values.Count; i++)
-        {
-            parameters[i] = args.Add(values[i]);
-        }
-
-        predicates.Add(
-            alias + ".\"" + column + "\" " + (negate ? "NOT IN" : "IN")
-            + " (" + string.Join(", ", parameters) + ")");
-    }
-
-    private static void AddTimeIn(
-        List<string?> predicates,
-        string alias,
-        string column,
-        IReadOnlyList<DateTime>? values,
-        bool negate,
-        SqlArguments args)
-    {
-        if (values is null)
-        {
-            return;
-        }
-
-        if (values.Count == 0)
-        {
-            predicates.Add(negate ? "TRUE" : "FALSE");
-            return;
-        }
-
-        var parameters = new string[values.Count];
-        for (var i = 0; i < values.Count; i++)
-        {
-            parameters[i] = args.Add(values[i]);
-        }
-
-        predicates.Add(
-            alias + ".\"" + column + "\" " + (negate ? "NOT IN" : "IN")
-            + " (" + string.Join(", ", parameters) + ")");
-    }
-
-    private static void AddLongComparison(
-        List<string?> predicates,
-        string alias,
-        string column,
-        long? value,
-        string op,
-        SqlArguments args)
-    {
-        if (value is not null)
-        {
-            predicates.Add(
-                alias + ".\"" + column + "\" " + op + " " + args.Add(value.Value));
-        }
-    }
-
-    private static void AddStringComparison(
-        List<string?> predicates,
-        string alias,
-        string column,
-        string? value,
-        string op,
-        SqlArguments args)
-    {
-        if (value is not null)
-        {
-            predicates.Add(alias + ".\"" + column + "\" " + op + " " + args.Add(value));
-        }
-    }
-
-    private static void AddTimeComparison(
-        List<string?> predicates,
-        string alias,
-        string column,
-        DateTime? value,
-        string op,
-        SqlArguments args)
-    {
-        if (value is not null)
-        {
-            predicates.Add(alias + ".\"" + column + "\" " + op + " " + args.Add(value.Value));
-        }
     }
 
     private static bool IsConstraintViolation(DbUpdateException exception)

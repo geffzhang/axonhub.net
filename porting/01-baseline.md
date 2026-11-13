@@ -1244,6 +1244,27 @@ Role.users 等反向边归 C165；AddUserToProject 的策略求值在端口早�
 UserAdminStoreTests 19 通过、两个 GraphQL fixture 34 通过、管理面回归 182 通过。C014 至此
 resolved；剩余反向边（Role.users 等）继续由 C165 跟踪。
 
+2026-11-13 更新（§199）：ChannelWhereInput 标量谓词全量建模（C135 第一刀）。参照
+`internal/server/gql/ent.graphql:1349-1576` 的 ChannelWhereInput 共 163 个字段：148 个标量
+谓词、12 个边谓词（6 组 has* / has*With）与 not / and / or。端口此前只建模管理面前端实际
+使用的 14 个字段，其余在 schema 校验阶段被拒绝。§199 把 148 个标量谓词按字段族全部加入
+`ChannelWhereInput`（id 8、createdAt 8、updatedAt 8、type 4、baseURL 15、name 13、status 4、
+autoSyncSupportedModels 2、autoSyncModelPattern 15、defaultTestModel 13、orderingWeight 8、
+errorMessage 15、autoDisabledAt 10、autoDisableExpiresAt 10、remark 15），`ChannelListFilter`
+同步扩展，`ChannelMapping.ToFilter` 完成 GID / Time / 枚举 / int→long / IsNil 布尔的映射。
+存储层把 `ApiKeyProfileTemplateStore` 内部使用的 ent 谓词翻译 helper（AppendStringPredicates /
+AppendStringIn / AppendIdIn / AppendTimeIn / AppendComparison）上提到 `ConnectionSql`，
+Channel 与 APIKeyProfileTemplate 两个 store 共用同一份 SQL 语义：Contains → LIKE %v%、
+HasPrefix → LIKE v%、HasSuffix → LIKE %v%、EqualFold → LOWER(col) = LOWER(@p)、
+ContainsFold → LOWER(col) LIKE LOWER(@p)、空列表的 IN 为 false、NOT IN 为 true，`<>` /
+`NOT IN` 与 SQL 一样不返回 NULL 行。新增 5 例：Persistence 3 例（id / 时间 / orderingWeight、
+可空字符串族、枚举 / 布尔 / 嵌套 Not-And-Or 与空列表语义，ChannelAdminStoreTests 7 通过）、
+Api 2 例（where 逐族映射到 `ChannelListFilter`、introspection 断言 148 个标量 + not / and / or
+的完整字段名集合；AdminChannelsEndpointTests 41 通过）、ApiKeyProfileTemplate 持久化 4 通过
+（helper 上提后行为不变）。残余：6 组边谓词（依赖 ChannelModelPrice / ChannelProbe /
+ProviderQuotaStatus / UserProject 等尚未建模的 where 输入）与 User / RoleWhereInput 的全量
+谓词，继续由 C135 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、
