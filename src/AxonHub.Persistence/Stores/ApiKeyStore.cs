@@ -7,6 +7,7 @@ namespace AxonHub.Persistence;
 public enum ApiKeySortField
 {
     Id,
+    CreatedAt,
     UpdatedAt,
     Name,
 }
@@ -583,6 +584,7 @@ public sealed class ApiKeyStore(AxonHubDbContext db) : IApiKeyStore
 
         var sortColumn = query.SortField switch
         {
+            ApiKeySortField.CreatedAt => "created_at",
             ApiKeySortField.UpdatedAt => "updated_at",
             ApiKeySortField.Name => "name",
             _ => null,

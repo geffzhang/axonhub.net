@@ -10,6 +10,7 @@ namespace AxonHub.Persistence;
 public enum RoleSortField
 {
     Id,
+    CreatedAt,
     UpdatedAt,
 }
 
@@ -189,6 +190,15 @@ public interface IRoleStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of <c>User.userRoles</c> (ent.graphql:7284): the reference runs
+    /// <c>obj.QueryUserRoles().All(ctx)</c>, so the rows keep the database's
+    /// natural order and no privacy policy applies.
+    /// </summary>
+    Task<IReadOnlyList<UserRoleRecord>> ListUserRolesForUserAsync(
+        long userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Runs <paramref name="action"/> in a transaction, joining the ambient one
     /// when the caller (RoleManagementService.DeleteRole/BulkDeleteRoles)
     /// already opened it. The reference's RoleService.RunInTransaction.
@@ -305,6 +315,25 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<UserRoleRecord>> ListUserRolesForUserAsync(
+        long userId,
+        CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            SELECT "id", "created_at", "updated_at", "user_id", "role_id"
+            FROM "user_roles" WHERE "user_id" = @UserId;
+            """;
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<UserRoleRecord>(
+            new CommandDefinition(
+                sql,
+                new { UserId = userId },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.AsList();
+    }
+
     public async Task<bool> NameExistsAsync(
         string name,
         long projectId,
@@ -363,22 +392,24 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
             .Select(static column => "r." + column.Trim())));
         nodesSql.Append(from).Append(conditions);
 
+        var sortColumn = query.SortField switch
+        {
+            RoleSortField.CreatedAt => "created_at",
+            RoleSortField.UpdatedAt => "updated_at",
+            _ => null,
+        };
         ConnectionSql.AppendCursor(
             nodesSql,
             "r",
             "id",
-            query.SortField == RoleSortField.UpdatedAt ? "updated_at" : null,
+            sortColumn,
             query.After,
             query.Before,
             direction,
             args);
 
         nodesSql.Append(" ORDER BY ")
-            .Append(ConnectionSql.OrderBy(
-                "r",
-                "id",
-                query.SortField == RoleSortField.UpdatedAt ? "updated_at" : null,
-                direction));
+            .Append(ConnectionSql.OrderBy("r", "id", sortColumn, direction));
 
         var limit = query.First is not null
             ? query.First + 1

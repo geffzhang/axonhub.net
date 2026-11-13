@@ -157,9 +157,12 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
             rows,
             query.SortField != ApiKeySortField.Id,
             static row => row.Id,
-            row => query.SortField == ApiKeySortField.Name
-                ? row.Name
-                : row.UpdatedAt,
+            row => query.SortField switch
+            {
+                ApiKeySortField.Name => row.Name,
+                ApiKeySortField.CreatedAt => row.CreatedAt,
+                _ => row.UpdatedAt,
+            },
             query.Direction,
             query.After,
             query.Before,
@@ -485,9 +488,11 @@ internal sealed class FakeProjectStore : IProjectStore
 
         var page = FakePagination.Paginate(
             filtered,
-            query.SortField == ProjectSortField.UpdatedAt,
+            query.SortField != ProjectSortField.Id,
             static row => row.Id,
-            static row => row.UpdatedAt,
+            row => query.SortField == ProjectSortField.CreatedAt
+                ? row.CreatedAt
+                : row.UpdatedAt,
             query.Direction,
             query.After,
             query.Before,
@@ -693,7 +698,7 @@ internal sealed class FakeProjectStore : IProjectStore
         return row;
     }
 
-    private static bool Matches(ProjectListFilter? filter, ProjectRecord row)
+    private bool Matches(ProjectListFilter? filter, ProjectRecord row)
     {
         if (filter is null)
         {
@@ -731,6 +736,20 @@ internal sealed class FakeProjectStore : IProjectStore
         if (filter.StatusIn is not null && !filter.StatusIn.Contains(row.Status))
         {
             return false;
+        }
+
+        if (filter.HasUsersWith is { Count: > 0 })
+        {
+            // The store renders HasUsersWith as one EXISTS over user_projects
+            // JOIN users; the fake only tracks the links, so the edge tests are
+            // limited to the id predicate they actually send.
+            var linked = filter.HasUsersWith.All(userFilter =>
+                userFilter.Id is { } userId
+                && ProjectUsers.Any(up => up.ProjectId == row.Id && up.UserId == userId));
+            if (!linked)
+            {
+                return false;
+            }
         }
 
         if (filter.Not is not null && Matches(filter.Not, row))

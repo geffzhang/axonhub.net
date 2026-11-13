@@ -34,6 +34,11 @@ public sealed class AdminUsageLogsEndpointTests : IAsyncLifetime
     private readonly FakeChannelStore _channels = new();
     private readonly FakeTraceAdminStore _traces = new();
 
+    // RequestQueryService resolves the storage lookups behind the dataStorage
+    // output edges (§208); this fixture only reads the UsageLog shape, so an
+    // empty store is enough to activate the service.
+    private readonly FakeDataStorageStore _dataStorages = new();
+
     private WebApplication _app = null!;
     private HttpClient _client = null!;
 
@@ -49,10 +54,12 @@ public sealed class AdminUsageLogsEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IRequestExecutionStore>(new RequestsSliceExecutionStore());
         builder.Services.AddSingleton<IChannelStore>(_channels);
         builder.Services.AddSingleton<ITraceAdminStore>(_traces);
+        builder.Services.AddSingleton<IDataStorageStore>(_dataStorages);
         builder.Services.AddScoped<PermissionValidator>();
         builder.Services.AddScoped<ApiKeyPrivacy>();
         builder.Services.AddScoped<ModelPrivacy>();
         builder.Services.AddScoped<TracePrivacy>();
+        builder.Services.AddScoped<DataStoragePrivacy>();
         builder.Services.AddScoped<UsageLogManagementService>();
         builder.Services.AddScoped<RequestQueryService>();
 
@@ -457,6 +464,7 @@ internal sealed class UsageLogSliceStore : IUsageLogStore
 
         var filtered = _rows
             .Where(row => query.ProjectScope is null || row.ProjectId == query.ProjectScope.Value)
+            .Where(row => Matches(row, query.Where))
             .ToList();
         var page = FakePagination.Paginate(
             filtered,
@@ -490,6 +498,42 @@ internal sealed class UsageLogSliceStore : IUsageLogStore
         _ = cancellationToken;
         return Task.FromResult(_rows.FirstOrDefault(row =>
             row.Id == id && (projectScope is null || row.ProjectId == projectScope.Value)));
+    }
+
+    /// <summary>The subset of the ent predicates the reverse-edge tests send.</summary>
+    private static bool Matches(UsageLogRecord row, UsageLogListFilter? filter)
+    {
+        if (filter is null)
+        {
+            return true;
+        }
+
+        if (filter.ProjectId is not null && row.ProjectId != filter.ProjectId.Value)
+        {
+            return false;
+        }
+
+        if (filter.Id is not null && row.Id != filter.Id.Value)
+        {
+            return false;
+        }
+
+        if (filter.Not is not null && Matches(row, filter.Not))
+        {
+            return false;
+        }
+
+        if (filter.And is not null && !filter.And.All(nested => Matches(row, nested)))
+        {
+            return false;
+        }
+
+        if (filter.Or is not null && !filter.Or.Any(nested => Matches(row, nested)))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     public Task<long> CreateAsync(

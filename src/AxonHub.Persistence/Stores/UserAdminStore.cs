@@ -10,6 +10,7 @@ namespace AxonHub.Persistence;
 public enum UserSortField
 {
     Id,
+    CreatedAt,
     UpdatedAt,
 }
 
@@ -657,22 +658,24 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
             .Select(static column => "u." + column.Trim())));
         nodesSql.Append(" FROM \"users\" u").Append(conditions);
 
+        var sortColumn = query.SortField switch
+        {
+            UserSortField.CreatedAt => "created_at",
+            UserSortField.UpdatedAt => "updated_at",
+            _ => null,
+        };
         ConnectionSql.AppendCursor(
             nodesSql,
             "u",
             "id",
-            query.SortField == UserSortField.UpdatedAt ? "updated_at" : null,
+            sortColumn,
             query.After,
             query.Before,
             direction,
             args);
 
         nodesSql.Append(" ORDER BY ")
-            .Append(ConnectionSql.OrderBy(
-                "u",
-                "id",
-                query.SortField == UserSortField.UpdatedAt ? "updated_at" : null,
-                direction));
+            .Append(ConnectionSql.OrderBy("u", "id", sortColumn, direction));
 
         var limit = query.First is not null
             ? query.First + 1

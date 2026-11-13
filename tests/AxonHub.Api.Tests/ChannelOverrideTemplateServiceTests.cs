@@ -1162,6 +1162,13 @@ internal sealed class FakeChannelOverrideTemplateStore : IChannelOverrideTemplat
             return false;
         }
 
+        // The User.channelOverrideTemplates edge ANDs user_id = X into the
+        // caller's where filter.
+        if (filter.UserId is not null && row.UserId != filter.UserId)
+        {
+            return false;
+        }
+
         if (filter.Name is not null
             && !string.Equals(row.Name, filter.Name, StringComparison.Ordinal))
         {
@@ -1210,9 +1217,18 @@ internal sealed class FakeChannelOverrideTemplateStore : IChannelOverrideTemplat
         ChannelOverrideTemplateRecord right,
         ChannelOverrideTemplateSortField sortField)
     {
-        if (sortField == ChannelOverrideTemplateSortField.UpdatedAt)
+        var value = sortField switch
         {
-            var compare = left.UpdatedAt.CompareTo(right.UpdatedAt);
+            ChannelOverrideTemplateSortField.CreatedAt => (DateTime?)left.CreatedAt,
+            ChannelOverrideTemplateSortField.UpdatedAt => left.UpdatedAt,
+            _ => null,
+        };
+        if (value is { } leftValue)
+        {
+            var rightValue = sortField == ChannelOverrideTemplateSortField.CreatedAt
+                ? right.CreatedAt
+                : right.UpdatedAt;
+            var compare = leftValue.CompareTo(rightValue);
             if (compare != 0)
             {
                 return compare;
@@ -1227,10 +1243,15 @@ internal sealed class FakeChannelOverrideTemplateStore : IChannelOverrideTemplat
         ListCursor cursor,
         ChannelOverrideTemplateSortField sortField)
     {
-        if (sortField == ChannelOverrideTemplateSortField.UpdatedAt
-            && cursor.Value is DateTime time)
+        var value = sortField switch
         {
-            var compare = row.UpdatedAt.CompareTo(time);
+            ChannelOverrideTemplateSortField.CreatedAt => (DateTime?)row.CreatedAt,
+            ChannelOverrideTemplateSortField.UpdatedAt => row.UpdatedAt,
+            _ => null,
+        };
+        if (value is { } rowValue && cursor.Value is DateTime time)
+        {
+            var compare = rowValue.CompareTo(time);
             if (compare != 0)
             {
                 return compare;

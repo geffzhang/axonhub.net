@@ -961,6 +961,19 @@ public static class ApiKeyMapping
             _ => ApiKeySortField.Id,
         };
 
+    /// <summary>
+    /// Edge connections keep the generated order field; only the root
+    /// resolver rewrites CREATED_AT to the default id order.
+    /// </summary>
+    public static ApiKeySortField ToEdgeSortField(ApiKeyOrder? orderBy)
+        => orderBy?.Field switch
+        {
+            ApiKeyOrderFieldValue.CreatedAt => ApiKeySortField.CreatedAt,
+            ApiKeyOrderFieldValue.UpdatedAt => ApiKeySortField.UpdatedAt,
+            ApiKeyOrderFieldValue.Name => ApiKeySortField.Name,
+            _ => ApiKeySortField.Id,
+        };
+
     public static SortDirection ToSortDirection(ApiKeyOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc
             ? SortDirection.Desc
@@ -978,6 +991,7 @@ public static class ApiKeyMapping
                     node.Id,
                     sortField switch
                     {
+                        ApiKeySortField.CreatedAt => node.CreatedAt,
                         ApiKeySortField.UpdatedAt => node.UpdatedAt,
                         ApiKeySortField.Name => node.Name,
                         _ => null,

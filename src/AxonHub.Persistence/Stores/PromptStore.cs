@@ -8,6 +8,7 @@ namespace AxonHub.Persistence;
 public enum PromptSortField
 {
     Id,
+    CreatedAt,
     UpdatedAt,
     Order,
 }
@@ -486,6 +487,7 @@ public sealed class PromptStore(AxonHubDbContext db) : IPromptStore
 
         var sortColumn = query.SortField switch
         {
+            PromptSortField.CreatedAt => "created_at",
             PromptSortField.UpdatedAt => "updated_at",
             PromptSortField.Order => "order",
             _ => null,

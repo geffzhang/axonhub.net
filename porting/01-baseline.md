@@ -1491,6 +1491,29 @@ NodeReportsMissingRolesAndJoinRowsLikeTheReference，NodeReportsUnknownTypesAndM
 仅余 Project / User 反向边」；C192 由 accepted 转 resolved；283 条
 （204 accepted / 0 gap / 79 resolved）。
 
+2026-11-13 更新（§209）：Project / User 反向连接边全部接线（关闭 C165）。
+参照 `internal/server/gql/ent.graphql` 的 Project（users / roles / apiKeys / requests /
+usageLogs / threads / traces / prompts / apiKeyProfileTemplates 九条连接边 + projectUsers）与
+User（roles / projects / apiKeys / channelOverrideTemplates / oidcIdentities 五条连接边 +
+projectUsers / userRoles 两个列表），以及 `internal/ent/gql_edge.go:245-862` 的生成解析器：
+边查询走 `obj.QueryX().Paginate(ctx, after, first, before, last, WithXOrder(orderBy),
+WithXFilter(where.Filter))`，不做根解析器的 CREATED_AT→id 改写；first/last 校验沿用
+`gql_pagination.go:60-78`（同时给出或为负即报错）。端口新增 `ProjectTypeExtensions` 的九条
+连接边与 `UserTypeExtensions` 的四条新增连接边（projects / apiKeys /
+channelOverrideTemplates / oidcIdentities；roles 此前已接线）及 `userRoles` 列表；外键谓词
+一律作为 Where 过滤器经 `ProjectUserEdgeFilters.And` 合并（管理服务会用隐私结果覆盖
+ProjectScope，外键不能走 Scope）：users 用 `HasProjectUsersWithProjectId`，projects 用
+`ProjectListFilter.HasUsersWith`（EXISTS user_projects JOIN users），其余按 ProjectId / UserId；
+OIDC 边另 AND `SystemPrivacy.EvaluateOidcIdentityQueryAsync` 的所有者过滤（UserOwnedQueryRule）。
+新增 `ToEdgeSortField` / `ToUserEdgeSortField` / `ToRoleEdgeSortField` / `ToEdgeThreadSortField`
+等边排序映射（CREATED_AT / UPDATED_AT 保持时间列 + id 平局游标），`BuildConnection` 的游标
+随 sortField 输出 createdAt / updatedAt；`User.roles` 的既有边由根映射改为边映射。测试：新增
+AdminProjectUserEdgesEndpointTests 四例（14 条边解析器接线、where AND、FK 隔离、CREATED_AT
+边序、orderBy 缺 field 被两者同拒）；补注册 §208 引入的
+`IDataStorageStore` / `DataStoragePrivacy` 到 AdminUsageLogsEndpointTests。定向运行：12 个受影响
+测试类 189 通过；未跑 Api 全量回归。台账：C165 由 accepted 转 resolved；283 条
+（203 accepted / 0 gap / 80 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

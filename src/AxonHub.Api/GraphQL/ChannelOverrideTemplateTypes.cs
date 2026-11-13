@@ -646,6 +646,20 @@ public static class ChannelOverrideTemplateMapping
             _ => ChannelOverrideTemplateSortField.Id,
         };
 
+    /// <summary>
+    /// Edge connections keep the generated order field; only the root
+    /// resolver rewrites CREATED_AT to the default id order.
+    /// </summary>
+    public static ChannelOverrideTemplateSortField ToEdgeSortField(
+        ChannelOverrideTemplateOrder? orderBy) => orderBy?.Field switch
+        {
+            ChannelOverrideTemplateOrderFieldValue.CreatedAt =>
+                ChannelOverrideTemplateSortField.CreatedAt,
+            ChannelOverrideTemplateOrderFieldValue.UpdatedAt =>
+                ChannelOverrideTemplateSortField.UpdatedAt,
+            _ => ChannelOverrideTemplateSortField.Id,
+        };
+
     public static SortDirection ToSortDirection(ChannelOverrideTemplateOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc
             ? SortDirection.Desc
@@ -663,9 +677,12 @@ public static class ChannelOverrideTemplateMapping
                 Node = ToGraphQL(node),
                 Cursor = new CursorValue(
                     node.Id,
-                    sortField == ChannelOverrideTemplateSortField.UpdatedAt
-                        ? node.UpdatedAt
-                        : null),
+                    sortField switch
+                    {
+                        ChannelOverrideTemplateSortField.CreatedAt => node.CreatedAt,
+                        ChannelOverrideTemplateSortField.UpdatedAt => node.UpdatedAt,
+                        _ => null,
+                    }),
             })
             .ToList();
 

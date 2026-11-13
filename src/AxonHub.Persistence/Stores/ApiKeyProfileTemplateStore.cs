@@ -10,6 +10,7 @@ namespace AxonHub.Persistence;
 public enum ApiKeyProfileTemplateSortField
 {
     Id,
+    CreatedAt,
     UpdatedAt,
 }
 
@@ -703,6 +704,7 @@ public sealed class ApiKeyProfileTemplateStore(AxonHubDbContext db) : IApiKeyPro
 
     private static string? SortValueColumn(ApiKeyProfileTemplateSortField field) => field switch
     {
+        ApiKeyProfileTemplateSortField.CreatedAt => "created_at",
         ApiKeyProfileTemplateSortField.UpdatedAt => "updated_at",
         _ => null,
     };

@@ -9,6 +9,7 @@ namespace AxonHub.Persistence;
 public enum ChannelOverrideTemplateSortField
 {
     Id,
+    CreatedAt,
     UpdatedAt,
 }
 
@@ -695,6 +696,7 @@ public sealed class ChannelOverrideTemplateStore(AxonHubDbContext db) : IChannel
 
     private static string? SortValueColumn(ChannelOverrideTemplateSortField field) => field switch
     {
+        ChannelOverrideTemplateSortField.CreatedAt => "created_at",
         ChannelOverrideTemplateSortField.UpdatedAt => "updated_at",
         _ => null,
     };

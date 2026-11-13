@@ -8,6 +8,7 @@ namespace AxonHub.Persistence;
 public enum ProjectSortField
 {
     Id,
+    CreatedAt,
     UpdatedAt,
 }
 
@@ -394,22 +395,24 @@ public sealed class ProjectStore(AxonHubDbContext db) : IProjectStore
             .Select(static column => "p." + column.Trim())));
         nodesSql.Append(from).Append(conditions);
 
+        var sortColumn = query.SortField switch
+        {
+            ProjectSortField.CreatedAt => "created_at",
+            ProjectSortField.UpdatedAt => "updated_at",
+            _ => null,
+        };
         ConnectionSql.AppendCursor(
             nodesSql,
             "p",
             "id",
-            query.SortField == ProjectSortField.UpdatedAt ? "updated_at" : null,
+            sortColumn,
             query.After,
             query.Before,
             direction,
             args);
 
         nodesSql.Append(" ORDER BY ")
-            .Append(ConnectionSql.OrderBy(
-                "p",
-                "id",
-                query.SortField == ProjectSortField.UpdatedAt ? "updated_at" : null,
-                direction));
+            .Append(ConnectionSql.OrderBy("p", "id", sortColumn, direction));
 
         var limit = query.First is not null
             ? query.First + 1

@@ -641,6 +641,19 @@ public static class PromptMapping
             _ => PromptSortField.Id,
         };
 
+    /// <summary>
+    /// Edge connections keep the generated order field; only the root
+    /// resolver rewrites CREATED_AT to the default id order.
+    /// </summary>
+    public static PromptSortField ToEdgeSortField(PromptOrder? orderBy)
+        => orderBy?.Field switch
+        {
+            PromptOrderFieldValue.CreatedAt => PromptSortField.CreatedAt,
+            PromptOrderFieldValue.UpdatedAt => PromptSortField.UpdatedAt,
+            PromptOrderFieldValue.Order => PromptSortField.Order,
+            _ => PromptSortField.Id,
+        };
+
     public static SortDirection ToSortDirection(PromptOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc
             ? SortDirection.Desc
@@ -658,6 +671,7 @@ public static class PromptMapping
                     node.Id,
                     sortField switch
                     {
+                        PromptSortField.CreatedAt => node.CreatedAt,
                         PromptSortField.UpdatedAt => node.UpdatedAt,
                         PromptSortField.Order => node.Order,
                         _ => null,

@@ -1956,6 +1956,19 @@ UserProject / UserRole 节点与缺失、未知类型改用 PromptProtectionRule
 C192 转 resolved；lint 通过；02-differences.md 已重新生成；283 条
 （204 accepted / 0 gap / 79 resolved）。
 
+§209（2026-11-13）Project / User 反向连接边全部接线（关闭 C165）。参照 ent.graphql 的 Project
+九条连接边与 User 五条连接边 + projectUsers / userRoles 两个列表，以及 `gql_edge.go:245-862`
+的生成解析器（保留 CREATED_AT 为时间列，不做根解析器的 id 改写；first/last 校验同
+gql_pagination.go:60-78）。外键谓词一律作为 Where 过滤器 AND 进调用方 where——管理服务会用
+隐私结果覆盖 ProjectScope，外键不能走 Scope；users 用 HasProjectUsersWithProjectId，projects 用
+ProjectListFilter.HasUsersWith（EXISTS user_projects JOIN users），OIDC 边另 AND 所有者过滤。
+新增边排序映射（CREATED_AT / UPDATED_AT 保持时间列 + id 平局游标），BuildConnection 的游标随
+sortField 输出 createdAt / updatedAt；User.roles 的既有边由根映射改为边映射。测试：新增
+AdminProjectUserEdgesEndpointTests 四例（14 条边解析器、where AND、FK 隔离、CREATED_AT 边序、
+orderBy 缺 field 与参照同被拒），补注册 §208 引入的 IDataStorageStore / DataStoragePrivacy 到
+AdminUsageLogsEndpointTests；12 个受影响测试类 189 通过；未跑 Api 全量回归。台账：C165 转
+resolved；lint 通过；02-differences.md 已重新生成；283 条（203 accepted / 0 gap / 80 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

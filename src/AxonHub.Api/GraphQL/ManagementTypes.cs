@@ -914,7 +914,9 @@ public sealed class UserType : INode
                 : new RoleListFilter { And = [filter, scope] };
         }
 
-        var sortField = ManagementMapping.ToRoleSortField(orderBy);
+        // The edge keeps the generated CREATED_AT order; only the root resolver
+        // rewrites it to id.
+        var sortField = ManagementMapping.ToRoleEdgeSortField(orderBy);
         var page = await roles.ListAsync(
                 new RoleListQuery
                 {
@@ -1131,7 +1133,12 @@ public static class ManagementMapping
                 Node = ToGraphQL(node),
                 Cursor = new CursorValue(
                     node.Id,
-                    sortField == UserSortField.UpdatedAt ? node.UpdatedAt : (object?)null),
+                    sortField switch
+                    {
+                        UserSortField.CreatedAt => node.CreatedAt,
+                        UserSortField.UpdatedAt => node.UpdatedAt,
+                        _ => null,
+                    }),
             })
             .ToList();
 
@@ -1156,7 +1163,12 @@ public static class ManagementMapping
                 Node = ToGraphQL(node),
                 Cursor = new CursorValue(
                     node.Id,
-                    sortField == RoleSortField.UpdatedAt ? node.UpdatedAt : (object?)null),
+                    sortField switch
+                    {
+                        RoleSortField.CreatedAt => node.CreatedAt,
+                        RoleSortField.UpdatedAt => node.UpdatedAt,
+                        _ => null,
+                    }),
             })
             .ToList();
 
@@ -1504,10 +1516,31 @@ public static class ManagementMapping
             ? UserSortField.UpdatedAt
             : UserSortField.Id;
 
+    /// <summary>
+    /// Edge connections do not run the root resolver's CREATED_AT rewrite;
+    /// WithUserOrder keeps the generated order field.
+    /// </summary>
+    public static UserSortField ToUserEdgeSortField(UserOrder? orderBy)
+        => orderBy?.Field switch
+        {
+            UserOrderFieldValue.CreatedAt => UserSortField.CreatedAt,
+            UserOrderFieldValue.UpdatedAt => UserSortField.UpdatedAt,
+            _ => UserSortField.Id,
+        };
+
     public static RoleSortField ToRoleSortField(RoleOrder? orderBy)
         => orderBy?.Field == RoleOrderFieldValue.UpdatedAt
             ? RoleSortField.UpdatedAt
             : RoleSortField.Id;
+
+    /// <summary>Edge counterpart of <see cref="ToRoleSortField"/>.</summary>
+    public static RoleSortField ToRoleEdgeSortField(RoleOrder? orderBy)
+        => orderBy?.Field switch
+        {
+            RoleOrderFieldValue.CreatedAt => RoleSortField.CreatedAt,
+            RoleOrderFieldValue.UpdatedAt => RoleSortField.UpdatedAt,
+            _ => RoleSortField.Id,
+        };
 
     public static SortDirection ToSortDirection(UserOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc

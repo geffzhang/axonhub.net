@@ -138,6 +138,7 @@ internal sealed class FakePromptStore : IPromptStore
             row => row.Id,
             row => query.SortField switch
             {
+                PromptSortField.CreatedAt => row.CreatedAt,
                 PromptSortField.UpdatedAt => row.UpdatedAt,
                 PromptSortField.Order => row.Order,
                 _ => null,

@@ -97,8 +97,9 @@ public enum ProjectStatusValue
 
 /// <summary>
 /// Port of the scalar surface of the entgql <c>Project</c> type
-/// (ent.graphql:2836-2852). The entgql edge connections other than
-/// <c>projectUsers</c> (ProjectTypeExtensions) are not wired yet (C165).
+/// (ent.graphql:2836-2852). The edge fields are split between
+/// <see cref="ProjectTypeExtensions"/> (the nine connections and the
+/// projectUsers list) and <c>GetProfiles</c>/profiles wiring (§86).
 /// </summary>
 [GraphQLName("Project")]
 public sealed class ProjectType : INode

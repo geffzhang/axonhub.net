@@ -1262,6 +1262,15 @@ public static class TraceMapping
             ? ThreadSortField.UpdatedAt
             : ThreadSortField.Id;
 
+    /// <summary>The Project.threads edge keeps CREATED_AT as the created_at column.</summary>
+    public static ThreadSortField ToEdgeThreadSortField(ThreadOrder? orderBy)
+        => orderBy?.Field switch
+        {
+            ThreadOrderFieldValue.UpdatedAt => ThreadSortField.UpdatedAt,
+            ThreadOrderFieldValue.CreatedAt => ThreadSortField.CreatedAt,
+            _ => ThreadSortField.Id,
+        };
+
     /// <summary>
     /// The root Requests resolver rewrites CREATED_AT to
     /// ent.DefaultRequestOrder's field (id) (ent.resolvers.go:497-505).

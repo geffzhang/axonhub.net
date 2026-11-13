@@ -463,6 +463,20 @@ public static class ApiKeyProfileTemplateMapping
             _ => ApiKeyProfileTemplateSortField.Id,
         };
 
+    /// <summary>
+    /// Edge connections keep the generated order field; only the root
+    /// resolver rewrites CREATED_AT to the default id order.
+    /// </summary>
+    public static ApiKeyProfileTemplateSortField ToEdgeSortField(
+        ApiKeyProfileTemplateOrder? orderBy) => orderBy?.Field switch
+        {
+            ApiKeyProfileTemplateOrderFieldValue.CreatedAt =>
+                ApiKeyProfileTemplateSortField.CreatedAt,
+            ApiKeyProfileTemplateOrderFieldValue.UpdatedAt =>
+                ApiKeyProfileTemplateSortField.UpdatedAt,
+            _ => ApiKeyProfileTemplateSortField.Id,
+        };
+
     public static SortDirection ToSortDirection(ApiKeyProfileTemplateOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc
             ? SortDirection.Desc
@@ -480,9 +494,12 @@ public static class ApiKeyProfileTemplateMapping
                 Node = ToGraphQL(node),
                 Cursor = new CursorValue(
                     node.Id,
-                    sortField == ApiKeyProfileTemplateSortField.UpdatedAt
-                        ? node.UpdatedAt
-                        : null),
+                    sortField switch
+                    {
+                        ApiKeyProfileTemplateSortField.CreatedAt => node.CreatedAt,
+                        ApiKeyProfileTemplateSortField.UpdatedAt => node.UpdatedAt,
+                        _ => null,
+                    }),
             })
             .ToList();
 

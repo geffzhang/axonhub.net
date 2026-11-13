@@ -1804,9 +1804,11 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
 
         var page = FakePagination.Paginate(
             filtered,
-            query.SortField == UserSortField.UpdatedAt,
+            query.SortField != UserSortField.Id,
             row => row.Id,
-            row => row.UpdatedAt,
+            row => query.SortField == UserSortField.CreatedAt
+                ? row.CreatedAt
+                : row.UpdatedAt,
             query.Direction,
             query.After,
             query.Before,
@@ -2396,6 +2398,12 @@ internal sealed class FakeRoleStore : IRoleStore
         CancellationToken cancellationToken = default)
         => Task.FromResult(_userRoleRows.FirstOrDefault(row => row.Id == id));
 
+    public Task<IReadOnlyList<UserRoleRecord>> ListUserRolesForUserAsync(
+        long userId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<UserRoleRecord>>(
+            _userRoleRows.Where(row => row.UserId == userId).ToList());
+
     public Task<T> RunInTransactionAsync<T>(
         Func<CancellationToken, Task<T>> action,
         CancellationToken cancellationToken = default)
@@ -2430,9 +2438,11 @@ internal sealed class FakeRoleStore : IRoleStore
 
         var page = FakePagination.Paginate(
             filtered,
-            query.SortField == RoleSortField.UpdatedAt,
+            query.SortField != RoleSortField.Id,
             row => row.Id,
-            row => row.UpdatedAt,
+            row => query.SortField == RoleSortField.CreatedAt
+                ? row.CreatedAt
+                : row.UpdatedAt,
             query.Direction,
             query.After,
             query.Before,

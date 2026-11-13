@@ -782,9 +782,11 @@ internal sealed class FakeApiKeyProfileTemplateStore : IApiKeyProfileTemplateSto
 
         var page = FakePagination.Paginate(
             rows,
-            query.SortField == ApiKeyProfileTemplateSortField.UpdatedAt,
+            query.SortField != ApiKeyProfileTemplateSortField.Id,
             static row => row.Id,
-            static row => row.UpdatedAt,
+            row => query.SortField == ApiKeyProfileTemplateSortField.CreatedAt
+                ? row.CreatedAt
+                : row.UpdatedAt,
             query.Direction,
             query.After,
             query.Before,

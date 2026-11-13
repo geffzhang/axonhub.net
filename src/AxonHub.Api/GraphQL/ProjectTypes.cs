@@ -522,6 +522,18 @@ public static class ProjectMapping
             ? ProjectSortField.UpdatedAt
             : ProjectSortField.Id;
 
+    /// <summary>
+    /// Edge connections keep the generated order field; only the root
+    /// resolver rewrites CREATED_AT to the default id order.
+    /// </summary>
+    public static ProjectSortField ToEdgeSortField(ProjectOrder? orderBy)
+        => orderBy?.Field switch
+        {
+            ProjectOrderFieldValue.CreatedAt => ProjectSortField.CreatedAt,
+            ProjectOrderFieldValue.UpdatedAt => ProjectSortField.UpdatedAt,
+            _ => ProjectSortField.Id,
+        };
+
     public static SortDirection ToSortDirection(ProjectOrder? orderBy)
         => orderBy?.Direction == OrderDirectionValue.Desc
             ? SortDirection.Desc
@@ -540,7 +552,12 @@ public static class ProjectMapping
                 Node = UserProfileMapping.ToGraphQL(node),
                 Cursor = new CursorValue(
                     node.Id,
-                    sortField == ProjectSortField.UpdatedAt ? node.UpdatedAt : (object?)null),
+                    sortField switch
+                    {
+                        ProjectSortField.CreatedAt => node.CreatedAt,
+                        ProjectSortField.UpdatedAt => node.UpdatedAt,
+                        _ => null,
+                    }),
             })
             .ToList();
 
