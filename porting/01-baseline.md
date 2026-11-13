@@ -1457,6 +1457,40 @@ AdminChannelsEndpointTests 45 通过；未跑 Api 全量回归。台账：C097 �
 C061 / C080 / C086 / C098 / C099 / C100 / C101 / C102 / C105 / C106 / C150 的端点/能力表口径更新；
 283 条（205 accepted / 0 gap / 78 resolved）。
 
+2026-11-13 更新（§208）：node() 剩余六个 ent 类型全量注册 + Request / RequestExecution 的
+dataStorage 输出边（关闭 C165 的 node() 部分与 C192 残余）。
+参照 `internal/server/gql/graphql.go:206-226` 的 guidTypeToNodeType（19 个类型）与
+`internal/ent/gql_node.go` 的 noder()（每表 `Query().Where(x.ID(id)).Only(ctx)`，缺失行报
+`ent: <label> not found`），以及 `internal/ent/gql_edge.go` 的三类边语义：ChannelProbe.channel
+与 UserRole.user / role 直接 Only（缺失即报错），Request.dataStorage 与
+RequestExecution.dataStorage 在 `QueryDataStorage().Only(ctx)` 后 MaskNotFound（缺失 / 软删 →
+null）。隐私：Role（用户作用域读规则）、UserProject（Owner / 项目作用域 / 用户查询规则）、
+ChannelOverrideTemplate（Owner / 当前用户）在查询策略层求值，无用户时报 deny，deny 即使外键为
+null 也传播（ent 的 policy 在 SQL 之前求值）；其余三个类型无 Mixin / Policy，按主键直读。
+端口新增：`ChannelProbeType` / `UserRoleType` / `RoleType` / `ChannelOverrideTemplateType` /
+`UserProjectType` / `RequestExecutionType` 均实现 `INode`；`AdminQuery.NodeAsync` 增加六个分支
+（Role → `RolePrivacy.GetVisibleRoleOrThrowAsync`、UserProject → `UserProjectPrivacy.EvaluateQueryAsync`
++ `GetProjectUserByIdAsync`、ChannelOverrideTemplate → 新增
+`ChannelOverrideTemplateService.GetNodeAsync`（无服务前缀的
+`ent: channel_override_template not found`）、其余三个按主键读取）；`ChannelProbeType.channel`
+与 `UserRoleType.user / role` 边直接解析、缺失报错；
+`RequestQueryService.GetVisibleDataStorageOrNullAsync` 先求值 DataStorage 隐私再按 id 读取
+（null / 0 短路但不跳过隐私），`RequestType` / `RequestExecutionType` 的 `dataStorage` 边映射
+缺失行为 null；`GraphQLSetup` 显式 `AddType<ChannelProbeType>()` / `AddType<UserRoleType>()`
+（仅经 node(id:) 可达）。新增 11 例并更新既有断言：AdminChannelProbeDataEndpointTests 的
+NodeResolvesTheProbeRow / NodeReportsAMissingProbeAsEntNotFound；AdminChannelOverrideTemplateEndpointTests
+的 NodeResolvesTheTemplatesOwnedByTheCurrentUser / NodeReportsAnotherUsersTemplateAsNotFound /
+NodeReportsMissingTemplatesWithoutTheServicePrefix；AdminRequestsEndpointTests 的
+RequestExecutionNodeResolvesTheExecutionAndItsDataStorage /
+DataStorageEdgesAreMaskedWhenTheRowIsMissing，以及 RequestQueryServiceVisibilityTests 的
+DataStorageQueryDenyPropagatesEvenWithoutAForeignKey / NullDataStorageIdSkipsTheQueryForAnAllowedCaller；
+AdminUsersRolesEndpointTests 的 NodeResolvesRoleUserProjectAndUserRole /
+NodeReportsMissingRolesAndJoinRowsLikeTheReference，NodeReportsUnknownTypesAndMissingNodesLikeTheReference
+改以 PromptProtectionRule 作为未映射类型；ChannelProbeServiceTests 的替身补齐 GetByIdAsync。
+定向运行：五个测试类 94 通过；未跑 Api 全量回归。台账：C165 更新为「node() 已覆盖 19 个类型，
+仅余 Project / User 反向边」；C192 由 accepted 转 resolved；283 条
+（204 accepted / 0 gap / 79 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

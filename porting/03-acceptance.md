@@ -1938,6 +1938,24 @@ opencode_go_anthropic / 未知类型为空）、
 C106 / C150 更新为 §207 口径；lint 通过；02-differences.md 已重新生成；283 条
 （205 accepted / 0 gap / 78 resolved）。
 
+§208（2026-11-13）node() 剩余六个 ent 类型全量注册 + Request / RequestExecution 的 dataStorage
+输出边（关闭 C165 的 node() 部分与 C192 残余）。参照 `internal/server/gql/graphql.go:206-226`
+的 guidTypeToNodeType（19 个类型）与 `internal/ent/gql_node.go` 的 noder()：端口新增
+ChannelProbeType / UserRoleType / RoleType / ChannelOverrideTemplateType / UserProjectType /
+RequestExecutionType（均实现 INode）与 AdminQuery.NodeAsync 的六个分支，Role / UserProject /
+ChannelOverrideTemplate 先求值各自查询策略（deny 或不属于当前用户的行报 ent NotFound），
+ChannelProbe / RequestExecution / UserRole 无 Policy 直接按主键读取，缺失文案统一为
+`ent: <label> not found`；ChannelProbe.channel 与 UserRole.user / role 边缺失即报错。dataStorage
+输出边：`RequestQueryService.GetVisibleDataStorageOrNullAsync` 先求值 DataStorage 隐私再按 id
+读取（null / 0 短路但不跳过隐私，复刻 ent 在 SQL 之前求值 policy 的行为），缺失 / 软删行经
+MaskNotFound 映射为 null。显式 `.AddType<ChannelProbeType>()` / `.AddType<UserRoleType>()` 因
+两者仅经 node(id:) 可达。测试：新增 11 例并更新既有断言（探针行与缺失、模板归属与缺失、执行
+节点与两条 dataStorage 边、FK 缺失掩蔽、null 外键短路、deny 即使外键为空也传播、Role /
+UserProject / UserRole 节点与缺失、未知类型改用 PromptProtectionRule），五个测试类 94 通过；
+未跑 Api 全量回归。台账：C165 更新为「node() 已覆盖 19 个类型，仅余 Project / User 反向边」；
+C192 转 resolved；lint 通过；02-differences.md 已重新生成；283 条
+（204 accepted / 0 gap / 79 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

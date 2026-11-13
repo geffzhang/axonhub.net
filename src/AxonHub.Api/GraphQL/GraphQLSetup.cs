@@ -37,6 +37,12 @@ public static class GraphQLSetup
             // registering it keeps the same named type in the schema.
             .AddType<HourlyRequestStatsType>()
 
+            // Node implementors that are not reachable from any root field or
+            // connection (node(id:) is their only entry point); HotChocolate
+            // only discovers interface implementors among registered types.
+            .AddType<ChannelProbeType>()
+            .AddType<UserRoleType>()
+
             // HotChocolate infers input-object names from the CLR type; the
             // gqlgen SDL calls these ChannelOrderingItem, BulkImportChannelItem
             // and AnalyticsFilter. Registering the descriptors explicitly fixes

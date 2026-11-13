@@ -324,6 +324,33 @@ public sealed class ChannelOverrideTemplateService(
     }
 
     /// <summary>
+    /// Port of the entgql Node lookup for ChannelOverrideTemplate
+    /// (<c>client.ChannelOverrideTemplate.Get(ctx, id)</c>): the query policy
+    /// denies a caller with no user in context, an owner sees every row and a
+    /// non-owner is scoped to their own; a missing or filtered-out row is
+    /// <c>ent: channel_override_template not found</c>. Unlike
+    /// <see cref="GetAsync"/> the Noder path carries no service prefix.
+    /// </summary>
+    /// <exception cref="PrivacyDenyException">No user in context.</exception>
+    public async Task<ChannelOverrideTemplateRecord> GetNodeAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await identity.GetCurrentUserAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (current is null)
+        {
+            throw new PrivacyDenyException(
+                "no user in context: " + PrivacyDenyException.DenyMessage);
+        }
+
+        var template = await store.GetAsync(id, ScopeOf(current), cancellationToken)
+            .ConfigureAwait(false);
+        return template
+            ?? throw new InvalidOperationException("ent: channel_override_template not found");
+    }
+
+    /// <summary>
     /// Port of the paginated channelOverrideTemplates query (ent.resolvers.go:383-397).
     /// </summary>
     public async Task<ListPage<ChannelOverrideTemplateRecord>> ListAsync(

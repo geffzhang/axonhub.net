@@ -936,7 +936,7 @@ public sealed class UserType : INode
 
 /// <summary>Port of the <c>Role</c> object type (ent.graphql:5419-...).</summary>
 [GraphQLName("Role")]
-public sealed class RoleType
+public sealed class RoleType : INode
 {
     [GraphQLIgnore]
     public long DbId { get; init; }

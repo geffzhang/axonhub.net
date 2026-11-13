@@ -329,7 +329,7 @@ public sealed class ClearChannelOverrideTemplatesPayloadType
 
 /// <summary>Port of the <c>ChannelOverrideTemplate</c> object type (ent.graphql:967-1000).</summary>
 [GraphQLName("ChannelOverrideTemplate")]
-public sealed class ChannelOverrideTemplateType
+public sealed class ChannelOverrideTemplateType : INode
 {
     [GraphQLIgnore]
     public long DbId { get; init; }

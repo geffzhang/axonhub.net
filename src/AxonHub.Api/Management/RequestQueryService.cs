@@ -16,9 +16,11 @@ public sealed class RequestQueryService(
     IApiKeyStore apiKeys,
     IChannelStore channels,
     ITraceAdminStore traces,
+    IDataStorageStore dataStorages,
     ApiKeyPrivacy apiKeyPrivacy,
     ModelPrivacy channelPrivacy,
-    TracePrivacy requestPrivacy)
+    TracePrivacy requestPrivacy,
+    DataStoragePrivacy dataStoragePrivacy)
 {
     /// <summary>Ent's NotFoundError text for the Request label.</summary>
     public const string RequestNotFound = "ent: request not found";
@@ -127,6 +129,26 @@ public sealed class RequestQueryService(
         var project = await apiKeyPrivacy.GetVisibleProjectAsync(projectId, cancellationToken)
             .ConfigureAwait(false);
         return project ?? throw new InvalidOperationException(ProjectNotFound);
+    }
+
+    /// <summary>
+    /// Port of the DataStorage edge query (gql_edge.go:495-502, 569-576): the
+    /// DataStorage query policy runs before the SQL, so a deny propagates even
+    /// when the foreign key is null; MaskNotFound then turns a missing or
+    /// soft-deleted row into null.
+    /// </summary>
+    public async Task<DataStorageRecord?> GetVisibleDataStorageOrNullAsync(
+        long? dataStorageId,
+        CancellationToken cancellationToken = default)
+    {
+        await dataStoragePrivacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+        if (dataStorageId is null or 0)
+        {
+            return null;
+        }
+
+        return await dataStorages.GetByIdAsync(dataStorageId.Value, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

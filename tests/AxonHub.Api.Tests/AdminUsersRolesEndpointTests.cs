@@ -1314,16 +1314,16 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     [Fact]
     public async Task NodeReportsUnknownTypesAndMissingNodesLikeTheReference()
     {
-        // The reference maps every ent type to a Noder lookup; the port does
-        // not resolve ChannelProbe, ChannelOverrideTemplate, RequestExecution,
-        // Role, System, UserProject or UserRole yet (C165).
+        // PromptProtectionRule implements Node in the SDL but the reference's
+        // guidTypeToNodeType map (graphql.go:206-226) does not register it, so
+        // node() reports it as an unknown type.
         var unknown = await QueryErrorsAsync(
             """
             query Node($id: ID!) { node(id: $id) { id } }
             """,
-            new { id = "gid://axonhub/ChannelProbe/1" });
+            new { id = "gid://axonhub/PromptProtectionRule/1" });
         Assert.Equal(
-            "unknown node type: ChannelProbe",
+            "unknown node type: PromptProtectionRule",
             unknown[0].GetProperty("message").GetString());
 
         var missingProject = await QueryErrorsAsync(
@@ -1343,6 +1343,102 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         Assert.Equal(
             "ent: user not found",
             missingUser[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task NodeResolvesRoleUserProjectAndUserRole()
+    {
+        var alice = SeedUser(
+            "alice@example.com",
+            new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+        var role = SeedRole("Developer", projectId: 0);
+        _users.AssignProject(alice.Id, projectId: 1, isOwner: true);
+        _roles.Assign(alice.Id, role.Id);
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              role: node(id: "gid://axonhub/Role/1") {
+                id
+                ... on Role { name level scopes }
+              }
+              membership: node(id: "gid://axonhub/UserProject/1") {
+                id
+                ... on UserProject {
+                  userID projectID isOwner scopes
+                  user { id }
+                }
+              }
+              link: node(id: "gid://axonhub/UserRole/1") {
+                id
+                ... on UserRole {
+                  userID roleID createdAt updatedAt
+                  user { id }
+                  role { id }
+                }
+              }
+            }
+            """);
+
+        var roleNode = data.GetProperty("role");
+        Assert.Equal("gid://axonhub/Role/1", roleNode.GetProperty("id").GetString());
+        Assert.Equal("Developer", roleNode.GetProperty("name").GetString());
+        Assert.Equal("system", roleNode.GetProperty("level").GetString());
+
+        var membership = data.GetProperty("membership");
+        Assert.Equal("gid://axonhub/UserProject/1", membership.GetProperty("id").GetString());
+        Assert.Equal(
+            "gid://axonhub/User/" + alice.Id,
+            membership.GetProperty("userID").GetString());
+        Assert.Equal("gid://axonhub/Project/1", membership.GetProperty("projectID").GetString());
+        Assert.True(membership.GetProperty("isOwner").GetBoolean());
+        Assert.Equal(
+            "gid://axonhub/User/" + alice.Id,
+            membership.GetProperty("user").GetProperty("id").GetString());
+
+        var link = data.GetProperty("link");
+        Assert.Equal("gid://axonhub/UserRole/1", link.GetProperty("id").GetString());
+        Assert.Equal("gid://axonhub/User/" + alice.Id, link.GetProperty("userID").GetString());
+        Assert.Equal("gid://axonhub/Role/1", link.GetProperty("roleID").GetString());
+        Assert.Equal(JsonValueKind.Null, link.GetProperty("createdAt").ValueKind);
+        Assert.Equal(JsonValueKind.Null, link.GetProperty("updatedAt").ValueKind);
+        Assert.Equal(
+            "gid://axonhub/User/" + alice.Id,
+            link.GetProperty("user").GetProperty("id").GetString());
+        Assert.Equal(
+            "gid://axonhub/Role/1",
+            link.GetProperty("role").GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task NodeReportsMissingRolesAndJoinRowsLikeTheReference()
+    {
+        var missingRole = await QueryErrorsAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/Role/999" });
+        Assert.Equal(
+            "ent: role not found",
+            missingRole[0].GetProperty("message").GetString());
+
+        var missingMembership = await QueryErrorsAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/UserProject/999" });
+        Assert.Equal(
+            "ent: user_project not found",
+            missingMembership[0].GetProperty("message").GetString());
+
+        var missingLink = await QueryErrorsAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/UserRole/999" });
+        Assert.Equal(
+            "ent: user_role not found",
+            missingLink[0].GetProperty("message").GetString());
     }
 
     [Fact]
@@ -1645,6 +1741,7 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
     {
         _userProjects.Add(new UserProjectRecord
         {
+            Id = _nextProjectUserId++,
             UserId = userId,
             ProjectId = projectId,
             IsOwner = isOwner,
@@ -2143,6 +2240,16 @@ internal sealed class FakeUserAdminStore : IUserAdminStore
                 .Where(up => queryScope?.UserId is not { } scope || up.UserId == scope)
                 .ToList());
 
+    public Task<UserProjectRecord?> GetProjectUserByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null)
+        => Task.FromResult(_userProjects
+            .Where(up => up.Id == id)
+            .Where(up => queryScope?.ProjectId is not { } scope || up.ProjectId == scope)
+            .Where(up => queryScope?.UserId is not { } scope || up.UserId == scope)
+            .FirstOrDefault());
+
     private UserRecord? Live(long id)
         => _rows.FirstOrDefault(row => row.Id == id && row.DeletedAt == 0);
 
@@ -2215,7 +2322,9 @@ internal sealed class FakeRoleStore : IRoleStore
 {
     private readonly List<RoleRecord> _rows = [];
     private readonly Dictionary<long, List<long>> _userRoles = [];
+    private readonly List<UserRoleRecord> _userRoleRows = [];
     private long _nextId = 1;
+    private long _nextUserRoleId = 1;
 
     public List<RoleListQuery> Queries { get; } = [];
 
@@ -2237,6 +2346,12 @@ internal sealed class FakeRoleStore : IRoleStore
         if (!roleIds.Contains(roleId))
         {
             roleIds.Add(roleId);
+            _userRoleRows.Add(new UserRoleRecord
+            {
+                Id = _nextUserRoleId++,
+                UserId = userId,
+                RoleId = roleId,
+            });
         }
     }
 
@@ -2257,6 +2372,8 @@ internal sealed class FakeRoleStore : IRoleStore
         {
             roleIds.RemoveAll(id => id == roleId);
         }
+
+        _userRoleRows.RemoveAll(row => row.UserId == userId && row.RoleId == roleId);
     }
 
     public Task<long> CreateAsync(RoleRecord role, CancellationToken cancellationToken = default)
@@ -2273,6 +2390,11 @@ internal sealed class FakeRoleStore : IRoleStore
 
     public Task<RoleRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => Task.FromResult(Live(id));
+
+    public Task<UserRoleRecord?> GetUserRoleByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(_userRoleRows.FirstOrDefault(row => row.Id == id));
 
     public Task<T> RunInTransactionAsync<T>(
         Func<CancellationToken, Task<T>> action,

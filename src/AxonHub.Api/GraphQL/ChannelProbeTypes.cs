@@ -41,6 +41,44 @@ public sealed class ChannelProbeDataType
     public IReadOnlyList<ChannelProbePointType> Points { get; init; } = [];
 }
 
+/// <summary>Port of the <c>ChannelProbe</c> object type (ent.graphql:1157-1166).</summary>
+/// <remarks>
+/// The probe schema has no mixins and no privacy policy, so node(ChannelProbe)
+/// reads the row as-is. Timestamp and the counters narrow like
+/// <see cref="ChannelProbePointType"/> (C190).
+/// </remarks>
+[GraphQLName("ChannelProbe")]
+public sealed class ChannelProbeType : INode
+{
+    [GraphQLIgnore]
+    public ChannelProbeRecord Record { get; init; } = null!;
+
+    [GraphQLType(typeof(IdType))]
+    public string Id => new GidValue("ChannelProbe", Record.Id).ToString();
+
+    [GraphQLName("channelID")]
+    [GraphQLType(typeof(IdType))]
+    public string ChannelID => new GidValue("Channel", Record.ChannelId).ToString();
+
+    public int TotalRequestCount => checked((int)Record.TotalRequestCount);
+
+    public int SuccessRequestCount => checked((int)Record.SuccessRequestCount);
+
+    public double? AvgTokensPerSecond => Record.AvgTokensPerSecond;
+
+    public double? AvgTimeToFirstTokenMs => Record.AvgTimeToFirstTokenMs;
+
+    public int Timestamp => checked((int)Record.Timestamp);
+
+    /// <summary>Port of the entgql Channel edge (gql_edge.go:187-194).</summary>
+    [GraphQLName("channel")]
+    public async Task<ChannelType> GetChannelAsync(
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => await channels.GetNodeAsync(Record.ChannelId, cancellationToken)
+            .ConfigureAwait(false);
+}
+
 /// <summary>Port of <c>GetChannelProbeDataInput</c> (channel_probe.graphql:14-16).</summary>
 public sealed class GetChannelProbeDataInput
 {
@@ -230,6 +268,11 @@ public static class ChannelProbeMapping
             Points = points,
         };
     }
+
+    public static ChannelProbeType ToGraphQL(ChannelProbeRecord record) => new()
+    {
+        Record = record,
+    };
 
     public static ChannelProbeListFilter? ToFilter(ChannelProbeWhereInput? where)
     {

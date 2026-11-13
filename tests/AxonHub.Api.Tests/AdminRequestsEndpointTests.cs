@@ -71,6 +71,7 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
         builder.Services.AddScoped<ApiKeyPrivacy>();
         builder.Services.AddScoped<ModelPrivacy>();
         builder.Services.AddScoped<TracePrivacy>();
+        builder.Services.AddScoped<DataStoragePrivacy>();
         builder.Services.AddScoped<TraceSegmentService>();
         builder.Services.AddScoped<RequestManagementService>();
         builder.Services.AddScoped<RequestQueryService>();
@@ -795,6 +796,83 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
         Assert.Equal("unknown node type: Foo", unknown[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task RequestExecutionNodeResolvesTheExecutionAndItsDataStorage()
+    {
+        SeedRequest(11, request => request.DataStorageId = 1);
+        SeedExecution(21, execution => execution.DataStorageId = 1);
+
+        var data = await QueryDataAsync(
+            """
+            query Node($id: ID!) {
+              node(id: $id) {
+                id
+                ... on RequestExecution {
+                  requestID
+                  dataStorageID
+                  request { id }
+                  dataStorage { id name type }
+                }
+              }
+              request: node(id: "gid://axonhub/Request/11") {
+                ... on Request { dataStorage { id name } }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/RequestExecution/21" });
+
+        var node = data.GetProperty("node");
+        Assert.Equal(
+            "gid://axonhub/RequestExecution/21",
+            node.GetProperty("id").GetString());
+        Assert.Equal("gid://axonhub/Request/11", node.GetProperty("requestID").GetString());
+        Assert.Equal(
+            "gid://axonhub/DataStorage/1",
+            node.GetProperty("dataStorageID").GetString());
+        Assert.Equal(
+            "gid://axonhub/Request/11",
+            node.GetProperty("request").GetProperty("id").GetString());
+
+        var storage = node.GetProperty("dataStorage");
+        Assert.Equal("gid://axonhub/DataStorage/1", storage.GetProperty("id").GetString());
+        Assert.Equal("Primary", storage.GetProperty("name").GetString());
+        Assert.Equal("database", storage.GetProperty("type").GetString());
+
+        // The Request edge runs the same query and mapping.
+        var requestStorage = data.GetProperty("request").GetProperty("dataStorage");
+        Assert.Equal(
+            "gid://axonhub/DataStorage/1",
+            requestStorage.GetProperty("id").GetString());
+        Assert.Equal("Primary", requestStorage.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task DataStorageEdgesAreMaskedWhenTheRowIsMissing()
+    {
+        SeedRequest(11, request => request.DataStorageId = 999);
+        SeedExecution(21, execution => execution.DataStorageId = 999);
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              request: node(id: "gid://axonhub/Request/11") {
+                ... on Request { dataStorage { id } }
+              }
+              execution: node(id: "gid://axonhub/RequestExecution/21") {
+                ... on RequestExecution { dataStorage { id } }
+              }
+            }
+            """);
+
+        // MaskNotFound turns the missing data storage into null on both edges.
+        Assert.Equal(
+            JsonValueKind.Null,
+            data.GetProperty("request").GetProperty("dataStorage").ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            data.GetProperty("execution").GetProperty("dataStorage").ValueKind);
+    }
+
     private void SeedLookups()
     {
         AddProject(1);
@@ -975,7 +1053,10 @@ internal sealed class RequestsSliceExecutionStore : IRequestExecutionStore
     public Task<RequestExecutionRecord?> GetByIdAsync(
         long id,
         CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("not used by the requests surface");
+    {
+        _ = cancellationToken;
+        return Task.FromResult(_rows.FirstOrDefault(row => row.Id == id));
+    }
 
     public Task<IReadOnlyList<RequestExecutionRecord>> ListByRequestIdAsync(
         long requestId,
@@ -1169,6 +1250,29 @@ public sealed class RequestQueryServiceVisibilityTests
         Assert.Null(await service.GetVisibleChannelOrNullAsync(0));
     }
 
+    [Fact]
+    public async Task DataStorageQueryDenyPropagatesEvenWithoutAForeignKey()
+    {
+        // The ent query policy runs before the SQL, so a deny is not masked by
+        // MaskNotFound even when the edge foreign key is null.
+        var identity = new FakeManagementIdentity(new ManagementUser(1, IsOwner: false));
+        var service = CreateService(identity, new FailingChannelStore());
+
+        await Assert.ThrowsAsync<PrivacyDenyException>(
+            () => service.GetVisibleDataStorageOrNullAsync(null));
+    }
+
+    [Fact]
+    public async Task NullDataStorageIdSkipsTheQueryForAnAllowedCaller()
+    {
+        var identity = new FakeManagementIdentity(
+            new ManagementUser(AdminGraphqlGateServices.UserId, IsOwner: true));
+        var service = CreateService(identity, new FailingChannelStore());
+
+        Assert.Null(await service.GetVisibleDataStorageOrNullAsync(null));
+        Assert.Null(await service.GetVisibleDataStorageOrNullAsync(0));
+    }
+
     private static RequestQueryService CreateService(
         FakeManagementIdentity identity,
         IChannelStore channels)
@@ -1182,9 +1286,11 @@ public sealed class RequestQueryServiceVisibilityTests
             null!,
             channels,
             null!,
+            null!,
             new ApiKeyPrivacy(identity, users, projects),
             new ModelPrivacy(identity, users),
-            new TracePrivacy(identity, users));
+            new TracePrivacy(identity, users),
+            new DataStoragePrivacy(identity, users));
     }
 
     private sealed class FailingChannelStore : IChannelStore

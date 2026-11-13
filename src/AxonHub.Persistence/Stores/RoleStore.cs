@@ -180,6 +180,15 @@ public interface IRoleStore
     Task<RoleRecord?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of the entgql Node lookup for UserRole
+    /// (<c>client.UserRole.Get(ctx, id)</c>): the join table declares no
+    /// mixins and no privacy policy, so the row is read as-is.
+    /// </summary>
+    Task<UserRoleRecord?> GetUserRoleByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Runs <paramref name="action"/> in a transaction, joining the ambient one
     /// when the caller (RoleManagementService.DeleteRole/BulkDeleteRoles)
     /// already opened it. The reference's RoleService.RunInTransaction.
@@ -271,6 +280,24 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
         return await connection.QuerySingleOrDefaultAsync<RoleRecord>(
+            new CommandDefinition(
+                sql,
+                new { Id = id },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<UserRoleRecord?> GetUserRoleByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            SELECT "id", "created_at", "updated_at", "user_id", "role_id"
+            FROM "user_roles" WHERE "id" = @Id;
+            """;
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<UserRoleRecord>(
             new CommandDefinition(
                 sql,
                 new { Id = id },

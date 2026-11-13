@@ -720,6 +720,70 @@ public sealed class AdminChannelOverrideTemplateEndpointTests : IAsyncLifetime
             errors[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task NodeResolvesTheTemplatesOwnedByTheCurrentUser()
+    {
+        // Templates are private: node(id) runs OwnerRule → UserOwnedQueryRule
+        // inside the service, and the gate user (9, non-owner) owns the row.
+        _templates.Templates.Add(Template(id: 3, name: "Mine"));
+
+        var data = await QueryDataAsync(
+            """
+            query Node($id: ID!) {
+              node(id: $id) {
+                id
+                ... on ChannelOverrideTemplate {
+                  userID
+                  name
+                  headerOverrideOperations { op path value }
+                }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/ChannelOverrideTemplate/3" });
+
+        var node = data.GetProperty("node");
+        Assert.Equal(
+            "gid://axonhub/ChannelOverrideTemplate/3",
+            node.GetProperty("id").GetString());
+        Assert.Equal("gid://axonhub/User/9", node.GetProperty("userID").GetString());
+        Assert.Equal("Mine", node.GetProperty("name").GetString());
+        Assert.Empty(node.GetProperty("headerOverrideOperations").EnumerateArray().ToArray());
+    }
+
+    [Fact]
+    public async Task NodeReportsAnotherUsersTemplateAsNotFound()
+    {
+        var other = Template(id: 4, name: "Someone else's");
+        other.UserId = 10;
+        _templates.Templates.Add(other);
+
+        var errors = await QueryErrorsAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/ChannelOverrideTemplate/4" });
+
+        // UserOwnedQueryRule filters the row out, which ent reports as NotFound.
+        Assert.Equal(
+            "ent: channel_override_template not found",
+            errors[0].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task NodeReportsMissingTemplatesWithoutTheServicePrefix()
+    {
+        var errors = await QueryErrorsAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/ChannelOverrideTemplate/999" });
+
+        Assert.Equal(
+            "ent: channel_override_template not found",
+            errors[0].GetProperty("message").GetString());
+    }
+
     // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------

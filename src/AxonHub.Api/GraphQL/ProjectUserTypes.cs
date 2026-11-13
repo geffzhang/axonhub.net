@@ -8,8 +8,8 @@ namespace AxonHub.Api.GraphQL;
 /// <summary>
 /// Port of the Relay <c>Node</c> interface (ent.graphql:2580-2586). Every
 /// management-slice type that ent generates as a Node implementor does;
-/// node() resolves the types listed in <c>AdminQuery.NodeAsync</c> and reports
-/// the remaining ent types as "unknown node type: %s" (C165).
+/// node() resolves the 19 types in the reference's guidTypeToNodeType map and
+/// reports every other ent type as "unknown node type: %s".
 /// </summary>
 [InterfaceType("Node")]
 public interface INode
@@ -77,6 +77,66 @@ public sealed class UserProjectType : INode
         return project is null
             ? throw new InvalidOperationException("ent: project not found")
             : UserProfileMapping.ToGraphQL(project);
+    }
+}
+
+/// <summary>Port of the entgql <c>UserRole</c> type (ent.graphql:7420-7428).</summary>
+/// <remarks>
+/// The join table declares no mixins and no privacy policy, so node(UserRole)
+/// reads the row as-is; the user/role edges still run those schemas' query
+/// policies through their required-edge resolvers.
+/// </remarks>
+[GraphQLName("UserRole")]
+public sealed class UserRoleType : INode
+{
+    [GraphQLIgnore]
+    public long DbId { get; init; }
+
+    [GraphQLIgnore]
+    public long UserDbId { get; init; }
+
+    [GraphQLIgnore]
+    public long RoleDbId { get; init; }
+
+    [GraphQLType(typeof(IdType))]
+    public string Id { get; init; } = string.Empty;
+
+    [GraphQLName("userID")]
+    [GraphQLType(typeof(IdType))]
+    public string UserId { get; init; } = string.Empty;
+
+    [GraphQLName("roleID")]
+    [GraphQLType(typeof(IdType))]
+    public string RoleId { get; init; } = string.Empty;
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; init; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; init; }
+
+    /// <summary>Port of the entgql edge resolver UserRole.user.</summary>
+    [GraphQLName("user")]
+    public async Task<UserType> GetUserAsync(
+        [Service] UserPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        // obj.QueryUser().Only runs the User query policy.
+        var user = await privacy.GetVisibleUserOrThrowAsync(UserDbId, cancellationToken)
+            .ConfigureAwait(false);
+        return ManagementMapping.ToGraphQL(user);
+    }
+
+    /// <summary>Port of the entgql edge resolver UserRole.role.</summary>
+    [GraphQLName("role")]
+    public async Task<RoleType> GetRoleAsync(
+        [Service] RolePrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        // obj.QueryRole().Only runs the Role query policy.
+        var role = await privacy.GetVisibleRoleOrThrowAsync(RoleDbId, cancellationToken)
+            .ConfigureAwait(false);
+        return ManagementMapping.ToGraphQL(role);
     }
 }
 
@@ -187,6 +247,22 @@ public sealed class UserTypeExtensions
             .ConfigureAwait(false);
         return [.. rows.Select(ProjectUserMapping.ToGraphQL)];
     }
+}
+
+/// <summary>Domain → GraphQL projection for the UserRole join rows.</summary>
+public static class UserRoleMapping
+{
+    public static UserRoleType ToGraphQL(UserRoleRecord record) => new()
+    {
+        DbId = record.Id,
+        UserDbId = record.UserId,
+        RoleDbId = record.RoleId,
+        Id = new GidValue("UserRole", record.Id).ToString(),
+        UserId = new GidValue("User", record.UserId).ToString(),
+        RoleId = new GidValue("Role", record.RoleId).ToString(),
+        CreatedAt = record.CreatedAt,
+        UpdatedAt = record.UpdatedAt,
+    };
 }
 
 /// <summary>Domain ↔ GraphQL mapping for the UserProject slice.</summary>

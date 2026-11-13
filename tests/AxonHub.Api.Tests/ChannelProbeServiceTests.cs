@@ -590,6 +590,14 @@ internal sealed class RecordingChannelProbeStore : IChannelProbeStore
 
     public Exception? CreateFailure { get; set; }
 
+    public Task<ChannelProbeRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        return Task.FromResult(Rows.FirstOrDefault(row => row.Id == id));
+    }
+
     public Task<IReadOnlyList<ChannelProbeRecord>> QueryAsync(
         IReadOnlyList<long> channelIds,
         long startUnix,

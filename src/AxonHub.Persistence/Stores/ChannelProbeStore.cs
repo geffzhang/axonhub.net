@@ -427,6 +427,15 @@ internal static class ChannelProbeFilterSql
 public interface IChannelProbeStore
 {
     /// <summary>
+    /// Port of the entgql Node lookup for ChannelProbe
+    /// (<c>client.ChannelProbe.Get(ctx, id)</c>): the probe schema declares no
+    /// mixins and no privacy policy, so the row is read as-is.
+    /// </summary>
+    Task<ChannelProbeRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of <c>client.ChannelProbe.Query().Where(ChannelIDIn(...),
     /// TimestampGTE(start), TimestampLTE(end)).Order(ent.Asc(Timestamp))</c>
     /// (channel_probe.go:375-382): inclusive bounds, ascending timestamp and no
@@ -472,6 +481,22 @@ public sealed class ChannelProbeStore(AxonHubDbContext db) : IChannelProbeStore
         "id", "total_request_count", "success_request_count",
         "avg_tokens_per_second", "avg_time_to_first_token_ms", "timestamp", "channel_id"
         """;
+
+    public async Task<ChannelProbeRecord?> GetByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var sql = "SELECT " + Columns
+            + " FROM \"channel_probes\" WHERE \"id\" = @Id;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<ChannelProbeRecord>(
+            new CommandDefinition(
+                sql,
+                new { Id = id },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
 
     public async Task<IReadOnlyList<ChannelProbeRecord>> QueryAsync(
         IReadOnlyList<long> channelIds,

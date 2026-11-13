@@ -2029,7 +2029,7 @@ public sealed class CostItemType
 
 /// <summary>Port of the <c>RequestExecution</c> type (ent.graphql:4641-4711).</summary>
 [GraphQLName("RequestExecution")]
-public sealed class RequestExecutionType
+public sealed class RequestExecutionType : INode
 {
     [GraphQLIgnore]
     public RequestExecutionRecord Record { get; init; } = null!;
@@ -2199,6 +2199,19 @@ public sealed class RequestExecutionType
                 cancellationToken)
             .ConfigureAwait(false);
         return channel is null ? null : ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>Port of the DataStorage edge (gql_edge.go:569-576): MaskNotFound.</summary>
+    [GraphQLName("dataStorage")]
+    public async Task<DataStorageType?> GetDataStorageAsync(
+        [Service] RequestQueryService requests,
+        CancellationToken cancellationToken)
+    {
+        var storage = await requests.GetVisibleDataStorageOrNullAsync(
+                Record.DataStorageId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return storage is null ? null : DataStorageMapping.ToGraphQL(storage);
     }
 }
 
@@ -2457,6 +2470,19 @@ public sealed partial class RequestType
         var trace = await requests.GetVisibleTraceOrNullAsync(Record.TraceId, cancellationToken)
             .ConfigureAwait(false);
         return trace is null ? null : TraceMapping.ToGraphQL(trace);
+    }
+
+    /// <summary>Port of the DataStorage edge (gql_edge.go:495-502): MaskNotFound.</summary>
+    [GraphQLName("dataStorage")]
+    public async Task<DataStorageType?> GetDataStorageAsync(
+        [Service] RequestQueryService requests,
+        CancellationToken cancellationToken)
+    {
+        var storage = await requests.GetVisibleDataStorageOrNullAsync(
+                Record.DataStorageId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return storage is null ? null : DataStorageMapping.ToGraphQL(storage);
     }
 
     /// <summary>Port of the Request.executions connection (gql_edge.go:503-522).</summary>

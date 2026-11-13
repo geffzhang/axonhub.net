@@ -1456,12 +1456,10 @@ public sealed class AdminQuery
     /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
     /// <remarks>
     /// The reference maps every ent type string to a Noder table lookup; the
-    /// port resolves Project, User, APIKey, APIKeyProfileTemplate, Model,
-    /// Prompt, DataStorage, Channel, Trace, Thread, Request, UsageLog and
-    /// System so far and reports every other type as "unknown node type: %s"
-    /// (C165). PromptProtectionRule is absent from the reference map
-    /// (graphql.go:206-226) even though its SDL type implements Node, and so
-    /// is OIDCIdentity.
+    /// port resolves all 19 types registered by guidTypeToNodeType
+    /// (graphql.go:206-226) and reports every other type as "unknown node
+    /// type: %s". PromptProtectionRule is absent from the reference map even
+    /// though its SDL type implements Node, and so is OIDCIdentity.
     /// </remarks>
     [GraphQLName("node")]
     public async Task<INode?> NodeAsync(
@@ -1551,6 +1549,27 @@ public sealed class AdminQuery
                         .ConfigureAwait(false);
                 }
 
+            case "ChannelProbe":
+                {
+                    // The probe schema has no mixins and no policy, so the
+                    // Noder lookup is a bare primary-key read.
+                    var probes = services.GetRequiredService<IChannelProbeStore>();
+                    var probe = await probes.GetByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return probe is null
+                        ? throw new InvalidOperationException("ent: channel_probe not found")
+                        : ChannelProbeMapping.ToGraphQL(probe);
+                }
+
+            case "ChannelOverrideTemplate":
+                {
+                    // OwnerRule → UserOwnedQueryRule inside the service.
+                    var templates = services.GetRequiredService<ChannelOverrideTemplateService>();
+                    var template = await templates.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ChannelOverrideTemplateMapping.ToGraphQL(template);
+                }
+
             case "Trace":
                 {
                     var traces = services.GetRequiredService<TraceManagementService>();
@@ -1573,6 +1592,54 @@ public sealed class AdminQuery
                     var request = await requests.GetNodeAsync(gid.Id, cancellationToken)
                         .ConfigureAwait(false);
                     return TraceMapping.ToGraphQL(request);
+                }
+
+            case "RequestExecution":
+                {
+                    // The execution schema declares no mixins and no policy.
+                    var executions = services.GetRequiredService<IRequestExecutionStore>();
+                    var execution = await executions.GetByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return execution is null
+                        ? throw new InvalidOperationException("ent: request_execution not found")
+                        : RequestMapping.ToGraphQL(execution);
+                }
+
+            case "Role":
+                {
+                    var rolePrivacy = services.GetRequiredService<RolePrivacy>();
+                    var role = await rolePrivacy
+                        .GetVisibleRoleOrThrowAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ManagementMapping.ToGraphQL(role);
+                }
+
+            case "UserProject":
+                {
+                    // OwnerRule → UserProjectScopeReadRule(read_users) →
+                    // UserOwnedQueryRule; the policy's predicate is applied to
+                    // the primary-key read, so a filtered-out row is NotFound.
+                    var projects = services.GetRequiredService<IUserAdminStore>();
+                    var scope = await services.GetRequiredService<UserProjectPrivacy>()
+                        .EvaluateQueryAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    var membership = await projects
+                        .GetProjectUserByIdAsync(gid.Id, cancellationToken, scope)
+                        .ConfigureAwait(false);
+                    return membership is null
+                        ? throw new InvalidOperationException("ent: user_project not found")
+                        : ProjectUserMapping.ToGraphQL(membership);
+                }
+
+            case "UserRole":
+                {
+                    // The join table declares no mixins and no policy.
+                    var roles = services.GetRequiredService<IRoleStore>();
+                    var userRole = await roles.GetUserRoleByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return userRole is null
+                        ? throw new InvalidOperationException("ent: user_role not found")
+                        : UserRoleMapping.ToGraphQL(userRole);
                 }
 
             case "UsageLog":

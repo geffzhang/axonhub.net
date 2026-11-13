@@ -508,6 +508,17 @@ public interface IUserAdminStore
         long userId,
         CancellationToken cancellationToken = default,
         UserProjectAccessFilter? queryScope = null);
+
+    /// <summary>
+    /// Port of the entgql Node lookup for UserProject
+    /// (<c>client.UserProject.Get(ctx, id)</c>): the UserProject query policy
+    /// installs <c>WhereProjectID(ctx)</c> or <c>WhereUserID(ctx)</c>; a row the
+    /// policy filters out is ent NotFound.
+    /// </summary>
+    Task<UserProjectRecord?> GetProjectUserByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null);
 }
 
 /// <summary>
@@ -1275,6 +1286,40 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
             .ConfigureAwait(false);
 
         return row;
+    }
+
+    public async Task<UserProjectRecord?> GetProjectUserByIdAsync(
+        long id,
+        CancellationToken cancellationToken = default,
+        UserProjectAccessFilter? queryScope = null)
+    {
+        var sql = "SELECT " + UserProjectColumns
+            + " FROM \"user_projects\" WHERE \"id\" = @Id";
+        var parameters = new DynamicParameters();
+        parameters.Add("Id", id);
+
+        // UserProject query policy: WhereProjectID(ctx) / WhereUserID(me).
+        if (queryScope?.ProjectId is { } scopeProject)
+        {
+            sql += " AND \"project_id\" = @ScopeProjectId";
+            parameters.Add("ScopeProjectId", scopeProject);
+        }
+
+        if (queryScope?.UserId is { } scopeUser)
+        {
+            sql += " AND \"user_id\" = @ScopeUserId";
+            parameters.Add("ScopeUserId", scopeUser);
+        }
+
+        sql += ";";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<UserProjectRecord>(
+            new CommandDefinition(
+                sql,
+                parameters,
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<UserProjectRecord>> ListProjectUsersAsync(

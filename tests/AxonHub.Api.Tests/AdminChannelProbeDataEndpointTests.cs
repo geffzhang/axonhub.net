@@ -214,6 +214,64 @@ public sealed class AdminChannelProbeDataEndpointTests : IAsyncLifetime
         Assert.Equal("probe query failed", errors[0].GetProperty("message").GetString());
     }
 
+    [Fact]
+    public async Task NodeResolvesTheProbeRow()
+    {
+        _probes.Rows.Add(new ChannelProbeRecord
+        {
+            Id = 7,
+            ChannelId = 42,
+            Timestamp = 1_772_000_000,
+            TotalRequestCount = 10,
+            SuccessRequestCount = 9,
+            AvgTokensPerSecond = 12.5,
+            AvgTimeToFirstTokenMs = 300,
+        });
+
+        var root = await ExecuteRawAsync(
+            """
+            query Node($id: ID!) {
+              node(id: $id) {
+                id
+                ... on ChannelProbe {
+                  channelID
+                  totalRequestCount
+                  successRequestCount
+                  avgTokensPerSecond
+                  avgTimeToFirstTokenMs
+                  timestamp
+                }
+              }
+            }
+            """,
+            new { id = "gid://axonhub/ChannelProbe/7" });
+
+        Assert.False(root.TryGetProperty("errors", out var errors), errors.ToString());
+        var node = root.GetProperty("data").GetProperty("node");
+        Assert.Equal("gid://axonhub/ChannelProbe/7", node.GetProperty("id").GetString());
+        Assert.Equal("gid://axonhub/Channel/42", node.GetProperty("channelID").GetString());
+        Assert.Equal(10, node.GetProperty("totalRequestCount").GetInt32());
+        Assert.Equal(9, node.GetProperty("successRequestCount").GetInt32());
+        Assert.Equal(12.5, node.GetProperty("avgTokensPerSecond").GetDouble());
+        Assert.Equal(300, node.GetProperty("avgTimeToFirstTokenMs").GetDouble());
+        Assert.Equal(1_772_000_000, node.GetProperty("timestamp").GetInt32());
+    }
+
+    [Fact]
+    public async Task NodeReportsAMissingProbeAsEntNotFound()
+    {
+        var root = await ExecuteRawAsync(
+            """
+            query Node($id: ID!) { node(id: $id) { id } }
+            """,
+            new { id = "gid://axonhub/ChannelProbe/999" });
+
+        Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
+        Assert.Equal(
+            "ent: channel_probe not found",
+            errors[0].GetProperty("message").GetString());
+    }
+
     private static string Gid(long id) => new GidValue("Channel", id).ToString();
 
     private static object ChannelIds(params string[] ids)
@@ -234,8 +292,11 @@ public sealed class AdminChannelProbeDataEndpointTests : IAsyncLifetime
     }
 
     private async Task<JsonElement> ExecuteAsync(object variables)
+        => await ExecuteRawAsync(ProbeQuery, variables);
+
+    private async Task<JsonElement> ExecuteRawAsync(string query, object variables)
     {
-        var payload = JsonSerializer.Serialize(new { query = ProbeQuery, variables });
+        var payload = JsonSerializer.Serialize(new { query, variables });
         using var response = await _client.PostAsync(
             "/admin/graphql",
             new StringContent(payload, Encoding.UTF8, "application/json"));
