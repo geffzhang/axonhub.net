@@ -1793,6 +1793,31 @@ EXISTS 子查询：true → EXISTS、false → NOT EXISTS；hasXWith 的谓词 A
 台账：C135 保持 gap，残余收窄为 12 组边谓词（Channel 6、User 5、Role 1）；lint 通过；
 02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
 
+§202（2026-11-13）Project / APIKey / UserProject 的 where 输入与 User / Role 的 projects /
+apiKeys 边谓词（C135 第四刀）。
+
+参照 ent.graphql，ProjectWhereInput / APIKeyWhereInput / UserProjectWhereInput 分别有
+57 / 71 / 29 个字段；端口此前只有 9 / 17 / 0 个。§202 把 54 + 68 + 26 个标量谓词全部加入
+GraphQL 输入与 ProjectListFilter / ApiKeyListFilter / UserProjectListFilter，GID / Time /
+枚举 → wire 值 / IsNil 布尔映射逐项对齐；userID* / projectID* 显式使用参照大小写。存储层把
+ProjectStore.BuildFilter、ApiKeyStore.BuildFilter 上提为 internal static，并新建
+UserProjectFilterSql，复用 ConnectionSql 的共享谓词 helper。
+
+同时把已解锁的 4 组边谓词接入消费侧：RoleWhereInput 的 hasProject / hasProjectWith，
+UserWhereInput 的 hasProjects / hasProjectsWith、hasAPIKeys / hasAPIKeysWith、
+hasProjectUsers / hasProjectUsersWith。语义与 §201 相同：true → EXISTS、false → NOT EXISTS；
+hasXWith 的谓词 AND 进同一个 EXISTS，空列表不生成谓词，空过滤器退化为「存在任意链接」，
+被连接实体的软删除谓词不重新应用。
+
+测试：ProjectStoreTests 新增 1 例、ApiKeyStoreTests 新增 1 例、UserAdminStoreTests 新增 1 例、
+RoleStoreTests 新增 1 例（Postgres；覆盖三张输入的全部标量操作符、空列表、NULL 行排除、
+软删除目标仍匹配与 Not / And / Or 嵌套），四类合计 60 通过；AdminProjectsEndpointTests /
+AdminApiKeysEndpointTests / AdminUsersRolesEndpointTests 新增 7 例并更新 2 个 introspection
+断言（Project 57 字段、APIKey 71 字段、UserProject 29 字段、User 110 字段、Role 56 字段，
+以及 4 组边谓词到 ListFilter 的映射），三类合计 61 通过。
+台账：C135 保持 gap，残余收窄为 8 组边谓词（Channel 6、User 2）；lint 通过；
+02-differences.md 已重新生成；282 条（206 accepted / 2 gap / 74 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

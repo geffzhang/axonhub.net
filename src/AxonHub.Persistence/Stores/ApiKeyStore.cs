@@ -35,21 +35,137 @@ public sealed record ApiKeyAccessFilter
     public bool IsEmpty => ProjectId is null && PersonalUserId is null && !ExcludePersonal;
 }
 
+/// <summary>
+/// Entgql <c>APIKeyWhereInput</c> scalar predicates. The user, project and
+/// request edge predicate groups are not ported yet (C135).
+/// </summary>
 public sealed record ApiKeyListFilter
 {
     public long? Id { get; init; }
 
+    public long? IdNEQ { get; init; }
+
     public IReadOnlyList<long>? IdIn { get; init; }
 
-    public string? Name { get; init; }
+    public IReadOnlyList<long>? IdNotIn { get; init; }
 
-    public string? NameContainsFold { get; init; }
+    public long? IdGT { get; init; }
+
+    public long? IdGTE { get; init; }
+
+    public long? IdLT { get; init; }
+
+    public long? IdLTE { get; init; }
+
+    public DateTime? CreatedAt { get; init; }
+
+    public DateTime? CreatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; init; }
+
+    public DateTime? CreatedAtGT { get; init; }
+
+    public DateTime? CreatedAtGTE { get; init; }
+
+    public DateTime? CreatedAtLT { get; init; }
+
+    public DateTime? CreatedAtLTE { get; init; }
+
+    public DateTime? UpdatedAt { get; init; }
+
+    public DateTime? UpdatedAtNEQ { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; init; }
+
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; init; }
+
+    public DateTime? UpdatedAtGT { get; init; }
+
+    public DateTime? UpdatedAtGTE { get; init; }
+
+    public DateTime? UpdatedAtLT { get; init; }
+
+    public DateTime? UpdatedAtLTE { get; init; }
+
+    public long? UserId { get; init; }
+
+    public long? UserIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? UserIdIn { get; init; }
+
+    public IReadOnlyList<long>? UserIdNotIn { get; init; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool UserIdIsNil { get; init; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    public bool UserIdNotNil { get; init; }
+
+    public long? ProjectId { get; init; }
+
+    public long? ProjectIdNEQ { get; init; }
+
+    public IReadOnlyList<long>? ProjectIdIn { get; init; }
+
+    public IReadOnlyList<long>? ProjectIdNotIn { get; init; }
 
     public string? Key { get; init; }
 
+    public string? KeyNEQ { get; init; }
+
+    public IReadOnlyList<string>? KeyIn { get; init; }
+
+    public IReadOnlyList<string>? KeyNotIn { get; init; }
+
+    public string? KeyGT { get; init; }
+
+    public string? KeyGTE { get; init; }
+
+    public string? KeyLT { get; init; }
+
+    public string? KeyLTE { get; init; }
+
+    public string? KeyContains { get; init; }
+
+    public string? KeyHasPrefix { get; init; }
+
+    public string? KeyHasSuffix { get; init; }
+
+    public string? KeyEqualFold { get; init; }
+
     public string? KeyContainsFold { get; init; }
 
+    public string? Name { get; init; }
+
+    public string? NameNEQ { get; init; }
+
+    public IReadOnlyList<string>? NameIn { get; init; }
+
+    public IReadOnlyList<string>? NameNotIn { get; init; }
+
+    public string? NameGT { get; init; }
+
+    public string? NameGTE { get; init; }
+
+    public string? NameLT { get; init; }
+
+    public string? NameLTE { get; init; }
+
+    public string? NameContains { get; init; }
+
+    public string? NameHasPrefix { get; init; }
+
+    public string? NameHasSuffix { get; init; }
+
+    public string? NameEqualFold { get; init; }
+
+    public string? NameContainsFold { get; init; }
+
     public string? Type { get; init; }
+
+    public string? TypeNEQ { get; init; }
 
     public IReadOnlyList<string>? TypeIn { get; init; }
 
@@ -57,13 +173,11 @@ public sealed record ApiKeyListFilter
 
     public string? Status { get; init; }
 
+    public string? StatusNEQ { get; init; }
+
     public IReadOnlyList<string>? StatusIn { get; init; }
 
     public IReadOnlyList<string>? StatusNotIn { get; init; }
-
-    public long? ProjectId { get; init; }
-
-    public long? UserId { get; init; }
 
     public ApiKeyListFilter? Not { get; init; }
 
@@ -774,7 +888,7 @@ public sealed class ApiKeyStore(AxonHubDbContext db) : IApiKeyStore
         }
     }
 
-    private static string? BuildFilter(ApiKeyListFilter? filter, string alias, SqlArguments args)
+    internal static string? BuildFilter(ApiKeyListFilter? filter, string alias, SqlArguments args)
     {
         if (filter is null)
         {
@@ -782,97 +896,124 @@ public sealed class ApiKeyStore(AxonHubDbContext db) : IApiKeyStore
         }
 
         var predicates = new List<string?>();
-        if (filter.Id is not null)
+
+        ConnectionSql.AppendComparison(predicates, alias, "id", filter.Id, "=", args);
+        ConnectionSql.AppendComparison(predicates, alias, "id", filter.IdNEQ, "<>", args);
+        ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+        ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdNotIn, args, negate: true);
+        ConnectionSql.AppendComparison(predicates, alias, "id", filter.IdGT, ">", args);
+        ConnectionSql.AppendComparison(predicates, alias, "id", filter.IdGTE, ">=", args);
+        ConnectionSql.AppendComparison(predicates, alias, "id", filter.IdLT, "<", args);
+        ConnectionSql.AppendComparison(predicates, alias, "id", filter.IdLTE, "<=", args);
+
+        ConnectionSql.AppendComparison(
+            predicates, alias, "created_at", filter.CreatedAt, "=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "created_at", filter.CreatedAtNEQ, "<>", args);
+        ConnectionSql.AppendTimeIn(
+            predicates, alias, "created_at", filter.CreatedAtIn, args);
+        ConnectionSql.AppendTimeIn(
+            predicates, alias, "created_at", filter.CreatedAtNotIn, args, negate: true);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "created_at", filter.CreatedAtGT, ">", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "created_at", filter.CreatedAtGTE, ">=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "created_at", filter.CreatedAtLT, "<", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "created_at", filter.CreatedAtLTE, "<=", args);
+
+        ConnectionSql.AppendComparison(
+            predicates, alias, "updated_at", filter.UpdatedAt, "=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "updated_at", filter.UpdatedAtNEQ, "<>", args);
+        ConnectionSql.AppendTimeIn(
+            predicates, alias, "updated_at", filter.UpdatedAtIn, args);
+        ConnectionSql.AppendTimeIn(
+            predicates, alias, "updated_at", filter.UpdatedAtNotIn, args, negate: true);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "updated_at", filter.UpdatedAtGT, ">", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "updated_at", filter.UpdatedAtGTE, ">=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "updated_at", filter.UpdatedAtLT, "<", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "updated_at", filter.UpdatedAtLTE, "<=", args);
+
+        ConnectionSql.AppendComparison(predicates, alias, "user_id", filter.UserId, "=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "user_id", filter.UserIdNEQ, "<>", args);
+        ConnectionSql.AppendIdIn(predicates, alias, "user_id", filter.UserIdIn, args);
+        ConnectionSql.AppendIdIn(
+            predicates, alias, "user_id", filter.UserIdNotIn, args, negate: true);
+        if (filter.UserIdIsNil)
         {
-            predicates.Add(alias + ".\"id\" = " + args.Add(filter.Id.Value));
+            predicates.Add(alias + ".\"user_id\" IS NULL");
         }
 
-        if (filter.IdIn is not null)
+        if (filter.UserIdNotNil)
         {
-            ConnectionSql.AppendIdIn(predicates, alias, "id", filter.IdIn, args);
+            predicates.Add(alias + ".\"user_id\" IS NOT NULL");
         }
 
-        if (filter.Name is not null)
-        {
-            predicates.Add(alias + ".\"name\" = " + args.Add(filter.Name));
-        }
+        ConnectionSql.AppendComparison(
+            predicates, alias, "project_id", filter.ProjectId, "=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "project_id", filter.ProjectIdNEQ, "<>", args);
+        ConnectionSql.AppendIdIn(predicates, alias, "project_id", filter.ProjectIdIn, args);
+        ConnectionSql.AppendIdIn(
+            predicates, alias, "project_id", filter.ProjectIdNotIn, args, negate: true);
 
-        if (filter.NameContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(predicates, alias, "name", "LIKE", filter.NameContainsFold, args);
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "key",
+            filter.Key,
+            filter.KeyNEQ,
+            filter.KeyIn,
+            filter.KeyNotIn,
+            filter.KeyGT,
+            filter.KeyGTE,
+            filter.KeyLT,
+            filter.KeyLTE,
+            filter.KeyContains,
+            filter.KeyHasPrefix,
+            filter.KeyHasSuffix,
+            filter.KeyEqualFold,
+            filter.KeyContainsFold,
+            args);
 
-        if (filter.Key is not null)
-        {
-            predicates.Add(alias + ".\"key\" = " + args.Add(filter.Key));
-        }
+        ConnectionSql.AppendStringPredicates(
+            predicates,
+            alias,
+            "name",
+            filter.Name,
+            filter.NameNEQ,
+            filter.NameIn,
+            filter.NameNotIn,
+            filter.NameGT,
+            filter.NameGTE,
+            filter.NameLT,
+            filter.NameLTE,
+            filter.NameContains,
+            filter.NameHasPrefix,
+            filter.NameHasSuffix,
+            filter.NameEqualFold,
+            filter.NameContainsFold,
+            args);
 
-        if (filter.KeyContainsFold is not null)
-        {
-            ConnectionSql.AppendStringFilter(predicates, alias, "key", "LIKE", filter.KeyContainsFold, args);
-        }
+        ConnectionSql.AppendComparison(predicates, alias, "type", filter.Type, "=", args);
+        ConnectionSql.AppendComparison(predicates, alias, "type", filter.TypeNEQ, "<>", args);
+        ConnectionSql.AppendStringIn(predicates, alias, "type", filter.TypeIn, args);
+        ConnectionSql.AppendStringIn(
+            predicates, alias, "type", filter.TypeNotIn, args, negate: true);
 
-        if (filter.Type is not null)
-        {
-            predicates.Add(alias + ".\"type\" = " + args.Add(filter.Type));
-        }
-
-        if (filter.TypeIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "type", filter.TypeIn, args);
-        }
-
-        if (filter.TypeNotIn is not null)
-        {
-            if (filter.TypeNotIn.Count == 0)
-            {
-                predicates.Add("TRUE");
-            }
-            else
-            {
-                var parameters = filter.TypeNotIn
-                    .Select(value => args.Add(value))
-                    .ToArray();
-                predicates.Add(
-                    alias + ".\"type\" NOT IN (" + string.Join(", ", parameters) + ")");
-            }
-        }
-
-        if (filter.Status is not null)
-        {
-            predicates.Add(alias + ".\"status\" = " + args.Add(filter.Status));
-        }
-
-        if (filter.StatusIn is not null)
-        {
-            ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
-        }
-
-        if (filter.StatusNotIn is not null)
-        {
-            if (filter.StatusNotIn.Count == 0)
-            {
-                predicates.Add("TRUE");
-            }
-            else
-            {
-                var parameters = filter.StatusNotIn
-                    .Select(value => args.Add(value))
-                    .ToArray();
-                predicates.Add(
-                    alias + ".\"status\" NOT IN (" + string.Join(", ", parameters) + ")");
-            }
-        }
-
-        if (filter.ProjectId is not null)
-        {
-            predicates.Add(alias + ".\"project_id\" = " + args.Add(filter.ProjectId.Value));
-        }
-
-        if (filter.UserId is not null)
-        {
-            predicates.Add(alias + ".\"user_id\" = " + args.Add(filter.UserId.Value));
-        }
+        ConnectionSql.AppendComparison(predicates, alias, "status", filter.Status, "=", args);
+        ConnectionSql.AppendComparison(
+            predicates, alias, "status", filter.StatusNEQ, "<>", args);
+        ConnectionSql.AppendStringIn(predicates, alias, "status", filter.StatusIn, args);
+        ConnectionSql.AppendStringIn(
+            predicates, alias, "status", filter.StatusNotIn, args, negate: true);
 
         if (filter.Not is not null && BuildFilter(filter.Not, alias, args) is { } not)
         {

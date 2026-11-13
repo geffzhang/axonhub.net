@@ -221,6 +221,217 @@ public sealed class ProjectStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesEveryScalarPredicate()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ProjectStore(context);
+
+        var alpha = NewProject();
+        alpha.Name = "Alpha";
+        alpha.Description = "First project";
+        alpha.CreatedAt = CreatedAt;
+        alpha.UpdatedAt = CreatedAt.AddHours(1);
+        var alphaId = await store.CreateAsync(alpha);
+
+        var beta = NewProject();
+        beta.Name = "Beta";
+        beta.Description = "Second project";
+        beta.Status = "archived";
+        beta.CreatedAt = CreatedAt.AddMinutes(1);
+        beta.UpdatedAt = CreatedAt.AddHours(2);
+        var betaId = await store.CreateAsync(beta);
+
+        var gamma = NewProject();
+        gamma.Name = "Gamma";
+        gamma.Description = "Third project";
+        gamma.CreatedAt = CreatedAt.AddMinutes(2);
+        gamma.UpdatedAt = CreatedAt.AddHours(3);
+        var gammaId = await store.CreateAsync(gamma);
+
+        async Task<string[]> Names(ProjectListFilter where)
+        {
+            var page = await store.ListAsync(new ProjectListQuery { Where = where, First = 10 });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { Id = alphaId }));
+        Assert.Equal(["Beta", "Gamma"], await Names(new ProjectListFilter { IdNEQ = alphaId }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter { IdIn = [alphaId, gammaId] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { IdNotIn = [alphaId] }));
+        Assert.Equal(["Beta", "Gamma"], await Names(new ProjectListFilter { IdGT = alphaId }));
+        Assert.Equal(["Beta", "Gamma"], await Names(new ProjectListFilter { IdGTE = betaId }));
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { IdLT = betaId }));
+        Assert.Equal(["Alpha", "Beta"], await Names(new ProjectListFilter { IdLTE = betaId }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { CreatedAt = CreatedAt }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { CreatedAtNEQ = CreatedAt }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter
+            {
+                CreatedAtIn = [CreatedAt, CreatedAt.AddMinutes(2)],
+            }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { CreatedAtNotIn = [CreatedAt] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { CreatedAtGT = CreatedAt }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { CreatedAtGTE = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter { CreatedAtLT = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ProjectListFilter { CreatedAtLTE = CreatedAt.AddMinutes(1) }));
+
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ProjectListFilter { UpdatedAt = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter { UpdatedAtNEQ = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter
+            {
+                UpdatedAtIn = [CreatedAt.AddHours(1), CreatedAt.AddHours(3)],
+            }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { UpdatedAtNotIn = [CreatedAt.AddHours(1)] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { UpdatedAtGT = CreatedAt.AddHours(1) }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { UpdatedAtGTE = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter { UpdatedAtLT = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ProjectListFilter { UpdatedAtLTE = CreatedAt.AddHours(2) }));
+
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { Name = "Alpha" }));
+        Assert.Equal(["Beta", "Gamma"], await Names(new ProjectListFilter { NameNEQ = "Alpha" }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter { NameIn = ["Alpha", "Gamma"] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { NameNotIn = ["Alpha"] }));
+        Assert.Equal(["Gamma"], await Names(new ProjectListFilter { NameGT = "Beta" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { NameGTE = "Beta" }));
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { NameLT = "Beta" }));
+        Assert.Equal(["Alpha", "Beta"], await Names(new ProjectListFilter { NameLTE = "Beta" }));
+        Assert.Equal(["Gamma"], await Names(new ProjectListFilter { NameContains = "amm" }));
+        Assert.Equal(["Alpha"], await Names(new ProjectListFilter { NameHasPrefix = "Al" }));
+        Assert.Equal(["Beta"], await Names(new ProjectListFilter { NameHasSuffix = "ta" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter { NameEqualFold = "ALPHA" }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ProjectListFilter { NameContainsFold = "AMM" }));
+
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter { Description = "First project" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { DescriptionNEQ = "First project" }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter
+            {
+                DescriptionIn = ["First project", "Third project"],
+            }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { DescriptionNotIn = ["First project"] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { DescriptionGT = "First project" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ProjectListFilter { DescriptionGTE = "Second project" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter { DescriptionLT = "Second project" }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ProjectListFilter { DescriptionLTE = "Second project" }));
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ProjectListFilter { DescriptionContains = "Second" }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ProjectListFilter { DescriptionHasPrefix = "Third" }));
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            await Names(new ProjectListFilter { DescriptionHasSuffix = "project" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ProjectListFilter { DescriptionEqualFold = "FIRST PROJECT" }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ProjectListFilter { DescriptionContainsFold = "THIRD" }));
+
+        Assert.Equal(["Beta"], await Names(new ProjectListFilter { Status = "archived" }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter { StatusNEQ = "archived" }));
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ProjectListFilter { StatusIn = ["archived"] }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter { StatusNotIn = ["archived"] }));
+        Assert.Empty(await Names(new ProjectListFilter { StatusIn = [] }));
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            await Names(new ProjectListFilter { StatusNotIn = [] }));
+
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ProjectListFilter { Not = new() { Status = "archived" } }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ProjectListFilter
+            {
+                And =
+                [
+                    new ProjectListFilter { Status = "active" },
+                    new ProjectListFilter { NameContainsFold = "GAM" },
+                ],
+            }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ProjectListFilter
+            {
+                Or =
+                [
+                    new ProjectListFilter { Name = "Alpha" },
+                    new ProjectListFilter { Name = "Beta" },
+                ],
+            }));
+        Assert.Empty(await Names(new ProjectListFilter { Or = [] }));
+    }
+
+    [Fact]
     public async Task UpdateTouchesOnlySuppliedFieldsAndRefreshesUpdatedAt()
     {
         await using var db = new TestDatabase(fixture);

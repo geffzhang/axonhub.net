@@ -66,26 +66,143 @@ public sealed class ProjectOrder
 }
 
 /// <summary>
-/// Port of the subset of <c>ProjectWhereInput</c> used by the management
-/// frontend (nameContainsFold, status/statusIn, id/idIn, and/or/not). The full
-/// reference input also carries the remaining ent predicates and edge filters
-/// (C165).
+/// Port of <c>ProjectWhereInput</c> (ent.graphql:3195-3313). All 54 scalar
+/// field predicates are modeled; the ten edge predicate groups remain tracked
+/// by C165.
 /// </summary>
 public sealed class ProjectWhereInput
 {
     [GraphQLType(typeof(IdType))]
     public string? Id { get; set; }
 
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
     [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
     public IReadOnlyList<string>? IdIn { get; set; }
 
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
     public string? Name { get; set; }
+
+    public string? NameNEQ { get; set; }
+
+    public IReadOnlyList<string>? NameIn { get; set; }
+
+    public IReadOnlyList<string>? NameNotIn { get; set; }
+
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
+    public string? NameContains { get; set; }
+
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
 
     public string? NameContainsFold { get; set; }
 
+    public string? Description { get; set; }
+
+    public string? DescriptionNEQ { get; set; }
+
+    public IReadOnlyList<string>? DescriptionIn { get; set; }
+
+    public IReadOnlyList<string>? DescriptionNotIn { get; set; }
+
+    public string? DescriptionGT { get; set; }
+
+    public string? DescriptionGTE { get; set; }
+
+    public string? DescriptionLT { get; set; }
+
+    public string? DescriptionLTE { get; set; }
+
+    public string? DescriptionContains { get; set; }
+
+    public string? DescriptionHasPrefix { get; set; }
+
+    public string? DescriptionHasSuffix { get; set; }
+
+    public string? DescriptionEqualFold { get; set; }
+
+    public string? DescriptionContainsFold { get; set; }
+
     public ProjectStatusValue? Status { get; set; }
 
+    public ProjectStatusValue? StatusNEQ { get; set; }
+
     public IReadOnlyList<ProjectStatusValue>? StatusIn { get; set; }
+
+    public IReadOnlyList<ProjectStatusValue>? StatusNotIn { get; set; }
 
     public ProjectWhereInput? Not { get; set; }
 
@@ -239,11 +356,61 @@ public static class ProjectMapping
         return new ProjectListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
             Name = where.Name,
+            NameNEQ = where.NameNEQ,
+            NameIn = where.NameIn,
+            NameNotIn = where.NameNotIn,
+            NameGT = where.NameGT,
+            NameGTE = where.NameGTE,
+            NameLT = where.NameLT,
+            NameLTE = where.NameLTE,
+            NameContains = where.NameContains,
+            NameHasPrefix = where.NameHasPrefix,
+            NameHasSuffix = where.NameHasSuffix,
+            NameEqualFold = where.NameEqualFold,
             NameContainsFold = where.NameContainsFold,
+            Description = where.Description,
+            DescriptionNEQ = where.DescriptionNEQ,
+            DescriptionIn = where.DescriptionIn,
+            DescriptionNotIn = where.DescriptionNotIn,
+            DescriptionGT = where.DescriptionGT,
+            DescriptionGTE = where.DescriptionGTE,
+            DescriptionLT = where.DescriptionLT,
+            DescriptionLTE = where.DescriptionLTE,
+            DescriptionContains = where.DescriptionContains,
+            DescriptionHasPrefix = where.DescriptionHasPrefix,
+            DescriptionHasSuffix = where.DescriptionHasSuffix,
+            DescriptionEqualFold = where.DescriptionEqualFold,
+            DescriptionContainsFold = where.DescriptionContainsFold,
             Status = where.Status is null ? null : ToWireStatus(where.Status.Value),
+            StatusNEQ = where.StatusNEQ is null ? null : ToWireStatus(where.StatusNEQ.Value),
             StatusIn = where.StatusIn?
+                .Select(static status => ToWireStatus(status))
+                .ToList(),
+            StatusNotIn = where.StatusNotIn?
                 .Select(static status => ToWireStatus(status))
                 .ToList(),
             Not = ToFilter(where.Not),

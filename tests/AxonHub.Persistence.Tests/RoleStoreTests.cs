@@ -498,6 +498,71 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesProjectEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RoleStore(context);
+
+        var alphaProject = NewProject("alpha");
+        var betaProject = NewProject("beta", status: "archived");
+        betaProject.DeletedAt = 1_700_000_000L;
+        context.Projects.AddRange(alphaProject, betaProject);
+        await context.SaveChangesAsync();
+
+        await store.CreateAsync(NewRole("alpha", "project", alphaProject.Id));
+        await store.CreateAsync(NewRole("beta", "project", betaProject.Id));
+        await store.CreateAsync(NewRole("gamma", "system", null));
+        // project_id has no foreign key, so a dangling id exists in the wild.
+        await store.CreateAsync(NewRole("delta", "project", 999_999));
+
+        async Task<string[]> Names(RoleListFilter where)
+        {
+            var page = await store.ListAsync(new RoleListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        Assert.Equal(Expected("alpha", "beta"), await Names(new RoleListFilter { HasProject = true }));
+        Assert.Equal(
+            Expected("gamma", "delta"),
+            await Names(new RoleListFilter { HasProject = false }));
+        Assert.Equal(
+            Expected("alpha", "beta", "gamma", "delta"),
+            await Names(new RoleListFilter { HasProjectWith = [] }));
+        Assert.Equal(
+            Expected("alpha", "beta"),
+            await Names(new RoleListFilter { HasProjectWith = [new ProjectListFilter()] }));
+        Assert.Equal(
+            Expected("alpha"),
+            await Names(new RoleListFilter
+            {
+                HasProjectWith = [new ProjectListFilter { Name = "alpha" }],
+            }));
+        // Soft-deleted projects still match, like the generated ent predicate.
+        Assert.Equal(
+            Expected("beta"),
+            await Names(new RoleListFilter
+            {
+                HasProjectWith = [new ProjectListFilter { Name = "beta" }],
+            }));
+        Assert.Equal(
+            Expected("beta"),
+            await Names(new RoleListFilter
+            {
+                HasProjectWith = [new ProjectListFilter { Status = "archived" }],
+            }));
+        Assert.Empty(await Names(new RoleListFilter
+        {
+            HasProjectWith = [new ProjectListFilter { Name = "missing" }],
+        }));
+
+        Assert.Equal(
+            Expected("gamma", "delta"),
+            await Names(new RoleListFilter { Not = new RoleListFilter { HasProject = true } }));
+    }
+
+    [Fact]
     public async Task LastReturnsTheTailInAscendingOrder()
     {
         await using var db = new TestDatabase(fixture);
@@ -635,6 +700,15 @@ public sealed class RoleStoreTests(PostgresFixture fixture)
         Password = "$2a$10$hashed",
         FirstName = "First",
         LastName = "Last",
+    };
+
+    private static ProjectRecord NewProject(string name, string status = "active") => new()
+    {
+        CreatedAt = CreatedAt,
+        UpdatedAt = UpdatedAt,
+        Name = name,
+        Description = name + " project",
+        Status = status,
     };
 
     private static RoleRecord NewRole(string name, string level, long? projectId) => new()

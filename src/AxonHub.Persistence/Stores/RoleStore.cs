@@ -15,8 +15,8 @@ public enum RoleSortField
 
 /// <summary>
 /// Port of <c>RoleWhereInput</c> (ent.graphql:5531-5615). All scalar field
-/// predicates plus the <c>users</c> and <c>user_roles</c> edge predicates are
-/// modeled; the <c>project</c> edge predicate remains a registered gap (C135).
+/// predicates plus the <c>users</c>, <c>project</c> and <c>user_roles</c> edge
+/// predicates are modeled.
 /// </summary>
 public sealed record RoleListFilter
 {
@@ -115,6 +115,15 @@ public sealed record RoleListFilter
 
     /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
     public bool ProjectIdNotNil { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasProject</c>: true → the role's <c>project_id</c> points at
+    /// an existing project, false → NOT EXISTS. Generated sqlgraph does not
+    /// re-apply the Project soft-delete predicate.
+    /// </summary>
+    public bool? HasProject { get; init; }
+
+    public IReadOnlyList<ProjectListFilter>? HasProjectWith { get; init; }
 
     /// <summary>
     /// Ent's <c>hasUsers</c>: true → the role has a matching <c>user_roles</c>
@@ -735,6 +744,29 @@ public sealed class RoleStore(AxonHubDbContext db) : IRoleStore
         if (filter.ProjectIdNotNil)
         {
             predicates.Add(alias + ".\"project_id\" IS NOT NULL");
+        }
+
+        if (filter.HasProject is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"projects\" pj WHERE pj.\"id\" = "
+                + alias + ".\"project_id\")";
+            predicates.Add(filter.HasProject.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProjectWith is { Count: > 0 } projectFilters)
+        {
+            // sqlgraph.HasNeighborsWith does not re-apply the Project
+            // soft-delete predicate.
+            var projectPredicates = projectFilters
+                .Select(project => ProjectStore.BuildFilter(project, "pj", args))
+                .Where(static project => project is not null)
+                .ToArray();
+            var projectCondition = ConnectionSql.Combine(projectPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"projects\" pj"
+                + " WHERE pj.\"id\" = " + alias + ".\"project_id\""
+                + (projectCondition is null ? string.Empty : " AND " + projectCondition)
+                + ")");
         }
 
         if (filter.HasUsers is not null)

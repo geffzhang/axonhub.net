@@ -1305,6 +1305,37 @@ ListAppliesUserEdgePredicates（覆盖 true / false、空 With 列表、空过�
 字段、User / Role 边谓词到 ListFilter 的映射；AdminUsersRolesEndpointTests 29 通过）。
 残余：12 组边谓词（Channel 6、User 5、Role 1），继续由 C135 跟踪。
 
+2026-11-13 更新（§202）：Project / APIKey / UserProject 的 where 输入与 User / Role 的
+projects / apiKeys 边谓词（C135 第四刀）。
+参照 `internal/server/gql/ent.graphql`：ProjectWhereInput 共 57 个字段（54 个标量谓词 +
+not / and / or），APIKeyWhereInput 共 71 个字段（68 个标量谓词 + not / and / or），
+UserProjectWhereInput 共 29 个字段（26 个标量谓词 + not / and / or）。端口此前分别只有
+9 / 17 / 0 个字段（Project 仅前端使用的 id / idIn / nameContainsFold / status 等，APIKey
+仅前端实际使用的子集）。§202 把 54 个 Project 谓词（id 8、createdAt 8、updatedAt 8、
+name 13、description 13、status 4）、68 个 APIKey 谓词（id 8、createdAt 8、updatedAt 8、
+userID 6、projectID 4、key 13、name 13、type 4、status 4）与 26 个 UserProject 谓词
+（id 8、createdAt 8、updatedAt 8、isOwner 2）全部加入 GraphQL 输入与对应 ListFilter；
+`ProjectMapping.ToFilter` / `ApiKeyMapping.ToFilter` / `ManagementMapping.ToFilter`
+完成 GID / Time / 枚举 → wire 值 / IsNil 布尔映射，`userID*` / `projectID*` 用显式
+`[GraphQLName]` 保持参照大小写。存储层 `ProjectStore.BuildFilter` /
+`ApiKeyStore.BuildFilter` 改为 internal static，新建 `UserProjectFilterSql`，供跨实体
+EXISTS 复用；谓词语义与 Channel / User / Role 完全一致（LIKE / LOWER / IN / NOT IN
+空列表 false / true、`<>` 与 `NOT IN` 不返回 NULL 行）。
+同时接入 4 组已解锁的边谓词：RoleWhereInput 的 hasProject / hasProjectWith
+（roles.project_id → projects.id），UserWhereInput 的 hasProjects / hasProjectsWith
+（user_projects → projects）、hasAPIKeys / hasAPIKeysWith（api_keys）与
+hasProjectUsers / hasProjectUsersWith（user_projects）。生成方式沿用 §201：true → EXISTS、
+false → NOT EXISTS；hasXWith 的谓词 AND 进同一个 EXISTS，空列表不生成谓词，空过滤器
+退化为「存在任意链接」，不重新应用被连接实体的软删除谓词。新增 4 例：ProjectStoreTests
+的 ListAppliesEveryScalarPredicate、ApiKeyStoreTests 的 ListAppliesEveryScalarPredicate、
+UserAdminStoreTests 的 ListAppliesProjectAndApiKeyEdgePredicates、RoleStoreTests 的
+ListAppliesProjectEdgePredicates（覆盖三张输入的全部标量操作符、空列表、NULL 行排除、
+软删除目标仍匹配与 Not / And / Or 嵌套；四类合计 60 通过）。Api 侧新增 7 例并更新 2 个
+introspection 断言（ProjectWhereInput 57 个字段与逐族映射、APIKeyWhereInput 71 个字段与
+逐族映射、UserProjectWhereInput 29 个字段、UserWhereInput 110 个字段、RoleWhereInput
+56 个字段、4 组边谓词到 ListFilter 的映射；三类合计 61 通过）。
+残余：8 组边谓词（Channel 6、User 2），继续由 C135 跟踪。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

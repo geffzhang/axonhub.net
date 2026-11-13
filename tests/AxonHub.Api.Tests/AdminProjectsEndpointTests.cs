@@ -190,6 +190,187 @@ public sealed class AdminProjectsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProjectWhereInputExposesEveryScalarPredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "ProjectWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(text.Select(static suffix => "name" + suffix));
+        expected.AddRange(text.Select(static suffix => "description" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "status" + suffix));
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
+    }
+
+    [Fact]
+    public async Task QueryProjectsMapsEveryScalarPredicate()
+    {
+        await QueryDataAsync(
+            """
+            query Projects($where: ProjectWhereInput) {
+              projects(first: 10, where: $where) {
+                edges { node { id } }
+                totalCount
+              }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    id = "gid://axonhub/Project/1",
+                    idNEQ = "gid://axonhub/Project/2",
+                    idIn = new[] { "gid://axonhub/Project/3" },
+                    idNotIn = new[] { "gid://axonhub/Project/4" },
+                    idGT = "gid://axonhub/Project/5",
+                    idGTE = "gid://axonhub/Project/6",
+                    idLT = "gid://axonhub/Project/7",
+                    idLTE = "gid://axonhub/Project/8",
+                    createdAt = "2026-01-02T03:04:05Z",
+                    createdAtNEQ = "2026-01-02T03:04:06Z",
+                    createdAtIn = new[] { "2026-01-02T03:04:07Z" },
+                    createdAtNotIn = new[] { "2026-01-02T03:04:08Z" },
+                    createdAtGT = "2026-01-02T03:04:09Z",
+                    createdAtGTE = "2026-01-02T03:04:10Z",
+                    createdAtLT = "2026-01-02T03:04:11Z",
+                    createdAtLTE = "2026-01-02T03:04:12Z",
+                    updatedAt = "2026-02-03T04:05:05Z",
+                    updatedAtNEQ = "2026-02-03T04:05:06Z",
+                    updatedAtIn = new[] { "2026-02-03T04:05:07Z" },
+                    updatedAtNotIn = new[] { "2026-02-03T04:05:08Z" },
+                    updatedAtGT = "2026-02-03T04:05:09Z",
+                    updatedAtGTE = "2026-02-03T04:05:10Z",
+                    updatedAtLT = "2026-02-03T04:05:11Z",
+                    updatedAtLTE = "2026-02-03T04:05:12Z",
+                    name = "Alpha",
+                    nameNEQ = "Beta",
+                    nameIn = new[] { "Gamma" },
+                    nameNotIn = new[] { "Delta" },
+                    nameGT = "a",
+                    nameGTE = "b",
+                    nameLT = "c",
+                    nameLTE = "d",
+                    nameContains = "amm",
+                    nameHasPrefix = "Al",
+                    nameHasSuffix = "ta",
+                    nameEqualFold = "ALPHA",
+                    nameContainsFold = "AMM",
+                    description = "First",
+                    descriptionNEQ = "Second",
+                    descriptionIn = new[] { "Third" },
+                    descriptionNotIn = new[] { "Fourth" },
+                    descriptionGT = "e",
+                    descriptionGTE = "f",
+                    descriptionLT = "g",
+                    descriptionLTE = "h",
+                    descriptionContains = "ir",
+                    descriptionHasPrefix = "Fi",
+                    descriptionHasSuffix = "st",
+                    descriptionEqualFold = "FIRST",
+                    descriptionContainsFold = "IRS",
+                    status = "archived",
+                    statusNEQ = "active",
+                    statusIn = new[] { "archived" },
+                    statusNotIn = new[] { "active" },
+                    not = new { name = "Nope" },
+                    and = new[] { new { nameContains = "a" } },
+                    or = new[] { new { nameHasSuffix = "z" } },
+                },
+            });
+
+        var where = _gate.Projects.Queries[^1].Where!;
+        Assert.Equal(1L, where.Id);
+        Assert.Equal(2L, where.IdNEQ);
+        Assert.Equal([3L], where.IdIn!);
+        Assert.Equal([4L], where.IdNotIn!);
+        Assert.Equal(5L, where.IdGT);
+        Assert.Equal(6L, where.IdGTE);
+        Assert.Equal(7L, where.IdLT);
+        Assert.Equal(8L, where.IdLTE);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), where.CreatedAt);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 6, DateTimeKind.Utc), where.CreatedAtNEQ);
+        Assert.Equal(
+            [new DateTime(2026, 1, 2, 3, 4, 7, DateTimeKind.Utc)],
+            where.CreatedAtIn!);
+        Assert.Equal(
+            [new DateTime(2026, 1, 2, 3, 4, 8, DateTimeKind.Utc)],
+            where.CreatedAtNotIn!);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 9, DateTimeKind.Utc), where.CreatedAtGT);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 10, DateTimeKind.Utc), where.CreatedAtGTE);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 11, DateTimeKind.Utc), where.CreatedAtLT);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 12, DateTimeKind.Utc), where.CreatedAtLTE);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 5, DateTimeKind.Utc), where.UpdatedAt);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc), where.UpdatedAtNEQ);
+        Assert.Equal(
+            [new DateTime(2026, 2, 3, 4, 5, 7, DateTimeKind.Utc)],
+            where.UpdatedAtIn!);
+        Assert.Equal(
+            [new DateTime(2026, 2, 3, 4, 5, 8, DateTimeKind.Utc)],
+            where.UpdatedAtNotIn!);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 9, DateTimeKind.Utc), where.UpdatedAtGT);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 10, DateTimeKind.Utc), where.UpdatedAtGTE);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 11, DateTimeKind.Utc), where.UpdatedAtLT);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 12, DateTimeKind.Utc), where.UpdatedAtLTE);
+        Assert.Equal("Alpha", where.Name);
+        Assert.Equal("Beta", where.NameNEQ);
+        Assert.Equal(["Gamma"], where.NameIn!);
+        Assert.Equal(["Delta"], where.NameNotIn!);
+        Assert.Equal("a", where.NameGT);
+        Assert.Equal("b", where.NameGTE);
+        Assert.Equal("c", where.NameLT);
+        Assert.Equal("d", where.NameLTE);
+        Assert.Equal("amm", where.NameContains);
+        Assert.Equal("Al", where.NameHasPrefix);
+        Assert.Equal("ta", where.NameHasSuffix);
+        Assert.Equal("ALPHA", where.NameEqualFold);
+        Assert.Equal("AMM", where.NameContainsFold);
+        Assert.Equal("First", where.Description);
+        Assert.Equal("Second", where.DescriptionNEQ);
+        Assert.Equal(["Third"], where.DescriptionIn!);
+        Assert.Equal(["Fourth"], where.DescriptionNotIn!);
+        Assert.Equal("e", where.DescriptionGT);
+        Assert.Equal("f", where.DescriptionGTE);
+        Assert.Equal("g", where.DescriptionLT);
+        Assert.Equal("h", where.DescriptionLTE);
+        Assert.Equal("ir", where.DescriptionContains);
+        Assert.Equal("Fi", where.DescriptionHasPrefix);
+        Assert.Equal("st", where.DescriptionHasSuffix);
+        Assert.Equal("FIRST", where.DescriptionEqualFold);
+        Assert.Equal("IRS", where.DescriptionContainsFold);
+        Assert.Equal("archived", where.Status);
+        Assert.Equal("active", where.StatusNEQ);
+        Assert.Equal(["archived"], where.StatusIn!);
+        Assert.Equal(["active"], where.StatusNotIn!);
+        Assert.Equal("Nope", where.Not!.Name);
+        Assert.Equal("a", Assert.Single(where.And!).NameContains);
+        Assert.Equal("z", Assert.Single(where.Or!).NameHasSuffix);
+    }
+
+    [Fact]
     public async Task ProjectsCursorPaginatesWithEntgqlPageInfo()
     {
         SeedProject("One", createdAt: CreatedAt);

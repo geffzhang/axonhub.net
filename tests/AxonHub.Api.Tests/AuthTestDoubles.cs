@@ -19,6 +19,8 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
 
     public List<ApiKeyRecord> Rows { get; } = [];
 
+    public List<ApiKeyListQuery> Queries { get; } = [];
+
     public Exception? GetByKeyFailure { get; set; }
 
     public Task<T> RunInTransactionAsync<T>(
@@ -146,6 +148,7 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
         CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
+        Queries.Add(query);
         var rows = Rows.Where(row => row.DeletedAt == 0
             && (query.ProjectId is null || row.ProjectId == query.ProjectId)
             && Matches(query.Where, row)

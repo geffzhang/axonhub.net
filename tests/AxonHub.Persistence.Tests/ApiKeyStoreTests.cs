@@ -349,6 +349,241 @@ public sealed class ApiKeyStoreTests(PostgresFixture fixture)
         Assert.Equal("enabled", untouched.Status);
     }
 
+    [Fact]
+    public async Task ListAppliesEveryScalarPredicate()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new ApiKeyStore(context);
+
+        var alpha = NewApiKey("Alpha", projectId: 1);
+        alpha.Key = "sk-alpha";
+        alpha.UserId = 1;
+        alpha.CreatedAt = CreatedAt;
+        alpha.UpdatedAt = CreatedAt.AddHours(1);
+        var alphaId = await store.CreateAsync(alpha);
+
+        var beta = NewApiKey("Beta", projectId: 2);
+        beta.Key = "sk-beta";
+        beta.Type = "service_account";
+        beta.Status = "disabled";
+        beta.UserId = 2;
+        beta.CreatedAt = CreatedAt.AddMinutes(1);
+        beta.UpdatedAt = CreatedAt.AddHours(2);
+        var betaId = await store.CreateAsync(beta);
+
+        var gamma = NewApiKey("Gamma", projectId: 1);
+        gamma.Key = "sk-gamma";
+        gamma.Type = "noauth";
+        gamma.Status = "archived";
+        gamma.UserId = null;
+        gamma.CreatedAt = CreatedAt.AddMinutes(2);
+        gamma.UpdatedAt = CreatedAt.AddHours(3);
+        var gammaId = await store.CreateAsync(gamma);
+
+        async Task<string[]> Names(ApiKeyListFilter where)
+        {
+            var page = await store.ListAsync(new ApiKeyListQuery { Where = where, First = 10 });
+            return page.Nodes.Select(static row => row.Name).ToArray();
+        }
+
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { Id = alphaId }));
+        Assert.Equal(["Beta", "Gamma"], await Names(new ApiKeyListFilter { IdNEQ = alphaId }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter { IdIn = [alphaId, gammaId] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { IdNotIn = [alphaId] }));
+        Assert.Equal(["Beta", "Gamma"], await Names(new ApiKeyListFilter { IdGT = alphaId }));
+        Assert.Equal(["Beta", "Gamma"], await Names(new ApiKeyListFilter { IdGTE = betaId }));
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { IdLT = betaId }));
+        Assert.Equal(["Alpha", "Beta"], await Names(new ApiKeyListFilter { IdLTE = betaId }));
+
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { CreatedAt = CreatedAt }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { CreatedAtNEQ = CreatedAt }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter
+            {
+                CreatedAtIn = [CreatedAt, CreatedAt.AddMinutes(2)],
+            }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { CreatedAtNotIn = [CreatedAt] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { CreatedAtGT = CreatedAt }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { CreatedAtGTE = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ApiKeyListFilter { CreatedAtLT = CreatedAt.AddMinutes(1) }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ApiKeyListFilter { CreatedAtLTE = CreatedAt.AddMinutes(1) }));
+
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ApiKeyListFilter { UpdatedAt = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter { UpdatedAtNEQ = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter
+            {
+                UpdatedAtIn = [CreatedAt.AddHours(1), CreatedAt.AddHours(3)],
+            }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { UpdatedAtNotIn = [CreatedAt.AddHours(1)] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { UpdatedAtGT = CreatedAt.AddHours(1) }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { UpdatedAtGTE = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ApiKeyListFilter { UpdatedAtLT = CreatedAt.AddHours(2) }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ApiKeyListFilter { UpdatedAtLTE = CreatedAt.AddHours(2) }));
+
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { UserId = 1 }));
+        // "user_id <> 1" excludes the NULL row, like SQL and ent.
+        Assert.Equal(["Beta"], await Names(new ApiKeyListFilter { UserIdNEQ = 1 }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ApiKeyListFilter { UserIdIn = [1, 2] }));
+        Assert.Equal(["Beta"], await Names(new ApiKeyListFilter { UserIdNotIn = [1] }));
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { UserIdIsNil = true }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ApiKeyListFilter { UserIdNotNil = true }));
+        // Ent reads these as plain bools: false is ignored, not inverted.
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { UserIdIsNil = false }));
+
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter { ProjectId = 1 }));
+        Assert.Equal(["Beta"], await Names(new ApiKeyListFilter { ProjectIdNEQ = 1 }));
+        Assert.Equal(["Beta"], await Names(new ApiKeyListFilter { ProjectIdIn = [2, 3] }));
+        Assert.Equal(["Beta"], await Names(new ApiKeyListFilter { ProjectIdNotIn = [1] }));
+
+        Assert.Equal(["Beta"], await Names(new ApiKeyListFilter { Key = "sk-beta" }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter { KeyNEQ = "sk-beta" }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter { KeyIn = ["sk-alpha", "sk-gamma"] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { KeyNotIn = ["sk-alpha"] }));
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { KeyGT = "sk-beta" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { KeyGTE = "sk-beta" }));
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { KeyLT = "sk-beta" }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ApiKeyListFilter { KeyLTE = "sk-beta" }));
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { KeyContains = "gamma" }));
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { KeyHasPrefix = "sk-a" }));
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { KeyHasSuffix = "ma" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ApiKeyListFilter { KeyEqualFold = "SK-ALPHA" }));
+        Assert.Equal(
+            ["Beta"],
+            await Names(new ApiKeyListFilter { KeyContainsFold = "BETA" }));
+
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { Name = "Alpha" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { NameNEQ = "Alpha" }));
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter { NameIn = ["Alpha", "Gamma"] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { NameNotIn = ["Alpha"] }));
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { NameGT = "Beta" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { NameGTE = "Beta" }));
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { NameLT = "Beta" }));
+        Assert.Equal(["Alpha", "Beta"], await Names(new ApiKeyListFilter { NameLTE = "Beta" }));
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { NameContains = "amm" }));
+        Assert.Equal(["Alpha"], await Names(new ApiKeyListFilter { NameHasPrefix = "Al" }));
+        Assert.Equal(["Beta"], await Names(new ApiKeyListFilter { NameHasSuffix = "ta" }));
+        Assert.Equal(
+            ["Alpha"],
+            await Names(new ApiKeyListFilter { NameEqualFold = "ALPHA" }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ApiKeyListFilter { NameContainsFold = "AMM" }));
+
+        Assert.Equal(["Gamma"], await Names(new ApiKeyListFilter { Type = "noauth" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { TypeNEQ = "user" }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ApiKeyListFilter { TypeIn = ["user", "service_account"] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { TypeNotIn = ["user"] }));
+
+        Assert.Equal(["Beta"], await Names(new ApiKeyListFilter { Status = "disabled" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { StatusNEQ = "enabled" }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { StatusIn = ["disabled", "archived"] }));
+        Assert.Equal(
+            ["Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { StatusNotIn = ["enabled"] }));
+        Assert.Empty(await Names(new ApiKeyListFilter { StatusIn = [] }));
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            await Names(new ApiKeyListFilter { StatusNotIn = [] }));
+
+        Assert.Equal(
+            ["Alpha", "Gamma"],
+            await Names(new ApiKeyListFilter { Not = new() { Status = "disabled" } }));
+        Assert.Equal(
+            ["Gamma"],
+            await Names(new ApiKeyListFilter
+            {
+                And =
+                [
+                    new ApiKeyListFilter { Type = "noauth" },
+                    new ApiKeyListFilter { NameContainsFold = "GAM" },
+                ],
+            }));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            await Names(new ApiKeyListFilter
+            {
+                Or =
+                [
+                    new ApiKeyListFilter { Name = "Alpha" },
+                    new ApiKeyListFilter { Name = "Beta" },
+                ],
+            }));
+        Assert.Empty(await Names(new ApiKeyListFilter { Or = [] }));
+    }
+
     private static async Task SoftDeleteAsync(TestDatabase db, long id)
     {
         await using var connection = await db.Factory.OpenAsync();

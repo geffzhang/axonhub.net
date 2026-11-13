@@ -579,6 +579,184 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ListAppliesProjectAndApiKeyEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new UserAdminStore(context);
+
+        var alphaProject = NewProject("alpha");
+        var betaProject = NewProject("beta");
+        betaProject.DeletedAt = 1_700_000_000L;
+        var gammaProject = NewProject("gamma");
+        context.Projects.AddRange(alphaProject, betaProject, gammaProject);
+        await context.SaveChangesAsync();
+
+        var alice = NewUser("alice@example.com");
+        await store.CreateAsync(alice, null);
+        var bob = NewUser("bob@example.com");
+        await store.CreateAsync(bob, null);
+        var carol = NewUser("carol@example.com");
+        await store.CreateAsync(carol, null);
+
+        context.UserProjects.AddRange(
+            new UserProjectRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                IsOwner = true,
+                UserId = alice.Id,
+                ProjectId = alphaProject.Id,
+            },
+            new UserProjectRecord
+            {
+                // The soft-deleted project keeps its user_projects link;
+                // sqlgraph.HasNeighborsWith does not re-apply the Project
+                // soft-delete predicate.
+                CreatedAt = CreatedAt.AddMinutes(1),
+                UpdatedAt = UpdatedAt,
+                IsOwner = false,
+                UserId = bob.Id,
+                ProjectId = betaProject.Id,
+            });
+        context.ApiKeys.AddRange(
+            new ApiKeyRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                Key = "sk-alice",
+                Name = "alice-key",
+                Type = "user",
+                Status = "enabled",
+                ProjectId = alphaProject.Id,
+                UserId = alice.Id,
+            },
+            new ApiKeyRecord
+            {
+                // A soft-deleted APIKey still satisfies hasAPIKeysWith.
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                DeletedAt = 1_700_000_000L,
+                Key = "sk-bob",
+                Name = "bob-key",
+                Type = "user",
+                Status = "disabled",
+                ProjectId = betaProject.Id,
+                UserId = bob.Id,
+            });
+        await context.SaveChangesAsync();
+
+        async Task<string[]> Emails(UserListFilter where)
+        {
+            var page = await store.ListAsync(new UserListQuery { Where = where });
+            return page.Nodes.Select(static row => row.Email).ToArray();
+        }
+
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { HasProjects = true }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { HasProjects = false }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { HasProjectsWith = [] }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasProjectsWith = [new ProjectListFilter()],
+            }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasProjectsWith = [new ProjectListFilter { Name = "alpha" }],
+            }));
+        // Soft-deleted projects still match, like the generated ent predicate.
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasProjectsWith = [new ProjectListFilter { Name = "beta" }],
+            }));
+        // Several entries AND into one EXISTS.
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasProjectsWith =
+                [
+                    new ProjectListFilter { NameContainsFold = "ALPHA" },
+                    new ProjectListFilter { Status = "active" },
+                ],
+            }));
+        Assert.Empty(await Emails(new UserListFilter
+        {
+            HasProjectsWith = [new ProjectListFilter { Name = "missing" }],
+        }));
+
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { HasAPIKeys = true }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { HasAPIKeys = false }));
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com", "carol@example.com"),
+            await Emails(new UserListFilter { HasAPIKeysWith = [] }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasAPIKeysWith = [new ApiKeyListFilter { Status = "disabled" }],
+            }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasAPIKeysWith = [new ApiKeyListFilter { KeyContainsFold = "ALICE" }],
+            }));
+
+        Assert.Equal(
+            Expected("alice@example.com", "bob@example.com"),
+            await Emails(new UserListFilter { HasProjectUsers = true }));
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter { HasProjectUsers = false }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasProjectUsersWith = [new UserProjectListFilter { IsOwner = true }],
+            }));
+        Assert.Equal(
+            Expected("alice@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasProjectUsersWith = [new UserProjectListFilter { CreatedAt = CreatedAt }],
+            }));
+        Assert.Equal(
+            Expected("bob@example.com"),
+            await Emails(new UserListFilter
+            {
+                HasProjectUsersWith =
+                [
+                    new UserProjectListFilter { IsOwner = false },
+                    new UserProjectListFilter { CreatedAtGTE = CreatedAt.AddMinutes(1) },
+                ],
+            }));
+
+        Assert.Equal(
+            Expected("carol@example.com"),
+            await Emails(new UserListFilter
+            {
+                Not = new UserListFilter { HasProjects = true },
+            }));
+    }
+
+    [Fact]
     public async Task UpdateAppliesFieldsScopesAndRoleEdges()
     {
         await using var db = new TestDatabase(fixture);
@@ -1122,6 +1300,15 @@ public sealed class UserAdminStoreTests(PostgresFixture fixture)
         });
         await context.SaveChangesAsync();
     }
+
+    private static ProjectRecord NewProject(string name) => new()
+    {
+        CreatedAt = CreatedAt,
+        UpdatedAt = UpdatedAt,
+        Name = name,
+        Description = name + " project",
+        Status = "active",
+    };
 
     private static UserRecord NewUser(string email) => new()
     {

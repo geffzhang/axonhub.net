@@ -307,6 +307,219 @@ public sealed class AdminApiKeysEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ApiKeyWhereInputExposesEveryScalarPredicate()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "APIKeyWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+        string[] text =
+        [
+            .. comparison,
+            "Contains",
+            "HasPrefix",
+            "HasSuffix",
+            "EqualFold",
+            "ContainsFold",
+        ];
+        string[] nullableId = ["", "NEQ", "In", "NotIn", "IsNil", "NotNil"];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(nullableId.Select(static suffix => "userID" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "projectID" + suffix));
+        expected.AddRange(text.Select(static suffix => "key" + suffix));
+        expected.AddRange(text.Select(static suffix => "name" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "type" + suffix));
+        expected.AddRange(comparison.Take(4).Select(static suffix => "status" + suffix));
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
+    }
+
+    [Fact]
+    public async Task QueryApiKeysMapsEveryScalarPredicate()
+    {
+        await QueryDataAsync(
+            """
+            query ApiKeys($where: APIKeyWhereInput) {
+              apiKeys(first: 10, where: $where) {
+                edges { node { id } }
+                totalCount
+              }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    id = "gid://axonhub/APIKey/1",
+                    idNEQ = "gid://axonhub/APIKey/2",
+                    idIn = new[] { "gid://axonhub/APIKey/3" },
+                    idNotIn = new[] { "gid://axonhub/APIKey/4" },
+                    idGT = "gid://axonhub/APIKey/5",
+                    idGTE = "gid://axonhub/APIKey/6",
+                    idLT = "gid://axonhub/APIKey/7",
+                    idLTE = "gid://axonhub/APIKey/8",
+                    createdAt = "2026-01-02T03:04:05Z",
+                    createdAtNEQ = "2026-01-02T03:04:06Z",
+                    createdAtIn = new[] { "2026-01-02T03:04:07Z" },
+                    createdAtNotIn = new[] { "2026-01-02T03:04:08Z" },
+                    createdAtGT = "2026-01-02T03:04:09Z",
+                    createdAtGTE = "2026-01-02T03:04:10Z",
+                    createdAtLT = "2026-01-02T03:04:11Z",
+                    createdAtLTE = "2026-01-02T03:04:12Z",
+                    updatedAt = "2026-02-03T04:05:05Z",
+                    updatedAtNEQ = "2026-02-03T04:05:06Z",
+                    updatedAtIn = new[] { "2026-02-03T04:05:07Z" },
+                    updatedAtNotIn = new[] { "2026-02-03T04:05:08Z" },
+                    updatedAtGT = "2026-02-03T04:05:09Z",
+                    updatedAtGTE = "2026-02-03T04:05:10Z",
+                    updatedAtLT = "2026-02-03T04:05:11Z",
+                    updatedAtLTE = "2026-02-03T04:05:12Z",
+                    userID = "gid://axonhub/User/9",
+                    userIDNEQ = "gid://axonhub/User/10",
+                    userIDIn = new[] { "gid://axonhub/User/11" },
+                    userIDNotIn = new[] { "gid://axonhub/User/12" },
+                    userIDIsNil = true,
+                    userIDNotNil = true,
+                    projectID = "gid://axonhub/Project/13",
+                    projectIDNEQ = "gid://axonhub/Project/14",
+                    projectIDIn = new[] { "gid://axonhub/Project/15" },
+                    projectIDNotIn = new[] { "gid://axonhub/Project/16" },
+                    key = "sk-a",
+                    keyNEQ = "sk-b",
+                    keyIn = new[] { "sk-c" },
+                    keyNotIn = new[] { "sk-d" },
+                    keyGT = "a",
+                    keyGTE = "b",
+                    keyLT = "c",
+                    keyLTE = "d",
+                    keyContains = "sk",
+                    keyHasPrefix = "sk-",
+                    keyHasSuffix = "a",
+                    keyEqualFold = "SK-A",
+                    keyContainsFold = "SK",
+                    name = "Alpha",
+                    nameNEQ = "Beta",
+                    nameIn = new[] { "Gamma" },
+                    nameNotIn = new[] { "Delta" },
+                    nameGT = "a",
+                    nameGTE = "b",
+                    nameLT = "c",
+                    nameLTE = "d",
+                    nameContains = "amm",
+                    nameHasPrefix = "Al",
+                    nameHasSuffix = "ta",
+                    nameEqualFold = "ALPHA",
+                    nameContainsFold = "AMM",
+                    type = "service_account",
+                    typeNEQ = "user",
+                    typeIn = new[] { "noauth" },
+                    typeNotIn = new[] { "personal" },
+                    status = "disabled",
+                    statusNEQ = "enabled",
+                    statusIn = new[] { "archived" },
+                    statusNotIn = new[] { "enabled" },
+                    not = new { name = "Nope" },
+                    and = new[] { new { nameContains = "a" } },
+                    or = new[] { new { nameHasSuffix = "z" } },
+                },
+            });
+
+        var where = _gate.ApiKeys.Queries[^1].Where!;
+        Assert.Equal(1L, where.Id);
+        Assert.Equal(2L, where.IdNEQ);
+        Assert.Equal([3L], where.IdIn!);
+        Assert.Equal([4L], where.IdNotIn!);
+        Assert.Equal(5L, where.IdGT);
+        Assert.Equal(6L, where.IdGTE);
+        Assert.Equal(7L, where.IdLT);
+        Assert.Equal(8L, where.IdLTE);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), where.CreatedAt);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 6, DateTimeKind.Utc), where.CreatedAtNEQ);
+        Assert.Equal(
+            [new DateTime(2026, 1, 2, 3, 4, 7, DateTimeKind.Utc)],
+            where.CreatedAtIn!);
+        Assert.Equal(
+            [new DateTime(2026, 1, 2, 3, 4, 8, DateTimeKind.Utc)],
+            where.CreatedAtNotIn!);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 9, DateTimeKind.Utc), where.CreatedAtGT);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 10, DateTimeKind.Utc), where.CreatedAtGTE);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 11, DateTimeKind.Utc), where.CreatedAtLT);
+        Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 12, DateTimeKind.Utc), where.CreatedAtLTE);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 5, DateTimeKind.Utc), where.UpdatedAt);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc), where.UpdatedAtNEQ);
+        Assert.Equal(
+            [new DateTime(2026, 2, 3, 4, 5, 7, DateTimeKind.Utc)],
+            where.UpdatedAtIn!);
+        Assert.Equal(
+            [new DateTime(2026, 2, 3, 4, 5, 8, DateTimeKind.Utc)],
+            where.UpdatedAtNotIn!);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 9, DateTimeKind.Utc), where.UpdatedAtGT);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 10, DateTimeKind.Utc), where.UpdatedAtGTE);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 11, DateTimeKind.Utc), where.UpdatedAtLT);
+        Assert.Equal(new DateTime(2026, 2, 3, 4, 5, 12, DateTimeKind.Utc), where.UpdatedAtLTE);
+        Assert.Equal(9L, where.UserId);
+        Assert.Equal(10L, where.UserIdNEQ);
+        Assert.Equal([11L], where.UserIdIn!);
+        Assert.Equal([12L], where.UserIdNotIn!);
+        Assert.True(where.UserIdIsNil);
+        Assert.True(where.UserIdNotNil);
+        Assert.Equal(13L, where.ProjectId);
+        Assert.Equal(14L, where.ProjectIdNEQ);
+        Assert.Equal([15L], where.ProjectIdIn!);
+        Assert.Equal([16L], where.ProjectIdNotIn!);
+        Assert.Equal("sk-a", where.Key);
+        Assert.Equal("sk-b", where.KeyNEQ);
+        Assert.Equal(["sk-c"], where.KeyIn!);
+        Assert.Equal(["sk-d"], where.KeyNotIn!);
+        Assert.Equal("a", where.KeyGT);
+        Assert.Equal("b", where.KeyGTE);
+        Assert.Equal("c", where.KeyLT);
+        Assert.Equal("d", where.KeyLTE);
+        Assert.Equal("sk", where.KeyContains);
+        Assert.Equal("sk-", where.KeyHasPrefix);
+        Assert.Equal("a", where.KeyHasSuffix);
+        Assert.Equal("SK-A", where.KeyEqualFold);
+        Assert.Equal("SK", where.KeyContainsFold);
+        Assert.Equal("Alpha", where.Name);
+        Assert.Equal("Beta", where.NameNEQ);
+        Assert.Equal(["Gamma"], where.NameIn!);
+        Assert.Equal(["Delta"], where.NameNotIn!);
+        Assert.Equal("a", where.NameGT);
+        Assert.Equal("b", where.NameGTE);
+        Assert.Equal("c", where.NameLT);
+        Assert.Equal("d", where.NameLTE);
+        Assert.Equal("amm", where.NameContains);
+        Assert.Equal("Al", where.NameHasPrefix);
+        Assert.Equal("ta", where.NameHasSuffix);
+        Assert.Equal("ALPHA", where.NameEqualFold);
+        Assert.Equal("AMM", where.NameContainsFold);
+        Assert.Equal("service_account", where.Type);
+        Assert.Equal("user", where.TypeNEQ);
+        Assert.Equal(["noauth"], where.TypeIn!);
+        Assert.Equal(["personal"], where.TypeNotIn!);
+        Assert.Equal("disabled", where.Status);
+        Assert.Equal("enabled", where.StatusNEQ);
+        Assert.Equal(["archived"], where.StatusIn!);
+        Assert.Equal(["enabled"], where.StatusNotIn!);
+        Assert.Equal("Nope", where.Not!.Name);
+        Assert.Equal("a", Assert.Single(where.And!).NameContains);
+        Assert.Equal("z", Assert.Single(where.Or!).NameHasSuffix);
+    }
+
+    [Fact]
     public async Task ApiKeyWithoutCreatorOutputsTheZeroUserGidAndNullUserEdge()
     {
         SeedProject();

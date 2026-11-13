@@ -469,6 +469,106 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task QueryUsersMapsTheProjectAndApiKeyEdgePredicates()
+    {
+        SeedUser("alice@example.com", DateTime.UtcNow);
+
+        await QueryDataAsync(
+            """
+            query Users($where: UserWhereInput) {
+              users(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    hasProjects = true,
+                    hasProjectsWith = new[]
+                    {
+                        new { name = "Alpha", status = "active" },
+                    },
+                    hasAPIKeys = false,
+                    hasAPIKeysWith = new[]
+                    {
+                        new
+                        {
+                            id = "gid://axonhub/APIKey/3",
+                            userID = "gid://axonhub/User/4",
+                            userIDIsNil = true,
+                            projectID = "gid://axonhub/Project/5",
+                            key = "sk-x",
+                            type = "service_account",
+                            status = "disabled",
+                        },
+                    },
+                    hasProjectUsers = true,
+                    hasProjectUsersWith = new[]
+                    {
+                        new
+                        {
+                            id = "gid://axonhub/UserProject/6",
+                            isOwner = true,
+                            createdAtGT = "2026-01-02T03:04:05Z",
+                        },
+                    },
+                },
+            });
+
+        var where = _users.Queries[^1].Where!;
+        Assert.True(where.HasProjects);
+        var project = Assert.Single(where.HasProjectsWith!);
+        Assert.Equal("Alpha", project.Name);
+        Assert.Equal("active", project.Status);
+        Assert.False(where.HasAPIKeys);
+        var apiKey = Assert.Single(where.HasAPIKeysWith!);
+        Assert.Equal(3L, apiKey.Id);
+        Assert.Equal(4L, apiKey.UserId);
+        Assert.True(apiKey.UserIdIsNil);
+        Assert.Equal(5L, apiKey.ProjectId);
+        Assert.Equal("sk-x", apiKey.Key);
+        Assert.Equal("service_account", apiKey.Type);
+        Assert.Equal("disabled", apiKey.Status);
+        Assert.True(where.HasProjectUsers);
+        var link = Assert.Single(where.HasProjectUsersWith!);
+        Assert.Equal(6L, link.Id);
+        Assert.True(link.IsOwner!.Value);
+        Assert.Equal(
+            new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc),
+            link.CreatedAtGT!.Value);
+    }
+
+    [Fact]
+    public async Task QueryRolesMapsTheProjectEdgePredicate()
+    {
+        SeedRole("Developer", projectId: 0);
+
+        await QueryDataAsync(
+            """
+            query Roles($where: RoleWhereInput) {
+              roles(first: 10, where: $where) { totalCount }
+            }
+            """,
+            new
+            {
+                where = new
+                {
+                    hasProject = true,
+                    hasProjectWith = new[]
+                    {
+                        new { name = "Alpha", status = "archived" },
+                    },
+                },
+            });
+
+        var where = _roles.Queries[^1].Where!;
+        Assert.True(where.HasProject);
+        var project = Assert.Single(where.HasProjectWith!);
+        Assert.Equal("Alpha", project.Name);
+        Assert.Equal("archived", project.Status);
+    }
+
+    [Fact]
     public async Task NestedRolesAreUnboundedWithoutPaginationArgs()
     {
         // entgql's User.roles edge resolver routes through Paginate, which
@@ -905,6 +1005,12 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         expected.AddRange(comparison.Take(2).Select(static suffix => "isOwner" + suffix));
         expected.AddRange(
         [
+            "hasProjects",
+            "hasProjectsWith",
+            "hasAPIKeys",
+            "hasAPIKeysWith",
+            "hasProjectUsers",
+            "hasProjectUsersWith",
             "hasRoles",
             "hasRolesWith",
             "hasUserRoles",
@@ -954,6 +1060,8 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
             "hasUsersWith",
             "hasUserRoles",
             "hasUserRolesWith",
+            "hasProject",
+            "hasProjectWith",
         ]);
 
         var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
@@ -986,6 +1094,32 @@ public sealed class AdminUsersRolesEndpointTests : IAsyncLifetime
         expected.AddRange(comparison.Select(static suffix => "id" + suffix));
         expected.AddRange(timestamp.Select(static suffix => "createdAt" + suffix));
         expected.AddRange(timestamp.Select(static suffix => "updatedAt" + suffix));
+
+        var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            expected.OrderBy(static name => name, StringComparer.Ordinal).ToArray(),
+            actual);
+    }
+
+    [Fact]
+    public async Task UserProjectWhereInputExposesTheReferencePredicates()
+    {
+        var data = await QueryDataAsync(
+            """
+            { where: __type(name: "UserProjectWhereInput") { inputFields { name } } }
+            """);
+
+        string[] comparison = ["", "NEQ", "In", "NotIn", "GT", "GTE", "LT", "LTE"];
+
+        var expected = new List<string> { "and", "not", "or" };
+        expected.AddRange(comparison.Select(static suffix => "id" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "createdAt" + suffix));
+        expected.AddRange(comparison.Select(static suffix => "updatedAt" + suffix));
+        expected.AddRange(comparison.Take(2).Select(static suffix => "isOwner" + suffix));
 
         var actual = data.GetProperty("where").GetProperty("inputFields").EnumerateArray()
             .Select(static field => field.GetProperty("name").GetString()!)

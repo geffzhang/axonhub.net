@@ -145,10 +145,9 @@ public sealed class ApiKeyOrder
 }
 
 /// <summary>
-/// Port of the subset of <c>APIKeyWhereInput</c> used by the management
-/// frontend (id/idIn, name/nameContainsFold, key/keyContainsFold,
-/// type/typeIn/typeNotIn, status/statusIn/statusNotIn, userID, projectID,
-/// and/or/not). The remaining ent predicates are not ported (C165, C176).
+/// Port of <c>APIKeyWhereInput</c> (ent.graphql:292-406). All 68 scalar field
+/// predicates are modeled; the user, project and request edge predicate groups
+/// remain tracked by C135.
 /// </summary>
 [GraphQLName("APIKeyWhereInput")]
 public sealed class ApiKeyWhereInput
@@ -156,18 +155,170 @@ public sealed class ApiKeyWhereInput
     [GraphQLType(typeof(IdType))]
     public string? Id { get; set; }
 
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
     [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
     public IReadOnlyList<string>? IdIn { get; set; }
 
-    public string? Name { get; set; }
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
 
-    public string? NameContainsFold { get; set; }
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    [GraphQLName("userID")]
+    [GraphQLType(typeof(IdType))]
+    public string? UserID { get; set; }
+
+    [GraphQLName("userIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? UserIDNEQ { get; set; }
+
+    [GraphQLName("userIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? UserIDIn { get; set; }
+
+    [GraphQLName("userIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? UserIDNotIn { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    [GraphQLName("userIDIsNil")]
+    public bool? UserIDIsNil { get; set; }
+
+    /// <summary>Ent reads this field as a plain bool: false is ignored.</summary>
+    [GraphQLName("userIDNotNil")]
+    public bool? UserIDNotNil { get; set; }
+
+    [GraphQLName("projectID")]
+    [GraphQLType(typeof(IdType))]
+    public string? ProjectID { get; set; }
+
+    [GraphQLName("projectIDNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? ProjectIDNEQ { get; set; }
+
+    [GraphQLName("projectIDIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ProjectIDIn { get; set; }
+
+    [GraphQLName("projectIDNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? ProjectIDNotIn { get; set; }
 
     public string? Key { get; set; }
 
+    public string? KeyNEQ { get; set; }
+
+    public IReadOnlyList<string>? KeyIn { get; set; }
+
+    public IReadOnlyList<string>? KeyNotIn { get; set; }
+
+    public string? KeyGT { get; set; }
+
+    public string? KeyGTE { get; set; }
+
+    public string? KeyLT { get; set; }
+
+    public string? KeyLTE { get; set; }
+
+    public string? KeyContains { get; set; }
+
+    public string? KeyHasPrefix { get; set; }
+
+    public string? KeyHasSuffix { get; set; }
+
+    public string? KeyEqualFold { get; set; }
+
     public string? KeyContainsFold { get; set; }
 
+    public string? Name { get; set; }
+
+    public string? NameNEQ { get; set; }
+
+    public IReadOnlyList<string>? NameIn { get; set; }
+
+    public IReadOnlyList<string>? NameNotIn { get; set; }
+
+    public string? NameGT { get; set; }
+
+    public string? NameGTE { get; set; }
+
+    public string? NameLT { get; set; }
+
+    public string? NameLTE { get; set; }
+
+    public string? NameContains { get; set; }
+
+    public string? NameHasPrefix { get; set; }
+
+    public string? NameHasSuffix { get; set; }
+
+    public string? NameEqualFold { get; set; }
+
+    public string? NameContainsFold { get; set; }
+
     public ApiKeyTypeValue? Type { get; set; }
+
+    public ApiKeyTypeValue? TypeNEQ { get; set; }
 
     public IReadOnlyList<ApiKeyTypeValue>? TypeIn { get; set; }
 
@@ -175,17 +326,11 @@ public sealed class ApiKeyWhereInput
 
     public ApiKeyStatusValue? Status { get; set; }
 
+    public ApiKeyStatusValue? StatusNEQ { get; set; }
+
     public IReadOnlyList<ApiKeyStatusValue>? StatusIn { get; set; }
 
     public IReadOnlyList<ApiKeyStatusValue>? StatusNotIn { get; set; }
-
-    [GraphQLName("userID")]
-    [GraphQLType(typeof(IdType))]
-    public string? UserID { get; set; }
-
-    [GraphQLName("projectID")]
-    [GraphQLType(typeof(IdType))]
-    public string? ProjectID { get; set; }
 
     public ApiKeyWhereInput? Not { get; set; }
 
@@ -684,12 +829,79 @@ public static class ApiKeyMapping
         return new ApiKeyListFilter
         {
             Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
             IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
-            Name = where.Name,
-            NameContainsFold = where.NameContainsFold,
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
+            UserId = where.UserID is null ? null : GidValue.Parse(where.UserID).Id,
+            UserIdNEQ = where.UserIDNEQ is null
+                ? null
+                : GidValue.Parse(where.UserIDNEQ).Id,
+            UserIdIn = where.UserIDIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            UserIdNotIn = where.UserIDNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            UserIdIsNil = where.UserIDIsNil == true,
+            UserIdNotNil = where.UserIDNotNil == true,
+            ProjectId = where.ProjectID is null
+                ? null
+                : GidValue.Parse(where.ProjectID).Id,
+            ProjectIdNEQ = where.ProjectIDNEQ is null
+                ? null
+                : GidValue.Parse(where.ProjectIDNEQ).Id,
+            ProjectIdIn = where.ProjectIDIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
+            ProjectIdNotIn = where.ProjectIDNotIn?
+                .Select(static id => GidValue.Parse(id).Id)
+                .ToList(),
             Key = where.Key,
+            KeyNEQ = where.KeyNEQ,
+            KeyIn = where.KeyIn,
+            KeyNotIn = where.KeyNotIn,
+            KeyGT = where.KeyGT,
+            KeyGTE = where.KeyGTE,
+            KeyLT = where.KeyLT,
+            KeyLTE = where.KeyLTE,
+            KeyContains = where.KeyContains,
+            KeyHasPrefix = where.KeyHasPrefix,
+            KeyHasSuffix = where.KeyHasSuffix,
+            KeyEqualFold = where.KeyEqualFold,
             KeyContainsFold = where.KeyContainsFold,
+            Name = where.Name,
+            NameNEQ = where.NameNEQ,
+            NameIn = where.NameIn,
+            NameNotIn = where.NameNotIn,
+            NameGT = where.NameGT,
+            NameGTE = where.NameGTE,
+            NameLT = where.NameLT,
+            NameLTE = where.NameLTE,
+            NameContains = where.NameContains,
+            NameHasPrefix = where.NameHasPrefix,
+            NameHasSuffix = where.NameHasSuffix,
+            NameEqualFold = where.NameEqualFold,
+            NameContainsFold = where.NameContainsFold,
             Type = where.Type is null ? null : ToWireType(where.Type.Value),
+            TypeNEQ = where.TypeNEQ is null ? null : ToWireType(where.TypeNEQ.Value),
             TypeIn = where.TypeIn?
                 .Select(static type => ToWireType(type))
                 .ToList(),
@@ -697,16 +909,13 @@ public static class ApiKeyMapping
                 .Select(static type => ToWireType(type))
                 .ToList(),
             Status = where.Status is null ? null : ToWireStatus(where.Status.Value),
+            StatusNEQ = where.StatusNEQ is null ? null : ToWireStatus(where.StatusNEQ.Value),
             StatusIn = where.StatusIn?
                 .Select(static status => ToWireStatus(status))
                 .ToList(),
             StatusNotIn = where.StatusNotIn?
                 .Select(static status => ToWireStatus(status))
                 .ToList(),
-            UserId = where.UserID is null ? null : GidValue.Parse(where.UserID).Id,
-            ProjectId = where.ProjectID is null
-                ? null
-                : GidValue.Parse(where.ProjectID).Id,
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<ApiKeyListFilter>().ToList(),
             Or = where.Or?.Select(ToFilter).OfType<ApiKeyListFilter>().ToList(),

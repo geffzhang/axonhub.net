@@ -15,11 +15,11 @@ public enum UserSortField
 
 /// <summary>
 /// Port of <c>UserWhereInput</c> (ent.graphql:7506-7672). All scalar field
-/// predicates plus the <c>roles</c> and <c>user_roles</c> edge predicates are
-/// modeled; the remaining five edge predicates (projects, apiKeys,
-/// channelOverrideTemplates, oidcIdentities, projectUsers) are a registered
-/// gap (C135). <see cref="HasProjectUsersWithProjectId"/> is the
-/// <c>hasProjectUsersWith</c> predicate the User query policy installs.
+/// predicates plus the <c>projects</c>, <c>apiKeys</c>, <c>roles</c>,
+/// <c>projectUsers</c> and <c>userRoles</c> edge predicates are modeled; the
+/// remaining two edge predicates (channelOverrideTemplates, oidcIdentities)
+/// are a registered gap (C135). <see cref="HasProjectUsersWithProjectId"/> is
+/// the <c>hasProjectUsersWith</c> predicate the User query policy installs.
 /// </summary>
 public sealed record UserListFilter
 {
@@ -218,6 +218,32 @@ public sealed record UserListFilter
     public bool? IsOwner { get; init; }
 
     public bool? IsOwnerNEQ { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasProjects</c>: true → the user has a <c>user_projects</c> row,
+    /// false → NOT EXISTS. Generated sqlgraph does not re-apply the Project
+    /// soft-delete predicate.
+    /// </summary>
+    public bool? HasProjects { get; init; }
+
+    public IReadOnlyList<ProjectListFilter>? HasProjectsWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasAPIKeys</c>: true → the user has an <c>api_keys</c> row,
+    /// false → NOT EXISTS. Generated sqlgraph does not re-apply the APIKey
+    /// soft-delete predicate.
+    /// </summary>
+    public bool? HasAPIKeys { get; init; }
+
+    public IReadOnlyList<ApiKeyListFilter>? HasAPIKeysWith { get; init; }
+
+    /// <summary>
+    /// Ent's <c>hasProjectUsers</c>: true → the user has a <c>user_projects</c>
+    /// row, false → NOT EXISTS.
+    /// </summary>
+    public bool? HasProjectUsers { get; init; }
+
+    public IReadOnlyList<UserProjectListFilter>? HasProjectUsersWith { get; init; }
 
     /// <summary>
     /// Ent's <c>hasRoles</c>: true → the user has a matching <c>user_roles</c>
@@ -1627,6 +1653,75 @@ public sealed class UserAdminStore(AxonHubDbContext db) : IUserAdminStore
 
         AppendComparison(predicates, alias, "is_owner", filter.IsOwner, "=", args);
         AppendComparison(predicates, alias, "is_owner", filter.IsOwnerNEQ, "<>", args);
+
+        if (filter.HasProjects is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"user_projects\" up WHERE up.\"user_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasProjects.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProjectsWith is { Count: > 0 } projectFilters)
+        {
+            // Generated sqlgraph.HasNeighborsWith ANDs every predicate inside a
+            // single EXISTS and does not re-apply the Project soft-delete
+            // predicate.
+            var projectPredicates = projectFilters
+                .Select(project => ProjectStore.BuildFilter(project, "p2", args))
+                .Where(static project => project is not null)
+                .ToArray();
+            var projectCondition = ConnectionSql.Combine(projectPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_projects\" up"
+                + " JOIN \"projects\" p2 ON p2.\"id\" = up.\"project_id\""
+                + " WHERE up.\"user_id\" = " + alias + ".\"id\""
+                + (projectCondition is null ? string.Empty : " AND " + projectCondition)
+                + ")");
+        }
+
+        if (filter.HasAPIKeys is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"api_keys\" ak WHERE ak.\"user_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasAPIKeys.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasAPIKeysWith is { Count: > 0 } apiKeyFilters)
+        {
+            // sqlgraph.HasNeighborsWith does not re-apply the APIKey
+            // soft-delete predicate.
+            var apiKeyPredicates = apiKeyFilters
+                .Select(apiKey => ApiKeyStore.BuildFilter(apiKey, "ak", args))
+                .Where(static apiKey => apiKey is not null)
+                .ToArray();
+            var apiKeyCondition = ConnectionSql.Combine(apiKeyPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"api_keys\" ak"
+                + " WHERE ak.\"user_id\" = " + alias + ".\"id\""
+                + (apiKeyCondition is null ? string.Empty : " AND " + apiKeyCondition)
+                + ")");
+        }
+
+        if (filter.HasProjectUsers is not null)
+        {
+            var exists = "EXISTS (SELECT 1 FROM \"user_projects\" up WHERE up.\"user_id\" = "
+                + alias + ".\"id\")";
+            predicates.Add(filter.HasProjectUsers.Value ? exists : "NOT (" + exists + ")");
+        }
+
+        if (filter.HasProjectUsersWith is { Count: > 0 } userProjectFilters)
+        {
+            var userProjectPredicates = userProjectFilters
+                .Select(userProject => UserProjectFilterSql.Build(userProject, "up", args))
+                .Where(static userProject => userProject is not null)
+                .ToArray();
+            var userProjectCondition = ConnectionSql.Combine(userProjectPredicates);
+            predicates.Add(
+                "EXISTS (SELECT 1 FROM \"user_projects\" up"
+                + " WHERE up.\"user_id\" = " + alias + ".\"id\""
+                + (userProjectCondition is null ? string.Empty : " AND " + userProjectCondition)
+                + ")");
+        }
 
         if (filter.HasRoles is not null)
         {

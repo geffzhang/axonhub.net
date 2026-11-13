@@ -85,9 +85,9 @@ public sealed class RoleOrder
 
 /// <summary>
 /// Port of <c>UserWhereInput</c> (ent.graphql:7506-7672). All scalar field
-/// predicates are modeled; the seven edge predicates (hasProjects, hasAPIKeys,
-/// hasRoles, hasChannelOverrideTemplates, hasOidcIdentities, hasProjectUsers,
-/// hasUserRoles) remain a registered gap (C135).
+/// predicates plus the projects, apiKeys, roles, projectUsers and userRoles
+/// edge predicates are modeled; channelOverrideTemplates and oidcIdentities
+/// remain a registered gap (C135).
 /// </summary>
 public sealed class UserWhereInput
 {
@@ -319,6 +319,14 @@ public sealed class UserWhereInput
 
     public bool? IsOwnerNEQ { get; set; }
 
+    public bool? HasProjects { get; set; }
+
+    public IReadOnlyList<ProjectWhereInput>? HasProjectsWith { get; set; }
+
+    public bool? HasAPIKeys { get; set; }
+
+    public IReadOnlyList<ApiKeyWhereInput>? HasAPIKeysWith { get; set; }
+
     public bool? HasRoles { get; set; }
 
     public IReadOnlyList<RoleWhereInput>? HasRolesWith { get; set; }
@@ -326,6 +334,10 @@ public sealed class UserWhereInput
     public bool? HasUserRoles { get; set; }
 
     public IReadOnlyList<UserRoleWhereInput>? HasUserRolesWith { get; set; }
+
+    public bool? HasProjectUsers { get; set; }
+
+    public IReadOnlyList<UserProjectWhereInput>? HasProjectUsersWith { get; set; }
 
     public UserWhereInput? Not { get; set; }
 
@@ -336,8 +348,7 @@ public sealed class UserWhereInput
 
 /// <summary>
 /// Port of <c>RoleWhereInput</c> (ent.graphql:5531-5615). All scalar field
-/// predicates are modeled; the three edge predicates (hasUsers, hasProject,
-/// hasUserRoles) remain a registered gap (C135).
+/// predicates and all three edge predicate groups are modeled.
 /// </summary>
 public sealed class RoleWhereInput
 {
@@ -483,6 +494,10 @@ public sealed class RoleWhereInput
 
     public IReadOnlyList<UserWhereInput>? HasUsersWith { get; set; }
 
+    public bool? HasProject { get; set; }
+
+    public IReadOnlyList<ProjectWhereInput>? HasProjectWith { get; set; }
+
     public bool? HasUserRoles { get; set; }
 
     public IReadOnlyList<UserRoleWhereInput>? HasUserRolesWith { get; set; }
@@ -599,6 +614,105 @@ public sealed class UserRoleWhereInput
     public IReadOnlyList<UserRoleWhereInput>? And { get; set; }
 
     public IReadOnlyList<UserRoleWhereInput>? Or { get; set; }
+}
+
+/// <summary>
+/// Port of <c>UserProjectWhereInput</c> (ent.graphql:7377-7412). The reference
+/// input exposes only the join row's id, its two non-null timestamps and
+/// <c>is_owner</c>; <c>user_id</c> / <c>project_id</c> / <c>scopes</c> are not
+/// part of the GraphQL type.
+/// </summary>
+public sealed class UserProjectWhereInput
+{
+    [GraphQLName("id")]
+    [GraphQLType(typeof(IdType))]
+    public string? Id { get; set; }
+
+    [GraphQLName("idNEQ")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdNEQ { get; set; }
+
+    [GraphQLName("idIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdIn { get; set; }
+
+    [GraphQLName("idNotIn")]
+    [GraphQLType(typeof(ListType<NonNullType<IdType>>))]
+    public IReadOnlyList<string>? IdNotIn { get; set; }
+
+    [GraphQLName("idGT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGT { get; set; }
+
+    [GraphQLName("idGTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdGTE { get; set; }
+
+    [GraphQLName("idLT")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLT { get; set; }
+
+    [GraphQLName("idLTE")]
+    [GraphQLType(typeof(IdType))]
+    public string? IdLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? CreatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? CreatedAtLTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAt { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtNEQ { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtIn { get; set; }
+
+    [GraphQLType(typeof(ListType<NonNullType<GoTimeType>>))]
+    public IReadOnlyList<DateTime>? UpdatedAtNotIn { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtGTE { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLT { get; set; }
+
+    [GraphQLType(typeof(GoTimeType))]
+    public DateTime? UpdatedAtLTE { get; set; }
+
+    public bool? IsOwner { get; set; }
+
+    public bool? IsOwnerNEQ { get; set; }
+
+    public UserProjectWhereInput? Not { get; set; }
+
+    public IReadOnlyList<UserProjectWhereInput>? And { get; set; }
+
+    public IReadOnlyList<UserProjectWhereInput>? Or { get; set; }
 }
 
 /// <summary>Port of <c>CreateUserInput</c> (ent.graphql:2025-2046).</summary>
@@ -1155,6 +1269,16 @@ public static class ManagementMapping
             AvatarContainsFold = where.AvatarContainsFold,
             IsOwner = where.IsOwner,
             IsOwnerNEQ = where.IsOwnerNEQ,
+            HasProjects = where.HasProjects,
+            HasProjectsWith = where.HasProjectsWith?
+                .Select(ProjectMapping.ToFilter)
+                .OfType<ProjectListFilter>()
+                .ToList(),
+            HasAPIKeys = where.HasAPIKeys,
+            HasAPIKeysWith = where.HasAPIKeysWith?
+                .Select(ApiKeyMapping.ToFilter)
+                .OfType<ApiKeyListFilter>()
+                .ToList(),
             HasRoles = where.HasRoles,
             HasRolesWith = where.HasRolesWith?
                 .Select(ToFilter)
@@ -1164,6 +1288,11 @@ public static class ManagementMapping
             HasUserRolesWith = where.HasUserRolesWith?
                 .Select(ToFilter)
                 .OfType<UserRoleListFilter>()
+                .ToList(),
+            HasProjectUsers = where.HasProjectUsers,
+            HasProjectUsersWith = where.HasProjectUsersWith?
+                .Select(ToFilter)
+                .OfType<UserProjectListFilter>()
                 .ToList(),
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<UserListFilter>().ToList(),
@@ -1244,6 +1373,11 @@ public static class ManagementMapping
                 .Select(ToFilter)
                 .OfType<UserListFilter>()
                 .ToList(),
+            HasProject = where.HasProject,
+            HasProjectWith = where.HasProjectWith?
+                .Select(ProjectMapping.ToFilter)
+                .OfType<ProjectListFilter>()
+                .ToList(),
             HasUserRoles = where.HasUserRoles,
             HasUserRolesWith = where.HasUserRolesWith?
                 .Select(ToFilter)
@@ -1295,6 +1429,47 @@ public static class ManagementMapping
             Not = ToFilter(where.Not),
             And = where.And?.Select(ToFilter).OfType<UserRoleListFilter>().ToList(),
             Or = where.Or?.Select(ToFilter).OfType<UserRoleListFilter>().ToList(),
+        };
+    }
+
+    public static UserProjectListFilter? ToFilter(UserProjectWhereInput? where)
+    {
+        if (where is null)
+        {
+            return null;
+        }
+
+        return new UserProjectListFilter
+        {
+            Id = where.Id is null ? null : GidValue.Parse(where.Id).Id,
+            IdNEQ = where.IdNEQ is null ? null : GidValue.Parse(where.IdNEQ).Id,
+            IdIn = where.IdIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdNotIn = where.IdNotIn?.Select(static id => GidValue.Parse(id).Id).ToList(),
+            IdGT = where.IdGT is null ? null : GidValue.Parse(where.IdGT).Id,
+            IdGTE = where.IdGTE is null ? null : GidValue.Parse(where.IdGTE).Id,
+            IdLT = where.IdLT is null ? null : GidValue.Parse(where.IdLT).Id,
+            IdLTE = where.IdLTE is null ? null : GidValue.Parse(where.IdLTE).Id,
+            CreatedAt = where.CreatedAt,
+            CreatedAtNEQ = where.CreatedAtNEQ,
+            CreatedAtIn = where.CreatedAtIn,
+            CreatedAtNotIn = where.CreatedAtNotIn,
+            CreatedAtGT = where.CreatedAtGT,
+            CreatedAtGTE = where.CreatedAtGTE,
+            CreatedAtLT = where.CreatedAtLT,
+            CreatedAtLTE = where.CreatedAtLTE,
+            UpdatedAt = where.UpdatedAt,
+            UpdatedAtNEQ = where.UpdatedAtNEQ,
+            UpdatedAtIn = where.UpdatedAtIn,
+            UpdatedAtNotIn = where.UpdatedAtNotIn,
+            UpdatedAtGT = where.UpdatedAtGT,
+            UpdatedAtGTE = where.UpdatedAtGTE,
+            UpdatedAtLT = where.UpdatedAtLT,
+            UpdatedAtLTE = where.UpdatedAtLTE,
+            IsOwner = where.IsOwner,
+            IsOwnerNEQ = where.IsOwnerNEQ,
+            Not = ToFilter(where.Not),
+            And = where.And?.Select(ToFilter).OfType<UserProjectListFilter>().ToList(),
+            Or = where.Or?.Select(ToFilter).OfType<UserProjectListFilter>().ToList(),
         };
     }
 
