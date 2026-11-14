@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -6,6 +7,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
+using AxonHub.Llm.Transformer.Shared;
 using WebSocketStream = AxonHub.Llm.Transformer.OpenAI.Responses.WebSocketStream;
 
 namespace AxonHub.Llm.Tests;
@@ -534,70 +536,81 @@ public sealed class ResponsesWebSocketExecutorTests
     }
 
     [Fact]
-    public void KeepsExplicitPreviousResponseIdOnFreshConnection()
+    public void RejectsExplicitPreviousResponseIdOnFreshConnection()
     {
         using var server = new ResponsesWebSocketTestServer();
+        var dispatched = 0;
         server.Handler = conn =>
         {
-            var payload = conn.ReadJson();
-            Assert.Equal("client_prev", payload.GetProperty("previous_response_id").GetString());
-            conn.WriteJson(CompletedEvent);
+            try
+            {
+                _ = conn.ReadJson();
+                Interlocked.Increment(ref dispatched);
+            }
+            catch (Exception ex) when (ex is WebSocketException
+                or IOException
+                or ObjectDisposedException
+                or InvalidOperationException)
+            {
+                // The client aborted the unresolved delta before a frame.
+            }
+
             conn.WaitUntilClosed();
         };
 
         var executor = new WebSocketExecutor(inner: null);
-        using var stream = executor.DoStream(
+        var ex = Assert.ThrowsAny<Exception>(() => executor.DoStream(
             CancellationToken.None,
             Request(
                 server,
                 """{"model":"gpt-5","previous_response_id":"client_prev","input":[{"id":"first","type":"message"}]}""",
-                sessionId: "explicit-previous"));
-        Assert.True(stream.Next());
-        Assert.Equal("response.completed", stream.Current?.Type);
-        Assert.False(stream.Next());
-        Assert.Null(stream.Err);
+                sessionId: "explicit-previous")));
 
+        Assert.True(GoErrors.Is(ex, ResponsesRecovery.Sentinel));
+        Assert.Equal(0, Volatile.Read(ref dispatched));
+
+        executor.Close();
         Finish(server);
     }
 
     [Fact]
-    public void ReconnectsForDifferentExplicitPreviousResponseId()
+    public void RejectsDifferentExplicitPreviousResponseId()
     {
         using var server = new ResponsesWebSocketTestServer();
         server.Handler = conn =>
         {
             var payload = conn.ReadJson();
-            if (conn.UpgradeIndex == 1)
-            {
-                Assert.False(payload.TryGetProperty("previous_response_id", out _));
-                conn.WriteJson(Completed("resp_1"));
-                conn.WaitUntilClosed();
-                return;
-            }
-
-            Assert.Equal("client_prev", payload.GetProperty("previous_response_id").GetString());
-            Assert.Equal(2, payload.GetProperty("input").GetArrayLength());
-            conn.WriteJson(Completed("resp_2"));
+            Assert.Equal(1, conn.UpgradeIndex);
+            Assert.False(payload.TryGetProperty("previous_response_id", out _));
+            conn.WriteJson(Completed("resp_1"));
             conn.WaitUntilClosed();
         };
 
         var executor = new WebSocketExecutor(inner: null);
-        foreach (var body in new[]
+        using (var stream = executor.DoStream(
+            CancellationToken.None,
+            Request(
+                server,
+                """{"model":"gpt-5","input":[{"id":"first","type":"message","role":"user"}]}""",
+                sessionId: "explicit-reconnect")))
         {
-            """{"model":"gpt-5","input":[{"id":"first","type":"message","role":"user"}]}""",
-            """{"model":"gpt-5","previous_response_id":"client_prev","input":[{"id":"first","type":"message","role":"user"},{"id":"second","type":"message","role":"user"}]}""",
-        })
-        {
-            using var stream = executor.DoStream(
-                CancellationToken.None,
-                Request(server, body, sessionId: "explicit-reconnect"));
             Assert.True(stream.Next());
             Assert.Equal("response.completed", stream.Current?.Type);
             Assert.False(stream.Next());
             Assert.Null(stream.Err);
         }
 
-        Assert.Equal(2, server.Upgrades);
+        var ex = Assert.ThrowsAny<Exception>(() => executor.DoStream(
+            CancellationToken.None,
+            Request(
+                server,
+                """{"model":"gpt-5","previous_response_id":"client_prev","input":[{"id":"first","type":"message","role":"user"},{"id":"second","type":"message","role":"user"}]}""",
+                sessionId: "explicit-reconnect")));
+
+        Assert.True(GoErrors.Is(ex, ResponsesRecovery.Sentinel));
+        Assert.Equal(1, server.Upgrades);
+
+        executor.Close();
         Finish(server);
     }
 
@@ -639,6 +652,212 @@ public sealed class ResponsesWebSocketExecutorTests
         Finish(server);
     }
 
+    // ------------------------------------------------------------------
+    // Lane ownership, recovery and lease generations
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void DisconnectReleasesOwnedLeases()
+    {
+        using var server = new ResponsesWebSocketTestServer();
+        using var closed = new SemaphoreSlim(0);
+        server.Handler = conn =>
+        {
+            try
+            {
+                while (true)
+                {
+                    _ = conn.ReadJson();
+                    conn.WriteJson(
+                        """{"type":"response.completed","response":{"id":"provider_id","status":"completed","output":[]}}""");
+                }
+            }
+            catch (Exception ex) when (ex is WebSocketException
+                or IOException
+                or ObjectDisposedException
+                or InvalidOperationException
+                or OperationCanceledException)
+            {
+                closed.Release();
+            }
+        };
+
+        var executor = new WebSocketExecutor(inner: null);
+        var budget = new ResponsesBudget(64 << 20);
+        var laneA = new ResponsesLane("server_lane_a", budget);
+        var laneB = new ResponsesLane("server_lane_b", budget);
+
+        try
+        {
+            void Turn(ResponsesLane lane, string body)
+            {
+                var request = Request(server, body, sessionId: "same_client_id");
+                request.ResponsesLane = lane;
+                request.ResponsesAttempt = new ResponsesAttempt();
+                request.ResponsesWebSocket = true;
+
+                using var stream = executor.DoStream(CancellationToken.None, request);
+                while (stream.Next())
+                {
+                }
+
+                Assert.Null(stream.Err);
+            }
+
+            Turn(laneA, """{"input":[]}""");
+            Turn(laneB, """{"input":[]}""");
+
+            // Closing a lane evicts the upstream connections it owns, so the
+            // other lane must keep its own connection and its cached response
+            // id (websocket_lane_test.go:56-64).
+            laneA.Close();
+            Assert.True(closed.Wait(TimeSpan.FromSeconds(5)));
+
+            Turn(
+                laneB,
+                """{"previous_response_id":"provider_id","input":[{"role":"user","content":"survivor"}]}""");
+
+            Assert.Equal(2, server.Upgrades);
+            Assert.Single(executor.Pool);
+        }
+        finally
+        {
+            executor.Close();
+            laneB.Close();
+            laneA.Close();
+            Finish(server);
+        }
+    }
+
+    [Fact]
+    public void ProviderRecoveryUsesNonRetrySentinel()
+    {
+        using var server = new ResponsesWebSocketTestServer();
+        server.Handler = conn =>
+        {
+            _ = conn.ReadJson();
+            conn.WriteJson(
+                """{"type":"error","status":400,"error":{"code":"previous_response_not_found","type":"invalid_request_error"}}""");
+            conn.WaitUntilClosed();
+        };
+
+        var executor = new WebSocketExecutor(inner: null);
+        using var stream = executor.DoStream(
+            CancellationToken.None,
+            Request(server, """{"input":[]}"""));
+
+        while (stream.Next())
+        {
+        }
+
+        Assert.True(GoErrors.Is(stream.Err, ResponsesRecovery.Sentinel));
+
+        executor.Close();
+        Finish(server);
+    }
+
+    [Fact]
+    public void ContinuationMissingHistoryFailsBeforeDispatch()
+    {
+        using var server = new ResponsesWebSocketTestServer();
+        var writes = 0;
+        server.Handler = conn =>
+        {
+            try
+            {
+                _ = conn.ReadJson();
+                Interlocked.Increment(ref writes);
+            }
+            catch (Exception ex) when (ex is WebSocketException
+                or IOException
+                or ObjectDisposedException
+                or InvalidOperationException)
+            {
+                // The unresolved delta never reached the upstream.
+            }
+
+            conn.WaitUntilClosed();
+        };
+
+        var executor = new WebSocketExecutor(inner: null);
+        var ex = Assert.ThrowsAny<Exception>(() => executor.DoStream(
+            CancellationToken.None,
+            Request(
+                server,
+                """{"previous_response_id":"old","input":[]}""",
+                sessionId: "fresh")));
+
+        Assert.True(GoErrors.Is(ex, ResponsesRecovery.Sentinel));
+        Assert.Equal(0, Volatile.Read(ref writes));
+
+        executor.Close();
+        Finish(server);
+    }
+
+    [Fact]
+    public void NativeContinuationSurvivesRetentionLimit()
+    {
+        using var server = new ResponsesWebSocketTestServer();
+        using var frames = new BlockingCollection<JsonElement>(2);
+        server.Handler = conn =>
+        {
+            foreach (var id in new[] { "resp_1", "resp_2" })
+            {
+                var frame = conn.ReadJson();
+                frames.Add(frame);
+                conn.WriteJson(Completed(id));
+            }
+        };
+
+        var executor = new WebSocketExecutor(inner: null)
+        {
+            MaxRetainedInput = 8,
+        };
+        var first = "{\"input\":[{\"role\":\"user\",\"content\":\""
+            + new string('x', 1 << 20)
+            + "\"}]}";
+
+        using (var stream = executor.DoStream(
+            CancellationToken.None,
+            Request(server, first, sessionId: "native")))
+        {
+            while (stream.Next())
+            {
+            }
+
+            Assert.Null(stream.Err);
+        }
+
+        _ = frames.Take();
+
+        // The delta names the successful response despite the optional
+        // retention overflow; the connection must keep its generation and the
+        // explicit id (continuation_lease_test.go:79-98).
+        using (var stream = executor.DoStream(
+            CancellationToken.None,
+            Request(
+                server,
+                """{"previous_response_id":"resp_1","input":[{"role":"user","content":"canary"}]}""",
+                sessionId: "native")))
+        {
+            while (stream.Next())
+            {
+            }
+
+            Assert.Null(stream.Err);
+        }
+
+        var sent = frames.Take();
+        Assert.Equal("resp_1", sent.GetProperty("previous_response_id").GetString());
+        foreach (var pc in executor.Pool.Values)
+        {
+            Assert.Equal("resp_2", pc.PreviousTurn().ResponseId);
+        }
+
+        executor.Close();
+        Finish(server);
+    }
+
     [Fact]
     public void PreparePayloadChecksExplicitPreviousIdWithEmptyCachedInput()
     {
@@ -660,11 +879,12 @@ public sealed class ResponsesWebSocketExecutorTests
             }),
         };
 
-        var ex = Assert.Throws<WebSocketReconnectRequiredException>(
+        // The reference now treats an explicit id that names no response of
+        // this connection as an unrecoverable continuation, not a reconnect
+        // (websocket_executor.go:930-942).
+        var ex = Assert.ThrowsAny<Exception>(
             () => WebSocketExecutor.PrepareWebSocketPayloadForLease(payload, lease));
-        Assert.Equal(
-            "websocket session context changed; reconnect and send full context",
-            ex.Message);
+        Assert.True(GoErrors.Is(ex, ResponsesRecovery.Sentinel));
     }
 
     [Fact]
@@ -970,7 +1190,7 @@ public sealed class ResponsesWebSocketExecutorTests
     [Fact]
     public void RetainsTheResponseIdWhenTheInputExceedsTheRetainedBudget()
     {
-        var budget = new ResponsesRetainedBudget(16);
+        var budget = new ResponsesBudget(16);
         var pooled = new PooledWebSocketConnection(default, conn: null, now: DateTime.UtcNow)
         {
             Budget = budget,
@@ -996,7 +1216,7 @@ public sealed class ResponsesWebSocketExecutorTests
     [Fact]
     public void SharesTheRetainedBudgetAcrossPooledConnections()
     {
-        var budget = new ResponsesRetainedBudget(16);
+        var budget = new ResponsesBudget(16);
         var first = new PooledWebSocketConnection(default, conn: null, now: DateTime.UtcNow)
         {
             Budget = budget,

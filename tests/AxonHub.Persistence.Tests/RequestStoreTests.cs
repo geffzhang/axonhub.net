@@ -325,6 +325,55 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task HasCompletedResponsesOriginIgnoresTheOwner()
+    {
+        // request_responses_certification.go:12-18: the known check asks whether
+        // any completed Responses row carries the provider id. It is not scoped
+        // to an API key or project — the check decides whether a continuation
+        // may be forwarded upstream without its snapshot, not what history the
+        // caller may replay.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        async Task Add(
+            string externalId,
+            string format = "openai/responses",
+            string status = "completed",
+            long apiKeyId = 7,
+            long projectId = 9)
+            => await store.CreateAsync(new RequestRecord
+            {
+                CreatedAt = CreatedAt,
+                UpdatedAt = UpdatedAt,
+                ModelId = "gpt-5",
+                Format = format,
+                Status = status,
+                ExternalId = externalId,
+                ApiKeyId = apiKeyId,
+                ProjectId = projectId,
+            });
+
+        await Add("resp_shared", apiKeyId: 7, projectId: 9);
+        await Add(
+            "resp_websocket",
+            format: "openai/responses-ws",
+            apiKeyId: 8,
+            projectId: 10);
+        await Add("resp_failed", status: "failed");
+        await Add("resp_compact", format: "openai/responses_compact");
+        await Add("resp_chat", format: "openai/chat_completions");
+
+        Assert.True(await store.HasCompletedResponsesOriginAsync("resp_shared"));
+        Assert.True(await store.HasCompletedResponsesOriginAsync("resp_websocket"));
+        Assert.False(await store.HasCompletedResponsesOriginAsync("resp_failed"));
+        Assert.False(await store.HasCompletedResponsesOriginAsync("resp_compact"));
+        Assert.False(await store.HasCompletedResponsesOriginAsync("resp_chat"));
+        Assert.False(await store.HasCompletedResponsesOriginAsync("resp_missing"));
+    }
+
+    [Fact]
     public async Task UpdateStatusExternalIdAndResponseBodyRefreshesThePolledSnapshot()
     {
         // Port of UpdateRequestStatusExternalIDAndResponseBody: status and

@@ -13,6 +13,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
+using AxonHub.Llm.Transformer.Shared;
 using Orleans;
 using IModelSettingsProvider = AxonHub.Api.Models.IModelSettingsProvider;
 using ModelSettings = AxonHub.Api.Models.ModelSettings;
@@ -376,33 +377,85 @@ public sealed class ChatCompletionOrchestrator
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(identity);
 
-        // orchestrator.go:172-179: a Responses request may continue an earlier
-        // turn through previous_response_id. The store merges the remembered
-        // input and output before the transformer sees the body and returns the
-        // session id the rest of the chain persists (WithSessionID).
-        byte[]? preparedResponsesBody = null;
-        string? responsesSessionId = null;
-        string? responsesScope = null;
-        if (_responsesSessions is not null && _inbound is ResponsesInboundTransformer)
+        // orchestrator.go:186-208: a Responses request may continue an earlier
+        // turn through previous_response_id. The continuation resolves the
+        // session the turn belongs to, pins the attempt to the endpoint that
+        // produced it, and remembers the completed turn for the next request.
+        // The reference reads the lane, attempt, session id and scope from the
+        // request context; the port threads them through the wire request and
+        // pre-loads the owner record because the transformer API is synchronous
+        // and the store lookup is not (C289).
+        ResponsesContinuation? responsesContinuation = null;
+        if (_responsesSessions is not null
+            && (_inbound is ResponsesInboundTransformer || request.ResponsesWebSocket))
         {
             // HTTP derives the scope from the authenticated API key; the
             // WebSocket endpoint already captured it on the wire request (C062).
-            responsesScope = request.SessionScope ?? identity.SessionScope;
-            var prepared = await _responsesSessions.PrepareAsync(
-                    request.Body,
-                    request.SessionId,
-                    responsesScope,
-                    identity,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            preparedResponsesBody = prepared.Body;
-            request.Body = prepared.Body;
-            request.SessionId = prepared.SessionId;
-            responsesSessionId = prepared.SessionId;
-            if (responsesScope is not null)
+            var responsesScope = request.SessionScope ?? identity.SessionScope;
+            var previous = ResponsesJson.TopLevelString(request.Body, "previous_response_id");
+            var responsesSessionId = request.SessionId;
+
+            // orchestrator.go:201-207: without a lane, an in-memory hit wins so
+            // the continuation keeps writing to the session the turn used.
+            if (request.ResponsesLane is null
+                && previous.Length > 0
+                && _responsesSessions.Lookup(previous, responsesScope) is { } stored
+                && stored.SessionId.Length > 0)
             {
-                request.SessionScope ??= responsesScope;
+                responsesSessionId = stored.SessionId;
             }
+
+            request.SessionId = ResponsesSessionStore.ResponseSessionId(responsesSessionId);
+            request.SessionScope ??= responsesScope;
+
+            // shared.WithResponsesAttempt: the origin of the attempt currently
+            // on the wire, shared by verify and capture.
+            var responsesAttempt = new ResponsesAttempt();
+            request.ResponsesAttempt = responsesAttempt;
+
+            // responses_attempt.go:69-70 calls lookupOrLoad lazily; the port
+            // performs the same read once per request before the pipeline runs
+            // so the synchronous transformer sees the restored owner (C289).
+            ResponsesSessionRecord? preloaded = null;
+            var known = false;
+            var knownFailed = false;
+            if (request.ResponsesLane is null && previous.Length > 0)
+            {
+                preloaded = await _responsesSessions.LookupOrLoadAsync(
+                        previous,
+                        responsesScope,
+                        identity,
+                        request.SessionId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                // responses_attempt.go:101-105: an id the persistence layer knows
+                // but the store cannot restore is a recovery, not an upstream miss.
+                if (preloaded is null && _responsesSessions.Known is { } knownLookup)
+                {
+                    try
+                    {
+                        known = await knownLookup(previous, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        knownFailed = true;
+                    }
+                }
+            }
+
+            responsesContinuation = new ResponsesContinuation(
+                _responsesSessions,
+                request.Body,
+                responsesScope,
+                request.SessionId,
+                request.ResponsesLane,
+                responsesAttempt,
+                request.ResponsesWebSocket,
+                preloaded,
+                known,
+                knownFailed);
         }
 
         // Read the requested model the same way the reference's selectCandidates
@@ -509,7 +562,7 @@ public sealed class ChatCompletionOrchestrator
             throw TransformerErrors.InvalidModel(model);
         }
 
-        var result = await RunPipelineAsync(
+        return await RunPipelineAsync(
                 _inbound,
                 request,
                 candidates,
@@ -522,40 +575,9 @@ public sealed class ChatCompletionOrchestrator
                 promptProvider: _promptProvider,
                 includeRateLimits: true,
                 ensureUsage: false,
-                cancellationToken)
+                cancellationToken,
+                responsesContinuation: responsesContinuation)
             .ConfigureAwait(false);
-
-        // orchestrator.go:355-368: continuation bookkeeping never changes what
-        // the client receives; it only buffers streams and remembers the
-        // completed turn for the next previous_response_id lookup.
-        if (preparedResponsesBody is null || _responsesSessions is null)
-        {
-            return result;
-        }
-
-        if (result.Stream is not null)
-        {
-            return new ChatCompletionResult
-            {
-                Stream = _responsesSessions.WrapStream(
-                    result.Stream,
-                    preparedResponsesBody,
-                    responsesSessionId,
-                    responsesScope),
-                CodexResponseHeadersSupported = result.CodexResponseHeadersSupported,
-            };
-        }
-
-        if (result.Response is not null)
-        {
-            _responsesSessions.Record(
-                preparedResponsesBody,
-                result.Response.Body,
-                responsesSessionId,
-                responsesScope);
-        }
-
-        return result;
     }
 
     /// <summary>
@@ -768,7 +790,8 @@ public sealed class ChatCompletionOrchestrator
         bool ensureUsage,
         CancellationToken cancellationToken,
         ProxyConfig? proxyOverride = null,
-        bool livePreview = true)
+        bool livePreview = true,
+        ResponsesContinuation? responsesContinuation = null)
     {
         // channel_llm.go:122-130,700-774: the reference builds the channel's
         // transformer with the channel's proxy-aware client, and the same client
@@ -793,6 +816,10 @@ public sealed class ChatCompletionOrchestrator
                 _copilotTokens),
             _channelProxyExecutors,
             proxyOverride);
+
+        // orchestrator.go:232-233: PersistenceState.ResponsesContinuation is
+        // read by the outbound transformer and by the continuation middlewares.
+        outbound.ResponsesContinuation = responsesContinuation;
 
         // orchestrator.go mounts injectPrompts then protectPrompts as inbound
         // middlewares; the reference reads the enabled prompts and rules from
@@ -878,13 +905,18 @@ public sealed class ChatCompletionOrchestrator
             outbound,
             inbound,
             promptProtecter));
-        options.Middlewares.Add(new ChannelMetricsMiddleware(
-            outbound,
-            _metrics,
-            performance,
-            _timeProvider,
-            _apiKeySelection,
-            _autoDisableQueue));
+        // responses_health.go:12-24: a continuation that cannot be repaired is a
+        // client-facing recovery signal, so the performance middleware must not
+        // count it as a channel failure. The reference also wraps a model
+        // circuit breaker here; the port has none yet (C036).
+        options.Middlewares.Add(new WithoutResponsesRecoveryPenaltyMiddleware(
+            new ChannelMetricsMiddleware(
+                outbound,
+                _metrics,
+                performance,
+                _timeProvider,
+                _apiKeySelection,
+                _autoDisableQueue)));
 
         // Channel request rewriting runs after the outbound transform (so the
         // body it patches is the provider body) and before persistence (so the
@@ -894,9 +926,19 @@ public sealed class ChatCompletionOrchestrator
         // header overrides (which may still change the User-Agent).
         options.Middlewares.Add(new PassThroughRequestBodyMiddleware(outbound, passThroughSettings));
         options.Middlewares.Add(new PassThroughRequestHeadersMiddleware(outbound));
+
+        // orchestrator.go:312: the continuation writes its effective input (and
+        // the surviving previous_response_id) into the provider body after
+        // pass-through and before the override operations.
+        options.Middlewares.Add(new ResponsesContinuationBodyMiddleware(outbound));
+
         options.Middlewares.Add(new ChannelOverrideBodyMiddleware(outbound));
         options.Middlewares.Add(new UserAgentPassThroughMiddleware(outbound, passThroughSettings));
         options.Middlewares.Add(new ChannelOverrideHeaderMiddleware(outbound));
+
+        // orchestrator.go:324: verify runs on the final body, before the
+        // transport finalizer (which may drop fields the upstream cannot carry).
+        options.Middlewares.Add(new ResponsesVerifyMiddleware(outbound));
 
         // Remove transport-incompatible fields after pass-through and
         // overrides, so persistence and execution observe the same provider
@@ -970,6 +1012,10 @@ public sealed class ChatCompletionOrchestrator
             passThroughSettings,
             cancellationToken));
 
+        // orchestrator.go:352: remember the completed Responses turn (or its
+        // metadata-only projection) so the next request can continue it.
+        options.Middlewares.Add(new CaptureResponsesProviderMiddleware(outbound));
+
         // Run first on raw responses (reverse order), before capture fan-out:
         // an Anthropic message_stop is the provider protocol boundary, so close
         // the provider transport without canceling reviewed delivery
@@ -978,63 +1024,104 @@ public sealed class ChatCompletionOrchestrator
 
         var pipeline = new Pipeline(_executor, inbound, outbound, options);
 
-        PipelineResult result;
         try
         {
-            result = pipeline.Process(request, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            // Port of orchestrator.Process's error branch: mark the last
-            // execution and the request canceled (client cancellation) or failed.
-            persistence?.FinalizeFailure(ex);
-
-            await MaybeEvaluateChannelApiKeyRulesOnFailureAsync(performance, outbound, persistence, ex)
-                .ConfigureAwait(false);
-
-            // The reference stops each channel's outbound when the enabled
-            // channels cache swaps; the port's transformer lives for one
-            // attempt, so a failed attempt releases its WebSocket pool here
-            // (C072).
-            outbound.Stop();
-            throw;
-        }
-
-        // orchestrator.go:360-375: the API boundary forwards Codex response
-        // headers only when the selected outbound advertises the contract.
-        var codexResponseHeadersSupported = outbound.SupportsCodexResponseHeaders();
-
-        if (result.Stream)
-        {
-            // The stream outlives this method. Stop the attempt's transformer
-            // when the consumer disposes the stream — after completion, error or
-            // cancellation (C072).
-            IStream<StreamEvent> stream = new DisposeCallbackStream<StreamEvent>(
-                result.EventStream!,
-                outbound.Stop);
-
-            // The teardown wrapper is transparent, but it hides the
-            // responseHeadersProvider interface the pipeline attached to the
-            // stream (httpclient.WithResponseHeaders); re-attach the metadata so
-            // api.writeForwardResponseHeaders can read it (C094).
-            if (ResponseHeaders.GetResponseHeaders(result.EventStream) is { } headers)
+            PipelineResult result;
+            try
             {
-                stream = ResponseHeaders.WithResponseHeaders(stream, headers);
+                result = pipeline.Process(request, cancellationToken);
             }
+            catch (Exception ex)
+            {
+                // Port of orchestrator.Process's error branch: mark the last
+                // execution and the request canceled (client cancellation) or failed.
+                persistence?.FinalizeFailure(ex);
+
+                // responses_continuation.go:16-34: a missing continuation
+                // context is not a credential failure, so the reference skips
+                // the API key rules for it (orchestrator.go:384).
+                if (!GoErrors.Is(ex, ResponsesRecovery.Sentinel))
+                {
+                    await MaybeEvaluateChannelApiKeyRulesOnFailureAsync(
+                            performance,
+                            outbound,
+                            persistence,
+                            ex)
+                        .ConfigureAwait(false);
+                }
+
+                // The reference stops each channel's outbound when the enabled
+                // channels cache swaps; the port's transformer lives for one
+                // attempt, so a failed attempt releases its WebSocket pool here
+                // (C072).
+                outbound.Stop();
+                throw;
+            }
+
+            // orchestrator.go:360-375: the API boundary forwards Codex response
+            // headers only when the selected outbound advertises the contract.
+            var codexResponseHeadersSupported = outbound.SupportsCodexResponseHeaders();
+
+            if (result.Stream)
+            {
+                // The stream outlives this method. Stop the attempt's transformer
+                // when the consumer disposes the stream — after completion, error
+                // or cancellation (C072).
+                IStream<StreamEvent> stream = new DisposeCallbackStream<StreamEvent>(
+                    result.EventStream!,
+                    outbound.Stop);
+
+                // The teardown wrapper is transparent, but it hides the
+                // responseHeadersProvider interface the pipeline attached to the
+                // stream (httpclient.WithResponseHeaders); re-attach the metadata
+                // so api.writeForwardResponseHeaders can read it (C094).
+                var headers = ResponseHeaders.GetResponseHeaders(result.EventStream);
+                if (headers is not null)
+                {
+                    stream = ResponseHeaders.WithResponseHeaders(stream, headers);
+                }
+
+                // orchestrator.go:418-424: the returned stream owns the
+                // continuation; it accepts the completed response and releases
+                // the retained bytes when the consumer disposes it.
+                if (responsesContinuation is not null)
+                {
+                    stream = ResponseHeaders.WithResponseHeaders(
+                        new ResponsesAcceptedStream(stream, responsesContinuation),
+                        headers);
+                    responsesContinuation = null;
+                }
+
+                return new ChatCompletionResult
+                {
+                    Stream = stream,
+                    CodexResponseHeadersSupported = codexResponseHeadersSupported,
+                };
+            }
+
+            outbound.Stop();
+
+            // orchestrator.go:432-434: a completed non-stream Responses turn is
+            // recorded before the request ends.
+            responsesContinuation?.Accept();
 
             return new ChatCompletionResult
             {
-                Stream = stream,
+                Response = result.Response,
                 CodexResponseHeadersSupported = codexResponseHeadersSupported,
             };
         }
-
-        outbound.Stop();
-        return new ChatCompletionResult
+        finally
         {
-            Response = result.Response,
-            CodexResponseHeadersSupported = codexResponseHeadersSupported,
-        };
+            // orchestrator.go:194-199: a continuation that did not become a
+            // stream owns no bytes once the request ends. The accepted-stream
+            // path cleared the local reference because the stream owns it now.
+            if (responsesContinuation is not null)
+            {
+                responsesContinuation.ReleaseRetention();
+                responsesContinuation.ReleaseCapture();
+            }
+        }
     }
 
     /// <summary>

@@ -6,7 +6,9 @@ using AxonHub.Api.Auth;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
+using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
+using AxonHub.Llm.Transformer.Shared;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.WebUtilities;
 
@@ -35,10 +37,10 @@ namespace AxonHub.Api.Http;
 /// <see cref="ResponsesWebSocketPingInterval"/>, abort after the keep-alive
 /// timeout) stands in.</item>
 /// <item>The reference applies <c>LLMRequestTimeout</c> per event and carries a
-/// <c>shared.ResponsesLane</c> lease for Responses continuation; the port has
-/// neither a request-timeout setting (C115) nor the continuation subsystem, so
-/// events run until the connection closes and <c>previous_response_id</c>
-/// warmups merge locally.</item>
+/// <c>shared.ResponsesLane</c> lease for Responses continuation; the port reads
+/// the timeout from the same configuration key (C115) and binds a lane owner to
+/// every stream id, so continuation records survive between frames of one lane
+/// and are dropped when the lane's scope or lease changes.</item>
 /// <item><c>writeStreamDelivery</c>'s request-chain delivery boundary is not
 /// ported (request-chain persistence records directly), matching the rest of
 /// the port's stream paths.</item>
@@ -173,8 +175,8 @@ public static class ResponsesWebSocketEndpoint
         private readonly object _stateLock = new();
         private readonly Dictionary<string, Lane> _lanes = new(StringComparer.Ordinal);
         private readonly List<Task> _tasks = [];
-        private readonly Budget _queueBudget = new(QueueBudgetLimit);
-        private readonly Budget _retainedBudget = new(RetainedBudgetLimit);
+        private readonly ResponsesBudget _queueBudget = new(QueueBudgetLimit);
+        private readonly ResponsesBudget _retainedBudget = new(RetainedBudgetLimit);
 
         private int _pending;
         private int _namedStreams;
@@ -333,13 +335,18 @@ public static class ResponsesWebSocketEndpoint
                 // Every task handles its own failures; this only joins them.
             }
 
-            // dispatcher.wait(): close every lane owner and release warmup.
+            // dispatcher.wait(): close every lane owner and release warmup. The
+            // lease retirements run outside the map lock, like the reference.
+            Lane[] lanes;
             lock (_stateLock)
             {
-                foreach (var lane in _lanes.Values)
-                {
-                    lane.Session.ReleaseWarmup();
-                }
+                lanes = [.. _lanes.Values];
+            }
+
+            foreach (var lane in lanes)
+            {
+                lane.Owner.Close();
+                lane.Session.ReleaseWarmup();
             }
         }
 
@@ -427,6 +434,13 @@ public static class ResponsesWebSocketEndpoint
 
                 var request = prepared.Request!;
 
+                // responses_websocket.go:285-295: shared.WithResponsesLane binds
+                // the lane owner and makes the lane id the session id (the
+                // orchestrator only derives a session id when no lane exists).
+                request.ResponsesLane = lane.Owner;
+                request.ResponsesWebSocket = true;
+                request.SessionId = lane.Owner.Id;
+
                 // responses_websocket.go:267-283: the per-event deadline covers
                 // both processing and writing the result, not the whole socket.
                 using var requestCts = _requestTimeout > TimeSpan.Zero
@@ -447,6 +461,11 @@ public static class ResponsesWebSocketEndpoint
                 }
                 catch (Exception ex)
                 {
+                    // responses_websocket.go:297-301: a failed turn retires every
+                    // provider lease the lane still holds before the error is
+                    // reported.
+                    lane.Owner.RetireLeases();
+
                     return await WriteTransformedErrorAsync(ex, streamId, requestToken)
                         .ConfigureAwait(false);
                 }
@@ -630,6 +649,22 @@ public static class ResponsesWebSocketEndpoint
             string streamId,
             CancellationToken? requestToken = null)
         {
+            // transformResponsesWebSocketError (responses_websocket.go:702-712):
+            // a missing continuation context is a client-facing 400 envelope and
+            // bypasses the orchestrator's transformer.
+            if (GoErrors.Is(error, ResponsesRecovery.Sentinel)
+                && GoErrors.As<HttpClientError>(error) is { } recovery)
+            {
+                return await WriteErrorAsync(
+                        new HttpResponseData
+                        {
+                            StatusCode = recovery.StatusCode,
+                            Body = recovery.Body,
+                        },
+                        streamId)
+                    .ConfigureAwait(false);
+            }
+
             HttpResponseData? transformed = null;
             try
             {
@@ -851,10 +886,19 @@ public static class ResponsesWebSocketEndpoint
         string SessionId,
         string? SessionScope);
 
-    /// <summary>responsesWebSocketLane: one serialized tail per stream id.</summary>
-    private sealed class Lane(Task ready, Budget retainedBudget)
+    /// <summary>
+    /// responsesWebSocketLane: one serialized tail per stream id. The lane owner
+    /// (<c>shared.ResponsesLane</c>) keeps the latest completed continuation
+    /// record and the provider leases that must be retired when the lane fails
+    /// or the connection closes.
+    /// </summary>
+    private sealed class Lane(Task ready, ResponsesBudget retainedBudget)
     {
         public Session Session { get; } = new(retainedBudget);
+
+        public ResponsesLane Owner { get; } = new(
+            "responses-lane-" + Guid.NewGuid().ToString(),
+            retainedBudget);
 
         public Task Tail { get; set; } = ready;
     }
@@ -873,35 +917,13 @@ public static class ResponsesWebSocketEndpoint
 
     private sealed record ResponseError(int StatusCode, byte[] Detail);
 
-    /// <summary>Port of <c>shared.ResponsesBudget</c> (responses_lane.go:8-24).</summary>
-    private sealed class Budget(int limit)
-    {
-        private readonly object _gate = new();
-        private long _used;
-
-        public bool Replace(int previous, int next)
-        {
-            lock (_gate)
-            {
-                if (next > limit - (_used - previous))
-                {
-                    return false;
-                }
-
-                _used += next - previous;
-                return true;
-            }
-        }
-    }
-
     /// <summary>
     /// Port of responsesWebSocketSession: the warmup payload retained for the
-    /// next <c>previous_response_id</c> continuation. The reference also binds a
-    /// <c>shared.ResponsesLane</c> owner to the lane for the server-side
-    /// Responses continuation; that subsystem is not ported (C244), so only the
-    /// retained budget carries over.
+    /// next <c>previous_response_id</c> continuation. The session and the lane
+    /// owner share the connection's retained budget, exactly like the reference
+    /// (<c>lane.session.budget = lane.owner.Budget()</c>).
     /// </summary>
-    private sealed class Session(Budget budget)
+    private sealed class Session(ResponsesBudget budget)
     {
         private string _warmupId = string.Empty;
         private Dictionary<string, byte[]>? _warmupPayload;

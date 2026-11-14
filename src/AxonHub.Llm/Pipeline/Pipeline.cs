@@ -2,6 +2,7 @@ using System.Text.Json;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.Shared;
 
 namespace AxonHub.Llm.Pipeline;
 
@@ -68,6 +69,13 @@ public sealed partial class Pipeline
             catch (Exception ex)
             {
                 lastErr = ex;
+            }
+
+            // A missing Responses continuation context cannot be repaired by
+            // replaying the same previous_response_id (pipeline.go:322-325).
+            if (ResponsesRecovery.IsRecoveryError(lastErr))
+            {
+                throw ResponsesRecovery.Error();
             }
 
             // Resource limits are local facts about this attempt's payload; retrying
@@ -155,6 +163,12 @@ public sealed partial class Pipeline
 
         httpReq.TransformerMetadata = MergeTransformerMetadata(metadata, httpReq.TransformerMetadata);
         httpReq = HttpClientUtils.MergeInboundRequest(httpReq, request.RawRequest);
+
+        // The reference carries the Responses lane and attempt in the request
+        // context; the port threads them through the wire request (C289).
+        httpReq.ResponsesLane = request.RawRequest?.ResponsesLane;
+        httpReq.ResponsesAttempt = request.RawRequest?.ResponsesAttempt;
+        httpReq.ResponsesWebSocket = request.RawRequest?.ResponsesWebSocket ?? false;
 
         try
         {

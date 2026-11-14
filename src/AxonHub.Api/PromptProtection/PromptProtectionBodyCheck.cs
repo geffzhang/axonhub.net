@@ -55,6 +55,38 @@ internal sealed class PromptProtectionBodyCheck(
         return null;
     }
 
+    /// <summary>
+    /// Port of validateExpanded (pass_through_prompt_protection.go:49-60): the
+    /// continuation body appends replayed history in front of the protected
+    /// turn, so the protected values must appear as a suffix.
+    /// </summary>
+    public string? ValidateExpanded(byte[] body)
+    {
+        if (inbound is null || raw is null)
+        {
+            return "protected pass-through body has no inbound mapping";
+        }
+
+        LlmRequest replayed;
+        try
+        {
+            replayed = inbound.TransformRequest(CloneWithBody(raw, body));
+        }
+        catch (Exception)
+        {
+            return "protected pass-through body cannot be decoded by inbound mapping";
+        }
+
+        var actual = PromptProtectionTexts.Capture(replayed);
+        if (actual.Count < expected.Count
+            || !actual.Skip(actual.Count - expected.Count).SequenceEqual(expected))
+        {
+            return "pass-through prompt values differ from protected request";
+        }
+
+        return null;
+    }
+
     private static HttpRequestData CloneWithBody(HttpRequestData raw, byte[] body)
         => new()
         {

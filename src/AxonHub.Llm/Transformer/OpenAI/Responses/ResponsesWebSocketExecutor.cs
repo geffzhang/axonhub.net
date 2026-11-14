@@ -9,6 +9,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
+using AxonHub.Llm.Transformer.Shared;
 
 namespace AxonHub.Llm.Transformer.OpenAI.Responses;
 
@@ -127,10 +128,11 @@ internal sealed class WebSocketExecutor : IExecutor
     private readonly IExecutor? _inner;
     private readonly object _mu = new();
     private readonly Dictionary<WebSocketPoolKey, PooledWebSocketConnection> _pool = [];
-    private readonly ResponsesRetainedBudget _retainedBudget = new(DefaultRetainedBudget);
+    private readonly ResponsesBudget _retainedBudget = new(DefaultRetainedBudget);
     private Timer? _cleanupTimer;
     private bool _cleanupScheduled;
     private bool _closed;
+    private ulong _generation;
 
     /// <summary>Go: <c>newWebSocketExecutor</c>; <paramref name="inner"/> may be null in tests.</summary>
     public WebSocketExecutor(IExecutor? inner)
@@ -357,11 +359,17 @@ internal sealed class WebSocketExecutor : IExecutor
 
         HttpClientUtils.HeaderSet(headers, "OpenAI-Beta", BetaHeaderValue);
 
+        // Go: the lane owns the upstream connection identity, so it overrides
+        // whatever Session_id the inbound carried (websocket_executor.go:243-245).
+        if (request.ResponsesLane is { } lane)
+        {
+            HttpClientUtils.HeaderSet(headers, SessionHeader, lane.Id);
+        }
+
         var originalPayload = ClonePayloadMap(payload);
         var lease = AcquirePreparedLease(cancellationToken, request, wsUrl, headers, payload, originalPayload);
 
-        var connection = lease.Conn
-            ?? throw new InvalidOperationException("websocket connection is nil");
+        _ = lease.Conn ?? throw new InvalidOperationException("websocket connection is nil");
 
         try
         {
@@ -372,11 +380,7 @@ internal sealed class WebSocketExecutor : IExecutor
             message.CopyTo(frame, 0);
             frame[^1] = (byte)'\n';
 
-            connection.SendAsync(
-                new ArraySegment<byte>(frame),
-                WebSocketMessageType.Text,
-                endOfMessage: true,
-                cancellationToken).GetAwaiter().GetResult();
+            lease.Write(cancellationToken, frame, ExplicitPreviousResponseId(payload));
         }
         catch (OperationCanceledException ex)
         {
@@ -389,8 +393,12 @@ internal sealed class WebSocketExecutor : IExecutor
             throw new InvalidOperationException(
                 "failed to write response.create websocket event: " + ex.Message, ex);
         }
-        catch (Exception ex) when (ex is WebSocketException or IOException or InvalidOperationException)
+        catch (Exception ex)
         {
+            // A write failure is ambiguous: the upstream may already have
+            // accepted and executed the request. Replaying response.create on a
+            // fresh connection is therefore unsafe, so the dead session is
+            // evicted and the error is surfaced for the caller to decide.
             lease.Release(evict: true);
             throw new InvalidOperationException(
                 "failed to write response.create websocket event: " + ex.Message, ex);
@@ -445,14 +453,27 @@ internal sealed class WebSocketExecutor : IExecutor
         Dictionary<string, JsonElement?> originalPayload)
     {
         var lease = Acquire(cancellationToken, request, wsUrl, headers);
+        lease.Native = request.ResponsesWebSocket;
         try
         {
             PrepareWebSocketPayloadForLease(payload, lease);
-            return lease;
         }
         catch (WebSocketReconnectRequiredException)
         {
             lease.Release(evict: true);
+
+            RestorePayloadMap(payload, originalPayload);
+            lease = Acquire(cancellationToken, request, wsUrl, headers);
+            lease.Native = request.ResponsesWebSocket;
+            try
+            {
+                PrepareWebSocketPayloadForLease(payload, lease);
+            }
+            catch
+            {
+                lease.Release(evict: true);
+                throw;
+            }
         }
         catch
         {
@@ -460,18 +481,37 @@ internal sealed class WebSocketExecutor : IExecutor
             throw;
         }
 
-        RestorePayloadMap(payload, originalPayload);
-        lease = Acquire(cancellationToken, request, wsUrl, headers);
-        try
+        lease.Native = request.ResponsesWebSocket;
+
+        // Go: pin the attempt to the connection generation that will carry it.
+        // A continuation prepared for a different connection can never be
+        // repaired in place, so it becomes the client-facing recovery signal.
+        if (request.ResponsesAttempt is { } attempt)
         {
-            PrepareWebSocketPayloadForLease(payload, lease);
-            return lease;
+            var origin = attempt.Origin;
+            if (ExplicitPreviousResponseId(payload).Length > 0
+                && origin.Generation != 0
+                && origin.Generation != lease.Generation)
+            {
+                lease.Release(evict: true);
+                throw ResponsesRecovery.Error();
+            }
+
+            origin = origin with { Generation = lease.Generation };
+            attempt.SetOrigin(origin);
+
+            if (request.ResponsesLane is { } lane && lease.Pooled is { } pooled)
+            {
+                pooled.SetLane(lane, origin);
+                if (!lane.RegisterLease(origin, () => Evict(pooled)))
+                {
+                    lease.Release(evict: true);
+                    throw ResponsesRecovery.Error();
+                }
+            }
         }
-        catch
-        {
-            lease.Release(evict: true);
-            throw;
-        }
+
+        return lease;
     }
 
     private WebSocketLease Acquire(
@@ -487,7 +527,8 @@ internal sealed class WebSocketExecutor : IExecutor
                 Dial(cancellationToken, request, wsUrl, headers),
                 pooled: null,
                 owner: null,
-                reused: false);
+                reused: false,
+                generation: 0);
         }
 
         while (true)
@@ -503,7 +544,7 @@ internal sealed class WebSocketExecutor : IExecutor
                 continue;
             }
 
-            return new WebSocketLease(pc.Conn, pc, this, used);
+            return new WebSocketLease(pc.Conn, pc, this, used, pc.Generation);
         }
     }
 
@@ -560,8 +601,11 @@ internal sealed class WebSocketExecutor : IExecutor
                 throw new InvalidOperationException("websocket session pool is full");
             }
 
-            // Go: pc.budget = e.retainedBudget, assigned under the executor lock
-            // before the connection is visible in the pool.
+            // Go: pc.budget = e.retainedBudget and the generation stamp are
+            // assigned under the executor lock before the connection is visible
+            // in the pool (websocket_executor.go:506-511).
+            _generation++;
+            pc.Generation = _generation;
             pc.Budget = _retainedBudget;
             _pool[key] = pc;
             ScheduleCleanupLocked(now);
@@ -584,6 +628,14 @@ internal sealed class WebSocketExecutor : IExecutor
         Dictionary<string, List<string>> headers)
     {
         var sessionId = HttpClientUtils.HeaderGet(headers, SessionHeader).Trim();
+
+        // Go: a lane's connection identity wins over the header and the context
+        // session id (websocket_executor.go:536-544).
+        if (request.ResponsesLane is { } lane)
+        {
+            sessionId = lane.Id;
+        }
+
         if (sessionId.Length == 0 && request.SessionId is { } fromRequest)
         {
             sessionId = fromRequest.Trim();
@@ -600,9 +652,22 @@ internal sealed class WebSocketExecutor : IExecutor
             return (default, false);
         }
 
+        // Go: the continuation origin, when present, supplies the channel and
+        // model key fields, so one physical connection belongs to exactly one
+        // (channel, model) origin.
+        var channelId = ChannelId;
+        var model = string.Empty;
+        if (request.ResponsesAttempt is { } attempt)
+        {
+            var origin = attempt.Origin;
+            channelId = origin.ChannelId;
+            model = origin.Model;
+        }
+
         return (new WebSocketPoolKey
         {
-            ChannelId = ChannelId,
+            ChannelId = channelId,
+            Model = model,
             Url = wsUrl,
             SessionId = sessionId,
             Scope = scope,
@@ -665,7 +730,7 @@ internal sealed class WebSocketExecutor : IExecutor
         return HashSecret(builder.ToString());
     }
 
-    private static string AuthPoolIdentity(AuthConfig? auth, Dictionary<string, List<string>> headers)
+    internal static string AuthPoolIdentity(AuthConfig? auth, Dictionary<string, List<string>>? headers)
     {
         if (auth is not null)
         {
@@ -675,7 +740,7 @@ internal sealed class WebSocketExecutor : IExecutor
         return HashSecret(HttpClientUtils.HeaderGet(headers, "Authorization"));
     }
 
-    private static string HashSecret(string? value)
+    internal static string HashSecret(string? value)
     {
         if (string.IsNullOrEmpty(value))
         {
@@ -938,7 +1003,34 @@ internal sealed class WebSocketExecutor : IExecutor
         Dictionary<string, JsonElement?> payload,
         WebSocketLease? lease)
     {
+        // Go: an explicit previous_response_id must name a response this exact
+        // connection produced; there is no in-place repair when it does not
+        // (websocket_executor.go:930-942). Recovery, not reconnect, is the
+        // signal that reaches the client.
+        var explicitId = ExplicitPreviousResponseId(payload);
+        if (explicitId.Length > 0)
+        {
+            if (lease?.Pooled is not { } target
+                || !lease.Reused
+                || !target.MatchesPreviousTurn(lease.Generation, explicitId))
+            {
+                throw ResponsesRecovery.Error();
+            }
+
+            // Native WebSocket clients send only the new input together with
+            // the response id returned on this connection. Preserve that delta
+            // as-is.
+            return;
+        }
+
         if (lease?.Pooled is null)
+        {
+            return;
+        }
+
+        // Native clients own their context; rewriting or retaining it would
+        // corrupt the next delta (websocket_executor.go:946-948).
+        if (lease.Native)
         {
             return;
         }
@@ -960,20 +1052,6 @@ internal sealed class WebSocketExecutor : IExecutor
         var (previousInput, previousResponseId) = lease.Pooled.PreviousTurn();
         if (!lease.Reused || previousResponseId.Length == 0)
         {
-            return;
-        }
-
-        var explicitId = ExplicitPreviousResponseId(payload);
-        if (explicitId.Length > 0)
-        {
-            if (!string.Equals(explicitId, previousResponseId, StringComparison.Ordinal))
-            {
-                throw new WebSocketReconnectRequiredException();
-            }
-
-            // Native WebSocket clients send only the new input together with
-            // the response id returned on this connection. Preserve that delta
-            // as-is.
             return;
         }
 
@@ -1259,6 +1337,31 @@ internal sealed class WebSocketExecutor : IExecutor
             && value.Value.GetString()!.Length == 0;
     }
 
+    /// <summary>
+    /// Go: <c>isWebSocketRecoveryEvent</c> (websocket_lease_write.go:18-26) — a
+    /// top-level error whose code (inline or nested) is
+    /// <c>previous_response_not_found</c>.
+    /// </summary>
+    internal static bool IsWebSocketRecoveryEvent(byte[] raw)
+    {
+        WebSocketRecoveryEvent? evt;
+        try
+        {
+            evt = LlmJson.Deserialize<WebSocketRecoveryEvent>(raw);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        return evt is not null
+            && (string.Equals(evt.Code, "previous_response_not_found", StringComparison.Ordinal)
+                || string.Equals(
+                    evt.Error?.Code,
+                    "previous_response_not_found",
+                    StringComparison.Ordinal));
+    }
+
     internal static string StreamEventType(byte[] raw)
     {
         try
@@ -1368,6 +1471,21 @@ internal sealed class WebSocketExecutor : IExecutor
         public string? Type { get; set; }
     }
 
+    private sealed class WebSocketRecoveryEvent
+    {
+        [JsonPropertyName("code")]
+        public string? Code { get; set; }
+
+        [JsonPropertyName("error")]
+        public WebSocketRecoveryError? Error { get; set; }
+    }
+
+    private sealed class WebSocketRecoveryError
+    {
+        [JsonPropertyName("code")]
+        public string? Code { get; set; }
+    }
+
     private sealed class WebSocketResponseIdEvent
     {
         [JsonPropertyName("response")]
@@ -1412,6 +1530,9 @@ internal readonly record struct WebSocketPoolKey
     /// </summary>
     public long ChannelId { get; init; }
 
+    /// <summary>Go: the <c>Model</c> key field, taken from the attempt origin when present.</summary>
+    public string Model { get; init; } = string.Empty;
+
     public string Url { get; init; } = string.Empty;
 
     public string SessionId { get; init; } = string.Empty;
@@ -1448,6 +1569,8 @@ internal sealed class PooledWebSocketConnection
     private List<JsonElement> _lastInput = [];
     private string _lastResponseId = string.Empty;
     private int _retainedBytes;
+    private ResponsesLane? _lane;
+    private ResponsesOrigin _origin;
 
     public PooledWebSocketConnection(WebSocketPoolKey key, WebSocket? conn, DateTime now)
     {
@@ -1460,10 +1583,18 @@ internal sealed class PooledWebSocketConnection
     public WebSocketPoolKey Key { get; }
 
     /// <summary>
+    /// Go: <c>pooledWebSocketConn.generation</c> (websocket_executor.go:341) —
+    /// the executor-wide connection generation stamped when the connection is
+    /// published into the pool. A lease may only write to the connection whose
+    /// generation it captured.
+    /// </summary>
+    public ulong Generation { get; set; }
+
+    /// <summary>
     /// Go: <c>pooledWebSocketConn.budget</c> — the executor's shared 64 MiB
     /// retained-input budget, attached when the connection enters the pool.
     /// </summary>
-    public ResponsesRetainedBudget? Budget { get; set; }
+    public ResponsesBudget? Budget { get; set; }
 
     public WebSocket? Conn { get; }
 
@@ -1537,6 +1668,12 @@ internal sealed class PooledWebSocketConnection
             }
 
             _closed = true;
+
+            // Go: a closed connection retires the lane lease that pointed at it
+            // so the lane cannot hand its record to a dead socket
+            // (websocket_executor.go:839-857).
+            _lane?.ForgetLease(_origin);
+
             Budget?.Replace(_retainedBytes, 0);
             _retainedBytes = 0;
             _lastInput = [];
@@ -1546,11 +1683,81 @@ internal sealed class PooledWebSocketConnection
         Conn?.Dispose();
     }
 
+    /// <summary>
+    /// Go: the <c>pc.lane, pc.origin</c> assignment in
+    /// <c>acquirePreparedLease</c> (websocket_executor.go:395-397).
+    /// </summary>
+    public void SetLane(ResponsesLane lane, ResponsesOrigin origin)
+    {
+        lock (_mu)
+        {
+            _lane = lane;
+            _origin = origin;
+        }
+    }
+
+    /// <summary>
+    /// Go: <c>webSocketLease.write</c> (websocket_lease_write.go:28-52). The
+    /// guard is evaluated under the connection lock — the same lock Go holds
+    /// across the write — so a session that was evicted or replaced between
+    /// acquire and write turns into the recovery signal instead of a silent
+    /// write into an unrelated upstream connection.
+    /// </summary>
+    public void WriteFrame(
+        byte[] frame,
+        CancellationToken cancellationToken,
+        ulong generation,
+        string explicitPreviousResponseId)
+    {
+        lock (_mu)
+        {
+            if (_closed || Generation != generation)
+            {
+                throw ResponsesRecovery.Error();
+            }
+
+            if (explicitPreviousResponseId.Length > 0
+                && !string.Equals(
+                    explicitPreviousResponseId,
+                    _lastResponseId,
+                    StringComparison.Ordinal))
+            {
+                throw ResponsesRecovery.Error();
+            }
+
+            if (Conn is null)
+            {
+                throw new InvalidOperationException("websocket connection is nil");
+            }
+
+            Conn.SendAsync(
+                new ArraySegment<byte>(frame),
+                WebSocketMessageType.Text,
+                endOfMessage: true,
+                cancellationToken).GetAwaiter().GetResult();
+        }
+    }
+
     public (List<JsonElement> Input, string ResponseId) PreviousTurn()
     {
         lock (_mu)
         {
             return (WebSocketExecutor.CloneItems(_lastInput), _lastResponseId);
+        }
+    }
+
+    /// <summary>
+    /// Go: the <c>valid := !pc.closed &amp;&amp; pc.generation ==
+    /// lease.generation &amp;&amp; pc.lastResponseID == explicitID</c> check in
+    /// <c>prepareWebSocketPayloadForLease</c> (websocket_executor.go:935-937).
+    /// </summary>
+    public bool MatchesPreviousTurn(ulong generation, string responseId)
+    {
+        lock (_mu)
+        {
+            return !_closed
+                && Generation == generation
+                && string.Equals(_lastResponseId, responseId, StringComparison.Ordinal);
         }
     }
 
@@ -1631,7 +1838,8 @@ internal sealed class WebSocketLease(
     WebSocket? conn,
     PooledWebSocketConnection? pooled,
     WebSocketExecutor? owner,
-    bool reused)
+    bool reused,
+    ulong generation = 0)
 {
     private int _released;
 
@@ -1643,7 +1851,45 @@ internal sealed class WebSocketLease(
 
     public bool Reused { get; } = reused;
 
+    /// <summary>
+    /// Go: <c>webSocketLease.generation</c> — the pooled connection generation
+    /// captured when the lease was acquired.
+    /// </summary>
+    public ulong Generation { get; } = generation;
+
+    /// <summary>
+    /// Go: <c>webSocketLease.native</c> — true when the upstream client speaks
+    /// the Responses WebSocket protocol itself, so the executor must not rewrite
+    /// its deltas or retain its input.
+    /// </summary>
+    public bool Native { get; set; }
+
     public List<JsonElement> NextFullInput { get; set; } = [];
+
+    /// <summary>
+    /// Go: <c>webSocketLease.write</c> (websocket_lease_write.go:28-52). A
+    /// pooled lease validates its generation and cached response id before the
+    /// frame reaches the wire.
+    /// </summary>
+    public void Write(CancellationToken cancellationToken, byte[] frame, string explicitPreviousResponseId)
+    {
+        if (Pooled is { } pooled)
+        {
+            pooled.WriteFrame(frame, cancellationToken, Generation, explicitPreviousResponseId);
+            return;
+        }
+
+        if (Conn is null)
+        {
+            throw new InvalidOperationException("websocket connection is nil");
+        }
+
+        Conn.SendAsync(
+            new ArraySegment<byte>(frame),
+            WebSocketMessageType.Text,
+            endOfMessage: true,
+            cancellationToken).GetAwaiter().GetResult();
+    }
 
     /// <summary>Go: <c>webSocketLease.rememberTurn</c> (websocket_retention.go:31-47).</summary>
     public bool RememberTurn(string responseId, List<JsonElement> output)
@@ -1655,10 +1901,11 @@ internal sealed class WebSocketLease(
 
         var maxInputBytes = Owner?.MaxRetainedInput ?? 0;
 
-        // Without a cached full input only the response id is remembered; the
-        // next turn then sends full context while still agreeing on the last
-        // response id.
-        if (NextFullInput.Count == 0)
+        // Native clients send only the new input each turn, so retaining the
+        // rewritten input would make the next delta suffix look unrelated;
+        // without a cached full input only the response id is remembered and
+        // the next turn sends full context while still agreeing on the id.
+        if (Native || NextFullInput.Count == 0)
         {
             return Pooled.RememberTurn([], responseId, maxInputBytes);
         }
@@ -1807,6 +2054,17 @@ internal sealed class WebSocketStream : IStream<StreamEvent>
         }
 
         var eventType = WebSocketExecutor.StreamEventType(message.Data);
+
+        // Go: an upstream previous_response_not_found is the continuation
+        // recovery signal, not a protocol failure the client should retry
+        // verbatim (websocket_executor.go:1182-1187).
+        if (eventType == "error" && WebSocketExecutor.IsWebSocketRecoveryEvent(message.Data))
+        {
+            SetErr(ResponsesRecovery.Error());
+            Finish(evict: true);
+            return false;
+        }
+
         SetCurrent(new StreamEvent
         {
             Type = eventType,
@@ -1829,7 +2087,8 @@ internal sealed class WebSocketStream : IStream<StreamEvent>
                 {
                     evict = true;
                 }
-                else if (_lease?.Owner is { } owner && message.Data.Length > owner.MaxRetainedInput)
+                else if (_lease?.Native == true
+                    || (_lease?.Owner is { } owner && message.Data.Length > owner.MaxRetainedInput))
                 {
                     // The completed event itself is larger than the retained
                     // input cap, so the conversation is not cached; the healthy
@@ -2044,32 +2303,6 @@ internal sealed class WebSocketStream : IStream<StreamEvent>
         WebSocketCloseStatus? CloseStatus,
         string? Description,
         byte[] Data);
-}
-
-/// <summary>Port of <c>shared.ResponsesBudget</c> (responses_lane.go:8-24).</summary>
-internal sealed class ResponsesRetainedBudget(long limit)
-{
-    private readonly object _gate = new();
-    private long _used;
-
-    /// <summary>
-    /// Reserves <paramref name="next"/> bytes in place of
-    /// <paramref name="previous"/>; false when the replacement would exceed the
-    /// limit, leaving the reservation untouched.
-    /// </summary>
-    public bool Replace(int previous, int next)
-    {
-        lock (_gate)
-        {
-            if (next > limit - (_used - previous))
-            {
-                return false;
-            }
-
-            _used += next - previous;
-            return true;
-        }
-    }
 }
 
 /// <summary>

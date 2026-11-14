@@ -81,6 +81,13 @@ internal sealed class FakeRequestStore : IRequestStore
             .OrderByDescending(row => row.CreatedAt)
             .FirstOrDefault());
 
+    public Task<bool> HasCompletedResponsesOriginAsync(
+        string externalId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(Rows.Any(row => row.ExternalId == externalId
+            && row.Status == "completed"
+            && row.Format is "openai/responses" or "openai/responses-ws"));
+
     public Task<bool> UpdateStatusExternalIdAndResponseBodyAsync(
         long id,
         string status,

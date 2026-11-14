@@ -2046,6 +2046,22 @@ ChatCompletionOrchestrator.ProcessAsync 中接入 prepare / record / wrapStream 
 定向运行 32 + 1 通过；未跑 Api 全量回归。台账：C288 新增 resolved，C062 / C254 更新；lint 通过；
 02-differences.md 已重新生成；288 条（200 accepted / 0 gap / 88 resolved）。
 
+§216（2026-11-14）Responses continuation lease 全链路（C289 / C254）。按 live f272549f 移植
+shared.ResponsesLane（64 MiB retained 预算）、ResponsesAttempt（Origin/Generation/RetireLeases）与
+ErrResponsesContinuationUnavailable（ResponsesRecovery 哨兵 + 400 previous_response_not_found）；
+HttpRequestData 新增 lane/attempt/websocket 显式字段，Pipeline 复制到 wire request 并直抛 recovery；
+PersistentOutboundTransformer 在 dispatch 前固定 owner 候选，PrepareAttemptBody 按 lane > store 解析、
+128 MiB 合并展开、native WS lane 不保留 adapter snapshot；Verify 用最终 wire request（APIFormat / URL /
+CurrentModel / ContinuationAuthIdentity）核对 previous_response_id / owner origin / firstOrigin；
+capture/accept 只认 raw provider response.completed + completed + 非空 id，16 MiB 以上退化 metadata；
+store 升级到 16 MiB / Complete / Origin / Known（HasCompletedResponsesOriginAsync，不按 scope）与
+certifiedResponsesSnapshot。差异：Go ctx 取值改为显式字段、owner/known 每请求预解析、errors.Join 用
+inner 链复现；残余缺口为 transport adaptation / identity preservation 与 delivery capability（C255）。
+测试：新增 30 例（Continuation 6、Capture 9、Lane 3、WS Executor 4、Store 2、Loader 4、Orchestrator 1、
+真实 PG 1）；定向运行 Api 142、Llm 49、Persistence 1 通过；未跑 Api 全量回归。台账：C289 新增 resolved，
+C254 转 resolved，C255 / C288 更新；lint 通过；02-differences.md 已重新生成；289 条
+（199 accepted / 0 gap / 90 resolved）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

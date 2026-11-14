@@ -1634,6 +1634,32 @@ store 上限 2h / 2048 条 / 64 MiB / 单响应 1 MiB。端口新增 `ResponsesS
 `ResponsesSessionOrchestratorTests` 2 例，定向 32 通过；`RequestStoreTests` 新增真实 PG 查询 1 例通过。
 台账：新增 C288（resolved），C062 / C254 收窄；288 条（200 accepted / 0 gap / 88 resolved）。
 
+2026-11-14 更新（§216）：Responses continuation lease 全链路（C289 / C254）。
+按 live f272549f 移植 `responses_attempt.go` / `responses_capture.go` / `responses_origin_test.go` 描述的
+continuation 子系统：shared 层新增 `ResponsesLane`（64 MiB retained 预算、Record/Snapshot、attempt 的
+Origin/Generation/RetireLeases）与 `ResponsesRecovery`（ErrResponsesContinuationUnavailable 哨兵 +
+400 previous_response_not_found）；`HttpRequestData` 新增 port-only 的 `ResponsesLane` /
+`ResponsesAttempt` / `ResponsesWebSocket`，Pipeline 复制到出站 wire request 并直抛 recovery；
+`PersistentOutboundTransformer` 在 dispatch 前按 owner 固定候选，`PrepareResponsesAttempt` 按 lane > store
+顺序解析 owner、128 MiB 合并展开、native WS lane 不保留 adapter snapshot、retained 上限预留与
+capture.metadataOnly；`ResponsesVerifyMiddleware` 用最终 wire request（APIFormat / URL / CurrentModel /
+ContinuationAuthIdentity）核对 previous_response_id、owner origin 与 firstOrigin，必要时继承 Generation；
+`CaptureResponsesProviderMiddleware` / `ResponsesProviderStream` 只认 raw provider response.completed +
+completed + 非空 id，16 MiB 以上退化为 metadata；Accept 在 complete 时写回 store 或 lane Snapshot，overflow
+退化为 previous_response_id=unavailable。store 升级到 f272549f：MaxResponse 16 MiB、Complete/Origin、
+record 仅接受合法 JSON + 顶层 completed、字节压力先清 payload 再按 2048 条驱逐；loader 增加
+certifiedResponsesSnapshot；Known 由 `RequestStore.HasCompletedResponsesOriginAsync` 提供（不按 scope）。
+实现差异：Go ctx 取值改为显式字段，owner/known 每请求预解析（transformer API 同步）；errors.Join 用
+inner 链复现。残余缺口：transport adaptation / identity preservation（pass_through.go、
+AdaptRequestBody / AdaptResponseBody / AdaptStreamEvent）与 delivery capability
+（preserveDeliveryCapabilities，C255）未移植。测试：`ResponsesContinuationTests` 6 例、
+`ResponsesCaptureTests` 9 例、`ResponsesLaneTests` 3 例、`ResponsesWebSocketExecutorTests` 新增 4 例；
+`ResponsesSessionStoreTests` 25 例（+2）、`CompletedResponsesSessionLoaderTests` 11 例（+4）、
+`ResponsesSessionOrchestratorTests` 4 例（+1）、`RequestStoreTests` 新增真实 PG 1 例。定向运行：
+Api FullyQualifiedName~Responses 142 通过、Llm ResponsesLaneTests + ResponsesWebSocketExecutorTests 49
+通过、Persistence 1 通过；未跑 Api 全量回归。台账：新增 C289（resolved），C254 转 resolved，C255 / C288
+更新；289 条（199 accepted / 0 gap / 90 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

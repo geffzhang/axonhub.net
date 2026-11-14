@@ -6,6 +6,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
+using AxonHub.Llm.Transformer.Shared;
 using Microsoft.Extensions.Logging;
 using LlmGoJson = AxonHub.Llm.Json.GoJson;
 
@@ -31,8 +32,8 @@ public sealed record ResponsesSessionLoaded(byte[]? RequestBody, byte[]? Respons
 /// <summary>Port of <c>responsesSessionKey</c> (responses_session.go:36-39).</summary>
 public readonly record struct ResponsesSessionKey(string Scope, string ResponseId);
 
-/// <summary>Port of <c>responsesSessionRecord</c> (responses_session.go:41-47).</summary>
-internal sealed class ResponsesSessionRecord
+/// <summary>Port of <c>responsesSessionRecord</c> (responses_session.go:41-51).</summary>
+internal sealed record ResponsesSessionRecord
 {
     public IReadOnlyList<byte[]> Input { get; init; } = [];
 
@@ -43,6 +44,17 @@ internal sealed class ResponsesSessionRecord
     public DateTimeOffset UpdatedAt { get; init; }
 
     public int Size { get; init; }
+
+    /// <summary>
+    /// Whether this turn may be replayed as conversation history. Only a turn
+    /// whose request carried no <c>previous_response_id</c>, stayed under the
+    /// size limits and whose response strictly decoded counts as complete;
+    /// an incomplete record still pins the continuation to its origin.
+    /// </summary>
+    public bool Complete { get; init; }
+
+    /// <summary>The upstream endpoint that produced the turn.</summary>
+    public ResponsesOrigin Origin { get; init; }
 }
 
 /// <summary>Result of <see cref="ResponsesSessionStore.PrepareAsync"/>.</summary>
@@ -68,11 +80,11 @@ public sealed class ResponsesSessionStore
     internal static readonly TimeSpan Ttl = TimeSpan.FromHours(2);
     internal const int MaxRecords = 2048;
     internal const int MaxBytes = 64 << 20;
-    internal const int MaxResponse = 1 << 20;
+    internal const int MaxResponse = 16 << 20;
 
     // Go's decoder accepts nesting up to 10000 levels; System.Text.Json defaults
     // to 64, so the higher limit keeps the same accept/reject boundary.
-    private static readonly JsonDocumentOptions ParseOptions = new() { MaxDepth = 10_000 };
+    internal static readonly JsonDocumentOptions ParseOptions = new() { MaxDepth = 10_000 };
 
     private static readonly Action<ILogger, Exception?> LogRestoreFailed =
         LoggerMessage.Define(
@@ -84,6 +96,7 @@ public sealed class ResponsesSessionStore
     private readonly TimeProvider _timeProvider;
     private readonly ResponsesSessionLoadFunc? _load;
     private readonly ILogger<ResponsesSessionStore>? _logger;
+    private readonly Func<string, CancellationToken, Task<bool>>? _known;
     private readonly ResponsesInboundTransformer _aggregate = new();
     private readonly Dictionary<ResponsesSessionKey, ResponsesSessionRecord> _byResponse = [];
     private int _totalBytes;
@@ -91,12 +104,22 @@ public sealed class ResponsesSessionStore
     public ResponsesSessionStore(
         TimeProvider? timeProvider = null,
         ResponsesSessionLoadFunc? load = null,
-        ILogger<ResponsesSessionStore>? logger = null)
+        ILogger<ResponsesSessionStore>? logger = null,
+        Func<string, CancellationToken, Task<bool>>? known = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
         _load = load;
         _logger = logger;
+        _known = known;
     }
+
+    /// <summary>
+    /// Port of <c>responsesSessionStore.known</c> (orchestrator.go:41): whether
+    /// a provider response id belongs to a completed Responses request anywhere
+    /// in persistence. A continuation whose response is known but whose
+    /// snapshot could not be restored must not be forwarded upstream.
+    /// </summary>
+    public Func<string, CancellationToken, Task<bool>>? Known => _known;
 
     /// <summary>The live record table; exposed for the port's store tests.</summary>
     internal Dictionary<ResponsesSessionKey, ResponsesSessionRecord> ByResponse => _byResponse;
@@ -150,7 +173,7 @@ public sealed class ResponsesSessionStore
                 sessionId,
                 cancellationToken)
             .ConfigureAwait(false);
-        if (record is null)
+        if (record is null || !record.Complete)
         {
             return new ResponsesSessionPrepared(
                 EncodePreparedResponsesBody(body, current, inputChanged),
@@ -188,7 +211,7 @@ public sealed class ResponsesSessionStore
     /// (responses_session.go:109-128): an in-memory hit wins; a miss asks the
     /// loader once and caches the restored turn.
     /// </summary>
-    private async Task<ResponsesSessionRecord?> LookupOrLoadAsync(
+    internal async Task<ResponsesSessionRecord?> LookupOrLoadAsync(
         string responseId,
         string? scope,
         RequestIdentity identity,
@@ -233,17 +256,30 @@ public sealed class ResponsesSessionStore
     }
 
     /// <summary>
-    /// Port of <c>responsesSessionStore.record</c> (responses_session.go:142-201):
+    /// Port of <c>responsesSessionStore.record</c> (responses_session.go:146-233):
     /// remember a completed turn's input and final output, keyed by scope and the
-    /// provider response id.
+    /// provider response id. A turn without <c>previous_response_id</c> and
+    /// within the size limits is stored complete, so a later continuation can
+    /// replay it; every other turn is still recorded for its origin but never
+    /// contributes history.
     /// </summary>
+    /// <param name="attempt">
+    /// Port of <c>shared.GetResponsesAttempt(ctx)</c>: the origin of the attempt
+    /// that produced the response (C289).
+    /// </param>
     public void Record(
         byte[]? requestBody,
         byte[]? responseBody,
         string? sessionId,
-        string? scope)
+        string? scope,
+        ResponsesAttempt? attempt = null)
     {
-        if (responseBody is null || responseBody.Length == 0 || responseBody.Length > MaxResponse)
+        // gjson reads the status without decoding: only a document whose
+        // top-level status is the string "completed" is eligible.
+        if (responseBody is null
+            || responseBody.Length == 0
+            || !IsValidJson(responseBody)
+            || GoString(responseBody, "status") != "completed")
         {
             return;
         }
@@ -254,25 +290,45 @@ public sealed class ResponsesSessionStore
             return;
         }
 
-        var response = TryParseResponseMeta(responseBody);
-        if (response is null || response.Id.Length == 0)
+        var responseId = GoString(responseBody, "id");
+        if (responseId.Length == 0)
         {
             return;
         }
 
         // Both spellings have appeared in Responses-compatible implementations.
-        if (response.Status is "failed" or "cancelled" or "canceled")
+        // The status was never decoded at this point in the reference, so the
+        // guard could not fire; the completed gate above already excludes them.
+        var complete = ResponseSessionString(requestPayload.GetValueOrDefault("previous_response_id")).Length == 0
+            && responseBody.Length <= MaxResponse
+            && (requestPayload.GetValueOrDefault("input")?.Length ?? 0) <= MaxResponse + 2;
+
+        List<byte[]> input = [];
+        List<byte[]> output = [];
+        var size = 0;
+        if (complete)
         {
-            return;
+            // The reference strictly decodes the response only on the complete
+            // path; any field type mismatch discards the whole turn.
+            var response = TryParseResponseMeta(responseBody);
+            if (response is null)
+            {
+                return;
+            }
+
+            input = ResponseSessionInputItems(requestPayload.GetValueOrDefault("input"));
+            output = response.Output;
+            size = RawSize(input) + RawSize(output);
+            if (size > MaxResponse)
+            {
+                input = [];
+                output = [];
+                size = 0;
+                complete = false;
+            }
         }
 
-        var input = ResponseSessionInputItems(requestPayload.GetValueOrDefault("input"));
-        var output = CloneValues(response.Output);
-        var size = RawSize(input) + RawSize(output);
-        if (size > MaxResponse)
-        {
-            return;
-        }
+        var origin = attempt?.Origin ?? default;
 
         var now = _timeProvider.GetUtcNow();
         if (string.IsNullOrWhiteSpace(scope))
@@ -280,7 +336,7 @@ public sealed class ResponsesSessionStore
             return;
         }
 
-        var key = new ResponsesSessionKey(scope, response.Id);
+        var key = new ResponsesSessionKey(scope, responseId);
 
         lock (_mutex)
         {
@@ -297,10 +353,50 @@ public sealed class ResponsesSessionStore
                 SessionId = sessionId ?? string.Empty,
                 UpdatedAt = now,
                 Size = size,
+                Complete = complete,
+                Origin = origin,
             };
             _totalBytes += size;
 
-            while (_byResponse.Count > MaxRecords || _totalBytes > MaxBytes)
+            // Byte pressure first: the oldest records that still hold history
+            // release their payloads but stay addressable by id (they keep the
+            // origin for the pass-through decision).
+            while (_totalBytes > MaxBytes)
+            {
+                ResponsesSessionKey? oldestKey = null;
+                var oldest = DateTimeOffset.MinValue;
+                foreach (var (candidateKey, candidate) in _byResponse)
+                {
+                    if (candidate.Size <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (oldestKey is null || candidate.UpdatedAt < oldest)
+                    {
+                        oldestKey = candidateKey;
+                        oldest = candidate.UpdatedAt;
+                    }
+                }
+
+                if (oldestKey is not { } victim)
+                {
+                    break;
+                }
+
+                var record = _byResponse[victim];
+                _totalBytes -= record.Size;
+                _byResponse[victim] = record with
+                {
+                    Input = [],
+                    Output = [],
+                    Size = 0,
+                    Complete = false,
+                };
+            }
+
+            // Then the hard record cap drops the oldest entries entirely.
+            while (_byResponse.Count > MaxRecords)
             {
                 if (!EvictOldestLocked())
                 {
@@ -337,6 +433,8 @@ public sealed class ResponsesSessionStore
                 SessionId = record.SessionId,
                 UpdatedAt = record.UpdatedAt,
                 Size = record.Size,
+                Complete = record.Complete,
+                Origin = record.Origin,
             };
         }
     }
@@ -411,7 +509,7 @@ public sealed class ResponsesSessionStore
         bool changed)
         => changed ? MarshalRawObject(payload) : original;
 
-    private static Dictionary<string, byte[]>? TryParseObject(byte[]? raw)
+    internal static Dictionary<string, byte[]>? TryParseObject(byte[]? raw)
     {
         if (raw is null)
         {
@@ -440,7 +538,7 @@ public sealed class ResponsesSessionStore
         }
     }
 
-    private static bool TryParseArrayItems(byte[]? raw, out List<byte[]> items)
+    internal static bool TryParseArrayItems(byte[]? raw, out List<byte[]> items)
     {
         items = [];
         if (raw is null)
@@ -469,7 +567,7 @@ public sealed class ResponsesSessionStore
         }
     }
 
-    private static string? TryParseString(byte[]? raw)
+    internal static string? TryParseString(byte[]? raw)
     {
         if (raw is null)
         {
@@ -602,7 +700,7 @@ public sealed class ResponsesSessionStore
     /// Port of <c>responseSessionInputItems</c> (responses_session.go:389-412):
     /// a string input becomes one user message, like OpenAI's shorthand.
     /// </summary>
-    private static List<byte[]> ResponseSessionInputItems(byte[]? value)
+    internal static List<byte[]> ResponseSessionInputItems(byte[]? value)
     {
         if (value is null || IsNullLiteral(value))
         {
@@ -636,15 +734,63 @@ public sealed class ResponsesSessionStore
             "null",
             StringComparison.Ordinal);
 
-    private static string ResponseSessionString(byte[]? value)
+    internal static string ResponseSessionString(byte[]? value)
         => TryParseString(value) ?? string.Empty;
 
-    private static string ResponseSessionId(string? sessionId)
+    /// <summary>Port of <c>responseSessionID</c> (responses_session.go:447-452).</summary>
+    internal static string ResponseSessionId(string? sessionId)
         => string.IsNullOrEmpty(sessionId)
             ? "responses-" + Guid.NewGuid().ToString()
             : sessionId;
 
-    private static byte[] MarshalRawArray(IReadOnlyList<byte[]> items)
+    /// <summary>Go's <c>json.Valid</c>: syntax only, no value decoding.</summary>
+    internal static bool IsValidJson(byte[] body)
+    {
+        try
+        {
+            using var _ = JsonDocument.Parse(body, ParseOptions);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Port of <c>gjson.GetBytes(body, key).String()</c> for a top-level key on
+    /// a document that already passed <see cref="IsValidJson"/>: a string is
+    /// unescaped, a number or container keeps its raw text, literals become
+    /// <c>true</c>/<c>false</c>, and a missing key or <c>null</c> is empty.
+    /// </summary>
+    internal static string GoString(byte[] body, string key)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body, ParseOptions);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty(key, out var value))
+            {
+                return string.Empty;
+            }
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString() ?? string.Empty,
+                JsonValueKind.Number => value.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.Object or JsonValueKind.Array => value.GetRawText(),
+                _ => string.Empty,
+            };
+        }
+        catch (JsonException)
+        {
+            return string.Empty;
+        }
+    }
+
+    internal static byte[] MarshalRawArray(IReadOnlyList<byte[]> items)
     {
         using var buffer = new MemoryStream();
         buffer.WriteByte((byte)'[');
@@ -666,7 +812,7 @@ public sealed class ResponsesSessionStore
     /// <c>json.Marshal(map[string]json.RawMessage)</c>: keys sort by their UTF-8
     /// bytes (Go map ordering), every raw value is compacted and HTML-escaped.
     /// </summary>
-    private static byte[] MarshalRawObject(IReadOnlyDictionary<string, byte[]> payload)
+    internal static byte[] MarshalRawObject(IReadOnlyDictionary<string, byte[]> payload)
     {
         var entries = new List<(byte[] SortKey, byte[] Key, byte[] Value)>(payload.Count);
         foreach (var (key, value) in payload)
@@ -764,10 +910,10 @@ public sealed class ResponsesSessionStore
     private static byte HexDigit(int value)
         => (byte)(value < 10 ? '0' + value : 'a' + value - 10);
 
-    private static List<byte[]> CloneValues(IEnumerable<byte[]> values)
+    internal static List<byte[]> CloneValues(IEnumerable<byte[]> values)
         => [.. values.Select(static value => value.ToArray())];
 
-    private static int RawSize(IEnumerable<byte[]> values)
+    internal static int RawSize(IEnumerable<byte[]> values)
     {
         var total = 0;
         foreach (var value in values)

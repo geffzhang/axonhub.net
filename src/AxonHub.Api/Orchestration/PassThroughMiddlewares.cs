@@ -282,7 +282,7 @@ internal sealed class PassThroughRequestBodyMiddleware(
         }
 
         if (!PassThrough.TryMergeRequestBodyWithPromptProtection(
-                llmRequest.RawRequest.Body,
+                outbound.EffectiveResponsesRequestBody(),
                 llmRequest.ApiFormat,
                 llmRequest.Model,
                 outbound.PromptProtectionMaskRules,

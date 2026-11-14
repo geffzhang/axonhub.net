@@ -140,7 +140,18 @@ builder.Services.AddSingleton(static services => new ResponsesSessionStore(
         return await loader.LoadAsync(responseId, identity, cancellationToken)
             .ConfigureAwait(false);
     },
-    services.GetRequiredService<ILogger<ResponsesSessionStore>>()));
+    services.GetRequiredService<ILogger<ResponsesSessionStore>>(),
+    // orchestrator.go:41: requestService.HasCompletedResponsesOrigin, read
+    // through a fresh scope for the same reason as the loader.
+    async (responseId, cancellationToken) =>
+    {
+        await using var scope = services
+            .GetRequiredService<IServiceScopeFactory>()
+            .CreateAsyncScope();
+        var store = scope.ServiceProvider.GetRequiredService<IRequestStore>();
+        return await store.HasCompletedResponsesOriginAsync(responseId, cancellationToken)
+            .ConfigureAwait(false);
+    }));
 builder.Services.AddSingleton<IChannelMetricsRecorder, GrainChannelMetricsRecorder>();
 builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorder>();
 

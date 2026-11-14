@@ -146,6 +146,40 @@ public sealed class ResponsesSessionStoreTests
     }
 
     [Fact]
+    public void BudgetsLargeHistory()
+    {
+        var store = new ResponsesSessionStore();
+        store.Record(
+            Bytes(
+                """{"input":[{"type":"function_call_output","call_id":"call_canary","output":"ACTUAL"}]}"""
+                    .Replace("ACTUAL", new string('x', 4 << 20), StringComparison.Ordinal)),
+            Bytes("""{"id":"large","status":"completed","output":[]}"""),
+            sessionId: null,
+            Scope);
+
+        var record = store.Lookup("large", Scope);
+
+        Assert.NotNull(record);
+        Assert.True(record!.Size > 4 << 20);
+    }
+
+    [Fact]
+    public void SnapshotRejectsUnresolvedAncestor()
+    {
+        var store = new ResponsesSessionStore();
+        store.Record(
+            Bytes("""{"previous_response_id":"missing","input":"delta"}"""),
+            Bytes("""{"id":"delta","status":"completed","output":[]}"""),
+            sessionId: null,
+            Scope);
+
+        var record = store.Lookup("delta", Scope);
+
+        Assert.NotNull(record);
+        Assert.False(record!.Complete);
+    }
+
+    [Fact]
     public async Task RecordsCompletedStream()
     {
         var store = new ResponsesSessionStore();

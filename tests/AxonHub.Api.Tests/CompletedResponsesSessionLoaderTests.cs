@@ -208,6 +208,59 @@ public sealed class CompletedResponsesSessionLoaderTests
             CancellationToken.None)).Found);
     }
 
+    [Theory]
+    [InlineData(
+        "root",
+        """{"input":"canary"}""",
+        """{"id":"response","status":"completed","output":[]}""",
+        true)]
+    [InlineData(
+        "unresolved ancestor",
+        """{"previous_response_id":"missing","input":"delta"}""",
+        """{"id":"response","status":"completed","output":[]}""",
+        false)]
+    [InlineData(
+        "incomplete",
+        """{"input":"canary"}""",
+        """{"id":"response","status":"incomplete","output":[]}""",
+        false)]
+    [InlineData(
+        "wrong provider ID",
+        """{"input":"canary"}""",
+        """{"id":"wrong","status":"completed","output":[]}""",
+        false)]
+    public async Task RequiresACertifiedSnapshot(
+        string _,
+        string requestBody,
+        string responseBody,
+        bool found)
+    {
+        // request_responses_certification.go:20-46: only a self-contained turn
+        // may be replayed from persistence. The ancestor check is deliberately
+        // strict about a previous_response_id that the persisted request could
+        // not resolve, and the response must carry the provider id and a
+        // completed status.
+        AddSession(
+            OwnerKeyId,
+            ApiFormats.OpenAIResponse,
+            "response",
+            "canary",
+            requestBody: requestBody,
+            responseBody: responseBody);
+
+        var loaded = await _loader.LoadAsync(
+            "response",
+            IdentityFor(OwnerKeyId),
+            CancellationToken.None);
+
+        Assert.Equal(found, loaded.Found);
+        if (found)
+        {
+            Assert.Equal(requestBody, Text(loaded.RequestBody));
+            Assert.Equal(responseBody, Text(loaded.ResponseBody));
+        }
+    }
+
     [Fact]
     public async Task TrimsTheClientResponseId()
     {

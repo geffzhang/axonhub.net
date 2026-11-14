@@ -106,6 +106,29 @@ public sealed class HttpRequestData
     [JsonIgnore]
     public CancellationToken RequestCancellationToken { get; set; }
 
+    /// <summary>
+    /// Port-only: the value <c>shared.GetResponsesLane(ctx)</c> resolved for
+    /// this request. The reference reads the lane off the request context; the
+    /// port threads it through the wire request (difference C289).
+    /// </summary>
+    [JsonIgnore]
+    public AxonHub.Llm.Transformer.Shared.ResponsesLane? ResponsesLane { get; set; }
+
+    /// <summary>
+    /// Port-only: the value <c>shared.GetResponsesAttempt(ctx)</c> resolved for
+    /// this request, carrying the origin of the attempt on the wire
+    /// (difference C289).
+    /// </summary>
+    [JsonIgnore]
+    public AxonHub.Llm.Transformer.Shared.ResponsesAttempt? ResponsesAttempt { get; set; }
+
+    /// <summary>
+    /// Port-only: the value <c>shared.IsResponsesWebSocket(ctx)</c> for this
+    /// request (difference C289).
+    /// </summary>
+    [JsonIgnore]
+    public bool ResponsesWebSocket { get; set; }
+
     /// <summary>Observer invoked with the upstream response headers.</summary>
     [JsonIgnore]
     public Action<IReadOnlyDictionary<string, List<string>>>? OnResponseHeaders { get; set; }

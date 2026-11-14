@@ -33,6 +33,18 @@ public interface IRequestStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of biz.RequestService.HasCompletedResponsesOrigin
+    /// (request_responses_certification.go:12-18): whether any completed
+    /// Responses request carries this provider response id. Deliberately not
+    /// scoped to an API key or project: the check decides whether a
+    /// continuation may be forwarded upstream without its snapshot, not what
+    /// history the caller may replay.
+    /// </summary>
+    Task<bool> HasCompletedResponsesOriginAsync(
+        string externalId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of UpdateRequestStatusExternalIDAndResponseBody (async video task
     /// polling): status and external id are always written; the response body
     /// snapshot only when <paramref name="setResponseBody"/> is set (the
@@ -135,6 +147,13 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
         "project_id", "trace_id"
         """;
 
+    /// <summary>
+    /// Response formats that may carry a completed origin usable as a
+    /// continuation (internal/server/biz Go:
+    /// <c>IsResponsesAPI</c> plus the WebSocket wire format).
+    /// </summary>
+    private static readonly string[] ResponsesOriginFormats = ["openai/responses", "openai/responses-ws"];
+
     public async Task<long> CreateAsync(RequestRecord request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -209,6 +228,29 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
                     Formats = formats.ToArray(),
                     Status = "completed",
                     ProjectId = projectId,
+                },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<bool> HasCompletedResponsesOriginAsync(
+        string externalId,
+        CancellationToken cancellationToken = default)
+    {
+        var sql = "SELECT EXISTS(SELECT 1 FROM \"requests\""
+            + " WHERE \"external_id\" = @ExternalId"
+            + " AND \"status\" = @Status"
+            + " AND \"format\" = ANY(@Formats));";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteScalarAsync<bool>(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    ExternalId = externalId,
+                    Status = "completed",
+                    Formats = ResponsesOriginFormats,
                 },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);

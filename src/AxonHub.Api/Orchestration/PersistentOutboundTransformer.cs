@@ -1,3 +1,4 @@
+using System.Text;
 using AxonHub.Abstractions;
 using AxonHub.Api.PromptProtection;
 using AxonHub.Grains.Abstractions;
@@ -8,6 +9,8 @@ using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
 using AxonHub.Llm.Transformer.OpenAI;
+using AxonHub.Llm.Transformer.OpenAI.Responses;
+using AxonHub.Llm.Transformer.Shared;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -99,6 +102,15 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// requires the inbound and outbound stream intents to agree.
     /// </summary>
     public bool? OriginalRequestStream { get; internal set; }
+
+    /// <summary>
+    /// The per-request Responses continuation state
+    /// (the reference's <c>state.ResponsesContinuation</c>). The orchestrator
+    /// creates it from the client's raw body before the inbound transform, so
+    /// this transformer can pin a continuing turn to the endpoint that owns its
+    /// <c>previous_response_id</c> and expand the stored history (C289).
+    /// </summary>
+    internal ResponsesContinuation? ResponsesContinuation { get; set; }
 
     /// <summary>
     /// The actual outbound provider request of the latest attempt
@@ -200,6 +212,11 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
                 "no candidates available: candidates should be selected by inbound transformer");
         }
 
+        // outbound.go:712-716 — a continuing Responses turn must be pinned to a
+        // candidate that can reach the endpoint which produced the previous
+        // response, before the retry loop reads the current candidate.
+        SelectResponsesContinuationCandidate(request);
+
         if (_candidateIndex >= _candidates.Length)
         {
             throw new InvalidOperationException(
@@ -246,6 +263,11 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         // The upstream model is per-entry: the client's requested model is only
         // used to select candidates.
         request.Model = entry.ActualModel;
+
+        // outbound.go:741-746 — the continuation expands a stored history into a
+        // cloned request; the pipeline's request (state.LlmRequest) keeps the
+        // client's own messages, exactly like the reference.
+        request = PrepareResponsesAttempt(request);
 
         var outboundFormat = _current.ApiFormat;
         if (!string.IsNullOrEmpty(candidate.ApiFormat))
@@ -299,6 +321,16 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             request.Stream = true;
             request.StreamOptions ??= new StreamOptions();
             request.StreamOptions.IncludeUsage = true;
+
+            // outbound.go:777-783 — the pipeline reads the stream intent from
+            // the pre-continuation request (state.LlmRequest), which the clone
+            // above deliberately does not replace.
+            if (CurrentLlmRequest is { } stateRequest)
+            {
+                stateRequest.Stream = true;
+                stateRequest.StreamOptions ??= new StreamOptions();
+                stateRequest.StreamOptions.IncludeUsage = true;
+            }
         }
 
         // The options helpers may hand back a rebuilt request; the transform-stage
@@ -387,6 +419,209 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             request.RequestType,
             ChannelEndpoints.Resolve(candidate.Type, candidate.Endpoints, candidate.BaseUrl));
         candidate.ApiFormat = ChannelEndpointSelection.SelectApiFormat(endpoints, request);
+    }
+
+    /// <summary>
+    /// Port of selectResponsesContinuationCandidate (responses_attempt.go:167-202):
+    /// when the response being continued belongs to a candidate that can reach
+    /// the same upstream endpoint, pin every later attempt to that candidate and
+    /// model. The reference also rebuilds the wrapped transformer here; the port
+    /// only moves the indexes because the attempt's transformer is created right
+    /// after this call.
+    /// </summary>
+    private void SelectResponsesContinuationCandidate(LlmRequest request)
+    {
+        var continuation = ResponsesContinuation;
+        if (continuation is null || continuation.Previous.Length == 0)
+        {
+            return;
+        }
+
+        continuation.Owner ??= continuation.LoadOwner();
+        if (continuation.Owner is null || continuation.Owner.Snapshot is not null)
+        {
+            return;
+        }
+
+        for (var index = _candidateIndex; index < _candidates.Length; index++)
+        {
+            var candidate = _candidates[index];
+            if (candidate is null || candidate.Models.Count == 0)
+            {
+                continue;
+            }
+
+            for (var modelIndex = 0; modelIndex < candidate.Models.Count; modelIndex++)
+            {
+                RefreshCandidateApiFormat(candidate, modelIndex, request);
+                var origin = new ResponsesOrigin(
+                    (int)candidate.ChannelId,
+                    string.Empty,
+                    candidate.ApiFormat ?? string.Empty,
+                    candidate.Models[modelIndex].ActualModel,
+                    string.Empty,
+                    0);
+                if (!AxonHub.Api.Orchestration.ResponsesContinuation.OriginMatches(
+                        continuation.Owner.Origin,
+                        origin))
+                {
+                    continue;
+                }
+
+                _candidateIndex = index;
+                _modelIndex = modelIndex;
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Port of prepareResponsesAttempt (responses_attempt.go:224-286): computes
+    /// the attempt origin, expands a complete continuation snapshot into the
+    /// body, and prepends the replayed history to a cloned unified request. The
+    /// pipeline's request keeps the client's own messages, like
+    /// <c>state.LlmRequest</c> in the reference.
+    /// </summary>
+    private LlmRequest PrepareResponsesAttempt(LlmRequest request)
+    {
+        var continuation = ResponsesContinuation;
+        if (continuation is null)
+        {
+            return request;
+        }
+
+        SelectResponsesContinuationCandidate(request);
+
+        var origin = new ResponsesOrigin(
+            (int)CurrentChannelId,
+            string.Empty,
+            _current?.ApiFormat ?? string.Empty,
+            request.Model,
+            string.Empty,
+            0);
+        if (CurrentCandidate is { ApiFormat: { Length: > 0 } candidateFormat })
+        {
+            origin = origin with { Format = candidateFormat };
+        }
+
+        var body = continuation.PrepareAttemptBody(
+            new ResponsesAttemptTarget(origin, ForwardsResponsesId()));
+
+        request.RawRequest?.ResponsesAttempt?.SetOrigin(origin);
+
+        if (!continuation.Complete || continuation.Previous.Length == 0)
+        {
+            return request;
+        }
+
+        // The expanded body is decoded by a fresh Responses inbound transformer,
+        // so the merged history is represented exactly as a client turn would
+        // be (responses_attempt.go:245-248).
+        var parsed = new ResponsesInboundTransformer().TransformRequest(
+            new HttpRequestData { Body = body });
+
+        if (!ResponsesJson.TryUnmarshalRawObject(body, out var expandedPayload, out var expandedError))
+        {
+            throw new ResponsesContinuationException(expandedError ?? "invalid Responses body");
+        }
+
+        if (!ResponsesJson.TryUnmarshalRawObject(
+                continuation.Original,
+                out var originalPayload,
+                out var originalError))
+        {
+            throw new ResponsesContinuationException(originalError ?? "invalid Responses body");
+        }
+
+        var expandedItems = ResponsesSessionStore.ResponseSessionInputItems(
+            expandedPayload?.GetValueOrDefault("input"));
+        var originalItems = ResponsesSessionStore.ResponseSessionInputItems(
+            originalPayload?.GetValueOrDefault("input"));
+        if (expandedItems.Count < originalItems.Count)
+        {
+            throw ResponsesRecovery.Error();
+        }
+
+        var historyItems = expandedItems.GetRange(0, expandedItems.Count - originalItems.Count);
+        var historyMessages = new List<Message>();
+        if (historyItems.Count > 0)
+        {
+            var historyPayload = new Dictionary<string, byte[]>(expandedPayload!);
+            historyPayload["input"] = ResponsesSessionStore.MarshalRawArray(historyItems);
+
+            // Instructions shape the next turn, not the replayed history.
+            historyPayload.Remove("instructions");
+            var historyBody = ResponsesSessionStore.MarshalRawObject(historyPayload);
+            var historyRequest = new ResponsesInboundTransformer().TransformRequest(
+                new HttpRequestData { Body = historyBody });
+            historyMessages = historyRequest.Messages;
+        }
+
+        // Go's struct copy keeps every other field shared; only Messages and the
+        // provider sidecar are replaced (responses_attempt.go:282-285).
+        var cloned = request.ShallowClone();
+        var messages = new List<Message>(historyMessages.Count + request.Messages.Count);
+        messages.AddRange(historyMessages);
+        messages.AddRange(request.Messages);
+        cloned.Messages = messages;
+        cloned.ProviderExtensions = parsed.ProviderExtensions;
+
+        return cloned;
+    }
+
+    /// <summary>
+    /// Port of forwardsResponsesID (responses_attempt.go:216-222): probes the
+    /// provider transformer to learn whether <c>previous_response_id</c> survives
+    /// its transport finalization.
+    /// </summary>
+    internal bool ForwardsResponsesId()
+    {
+        var current = _current;
+        if (current is ITransportRequestFinalizer finalizer)
+        {
+            var probe = finalizer.FinalizeTransportRequest(new HttpRequestData
+            {
+                Body = Encoding.UTF8.GetBytes("{\"previous_response_id\":\"probe\"}"),
+            });
+
+            return probe is not null
+                   && ResponsesJson.TopLevelString(probe.Body, "previous_response_id") == "probe";
+        }
+
+        return current is not null
+               && string.Equals(
+                   current.ApiFormat,
+                   ApiFormats.OpenAIResponseWebSocket,
+                   StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Port of effectiveResponsesRequestBody (responses_attempt.go:288-302): the
+    /// body later outbound middlewares replay — the expanded continuation body
+    /// when one exists, otherwise the client's inbound body.
+    /// </summary>
+    internal byte[]? EffectiveResponsesRequestBody()
+    {
+        if (ResponsesContinuation?.Effective is { } effective)
+        {
+            return effective;
+        }
+
+        // state.RawRequest and state.LlmRequest.RawRequest are the same inbound
+        // request in the reference; the port reads it through the unified
+        // request, which is the object the inbound transformer populated.
+        var inbound = CurrentLlmRequest?.RawRequest;
+        if (inbound?.Body is { Length: > 0 } body)
+        {
+            return body;
+        }
+
+        if (inbound?.JsonBody is { Length: > 0 } jsonBody)
+        {
+            return jsonBody;
+        }
+
+        return inbound?.Body;
     }
 
     /// <summary>
