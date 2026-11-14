@@ -81,6 +81,19 @@ public static class CliConfiguration
             && debug;
 
     /// <summary>
+    /// server.max_multipart_memory (conf/conf.go:275, default 32M). The same
+    /// MemorySize decoder as the reference; an empty value is 0, which leaves
+    /// gin's 32 MiB default in place when the server is built.
+    /// </summary>
+    public static long GetMaxMultipartMemory(IConfiguration configuration)
+        => ParseMemorySize(
+            GetString(
+                configuration,
+                "Server:MaxMultipartMemory",
+                "AXONHUB_SERVER_MAX_MULTIPART_MEMORY",
+                "32M"));
+
+    /// <summary>
     /// db.dialect (conf/conf.go:290): the port's only dialect is PostgreSQL.
     /// </summary>
     public static string GetDialect(IConfiguration configuration)
@@ -210,12 +223,7 @@ public static class CliConfiguration
                     ["allowed_ips"] = ipAccessControl.AllowedIps,
                     ["redirect_url"] = ipAccessControl.RedirectUrl,
                 },
-                ["max_multipart_memory"] = ParseMemorySize(
-                    GetString(
-                        configuration,
-                        "Server:MaxMultipartMemory",
-                        "AXONHUB_SERVER_MAX_MULTIPART_MEMORY",
-                        "32M")),
+                ["max_multipart_memory"] = GetMaxMultipartMemory(configuration),
             },
         };
     }

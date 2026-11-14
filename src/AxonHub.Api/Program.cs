@@ -52,6 +52,11 @@ if (cliExitCode is { } exitCode)
 
 var builder = WebApplication.CreateBuilder(args);
 
+// internal/server/server.go:50-54: gin's MaxMultipartMemory bounds the
+// in-memory multipart buffer; HotChocolate's multipart reader consumes the
+// same bound from FormOptions.MemoryBufferThreshold.
+MultipartMemoryOptions.Configure(builder.Services, builder.Configuration);
+
 var connectionString = builder.Configuration.GetConnectionString("Default");
 if (string.IsNullOrWhiteSpace(connectionString))
 {
