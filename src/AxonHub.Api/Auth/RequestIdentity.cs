@@ -1,3 +1,4 @@
+using System.Globalization;
 using AxonHub.Api.Http;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
@@ -57,6 +58,19 @@ public sealed record RequestIdentity(long ProjectId, long? ApiKeyId)
     /// request as a channel test.
     /// </summary>
     public string Source { get; init; } = SourceApi;
+
+    /// <summary>
+    /// Port of <c>withSessionScopeForAPIKey</c> (middleware/auth.go:326-332):
+    /// <c>api_key:&lt;id&gt;</c> plus <c>:project:&lt;id&gt;</c> when the key's
+    /// project edge was loaded. Null for unauthenticated callers (the
+    /// playground's user principal has its own scope in the reference).
+    /// </summary>
+    public string? SessionScope => ApiKeyId is not { } keyId
+        ? null
+        : "api_key:" + keyId.ToString(CultureInfo.InvariantCulture)
+            + (Project is { } project
+                ? ":project:" + project.Id.ToString(CultureInfo.InvariantCulture)
+                : string.Empty);
 
     /// <summary>
     /// Port of contexts.GetAPIKey: the authenticated API key row, including the

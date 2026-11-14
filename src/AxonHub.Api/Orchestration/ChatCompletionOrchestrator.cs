@@ -12,6 +12,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.OpenAI.Responses;
 using Orleans;
 using IModelSettingsProvider = AxonHub.Api.Models.IModelSettingsProvider;
 using ModelSettings = AxonHub.Api.Models.ModelSettings;
@@ -61,6 +62,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly ChannelCopilotTokenCache? _copilotTokens;
     private readonly LiveStreamRegistry? _liveStreamRegistry;
     private readonly ISystemSettingsAdminService? _systemSettings;
+    private readonly ResponsesSessionStore? _responsesSessions;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -91,7 +93,8 @@ public sealed class ChatCompletionOrchestrator
         ChannelProxyExecutors? channelProxyExecutors = null,
         LiveStreamRegistry? liveStreamRegistry = null,
         ISystemSettingsAdminService? systemSettings = null,
-        ChannelCopilotTokenCache? copilotTokens = null)
+        ChannelCopilotTokenCache? copilotTokens = null,
+        ResponsesSessionStore? responsesSessions = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -185,6 +188,11 @@ public sealed class ChatCompletionOrchestrator
         _liveStreamRegistry = liveStreamRegistry;
         _systemSettings = systemSettings;
 
+        // Production passes the process-wide Responses session store; direct
+        // constructions leave it null, which skips continuation handling exactly
+        // like the reference's nil responsesSessions.
+        _responsesSessions = responsesSessions;
+
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
         // is the same as no provider.
@@ -232,7 +240,8 @@ public sealed class ChatCompletionOrchestrator
             channelProxyExecutors: _channelProxyExecutors,
             liveStreamRegistry: _liveStreamRegistry,
             systemSettings: _systemSettings,
-            copilotTokens: _copilotTokens);
+            copilotTokens: _copilotTokens,
+            responsesSessions: _responsesSessions);
     }
 
     /// <summary>
@@ -275,7 +284,8 @@ public sealed class ChatCompletionOrchestrator
             channelProxyExecutors: _channelProxyExecutors,
             liveStreamRegistry: _liveStreamRegistry,
             systemSettings: _systemSettings,
-            copilotTokens: _copilotTokens);
+            copilotTokens: _copilotTokens,
+            responsesSessions: _responsesSessions);
     }
 
     /// <summary>
@@ -365,6 +375,35 @@ public sealed class ChatCompletionOrchestrator
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(identity);
+
+        // orchestrator.go:172-179: a Responses request may continue an earlier
+        // turn through previous_response_id. The store merges the remembered
+        // input and output before the transformer sees the body and returns the
+        // session id the rest of the chain persists (WithSessionID).
+        byte[]? preparedResponsesBody = null;
+        string? responsesSessionId = null;
+        string? responsesScope = null;
+        if (_responsesSessions is not null && _inbound is ResponsesInboundTransformer)
+        {
+            // HTTP derives the scope from the authenticated API key; the
+            // WebSocket endpoint already captured it on the wire request (C062).
+            responsesScope = request.SessionScope ?? identity.SessionScope;
+            var prepared = await _responsesSessions.PrepareAsync(
+                    request.Body,
+                    request.SessionId,
+                    responsesScope,
+                    identity,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            preparedResponsesBody = prepared.Body;
+            request.Body = prepared.Body;
+            request.SessionId = prepared.SessionId;
+            responsesSessionId = prepared.SessionId;
+            if (responsesScope is not null)
+            {
+                request.SessionScope ??= responsesScope;
+            }
+        }
 
         // Read the requested model the same way the reference's selectCandidates
         // middleware does: after the inbound transform, before any retry.
@@ -470,7 +509,7 @@ public sealed class ChatCompletionOrchestrator
             throw TransformerErrors.InvalidModel(model);
         }
 
-        return await RunPipelineAsync(
+        var result = await RunPipelineAsync(
                 _inbound,
                 request,
                 candidates,
@@ -485,6 +524,38 @@ public sealed class ChatCompletionOrchestrator
                 ensureUsage: false,
                 cancellationToken)
             .ConfigureAwait(false);
+
+        // orchestrator.go:355-368: continuation bookkeeping never changes what
+        // the client receives; it only buffers streams and remembers the
+        // completed turn for the next previous_response_id lookup.
+        if (preparedResponsesBody is null || _responsesSessions is null)
+        {
+            return result;
+        }
+
+        if (result.Stream is not null)
+        {
+            return new ChatCompletionResult
+            {
+                Stream = _responsesSessions.WrapStream(
+                    result.Stream,
+                    preparedResponsesBody,
+                    responsesSessionId,
+                    responsesScope),
+                CodexResponseHeadersSupported = result.CodexResponseHeadersSupported,
+            };
+        }
+
+        if (result.Response is not null)
+        {
+            _responsesSessions.Record(
+                preparedResponsesBody,
+                result.Response.Body,
+                responsesSessionId,
+                responsesScope);
+        }
+
+        return result;
     }
 
     /// <summary>

@@ -1614,6 +1614,26 @@ tracing/metrics 之后；`RequestIdentity.RequestDeadlineExpired` 把 deadline �
 RequestTimeoutTests + SseStreamWriterTests + ResponsesWebSocketEndpointTests 54 通过；未跑 Api 全量回归。
 台账：C115 / C253 / C037 转 resolved，C027 补两个超时键；287 条（200 accepted / 0 gap / 87 resolved）。
 
+2026-11-14 更新（§215）：Responses previous_response_id 会话续接子系统（C288）。
+参照 `internal/server/orchestrator/responses_session.go`（460 行）：`prepare` 归一化客户端 input
+（删除非 web_search_call 项的 status），`previous_response_id` 命中内存或经
+`RequestService.LoadCompletedResponsesSession`（biz/request.go:1442-1489：两项 Responses 格式、
+API key + 可选 project、completed、created_at 最新、空 `{}` / 非法 JSON 拒绝）恢复后，
+把记录的 input、output 与本次 input 合并并删除标记；`record` 校验响应体（对象、id 非空、
+status 非 failed/cancelled/canceled、output 数组）后以 `api_key:<id>[:project:<pid>]` 为 scope
+保存；`wrapStream` 以 1 MiB 上限缓冲并复制 Type/LastEventID/Data/Size，终止事件判定复用
+`StreamTerminalTracker(1).Observe`（与参照 `IsTerminalStreamEvent` 同实现），聚合后记录；
+store 上限 2h / 2048 条 / 64 MiB / 单响应 1 MiB。端口新增 `ResponsesSessionStore`
+（Singleton，进程内表 + 可选 loader）、`CompletedResponsesSessionLoader`、
+`RequestIdentity.SessionScope` 与 `RequestStore.FindLatestCompletedResponsesSessionAsync`
+（Dapper，`format = ANY(@Formats)`），并在 `ChatCompletionOrchestrator.ProcessAsync` 的 inbound
+变换前 prepare、非流式响应后 record、流式结果 wrapStream（保留响应头），同时写回
+`request.SessionId` / `SessionScope`。实现差异：Go ctx 取值改为显式参数（C062）；Dapper 用
+`= ANY` 代替 ent `FormatIn`；进程内单例在 Orleans 下保持 Singleton，跨实例由数据库 loader 恢复（C288）。
+测试：`ResponsesSessionStoreTests` 23 例、`CompletedResponsesSessionLoaderTests` 7 例、
+`ResponsesSessionOrchestratorTests` 2 例，定向 32 通过；`RequestStoreTests` 新增真实 PG 查询 1 例通过。
+台账：新增 C288（resolved），C062 / C254 收窄；288 条（200 accepted / 0 gap / 88 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

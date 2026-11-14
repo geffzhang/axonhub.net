@@ -622,7 +622,8 @@ response.created / in_progress / completed 三事件与本地 continuation 合�
 错误信封与 stream_id 回显、协议 / 处理器错误不关闭连接、非升级 GET 400
 `websocket upgrade required`。参照的 2.5 分钟协议 ping / 5 分钟 read deadline 由 ASP.NET
 keep-alive 代替（C252），per-event `LLMRequestTimeout` 由每个 response.create 事件施加
-（C253 于 §214 resolved），`shared.ResponsesLane` continuation lease 未移植（C254），`writeStreamDelivery` 交付边界未移植
+（C253 于 §214 resolved），`shared.ResponsesLane` continuation lease 未移植（C254；基线
+`responsesSessionStore` 已由 §215 / C288 移植），`writeStreamDelivery` 交付边界未移植
 （C255），均登记为 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
 实现按 gorilla `SetReadLimit` 语义以 CloseMessageTooBig 关闭。
 
@@ -2030,6 +2031,20 @@ canceled）、SSE 五分支截止与固定 30s 写截止、以及 Responses WS p
 34 例（RequestTimeoutTests 31、SseStreamWriterTests 2、ResponsesWebSocketEndpointTests 1）；定向运行三类
 54 通过；未跑 Api 全量回归。台账：C115 / C253 / C037 resolved，C027 更新；lint 通过；
 02-differences.md 已重新生成；287 条（200 accepted / 0 gap / 87 resolved）。
+
+§215（2026-11-14）Responses previous_response_id 会话续接子系统（C288）。参照
+internal/server/orchestrator/responses_session.go：prepare 归一化客户端历史并在 previous_response_id
+命中时合并记录轮次；record 校验已完成响应体并按 scope（api_key:<id>[:project:<pid>]）保存；
+wrapStream 以 1 MiB 缓冲流事件、终态命中后聚合记录；store 上限 2h / 2048 条 / 64 MiB；loader 为
+RequestService.LoadCompletedResponsesSession（两项 Responses 格式、API key + project、completed、
+created_at 最新、空/非法 body 拒绝）。端口新增 ResponsesSessionStore（Singleton + 可选 loader）、
+CompletedResponsesSessionLoader、RequestIdentity.SessionScope、
+RequestStore.FindLatestCompletedResponsesSessionAsync（Dapper，format = ANY(@Formats)），并在
+ChatCompletionOrchestrator.ProcessAsync 中接入 prepare / record / wrapStream 与 SessionId/SessionScope
+写回。差异：Go ctx 取值改为显式参数（C062）、= ANY 代替 FormatIn、进程内单例保持 Singleton 并由
+数据库 loader 跨实例恢复（C288）。测试：新增 33 例（Store 23、Loader 7、Orchestrator 2、真实 PG 查询 1）；
+定向运行 32 + 1 通过；未跑 Api 全量回归。台账：C288 新增 resolved，C062 / C254 更新；lint 通过；
+02-differences.md 已重新生成；288 条（200 accepted / 0 gap / 88 resolved）。
 
 ## 公开 API 审计
 

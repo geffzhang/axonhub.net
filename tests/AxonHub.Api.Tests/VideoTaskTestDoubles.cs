@@ -66,6 +66,21 @@ internal sealed class FakeRequestStore : IRequestStore
         => Task.FromResult(Rows.FirstOrDefault(
             row => row.ExternalId == externalId && row.ProjectId == projectId));
 
+    public Task<RequestRecord?> FindLatestCompletedResponsesSessionAsync(
+        string externalId,
+        long apiKeyId,
+        IReadOnlyList<string> formats,
+        long? projectId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(Rows
+            .Where(row => row.ExternalId == externalId
+                && row.ApiKeyId == apiKeyId
+                && formats.Contains(row.Format)
+                && row.Status == "completed"
+                && (projectId is null || row.ProjectId == projectId))
+            .OrderByDescending(row => row.CreatedAt)
+            .FirstOrDefault());
+
     public Task<bool> UpdateStatusExternalIdAndResponseBodyAsync(
         long id,
         string status,

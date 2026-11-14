@@ -244,6 +244,87 @@ public sealed class RequestStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task FindLatestCompletedResponsesSessionScopesTheLookup()
+    {
+        // request.go:1442-1471: the continuation loader reads the newest
+        // completed OpenAI Responses row for one API key (and project, when the
+        // caller carries one). Failed rows, other formats and other owners
+        // never satisfy a previous_response_id lookup.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestStore(context);
+
+        async Task<long> Add(
+            string marker,
+            DateTime createdAt,
+            long apiKeyId = 7,
+            long projectId = 9,
+            string format = "openai/responses",
+            string status = "completed",
+            string externalId = "resp_shared")
+            => await store.CreateAsync(new RequestRecord
+            {
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt,
+                ModelId = "gpt-5",
+                Format = format,
+                Status = status,
+                ExternalId = externalId,
+                RequestBody = "{\"input\":\"" + marker + "\"}",
+                ApiKeyId = apiKeyId,
+                ProjectId = projectId,
+            });
+
+        await Add("older", CreatedAt);
+        await Add("newer", CreatedAt.AddMinutes(1));
+        await Add("other-key", CreatedAt.AddMinutes(2), apiKeyId: 8);
+        await Add("failed", CreatedAt.AddMinutes(3), status: "failed");
+        await Add("compact", CreatedAt.AddMinutes(4), format: "openai/responses_compact");
+        var websocket = await Add(
+            "websocket",
+            CreatedAt.AddMinutes(5),
+            format: "openai/responses-ws");
+
+        var responsesOnly = await store.FindLatestCompletedResponsesSessionAsync(
+            "resp_shared",
+            7,
+            ["openai/responses"],
+            projectId: 9);
+        Assert.NotNull(responsesOnly);
+        RecordAssert.Json("""{"input":"newer"}""", responsesOnly.RequestBody);
+
+        // Both Responses formats are accepted; the newest row wins.
+        var bothFormats = await store.FindLatestCompletedResponsesSessionAsync(
+            "resp_shared",
+            7,
+            ["openai/responses", "openai/responses-ws"],
+            projectId: 9);
+        Assert.NotNull(bothFormats);
+        Assert.Equal(websocket, bothFormats.Id);
+
+        // Without a project the lookup is keyed by API key alone.
+        var unscoped = await store.FindLatestCompletedResponsesSessionAsync(
+            "resp_shared",
+            7,
+            ["openai/responses"],
+            projectId: null);
+        Assert.NotNull(unscoped);
+        RecordAssert.Json("""{"input":"newer"}""", unscoped.RequestBody);
+
+        Assert.Null(await store.FindLatestCompletedResponsesSessionAsync(
+            "resp_shared",
+            7,
+            ["openai/responses"],
+            projectId: 10));
+        Assert.Null(await store.FindLatestCompletedResponsesSessionAsync(
+            "missing",
+            7,
+            ["openai/responses"],
+            projectId: 9));
+    }
+
+    [Fact]
     public async Task UpdateStatusExternalIdAndResponseBodyRefreshesThePolledSnapshot()
     {
         // Port of UpdateRequestStatusExternalIDAndResponseBody: status and

@@ -20,6 +20,19 @@ public interface IRequestStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Port of biz.RequestService.LoadCompletedResponsesSession's query
+    /// (request.go:1442-1471): the newest completed Responses request carrying
+    /// the provider response id for this API key (and project, when the caller
+    /// is project-scoped). Missing rows return null.
+    /// </summary>
+    Task<RequestRecord?> FindLatestCompletedResponsesSessionAsync(
+        string externalId,
+        long apiKeyId,
+        IReadOnlyList<string> formats,
+        long? projectId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Port of UpdateRequestStatusExternalIDAndResponseBody (async video task
     /// polling): status and external id are always written; the response body
     /// snapshot only when <paramref name="setResponseBody"/> is set (the
@@ -159,6 +172,44 @@ public sealed class RequestStore(AxonHubDbContext db) : IRequestStore
             new CommandDefinition(
                 sql,
                 new { ExternalId = externalId, ProjectId = projectId },
+                transaction: db.CurrentDbTransaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<RequestRecord?> FindLatestCompletedResponsesSessionAsync(
+        string externalId,
+        long apiKeyId,
+        IReadOnlyList<string> formats,
+        long? projectId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(formats);
+
+        var sql = "SELECT " + Columns
+            + " FROM \"requests\""
+            + " WHERE \"external_id\" = @ExternalId"
+            + " AND \"api_key_id\" = @ApiKeyId"
+            + " AND \"format\" = ANY(@Formats)"
+            + " AND \"status\" = @Status";
+        if (projectId is not null)
+        {
+            sql += " AND \"project_id\" = @ProjectId";
+        }
+
+        sql += " ORDER BY \"created_at\" DESC LIMIT 1;";
+
+        var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.QuerySingleOrDefaultAsync<RequestRecord>(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    ExternalId = externalId,
+                    ApiKeyId = apiKeyId,
+                    Formats = formats.ToArray(),
+                    Status = "completed",
+                    ProjectId = projectId,
+                },
                 transaction: db.CurrentDbTransaction,
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
     }

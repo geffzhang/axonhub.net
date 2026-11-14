@@ -124,6 +124,23 @@ builder.Services.AddSingleton<GeminiInboundTransformer>();
 // uses the same chat handler with the Responses inbound transformers.
 builder.Services.AddSingleton<ResponsesInboundTransformer>();
 builder.Services.AddSingleton<ResponsesCompactInboundTransformer>();
+
+// Responses continuation store (orchestrator.responsesSessionStore): process
+// wide like the reference. The loader opens a fresh scope per persistence miss
+// because the request store and payload storage are scoped services.
+builder.Services.AddSingleton(static services => new ResponsesSessionStore(
+    services.GetRequiredService<TimeProvider>(),
+    async (responseId, identity, cancellationToken) =>
+    {
+        await using var scope = services
+            .GetRequiredService<IServiceScopeFactory>()
+            .CreateAsyncScope();
+        var loader = scope.ServiceProvider
+            .GetRequiredService<CompletedResponsesSessionLoader>();
+        return await loader.LoadAsync(responseId, identity, cancellationToken)
+            .ConfigureAwait(false);
+    },
+    services.GetRequiredService<ILogger<ResponsesSessionStore>>()));
 builder.Services.AddSingleton<IChannelMetricsRecorder, GrainChannelMetricsRecorder>();
 builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorder>();
 
@@ -292,6 +309,10 @@ builder.Services.AddScoped<IUsageLogStore, UsageLogStore>();
 builder.Services.AddScoped<IAnalyticsStore, AnalyticsStore>();
 builder.Services.AddScoped<IDashboardStore, DashboardStore>();
 builder.Services.AddScoped<VideoService>();
+
+// biz.RequestService.LoadCompletedResponsesSession's persistence half, called
+// by the process-wide session store on a cache miss.
+builder.Services.AddScoped<CompletedResponsesSessionLoader>();
 
 // The orchestrator's enforceQuota middleware (biz.QuotaService): API key
 // profile quotas aggregated from usage_logs in the general-settings timezone.
