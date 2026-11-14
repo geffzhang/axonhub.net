@@ -785,24 +785,50 @@ public sealed class PassThroughStreamTests
     public void ChannelStreamStopsAtEmptyBufferAfterCancel()
     {
         // Reference TestPassThroughChannelStream_StopsAtEmptyBufferAfterCancel:
-        // after cancellation Next() must never block on the producer.
+        // after cancellation Next() must never block on the producer; it detaches
+        // the client branch at the first empty-buffer moment even though the raw
+        // owner keeps reading.
         using var cts = new CancellationTokenSource();
         var channel = Channel(capacity: 2);
         var chunk = TestChannels.Data("{\"id\":\"chunk\"}");
         channel.Add(chunk);
         cts.Cancel();
 
-        var upstreamCanceled = false;
+        var detached = false;
+        var rawOwnerCanceled = false;
         var stream = new PassThroughChannelStream(
             cts.Token,
             channel,
             new PassThroughErrorRef(),
-            () => upstreamCanceled = true);
+            () => rawOwnerCanceled = true,
+            detach: () => detached = true);
 
         Assert.True(stream.Next());
         Assert.Equal(chunk, stream.Current);
         Assert.False(stream.Next());
-        Assert.True(upstreamCanceled);
+        Assert.True(detached);
+        Assert.False(rawOwnerCanceled);
+    }
+
+    [Fact]
+    public void ChannelStreamCloseDetachesWithoutCancellingTheRawOwner()
+    {
+        // Reference TestPassThroughDetachKeepsRawOwner: the client branch's
+        // Close only detaches; canceling the raw owner belongs to the owner
+        // stream returned by captureRawProviderStream.
+        var detached = false;
+        var canceled = false;
+        var stream = new PassThroughChannelStream(
+            CancellationToken.None,
+            Channel(),
+            new PassThroughErrorRef(),
+            () => canceled = true,
+            detach: () => detached = true);
+
+        stream.Dispose();
+
+        Assert.True(detached);
+        Assert.False(canceled);
     }
 
     // ------------------------------------------------------------------

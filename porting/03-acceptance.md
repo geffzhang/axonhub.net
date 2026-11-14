@@ -628,8 +628,9 @@ keep-alive 代替（C252），per-event `LLMRequestTimeout` 由每个 response.c
 tail accounting 已由 §220 / C293 移植（execution/shutdown 上下文分离、双屏障、1 秒 / 256 事件 /
 1 MiB）；usage 记账的 provenance 门（AccountingEvidence / accountingMayBeFinal）已由 §221 / C294 移植
 （三 aggregator 证据分类、持久化门控与 "Authoritative usage unavailable" 警告），host shutdown 已由
-§222 / C295 接入（ServerLifetime → StreamLifecycle shutdown token/cause），pass-through detach 与
-request chunk 来源残余保留为 C255 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
+§222 / C295 接入（ServerLifetime → StreamLifecycle shutdown token/cause），pass-through 客户端分支的
+detach（不取消 raw owner）与 request chunk 来源（drain 读取持久流）已由 §223 / C255 对齐。超大帧
+（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
 实现按 gorilla `SetReadLimit` 语义以 CloseMessageTooBig 关闭。
 
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
@@ -2154,6 +2155,19 @@ AggregatedCompletionWithoutTerminalEventCountsSuccess 改为先 AcknowledgeDeliv
 188、pass-through / persistence / live-preview / timeout 6 类 125 通过；未跑 Api 全量回归。台账：C295 / C296
 新增 resolved，C255 收窄为 pass-through detach 与 request chunk 来源；lint 通过；02-differences.md
 已重新生成；296 条（199 accepted / 0 gap / 97 resolved）。
+
+§223（2026-11-14）pass-through 交付残余（C255 resolved）。按 live f272549f pass_through.go:634,657,
+765-803,1133-1144 与 inbound.go:527-545：(1) `PassThroughChannelStream` 增加 owner / detach 语义——
+只有 captureRawProviderStream 返回的 owner 流在 Dispose 时调用 attempt closer，客户端分支仅执行
+detach（`PassThroughStreamState.Detach` 对应 `state.RawStreamDetach`，生产为空，即 no-op）；
+`ChannelStreamStopsAtEmptyBufferAfterCancel` 改为断言 detach 为真、owner cancel 为假，并新增镜像
+`TestPassThroughDetachKeepsRawOwner` 的 `ChannelStreamCloseDetachesWithoutCancellingTheRawOwner`。
+(2) pass-through 流中间件改在持久化中间件之后注册（inbound raw 中间件按列表顺序应用），drain 读取
+`RequestRawStream`，request 行保存转换后事件而非客户端读到的 raw provider 事件；客户端仍经交付门读取
+raw 事件。新增 `PassThroughStreamPersistsTheDrainedTransformedChunks`（raw 事件带 provider_marker，
+request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroughStream + ChatCompletionOrchestrator
+56 通过；相关 10 类 244 通过；未跑 Api 全量回归。台账：C255 转 resolved；296 条
+（198 accepted / 0 gap / 98 resolved）。
 
 ## 公开 API 审计
 

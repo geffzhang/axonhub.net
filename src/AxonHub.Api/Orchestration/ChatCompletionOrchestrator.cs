@@ -992,15 +992,10 @@ public sealed class ChatCompletionOrchestrator
         // request (orchestrator.go's finalizeTransportRequest registration).
         options.Middlewares.Add(new TransportRequestFinalizerMiddleware(outbound));
 
-        // Response pass-through middlewares run before persistence so the raw
-        // provider response/stream is what the request row stores when
-        // pass-through is enabled (orchestrator.go:258-263).
+        // Response pass-through runs before persistence so the raw provider
+        // response is what the request row stores when pass-through is enabled
+        // (orchestrator.go:258-263).
         options.Middlewares.Add(new PassThroughResponseMiddleware(outbound, passThroughSettings));
-        options.Middlewares.Add(new PassThroughStreamMiddleware(
-            outbound,
-            passThroughSettings,
-            executionToken,
-            lifecycle));
 
         // Registered after the metrics middleware so it runs first on the way
         // out, matching the reference order (persistRequestExecution is the last
@@ -1024,6 +1019,18 @@ public sealed class ChatCompletionOrchestrator
                 _loggerFactory?.CreateLogger<RequestChainPersistenceMiddleware>());
             options.Middlewares.Add(persistence);
         }
+
+        // Stream pass-through is registered after persistence: inbound raw
+        // middlewares apply in list order and the reference's
+        // InboundPersistentStream lives inside the inbound transformer, so the
+        // pass-through drain — not the client — records the request chunks
+        // (inbound.go:527-545; pass_through.go:678-696). The client still reads
+        // the raw provider events through the delivery gate.
+        options.Middlewares.Add(new PassThroughStreamMiddleware(
+            outbound,
+            passThroughSettings,
+            executionToken,
+            lifecycle));
 
         // Forward the events to the live preview buffer (orchestrator.go:298-299:
         // registered right after persistRequestExecution and before the

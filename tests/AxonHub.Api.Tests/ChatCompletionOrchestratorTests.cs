@@ -581,6 +581,75 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
         Assert.Empty(metrics.Failures);
     }
 
+    [Fact]
+    public async Task PassThroughStreamPersistsTheDrainedTransformedChunks()
+    {
+        // The client receives the raw provider payload, but the request row
+        // stores the transformed events the drain consumed: in the reference
+        // InboundPersistentStream sits inside the inbound transformer and only
+        // the pass-through drain reads it (inbound.go:527-545;
+        // pass_through.go:678-696). The provider marker survives only in the
+        // raw payload, so it distinguishes the two sources.
+        fixture.Channels.Set(TestChannels.OpenAi(
+            4602,
+            "pass-through-model",
+            settings: "{\"passThroughBody\":true}"));
+
+        var chunks = new List<StreamEvent>
+        {
+            TestChannels.Data("{\"id\":\"chatcmpl-raw\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"pass-through-model\",\"provider_marker\":\"raw-stream\","
+                + "\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"he\"},\"finish_reason\":null}]}"),
+            TestChannels.Data("{\"id\":\"chatcmpl-raw\",\"object\":\"chat.completion.chunk\",\"created\":1,"
+                + "\"model\":\"pass-through-model\",\"provider_marker\":\"raw-stream\","
+                + "\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],"
+                + "\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}"),
+            TestChannels.Data("[DONE]"),
+        };
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(chunks),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+        var orchestrator = NewOrchestrator(
+            executor,
+            new RecordingMetricsRecorder(),
+            FastPolicy(),
+            recorder);
+
+        var result = await orchestrator.ProcessAsync(
+            TestChannels.ChatRequest("pass-through-model", stream: true));
+
+        Assert.NotNull(result.Stream);
+
+        var events = new List<StreamEvent>();
+        while (result.Stream!.Next())
+        {
+            if (result.Stream.Current is { } streamEvent)
+            {
+                events.Add(streamEvent);
+            }
+        }
+
+        result.Stream.AcknowledgeDelivery();
+        result.Stream.Dispose();
+
+        // Pass-through is on: the client saw the provider's untouched payload.
+        Assert.Contains(
+            events,
+            e => System.Text.Encoding.UTF8.GetString(e.Data)
+                .Contains("provider_marker", StringComparison.Ordinal));
+
+        // The request row stored the transformed events recorded by the drain.
+        var saved = Assert.Single(recorder.RequestChunkSaves);
+        Assert.Equal(3, saved.Chunks.Count);
+        Assert.DoesNotContain(
+            saved.Chunks,
+            c => System.Text.Encoding.UTF8.GetString(c.Data)
+                .Contains("provider_marker", StringComparison.Ordinal));
+        Assert.Equal("[DONE]", System.Text.Encoding.UTF8.GetString(saved.Chunks[^1].Data));
+    }
+
     /// <summary>
     /// orchestrator.go:360-375 + api/chat.go:146-159 (C094): the forwardable
     /// response metadata the pipeline attaches to the inbound stream must

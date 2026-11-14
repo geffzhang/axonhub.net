@@ -46,6 +46,13 @@ internal sealed class PassThroughStreamState
 
     /// <summary>Cancels the attempt and closes the upstream stream.</summary>
     public required Action Cancel { get; init; }
+
+    /// <summary>
+    /// Port of state.RawStreamDetach: detaches the client branch from the raw
+    /// owner without canceling it. The reference declares the field but never
+    /// assigns it; a consumer close still honors a detach when one is present.
+    /// </summary>
+    public Action? Detach { get; init; }
 }
 
 /// <summary>
@@ -362,12 +369,21 @@ internal sealed class RawStreamQueue
 /// When a <see cref="RawStreamQueue"/> is supplied it owns the held events and
 /// the per-event budget releases.
 /// </summary>
+/// <remarks>
+/// Only the raw owner (the stream returned by captureRawProviderStream) may
+/// cancel the attempt. The client branch created by applyPassThroughStream
+/// merely detaches: a client disconnect must leave the raw reader running so
+/// the drain can still feed the persistent stream's accounting
+/// (live pass_through.go:1133-1144).
+/// </remarks>
 internal sealed class PassThroughChannelStream(
     CancellationToken requestToken,
     BlockingCollection<StreamEvent> channel,
     PassThroughErrorRef errorRef,
     Action? cancel,
-    RawStreamQueue? queue = null) : IStream<StreamEvent>
+    RawStreamQueue? queue = null,
+    bool owner = false,
+    Action? detach = null) : IStream<StreamEvent>
 {
     private StreamEvent? _current;
     private bool _canceled;
@@ -439,7 +455,16 @@ internal sealed class PassThroughChannelStream(
         }
 
         _closed = true;
-        cancel?.Invoke();
+
+        // passThroughChannelStream.Close: the owner cancels the fan-out and the
+        // client branch only detaches, so closing the client view never stops
+        // the raw reader the drain depends on.
+        if (owner)
+        {
+            cancel?.Invoke();
+        }
+
+        detach?.Invoke();
     }
 
     /// <summary>
@@ -592,7 +617,7 @@ internal sealed class CaptureRawProviderStreamMiddleware(
         var errorRef = new PassThroughErrorRef();
         var closer = new PassThroughAttemptCloser(stream, cancellationToken);
 
-        outbound.PassThroughStream = new PassThroughStreamState
+        var state = new PassThroughStreamState
         {
             RawChannel = rawQueue.Channel,
             RawQueue = rawQueue,
@@ -600,6 +625,7 @@ internal sealed class CaptureRawProviderStreamMiddleware(
             ErrorRef = errorRef,
             Cancel = closer.Close,
         };
+        outbound.PassThroughStream = state;
 
         _ = Task.Factory.StartNew(
             () => FanOut(
@@ -614,7 +640,13 @@ internal sealed class CaptureRawProviderStreamMiddleware(
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
 
-        return new PassThroughChannelStream(cancellationToken, pipelineChannel, errorRef, closer.Close);
+        return new PassThroughChannelStream(
+            cancellationToken,
+            pipelineChannel,
+            errorRef,
+            closer.Close,
+            owner: true,
+            detach: state.Detach);
     }
 
     /// <summary>
@@ -775,6 +807,15 @@ internal sealed class CaptureRawProviderStreamMiddleware(
 /// (connection tracking, performance recording, rate-limit tracking) still see
 /// every event.
 /// </summary>
+/// <remarks>
+/// The drain reads whatever stream precedes this middleware. The middleware
+/// order in the orchestrator places the persistence wrapper ahead of it, so the
+/// drain — not the client — feeds InboundPersistentStream, and the persisted
+/// request chunks are the transformed events even while the client receives the
+/// raw provider payload. The reference gets the same shape from
+/// InboundPersistentStream living inside the inbound transformer
+/// (inbound.go:527-545; pass_through.go:678-696).
+/// </remarks>
 internal sealed class PassThroughStreamMiddleware(
     PersistentOutboundTransformer outbound,
     PassThroughSettings settings,
@@ -815,8 +856,9 @@ internal sealed class PassThroughStreamMiddleware(
                 cancellationToken,
                 queue.Channel,
                 state.ErrorRef,
-                state.Cancel,
-                queue);
+                cancel: null,
+                queue: queue,
+                detach: state.Detach);
         }
         else
         {
@@ -825,7 +867,8 @@ internal sealed class PassThroughStreamMiddleware(
                 cancellationToken,
                 state.RawChannel,
                 state.ErrorRef,
-                state.Cancel);
+                cancel: null,
+                detach: state.Detach);
 
             result = held.Length == 0
                 ? rawStream

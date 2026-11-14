@@ -1785,6 +1785,24 @@ RequestChainPersistence|PassThroughStream|ResponsesTransportPassThrough|Persiste
 LivePreviewOrchestrator|RequestTimeout 125 通过；未跑 Api 全量回归。台账：新增 C295 / C296（均 resolved），
 C255 收窄为 pass-through detach 与 request chunk 来源；296 条（199 accepted / 0 gap / 97 resolved）。
 
+2026-11-14 更新（§223）：pass-through 交付残余（C255 转 resolved）。按 live f272549f
+`internal/server/orchestrator/pass_through.go:634,657,765-803,1133-1144` 与 `inbound.go:527-545`：
+(1) `PassThroughChannelStream` 增加 owner / detach 构造参数，`Dispose` 仅在 owner 时调用 attempt
+closer，客户端分支只执行 detach；`PassThroughStreamState` 新增 `Detach`（对应
+`state.RawStreamDetach`，参照声明但生产从不赋值，因此为 no-op）。客户端断开不再取消扇出，raw owner
+由 pipeline/lifecycle 的关闭链取消。(2) 编排器把 `PassThroughStreamMiddleware` 注册在
+`RequestChainPersistenceMiddleware` 之后：inbound raw 中间件按列表顺序应用，参照的
+InboundPersistentStream 位于 inbound transformer 内，pass-through 的 drain 读取持久流，因此 request
+行的 chunks 来自转换后事件；客户端仍通过交付门读取 raw provider 事件。非流式响应保持
+applyPassThroughResponse 在持久化之前（请求行保存 raw provider 响应）。测试：
+`ChannelStreamStopsAtEmptyBufferAfterCancel` 改为断言 detach 为真、owner cancel 为假；新增
+`ChannelStreamCloseDetachesWithoutCancellingTheRawOwner`（镜像 TestPassThroughDetachKeepsRawOwner）与
+`PassThroughStreamPersistsTheDrainedTransformedChunks`（raw 事件带 provider_marker，request chunks
+不含 marker，末项 [DONE]）。定向运行：PassThroughStreamTests + ChatCompletionOrchestratorTests
+56 通过；request-chain / pass-through / transport / cancellation / live-preview / timeout 等 10 类
+244 通过；未跑 Api 全量回归。台账：C255 由 accepted 改为 resolved；296 条
+（198 accepted / 0 gap / 98 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、
