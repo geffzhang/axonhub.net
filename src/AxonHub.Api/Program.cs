@@ -4,6 +4,7 @@ using AxonHub.Api.Auth;
 using AxonHub.Api.Auth.Oidc;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Catalog;
+using AxonHub.Api.Cli;
 using AxonHub.Api.Codex;
 using AxonHub.Api.Diagnostics;
 using AxonHub.Api.Endpoints;
@@ -39,6 +40,15 @@ using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
 using OpenTelemetry.Metrics;
 using Orleans.Hosting;
+
+// cmd/axonhub/main.go:33-52: argv commands run before the host is built.
+// Anything else falls through to the normal server start.
+var cliExitCode = CliCommand.TryRun(args, Console.Out, Console.Error);
+if (cliExitCode is { } exitCode)
+{
+    Environment.ExitCode = exitCode;
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -968,6 +978,11 @@ builder.Host.UseOrleans(silo =>
     silo.UseInMemoryReminderService();
 });
 
+// server.pid_file (conf/conf.go:243, main.go:70-100): write the PID before
+// the HTTP server starts and remove it on stop. An empty value keeps the
+// reference's no-op hook.
+builder.Services.AddHostedService<PidFileHostedService>();
+
 // The startup half of the reference's scheduled-task registration
 // (backup service.go:39-55, gc gc.go:77-84). Registered after UseOrleans so
 // the hosted service starts after the silo.
@@ -981,6 +996,20 @@ var app = builder.Build();
 // substitutes "server shutdown".
 var serverLifetime = app.Services.GetRequiredService<ServerLifetime>();
 app.Lifetime.ApplicationStopping.Register(() => serverLifetime.Shutdown());
+
+// SIGHUP config reload (config_reload_unix.go): re-read the startup config
+// file and re-apply only server.ip_access_control. Registered after the
+// lifetime callback so shutdown stops the signal loop first, matching the
+// reference's hook ordering.
+var configReload = new ConfigReloadService(
+    (IConfigurationRoot)app.Configuration,
+    ipAccessControl,
+    app.Services.GetRequiredService<ILogger<ConfigReloadService>>(),
+    ConfigReloadService.FindConfigFile(
+        app.Environment.ContentRootPath,
+        app.Environment.EnvironmentName));
+app.Lifetime.ApplicationStarted.Register(configReload.Start);
+app.Lifetime.ApplicationStopping.Register(configReload.Stop);
 
 // server.request_timeout / server.llm_request_timeout (conf/conf.go:223-224),
 // read once at startup like the reference's immutable server.Config.
