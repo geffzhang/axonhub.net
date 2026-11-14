@@ -263,6 +263,45 @@ public sealed class AdminChannelUpdateEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UpdateChannelNormalizesResponsesEndpointsAndModelProtocols()
+    {
+        var channel = SeedChannel(name: "Alpha", baseUrl: "wss://gateway.example/ws");
+
+        await QueryDataAsync(
+            UpdateMutation,
+            new
+            {
+                id = Gid(channel.Id),
+                input = new
+                {
+                    baseURL = "wss://gateway.example/ws",
+                    endpoints = new[] { new { apiFormat = "openai/responses" } },
+                    settings = new
+                    {
+                        modelProtocols = new[]
+                        {
+                            new
+                            {
+                                model = "m",
+                                apiFormats = new[] { "openai/responses" },
+                                enabled = true,
+                            },
+                        },
+                    },
+                },
+            });
+
+        var update = Assert.Single(_channels.UpdateCalls).Update;
+        Assert.Equal("""[{"api_format":"openai/responses-ws"}]""", update.EndpointsJson);
+
+        using var settings = JsonDocument.Parse(update.SettingsJson!);
+        var protocol = settings.RootElement.GetProperty("modelProtocols")[0];
+        Assert.Equal(
+            "openai/responses-ws",
+            protocol.GetProperty("apiFormats")[0].GetString());
+    }
+
+    [Fact]
     public async Task UpdateChannelCanonicalizesTheCommandCodeCookie()
     {
         var channel = SeedChannel(

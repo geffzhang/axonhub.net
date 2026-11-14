@@ -216,6 +216,34 @@ public sealed class ChannelLifecycleService(
             throw new InvalidOperationException(error);
         }
 
+        // Live createChannel validates the supplied endpoints before the
+        // settings block, normalizes model protocols against the new channel
+        // and rewrites the endpoint list (live channel.go:573-578).
+        var baseUrl = command.BaseUrl ?? string.Empty;
+        error = ChannelValidation.ValidateEndpointsForChannelType(
+            command.Type,
+            command.Endpoints,
+            baseUrl);
+        if (error is not null)
+        {
+            throw new InvalidOperationException("invalid endpoints: " + error);
+        }
+
+        var endpointsJson = command.Endpoints is null
+            ? null
+            : GoJson.MarshalToString(command.Endpoints);
+        command.Settings = NormalizeModelProtocols(
+            command.Settings,
+            endpointsJson,
+            baseUrl,
+            out _);
+        if (command.Endpoints is not null)
+        {
+            command.Endpoints = ChannelValidation.NormalizeEndpoints(
+                command.Endpoints,
+                baseUrl);
+        }
+
         if (command.Settings is { } settings)
         {
             // A new channel may intentionally be created before its model list
@@ -282,24 +310,16 @@ public sealed class ChannelLifecycleService(
             error = ChannelValidation.ValidateModelProtocols(
                 settings,
                 command.Type,
-                command.Endpoints);
+                command.Endpoints,
+                baseUrl);
             if (error is not null)
             {
                 throw new InvalidOperationException("invalid model protocols: " + error);
             }
         }
 
-        // Frozen createChannel validates the supplied endpoints after the
-        // settings block (channel.go:611-615).
-        if (command.Endpoints is { } endpoints)
-        {
-            error = ChannelValidation.ValidateEndpointsForChannelType(command.Type, endpoints);
-            if (error is not null)
-            {
-                throw new InvalidOperationException("invalid endpoints: " + error);
-            }
-        }
-
+        // Live createChannel validates Vertex bindings after the settings block
+        // (live channel.go:627).
         error = ChannelValidation.ValidateVertexApiKeys(command.Type, command.Credentials);
         if (error is not null)
         {
@@ -931,41 +951,71 @@ public sealed class ChannelLifecycleService(
             }
         }
 
-        // Per-model protocol overrides must reference the effective endpoint
-        // surface; settings may come from the input or the stored snapshot.
-        var protocolSettings = command.Settings;
-        if (protocolSettings is null && (command.Endpoints is not null || command.Type is not null))
-        {
-            protocolSettings = StoredSettings(
-                "failed to load channel for model protocol validation: ");
-        }
-
-        if (protocolSettings is { ModelProtocols.Count: > 0 })
-        {
-            var channelType = command.Type ?? snapshot.Type;
-            var endpoints = command.Endpoints
-                ?? StoredEndpoints("failed to load channel for model protocol validation: ");
-
-            var error = ChannelValidation.ValidateModelProtocols(
-                protocolSettings,
-                channelType,
-                endpoints);
-            if (error is not null)
-            {
-                throw new InvalidOperationException("invalid model protocols: " + error);
-            }
-        }
-
-        if (command.Endpoints is not null || command.Type is not null)
+        // Live update validates the effective endpoints first, normalizes the
+        // model protocols and the endpoint list, then validates the normalized
+        // protocols against the effective surface (live channel.go:1049-1090).
+        if (command.Settings is not null
+            || command.Endpoints is not null
+            || command.Type is not null
+            || command.BaseUrl is not null)
         {
             var channelType = command.Type ?? snapshot.Type;
             var endpoints = command.Endpoints
                 ?? StoredEndpoints("failed to load channel for endpoint validation: ");
 
-            var error = ChannelValidation.ValidateEndpointsForChannelType(channelType, endpoints);
+            var error = ChannelValidation.ValidateEndpointsForChannelType(
+                channelType,
+                endpoints,
+                effectiveBaseUrl);
             if (error is not null)
             {
                 throw new InvalidOperationException("invalid endpoints: " + error);
+            }
+
+            var protocolSettings = command.Settings;
+            string? protocolEndpointsJson;
+            string? protocolBaseUrl;
+            if (protocolSettings is null)
+            {
+                protocolSettings = StoredSettings(
+                    "failed to load channel for model protocol validation: ");
+                protocolEndpointsJson = snapshot.Endpoints;
+                protocolBaseUrl = snapshot.BaseUrl;
+            }
+            else
+            {
+                protocolEndpointsJson = endpoints is null
+                    ? null
+                    : GoJson.MarshalToString(endpoints);
+                protocolBaseUrl = effectiveBaseUrl;
+            }
+
+            protocolSettings = NormalizeModelProtocols(
+                protocolSettings,
+                protocolEndpointsJson,
+                protocolBaseUrl,
+                out var normalizedProtocolsChanged);
+
+            error = ChannelValidation.ValidateModelProtocols(
+                protocolSettings,
+                channelType,
+                endpoints,
+                effectiveBaseUrl);
+            if (error is not null)
+            {
+                throw new InvalidOperationException("invalid model protocols: " + error);
+            }
+
+            if (command.Settings is not null || normalizedProtocolsChanged)
+            {
+                command.Settings = protocolSettings;
+            }
+
+            if (command.Endpoints is not null)
+            {
+                command.Endpoints = ChannelValidation.NormalizeEndpoints(
+                    command.Endpoints,
+                    effectiveBaseUrl);
             }
         }
 
@@ -1650,7 +1700,11 @@ public sealed class ChannelLifecycleService(
             throw new InvalidOperationException("failed to get channel: " + ex.Message, ex);
         }
 
-        settings = NormalizeModelProtocols(settings, snapshot);
+        settings = NormalizeModelProtocols(
+            settings,
+            snapshot.Endpoints,
+            snapshot.BaseUrl,
+            out _);
 
         error = ChannelValidation.ValidateModelProtocols(
             settings,
@@ -1697,10 +1751,13 @@ public sealed class ChannelLifecycleService(
     /// </summary>
     private static ChannelSettingsDraft? NormalizeModelProtocols(
         ChannelSettingsDraft? settings,
-        ChannelRecord snapshot)
+        string? endpointsJson,
+        string? baseUrl,
+        out bool changed)
     {
+        changed = false;
         if (settings?.ModelProtocols is not { Count: > 0 } protocols
-            || ChannelEndpoints.LegacyResponsesFormat(snapshot.Endpoints, snapshot.BaseUrl)
+            || ChannelEndpoints.LegacyResponsesFormat(endpointsJson, baseUrl)
                 != ApiFormats.OpenAIResponseWebSocket)
         {
             return settings;
@@ -1709,19 +1766,29 @@ public sealed class ChannelLifecycleService(
         var normalized = new List<ModelProtocolDraft>(protocols.Count);
         foreach (var protocol in protocols)
         {
+            var formats = protocol.ApiFormats.ToArray();
+            for (var i = 0; i < formats.Length; i++)
+            {
+                if (formats[i] == ApiFormats.OpenAIResponse)
+                {
+                    formats[i] = ApiFormats.OpenAIResponseWebSocket;
+                    changed = true;
+                }
+            }
+
             normalized.Add(new ModelProtocolDraft
             {
                 Model = protocol.Model,
-                ApiFormats = protocol.ApiFormats
-                    .Select(format => format == ApiFormats.OpenAIResponse
-                        ? ApiFormats.OpenAIResponseWebSocket
-                        : format)
-                    .ToArray(),
+                ApiFormats = formats,
                 Enabled = protocol.Enabled,
             });
         }
 
-        settings.ModelProtocols = normalized;
+        if (changed)
+        {
+            settings.ModelProtocols = normalized;
+        }
+
         return settings;
     }
 

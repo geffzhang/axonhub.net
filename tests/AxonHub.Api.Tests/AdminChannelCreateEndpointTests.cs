@@ -563,7 +563,7 @@ public sealed class AdminChannelCreateEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task EndpointValidationRunsAfterTheSettingsBlock()
+    public async Task EndpointValidationRunsBeforeTheSettingsBlock()
     {
         async Task<string> ErrorAsync(object endpoints, object? settings = null)
         {
@@ -621,14 +621,59 @@ public sealed class AdminChannelCreateEndpointTests : IAsyncLifetime
                 new { apiFormat = "openai/chat_completions", path = "v1" },
             }));
 
-        // The settings block runs first, so its error wins over an endpoint one.
+        // Live createChannel validates endpoints first, so its error wins over a
+        // settings one.
         Assert.Equal(
-            "invalid rate limit: rpm must be >= 0",
+            "invalid endpoints: endpoint[0]: unsupported api_format \"bogus/format\"",
             await ErrorAsync(
                 new[] { new { apiFormat = "bogus/format" } },
                 new { rateLimit = new { rpm = -1 } }));
 
         Assert.Empty(_channels.CreatedChannels);
+    }
+
+    [Fact]
+    public async Task CreateChannelNormalizesResponsesEndpointsAndModelProtocols()
+    {
+        await QueryDataAsync(
+            CreateMutation,
+            new
+            {
+                input = new
+                {
+                    type = "openai",
+                    name = "Normalized",
+                    baseURL = "wss://gateway.example/ws",
+                    credentials = new { apiKey = "k" },
+                    supportedModels = Array.Empty<string>(),
+                    defaultTestModel = string.Empty,
+                    endpoints = new object[]
+                    {
+                        new { apiFormat = "openai/responses" },
+                    },
+                    settings = new
+                    {
+                        modelProtocols = new[]
+                        {
+                            new
+                            {
+                                model = "m",
+                                apiFormats = new[] { "openai/responses" },
+                                enabled = true,
+                            },
+                        },
+                    },
+                },
+            });
+
+        var record = Assert.Single(_channels.CreatedChannels);
+        Assert.Equal("""[{"api_format":"openai/responses-ws"}]""", record.Endpoints);
+
+        using var settings = JsonDocument.Parse(record.Settings!);
+        var protocol = settings.RootElement.GetProperty("modelProtocols")[0];
+        Assert.Equal(
+            "openai/responses-ws",
+            protocol.GetProperty("apiFormats")[0].GetString());
     }
 
     [Fact]
