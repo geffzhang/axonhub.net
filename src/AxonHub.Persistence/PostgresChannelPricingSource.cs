@@ -16,7 +16,9 @@ public interface IChannelPricingSource
 }
 
 /// <summary>PostgreSQL implementation of <see cref="IChannelPricingSource"/>.</summary>
-public sealed class PostgresChannelPricingSource(IAxonHubDbContextFactory dbFactory) : IChannelPricingSource
+public sealed class PostgresChannelPricingSource(
+    IAxonHubDbContextFactory dbFactory,
+    SystemValueCache? systemValueCache = null) : IChannelPricingSource
 {
     public IReadOnlyList<ChannelModelPriceRecord> ListEnabledChannelPrices(long channelId)
     {
@@ -30,6 +32,9 @@ public sealed class PostgresChannelPricingSource(IAxonHubDbContextFactory dbFact
     public string? GetSystemValue(string key)
     {
         using var context = dbFactory.CreateDbContext();
-        return new SystemStore(context).GetByKeyAsync(key).GetAwaiter().GetResult()?.Value;
+        ISystemStore store = systemValueCache is null
+            ? new SystemStore(context)
+            : new CachingSystemStore(new SystemStore(context), systemValueCache);
+        return store.GetByKeyAsync(key).GetAwaiter().GetResult()?.Value;
     }
 }

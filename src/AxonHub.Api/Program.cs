@@ -289,7 +289,12 @@ builder.Services.AddScoped<IProjectStore, ProjectStore>();
 builder.Services.AddScoped<IUserStore, UserStore>();
 builder.Services.AddScoped<IApiKeyStore, ApiKeyStore>();
 builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
-builder.Services.AddScoped<ISystemStore, SystemStore>();
+builder.Services.AddSingleton<SystemValueCache>();
+builder.Services.AddScoped<SystemStore>();
+builder.Services.AddScoped<ISystemStore>(static services =>
+    new CachingSystemStore(
+        services.GetRequiredService<SystemStore>(),
+        services.GetRequiredService<SystemValueCache>()));
 builder.Services.AddScoped<IOidcIdentityAdminStore, OidcIdentityAdminStore>();
 builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminService>();
 // First-run initialization (biz/system.go:698-846): owner user, default

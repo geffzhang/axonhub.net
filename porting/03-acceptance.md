@@ -2198,6 +2198,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §234（2026-11-14）通道测试的加载期 JSON 校验。C157 转 resolved：`ChannelTestService.LoadChannelAsync` 在 `SpecifiedChannelCandidateFactory.LoadChannelAsync` 之后校验 `policies` 与 `disabled_api_keys` 两列，非法 JSON 抛 `failed to get channel for test: ...`，使 `TestChannel` / `TestSingleApiKey` / `TestChannelApiKeys` 三个入口与参照 ent 的加载失败一致；合法数据下 stream 策略与禁用 key 行为不变。错误内层文案来自 System.Text.Json，归入既有 JSON 文案差异（C002/C064），失败模式与前缀一致。定向 ChannelTest 63/63；未跑 Api 全量（原宽松语义用例改为两列非法输入的 Theory）。台账 307 条（198 accepted / 109 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§235（2026-11-15）系统设置的进程内缓存。C029 转 resolved：新增 `SystemValueCache`（单例）与 `CachingSystemStore` 装饰器；`ISystemStore` 的 DI 注册改为装饰器，`GetByKeyAsync` 命中缓存直接返回，写方法（Create / TryCreate / Set / CreateIfAbsent / UpdateValueIfUnchanged）成功后清空缓存；请求链 recorder 与 `PostgresChannelPricingSource` 共用同一缓存。缺失键不缓存；外部直接改库在写入或重启前不可见，与参照 `SystemService.Cache` 的进程内范围一致。定向 `CachingSystemStoreTests` 4/4、`ChannelModelPriceStoreTests` + cache 30/30、Api `ConfigurationSurfaceTests` 10/10（Program DI 编译）；未跑 Api 全量（新增 Persistence 4 例待下次全量计入）。台账 307 条（197 accepted / 110 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
