@@ -287,7 +287,12 @@ builder.Services.AddScoped<AxonHubDbContext>(static services =>
     services.GetRequiredService<IAxonHubDbContextFactory>().CreateDbContext());
 builder.Services.AddScoped<IProjectStore, ProjectStore>();
 builder.Services.AddScoped<IUserStore, UserStore>();
-builder.Services.AddScoped<IApiKeyStore, ApiKeyStore>();
+builder.Services.AddSingleton<ApiKeyCache>();
+builder.Services.AddScoped<ApiKeyStore>();
+builder.Services.AddScoped<IApiKeyStore>(static services =>
+    new CachingApiKeyStore(
+        services.GetRequiredService<ApiKeyStore>(),
+        services.GetRequiredService<ApiKeyCache>()));
 builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
 builder.Services.AddSingleton<SystemValueCache>();
 builder.Services.AddScoped<SystemStore>();

@@ -2200,6 +2200,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §235（2026-11-15）系统设置的进程内缓存。C029 转 resolved：新增 `SystemValueCache`（单例）与 `CachingSystemStore` 装饰器；`ISystemStore` 的 DI 注册改为装饰器，`GetByKeyAsync` 命中缓存直接返回，写方法（Create / TryCreate / Set / CreateIfAbsent / UpdateValueIfUnchanged）成功后清空缓存；请求链 recorder 与 `PostgresChannelPricingSource` 共用同一缓存。缺失键不缓存；外部直接改库在写入或重启前不可见，与参照 `SystemService.Cache` 的进程内范围一致。定向 `CachingSystemStoreTests` 4/4、`ChannelModelPriceStoreTests` + cache 30/30、Api `ConfigurationSurfaceTests` 10/10（Program DI 编译）；未跑 Api 全量（新增 Persistence 4 例待下次全量计入）。台账 307 条（197 accepted / 110 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§236（2026-11-15）API key 鉴权的进程内缓存。C026 转 resolved：新增 `ApiKeyCache`（单例）与 `CachingApiKeyStore` 装饰器；`IApiKeyStore` 的 DI 注册改为装饰器，`GetByKeyAsync` 命中缓存直接返回，`Create` / `Update` / `BulkUpdateStatus` 成功后清空缓存；`GetById` / `List` / `Count` / `Exists` 与项目读取仍直达数据库。缺失 key 不缓存；外部直接改库在写入或重启前不可见，与参照的进程内缓存范围一致。用户停用/删除 personal key 的级联仍未移植（C176(6)），该路径不产生写。定向 `CachingApiKeyStoreTests` 5/5、Api `ConfigurationSurfaceTests` 10/10（Program DI 编译）；未跑 Api 全量（新增 Persistence 5 例待下次全量计入）。台账 307 条（196 accepted / 111 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
