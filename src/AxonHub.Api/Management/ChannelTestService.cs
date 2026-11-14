@@ -987,13 +987,48 @@ public sealed class ChannelTestService(
     /// (channel.go:397-418); see <see cref="SpecifiedChannelCandidateFactory"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">The channel does not exist.</exception>
-    private Task<ChannelRecord> LoadChannelAsync(
+    private async Task<ChannelRecord> LoadChannelAsync(
         long channelId,
         CancellationToken cancellationToken)
-        => SpecifiedChannelCandidateFactory.LoadChannelAsync(
-            channels,
-            channelId,
-            cancellationToken);
+    {
+        var channel = await SpecifiedChannelCandidateFactory.LoadChannelAsync(
+                channels,
+                channelId,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        // ent decodes the channel's JSON columns while loading it; malformed
+        // policies or disabled_api_keys fail the whole load. The port reads the
+        // raw columns, so validate them here to keep the test endpoint's
+        // failure mode aligned (C157).
+        try
+        {
+            ValidateStoredColumns(channel);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get channel for test: " + ex.Message,
+                ex);
+        }
+
+        return channel;
+    }
+
+    private static void ValidateStoredColumns(ChannelRecord channel)
+    {
+        if (!string.IsNullOrWhiteSpace(channel.Policies)
+            && !string.Equals(channel.Policies, "null", StringComparison.Ordinal))
+        {
+            LlmJson.Deserialize<ChannelPoliciesDraft>(channel.Policies);
+        }
+
+        if (!string.IsNullOrWhiteSpace(channel.DisabledApiKeys)
+            && !string.Equals(channel.DisabledApiKeys, "null", StringComparison.Ordinal))
+        {
+            ChannelWriteSerialization.ParseDisabledApiKeys(channel.DisabledApiKeys);
+        }
+    }
 
     /// <summary>Port of objects.ChannelPolicies.Stream == "require".</summary>
     private static bool StreamRequired(string? policiesJson)

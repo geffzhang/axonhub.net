@@ -2196,6 +2196,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §233（2026-11-14）safeguards 评审器日志。C264 转 resolved：`SafeguardsEndpointOptions` 新增可空 `ILogger<SafeguardsEvaluator>`，Anthropic Messages 处理器从 `ILoggerFactory` 注入；`SafeguardsEvaluator` 用 `LoggerMessage.Define` 在 live `evaluator.go:287,301` 的两处输出 warning——denial escalation assessed（Model / ToolId / PreviousOutcome / Outcome）与 reviewer fallback（Model / NextModel / Reason / PendingTools）；未注入 logger 时保持静默。classifier 的 operation name "safeguards-classifier" 未设置，拆到新登记的 C307（accepted）。定向 Safeguards 100/100；未跑 Api 全量，新增 Api 1 例待下次全量计入。台账 307 条（199 accepted / 108 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§234（2026-11-14）通道测试的加载期 JSON 校验。C157 转 resolved：`ChannelTestService.LoadChannelAsync` 在 `SpecifiedChannelCandidateFactory.LoadChannelAsync` 之后校验 `policies` 与 `disabled_api_keys` 两列，非法 JSON 抛 `failed to get channel for test: ...`，使 `TestChannel` / `TestSingleApiKey` / `TestChannelApiKeys` 三个入口与参照 ent 的加载失败一致；合法数据下 stream 策略与禁用 key 行为不变。错误内层文案来自 System.Text.Json，归入既有 JSON 文案差异（C002/C064），失败模式与前缀一致。定向 ChannelTest 63/63；未跑 Api 全量（原宽松语义用例改为两列非法输入的 Theory）。台账 307 条（198 accepted / 109 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

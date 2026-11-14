@@ -578,30 +578,35 @@ public sealed class ChannelTestServiceTests(GrainClusterFixture fixture)
         Assert.Equal(0, executor.Calls);
     }
 
-    [Fact]
-    public async Task TestChannelAPIKeysTreatsMalformedPolicyAndDisabledColumnsAsAbsent()
+    [Theory]
+    [InlineData("not-json", "[]")]
+    [InlineData("[]", "not-json")]
+    public async Task TestChannelAPIKeysRejectsMalformedPolicyAndDisabledColumns(
+        string policies,
+        string disabledApiKeys)
     {
         // ent decodes policies / disabled_api_keys on load and fails the whole
-        // channel; the port reads raw columns and only needs them for the
-        // stream policy and disable markers, so bad JSON means "absent"
-        // (difference C157).
+        // channel; the port validates the raw columns at the same boundary
+        // (C157).
         SeedPrompts();
         var channel = SeedChannel(
             credentials: """{"apiKeys":["test-key-1","test-key-2"]}""",
-            policies: "not-json",
-            disabledApiKeys: "not-json");
+            policies: policies,
+            disabledApiKeys: disabledApiKeys);
         var executor = new ScriptedExecutor
         {
             OnDo = (_, _, _) => Json(OpenAiCompletionBody),
         };
         var service = NewService(executor);
 
-        var result = await service.TestChannelApiKeysAsync(channel.Id, null);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.TestChannelApiKeysAsync(channel.Id, null));
 
-        Assert.Equal(2, result.SuccessCount);
-        Assert.Equal(0, result.FailedCount);
-        Assert.All(result.Results, item => Assert.False(item.Disabled));
-        Assert.Equal(2, executor.Calls);
+        Assert.StartsWith(
+            "failed to get channel for test: ",
+            error.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(0, executor.Calls);
     }
 
     [Fact]
