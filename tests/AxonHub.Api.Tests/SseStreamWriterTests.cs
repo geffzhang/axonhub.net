@@ -2,6 +2,7 @@ using System.Text;
 using AxonHub.Api.Http;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Streams;
 using Microsoft.AspNetCore.Http;
 
 namespace AxonHub.Api.Tests;
@@ -240,6 +241,82 @@ public sealed class SseStreamWriterTests
             + "\"type\":\"upstream_error\"},\"request_id\":\"\"}",
             Encoding.UTF8.GetString(body.ToArray()),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcknowledgesDeliveryOnlyAfterTheTerminalEventIsWritten()
+    {
+        var (context, _) = NewContext();
+        var stream = new CapabilityListStream(
+        [
+            TestChannels.Data("hello"),
+            TestChannels.Data("[DONE]"),
+        ]);
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.True(stream.DeliveryAcknowledged);
+    }
+
+    [Fact]
+    public async Task DoesNotAcknowledgeDeliveryWhenTheStreamNeverTerminates()
+    {
+        var (context, body) = NewContext();
+        var stream = new CapabilityListStream([TestChannels.Data("hello")]);
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.False(stream.DeliveryAcknowledged);
+        Assert.Contains("upstream_stream_interrupted", Encoding.UTF8.GetString(body.ToArray()), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A transport-shaped stream: the writer's gate must see the terminal flag
+    /// and acknowledge the request chain exactly like InboundPersistentStream's
+    /// Deliver fallback does.
+    /// </summary>
+    private sealed class CapabilityListStream(IReadOnlyList<StreamEvent> items)
+        : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary
+    {
+        private int _index;
+
+        public StreamEvent? Current { get; private set; }
+
+        public Exception? Err => null;
+
+        public bool DeliveryAcknowledged { get; private set; }
+
+        public bool Next()
+        {
+            if (_index >= items.Count)
+            {
+                return false;
+            }
+
+            Current = items[_index];
+            _index++;
+            return true;
+        }
+
+        public void AcknowledgeDelivery() => DeliveryAcknowledged = true;
+
+        public async Task<Exception?> DeliverAsync(
+            Func<Task<DeliveryWrite>> write,
+            CancellationToken cancellationToken)
+        {
+            var result = await write();
+            if (result.Error is null && result.Terminal)
+            {
+                AcknowledgeDelivery();
+            }
+
+            return result.Error;
+        }
+
+        public void Dispose()
+        {
+            // Nothing to release.
+        }
     }
 
     private sealed class TimedOutFeature(CancellationToken token) : IRequestTimeoutFeature

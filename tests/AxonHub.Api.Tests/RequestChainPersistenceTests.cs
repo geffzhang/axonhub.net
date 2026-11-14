@@ -326,6 +326,13 @@ public sealed class RequestChainPersistenceTests(GrainClusterFixture fixture)
             }
         }
 
+        // The reference only finalizes the request as completed when the
+        // transport wrote the terminal event through the delivery gate
+        // (InboundPersistentStream.AcknowledgeDelivery). A bare consumer that
+        // never acknowledges leaves the row incomplete, so acknowledge here the
+        // way every stream writer does.
+        result.Stream.AcknowledgeDelivery();
+
         result.Stream.Dispose();
 
         Assert.Equal("[DONE]", Encoding.UTF8.GetString(events[^1].Data));

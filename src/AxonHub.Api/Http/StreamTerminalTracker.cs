@@ -30,6 +30,9 @@ public sealed class StreamTerminalTracker(int expectedChoices)
 
     public bool Terminal => _terminal;
 
+    /// <summary>The request's expected choice count (streams.ExpectedStreamChoices).</summary>
+    public int ExpectedChoices => expectedChoices;
+
     /// <summary>
     /// Port of StreamTerminalTracker.AllChoicesFinished: every expected choice
     /// reported a finish reason. Aggregation alone cannot prove a multi-choice

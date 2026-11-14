@@ -953,6 +953,11 @@ public sealed class ChatCompletionOrchestrator
         // request (orchestrator.go's finalizeTransportRequest registration).
         options.Middlewares.Add(new TransportRequestFinalizerMiddleware(outbound));
 
+        // The delivery lifecycle is shared by the client-facing persistent
+        // stream and the pass-through gate (orchestrator.go creates it before
+        // the middleware chain; stream_lifecycle.go:37-55).
+        var deliveryState = _requestChainRecorder is not null ? new RequestDeliveryState() : null;
+
         // Response pass-through middlewares run before persistence so the raw
         // provider response/stream is what the request row stores when
         // pass-through is enabled (orchestrator.go:258-263).
@@ -960,7 +965,8 @@ public sealed class ChatCompletionOrchestrator
         options.Middlewares.Add(new PassThroughStreamMiddleware(
             outbound,
             passThroughSettings,
-            cancellationToken));
+            cancellationToken,
+            deliveryState));
 
         // Registered after the metrics middleware so it runs first on the way
         // out, matching the reference order (persistRequestExecution is the last
@@ -979,7 +985,8 @@ public sealed class ChatCompletionOrchestrator
                 performance,
                 identity,
                 _usageCostService,
-                _previousChannels);
+                _previousChannels,
+                deliveryState);
             options.Middlewares.Add(persistence);
         }
 
@@ -1074,16 +1081,19 @@ public sealed class ChatCompletionOrchestrator
             {
                 // The stream outlives this method. Stop the attempt's transformer
                 // when the consumer disposes the stream — after completion, error
-                // or cancellation (C072).
-                IStream<StreamEvent> stream = new DisposeCallbackStream<StreamEvent>(
-                    result.EventStream!,
-                    outbound.Stop);
+                // or cancellation (C072). The teardown decorator only forwards the
+                // base stream API, so preserve the delivery capabilities of the
+                // persistent inbound stream across it (orchestrator.go:417-424).
+                var source = result.EventStream!;
+                IStream<StreamEvent> stream = DeliveryCapabilities.Preserve(
+                    source,
+                    new DisposeCallbackStream<StreamEvent>(source, outbound.Stop));
 
                 // The teardown wrapper is transparent, but it hides the
                 // responseHeadersProvider interface the pipeline attached to the
                 // stream (httpclient.WithResponseHeaders); re-attach the metadata
                 // so api.writeForwardResponseHeaders can read it (C094).
-                var headers = ResponseHeaders.GetResponseHeaders(result.EventStream);
+                var headers = ResponseHeaders.GetResponseHeaders(source);
                 if (headers is not null)
                 {
                     stream = ResponseHeaders.WithResponseHeaders(stream, headers);
@@ -1095,7 +1105,9 @@ public sealed class ChatCompletionOrchestrator
                 if (responsesContinuation is not null)
                 {
                     stream = ResponseHeaders.WithResponseHeaders(
-                        new ResponsesAcceptedStream(stream, responsesContinuation),
+                        DeliveryCapabilities.Preserve(
+                            stream,
+                            new ResponsesAcceptedStream(stream, responsesContinuation)),
                         headers);
                     responsesContinuation = null;
                 }

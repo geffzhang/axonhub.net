@@ -622,9 +622,10 @@ response.created / in_progress / completed 三事件与本地 continuation 合�
 错误信封与 stream_id 回显、协议 / 处理器错误不关闭连接、非升级 GET 400
 `websocket upgrade required`。参照的 2.5 分钟协议 ping / 5 分钟 read deadline 由 ASP.NET
 keep-alive 代替（C252），per-event `LLMRequestTimeout` 由每个 response.create 事件施加
-（C253 于 §214 resolved），`shared.ResponsesLane` continuation lease 未移植（C254；基线
-`responsesSessionStore` 已由 §215 / C288 移植），`writeStreamDelivery` 交付边界未移植
-（C255），均登记为 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
+（C253 于 §214 resolved），`shared.ResponsesLane` continuation lease 已由 §216 / C289 移植
+（基线 `responsesSessionStore` 由 §215 / C288 移植），`writeStreamDelivery` 交付边界已由
+§219 / C292 移植（WebSocket 在 response.completed 后继续读到 EOF），streamLifecycle /
+tail accounting 残余保留为 C255 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
 实现按 gorilla `SetReadLimit` 语义以 CloseMessageTooBig 关闭。
 
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
@@ -2090,6 +2091,20 @@ C091 的静默结束（Err 由 requestToken 兜底）。测试：PassThroughStre
 定向运行 Api Responses|PassThrough 354、Api WebSocket|Codex|ChannelTest 339 通过；未跑 Api
 全量回归。台账：C291 新增 resolved，C290 收窄，C091 预算表述更新；lint 通过；
 02-differences.md 已重新生成；291 条（199 accepted / 0 gap / 92 resolved）。
+
+§219（2026-11-14）交付能力与交付门（C292）。按 live f272549f 移植 DeliveryAcknowledger /
+DeliveryBoundary / FinalizationWaiter / ExpectedStreamChoices 四个可选能力：Llm 的
+DeliveryCapabilities（Deliver 优先 boundary，Preserve 动态转发 expected）与 CancelOnCloseStream、
+ResponseHeadersStream；Api 的 PrimedStream、Safeguards、LivePreview inbound、ResponsesSessionStream、
+PassThroughDeliveryStream、RequestRawStream 转发；RequestDeliveryState（closed/一次性 ack/finalized）
+与 StreamOutcome.deliveryDecision（未 ack 的 completed → Incomplete + ErrStreamIncomplete，
+deadlineBeforeTerminal 优先 Failed）；SSE/Binary/Gemini/WS 写侧 gate 与终端 ack、SSE finally 等待
+FinalizationWaiter、ChannelTest 的 terminal 判定与 ack、pass-through 门的 close/drain 顺序。残余
+（streamLifecycle 的 execution/shutdown 上下文分离、tail accounting 的 256 事件 / 1 MiB 限额、端口
+Dispose 顺序、pass-through 下 request chunk 来源）保留在 C255 accepted。测试：DeliveryCapabilitiesTests
+5、StreamDeliveryTests 12、SseStreamWriterTests +2、WS 与 ChannelTest 各 +1；定向运行 Llm 390、
+Api 942 通过；未跑 Api 全量回归。台账：C292 新增 resolved，C255 收窄；lint 通过；
+02-differences.md 已重新生成；292 条（199 accepted / 0 gap / 93 resolved）。
 
 ## 公开 API 审计
 

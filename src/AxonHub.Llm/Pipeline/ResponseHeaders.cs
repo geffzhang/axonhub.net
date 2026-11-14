@@ -111,14 +111,22 @@ public interface IResponseHeadersProvider
 }
 
 /// <summary>Port of <c>responseHeadersStream</c>.</summary>
-public sealed class ResponseHeadersStream : IStream<StreamEvent>, IResponseHeadersProvider
+public sealed class ResponseHeadersStream
+    : IStream<StreamEvent>, IResponseHeadersProvider, IDeliveryAcknowledger, IDeliveryBoundary,
+      IFinalizationWaiter, IExpectedStreamChoices
 {
     private readonly IStream<StreamEvent> _stream;
+    private readonly IDeliveryAcknowledger? _observer;
+    private readonly IFinalizationWaiter? _waiter;
+    private readonly int _expectedChoices;
 
     public ResponseHeadersStream(IStream<StreamEvent> stream, Dictionary<string, List<string>> headers)
     {
         _stream = stream;
         ResponseHeaders = headers;
+        _observer = stream as IDeliveryAcknowledger;
+        _waiter = stream as IFinalizationWaiter;
+        _expectedChoices = stream is IExpectedStreamChoices choices ? choices.ExpectedStreamChoices : 0;
     }
 
     public Dictionary<string, List<string>> ResponseHeaders { get; }
@@ -127,7 +135,30 @@ public sealed class ResponseHeadersStream : IStream<StreamEvent>, IResponseHeade
 
     public Exception? Err => _stream.Err;
 
+    public int ExpectedStreamChoices => _expectedChoices;
+
+    public bool DeliveryAcknowledged => _observer?.DeliveryAcknowledged ?? false;
+
     public bool Next() => _stream.Next();
+
+    public void AcknowledgeDelivery() => _observer?.AcknowledgeDelivery();
+
+    public Task<Exception?> DeliverAsync(
+        Func<Task<DeliveryWrite>> write,
+        CancellationToken cancellationToken)
+    {
+        // Like the reference, the boundary is looked up on the wrapped stream
+        // (it is the transport gate), while acknowledgement state belongs to the
+        // observer captured at construction.
+        if (_stream is IDeliveryBoundary boundary)
+        {
+            return boundary.DeliverAsync(write, cancellationToken);
+        }
+
+        return DeliveryCapabilities.DeliverWithoutBoundaryAsync(_observer, write);
+    }
+
+    public void WaitForFinalization() => _waiter?.WaitForFinalization();
 
     public void Dispose() => _stream.Dispose();
 }

@@ -47,6 +47,13 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
     private readonly RequestIdentity _identity;
     private readonly IPreviousChannelProvider? _previousChannels;
 
+    /// <summary>
+    /// Delivery facts shared with the pass-through gate (streamLifecycle in the
+    /// reference). Created by the orchestrator so both layers observe the same
+    /// acknowledgement.
+    /// </summary>
+    private readonly RequestDeliveryState _deliveryState;
+
     /// <summary>Per-request stream state shared by the inbound and outbound streams.</summary>
     private readonly RequestStreamState _streamState = new();
 
@@ -80,7 +87,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         ChannelPerformanceState? performance = null,
         RequestIdentity? identity = null,
         IUsageCostService? usageCostService = null,
-        IPreviousChannelProvider? previousChannels = null)
+        IPreviousChannelProvider? previousChannels = null,
+        RequestDeliveryState? deliveryState = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -99,9 +107,13 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         _performance = performance;
         _identity = identity ?? RequestIdentity.Default;
         _previousChannels = previousChannels;
+        _deliveryState = deliveryState ?? new RequestDeliveryState();
         _requestTerminalTracker = new StreamTerminalTracker(
             ExpectedStreamChoices.FromRequestBody(rawRequest.Body));
     }
+
+    /// <summary>The request's delivery state (streamLifecycle in the reference).</summary>
+    public RequestDeliveryState DeliveryState => _deliveryState;
 
     /// <summary>Port of persistRequest.OnInboundLlmRequest: create the request row once.</summary>
     public override LlmRequest TransformInboundLlmRequest(LlmRequest request)
@@ -467,6 +479,10 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
                 _requestFinalized = true;
             }
         });
+
+        // A failed pipeline never returns a stream, so no consumer will close
+        // the delivery state; release it here.
+        CloseRequestDelivery();
     }
 
     /// <summary>
@@ -809,6 +825,31 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
             ? _streamState.OutboundStreamTerminal
             : _requestTerminalState;
 
+    /// <summary>Port of InboundPersistentStream.AcknowledgeDelivery.</summary>
+    public void AcknowledgeRequestDelivery()
+    {
+        if (!_deliveryState.TryAcknowledgeDelivery())
+        {
+            return;
+        }
+
+        _requestOutcome.ObserveDeliveryAcknowledgement();
+        _streamState.DeliveryAcknowledged = true;
+    }
+
+    /// <summary>
+    /// Port of InboundPersistentStream.Deliver: the request's shared lifecycle
+    /// is the delivery boundary, so the acknowledgement belongs to the request
+    /// row even when the write went through a pass-through gate.
+    /// </summary>
+    private Task<Exception?> DeliverRequestAsync(
+        Func<Task<DeliveryWrite>> write,
+        CancellationToken cancellationToken)
+        => _deliveryState.DeliverAsync(write, cancellationToken);
+
+    /// <summary>Port of the delivery-state half of InboundPersistentStream.Close.</summary>
+    public void CloseRequestDelivery() => _deliveryState.MarkClosed();
+
     /// <summary>Port of InboundPersistentStream.Close.</summary>
     private void FinalizeRequestStream(Exception? streamError)
     {
@@ -824,18 +865,34 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
         outcome.ObserveTransportError(streamError);
         outcome.ObserveContextError(contextError);
+
+        // The lifecycle acknowledgement is authoritative at close time; the
+        // pass-through gate may have acknowledged through the shared state
+        // without going through AcknowledgeRequestDelivery.
+        if (_deliveryState.DeliveryAcknowledged)
+        {
+            outcome.ObserveDeliveryAcknowledgement();
+            _streamState.DeliveryAcknowledged = true;
+        }
+
+        var deliveryDecision = outcome.DeliveryDecision();
+        var deliveryBlocked = outcome.FinalDecision().State == StreamTerminalState.Completed
+            && deliveryDecision.State != StreamTerminalState.Completed;
         _requestTerminalState = FinalRequestTerminalState();
 
         if (outcome.HasFinalEvidence)
         {
-            _requestTerminalState = outcome.FinalState();
+            _requestTerminalState = deliveryDecision.State;
         }
 
         TryPersist(() =>
         {
             var now = _timeProvider.GetUtcNow();
 
-            if (_requestTerminalState != StreamTerminalState.None)
+            // A terminal event that never reached the downstream transport is
+            // not a completed request: persist the partial chunks and report
+            // the incomplete outcome instead of the provider's success.
+            if (_requestTerminalState != StreamTerminalState.None && !deliveryBlocked)
             {
                 PersistRequestResponseChunks(now);
                 return;
@@ -881,10 +938,10 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
             if (outcome.HasFinalEvidence)
             {
-                _requestTerminalState = outcome.FinalState();
+                _requestTerminalState = outcome.DeliveryDecision().State;
             }
 
-            var decision = outcome.FinalDecision();
+            var decision = outcome.DeliveryDecision();
             if (_requestTerminalState == StreamTerminalState.None)
             {
                 _requestTerminalState = decision.State;
@@ -1162,6 +1219,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         public StreamTerminalState OutboundStreamTerminal { get; set; } = StreamTerminalState.None;
 
         public bool CleanEofCompletionEvidence { get; set; }
+
+        public bool DeliveryAcknowledged { get; set; }
     }
 
     /// <summary>Port of OutboundPersistentStream's stream surface.</summary>
@@ -1207,7 +1266,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
     /// <summary>Port of InboundPersistentStream's stream surface.</summary>
     private sealed class RequestRawStream(IStream<StreamEvent> stream, RequestChainPersistenceMiddleware owner)
-        : IStream<StreamEvent>
+        : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary, IFinalizationWaiter,
+          IExpectedStreamChoices
     {
         private bool _disposed;
 
@@ -1223,7 +1283,20 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
         public Exception? Err => stream.Err;
 
+        public bool DeliveryAcknowledged => owner._deliveryState.DeliveryAcknowledged;
+
+        public int ExpectedStreamChoices => owner._requestTerminalTracker.ExpectedChoices;
+
         public bool Next() => stream.Next();
+
+        public void AcknowledgeDelivery() => owner.AcknowledgeRequestDelivery();
+
+        public Task<Exception?> DeliverAsync(
+            Func<Task<DeliveryWrite>> write,
+            CancellationToken cancellationToken)
+            => owner.DeliverRequestAsync(write, cancellationToken);
+
+        public void WaitForFinalization() => owner._deliveryState.WaitForFinalization();
 
         public void Dispose()
         {
@@ -1239,7 +1312,14 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
             }
             finally
             {
-                stream.Dispose();
+                try
+                {
+                    stream.Dispose();
+                }
+                finally
+                {
+                    owner.CloseRequestDelivery();
+                }
             }
         }
     }

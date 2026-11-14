@@ -144,7 +144,9 @@ public sealed class LivePreviewMiddleware(
         var buffer = registry.GetRequestBuffer(requestId);
         return buffer is null
             ? stream
-            : new BufferingStream(stream, buffer, () => registry.UnregisterRequest(requestId));
+            : DeliveryCapabilities.Preserve(
+                stream,
+                new BufferingStream(stream, buffer, () => registry.UnregisterRequest(requestId)));
     }
 
     /// <summary>

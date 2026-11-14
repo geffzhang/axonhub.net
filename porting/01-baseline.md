@@ -1699,6 +1699,29 @@ per-attempt 句柄而非 IDisposable（通道由扇出线程 CompleteAdding）�
 ~WebSocket|~Codex|~ChannelTest 339 通过；未跑 Api 全量回归。台账：新增 C291（resolved），
 C290 收窄，C091 预算表述更新；291 条（199 accepted / 0 gap / 92 resolved）。
 
+2026-11-14 更新（§219）：交付能力与交付门（C292）。
+按 live f272549f 移植 llm/streams/stream.go 的四个可选能力（DeliveryAcknowledger / DeliveryBoundary /
+FinalizationWaiter / ExpectedStreamChoices）与全部交付门。Llm 新增 `Streams/DeliveryCapabilities.cs`：
+Deliver 优先 boundary，否则写入后 terminal 且无错误才 ack；`Preserve` 在 source 是 acknowledger 时包装
+CapabilityStream，expected 保持方法值（动态读取）。CancelOnCloseStream（有意不暴露 expected）、
+ResponseHeadersStream、PrimedStream、Safeguards、LivePreview inbound、ResponsesSessionStream、
+PassThroughDeliveryStream、RequestRawStream 按参照各自转发。RequestDeliveryState 实现 closed /
+一次性 ack / finalized TCS 与 Deliver 门；StreamOutcome 增加 deliveryDecision（未 ack 的 completed →
+Incomplete + ErrStreamIncomplete，deadlineBeforeTerminal 优先 Failed），持久化中间件据此决定状态并跳过
+结果行。SSE（每事件）、Binary（EOF flush）、Gemini（闭合 `]`）、Responses WebSocket（每帧，terminal 后
+继续读到 EOF）写侧全部经 gate 并在终端写成功后 ack；SSE 端点 finally 等待 FinalizationWaiter；
+ChannelTestService 依据 tracker 判定 terminal，无 terminal 返回 `Stream ended without terminal event`。
+pass-through 门：未交付先 close 生产者再无限等 drain，已交付等 1 秒 tail 超时后 close。实现差异保留为
+C255（streamLifecycle 的 execution/shutdown 上下文分离、tail accounting 的 256 事件 / 1 MiB 限额、
+端口 Dispose 顺序、pass-through 下 request chunk 来源），C255 由交付缺口收窄为上述残余。测试：
+`DeliveryCapabilitiesTests` 5 例、`StreamDeliveryTests` 12 例、`SseStreamWriterTests` +2 例、
+WS `KeepsWritingEventsAfterTheTerminalEventUntilTheStreamEnds`、ChannelTest
+`TestChannelReportsAStreamWithoutATerminalEvent`；`RequestChainPersistenceTests.StreamSuccess...`
+按新语义显式 AcknowledgeDelivery。定向运行：Llm ~Stream|~Pipeline|~ResponseHeaders 390 通过、
+Api ~Stream|~Orchestrat|~Chat|~Responses|~WebSocket|~Codex|~ChannelTest|~Safeguard|~LivePreview|
+~Pipeline|~RequestChain 942 通过；未跑 Api 全量回归。台账：新增 C292（resolved），C255 收窄仍为
+accepted，C292 相关条目（C091 等）不变；292 条（199 accepted / 0 gap / 93 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

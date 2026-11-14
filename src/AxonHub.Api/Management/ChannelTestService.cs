@@ -14,6 +14,7 @@ using AxonHub.Llm.Streams;
 // Orchestration also declares an internal GoJson helper (OverrideJson); the
 // tester marshals wire bodies, so bind the LLM module's implementation.
 using GoJson = AxonHub.Llm.Json.GoJson;
+using StreamTerminalTracker = AxonHub.Api.Http.StreamTerminalTracker;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenAI.Decisions;
@@ -522,7 +523,7 @@ public sealed class ChannelTestService(
         }
     }
 
-    /// <summary>Port of handleStreamResponse (tester.go:381-464).</summary>
+    /// <summary>Port of handleStreamResponse (tester.go:443-547).</summary>
     private TestChannelResult HandleStreamResponse(
         CancellationToken cancellationToken,
         IStream<StreamEvent> stream,
@@ -531,6 +532,9 @@ public sealed class ChannelTestService(
         using (stream)
         {
             var accumulated = new StringBuilder();
+            var tracker = new StreamTerminalTracker(
+                DeliveryCapabilities.ExpectedStreamChoicesOf(stream));
+            var terminalSeen = false;
 
             while (stream.Next())
             {
@@ -547,6 +551,13 @@ public sealed class ChannelTestService(
                 if (@event is null)
                 {
                     continue;
+                }
+
+                // tester.go:479-481: observe the terminal boundary before the
+                // data is parsed; "[DONE]" does not count as terminal.
+                if (!terminalSeen && tracker.Observe(@event))
+                {
+                    terminalSeen = true;
                 }
 
                 // The stream may end with a "[DONE]" message which is not valid JSON.
@@ -599,6 +610,19 @@ public sealed class ChannelTestService(
                     string.Empty,
                     "No content in stream response");
             }
+
+            if (!terminalSeen)
+            {
+                // tester.go:538-544: a channel that never completed the stream
+                // is unhealthy even when it streamed some content.
+                return new TestChannelResult(
+                    latency,
+                    Success: false,
+                    accumulated.ToString(),
+                    "Stream ended without terminal event");
+            }
+
+            stream.AcknowledgeDelivery();
 
             return new TestChannelResult(latency, Success: true, accumulated.ToString(), Error: null);
         }

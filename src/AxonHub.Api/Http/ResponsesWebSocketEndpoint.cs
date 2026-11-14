@@ -490,8 +490,11 @@ public static class ResponsesWebSocketEndpoint
                 using (stream)
                 {
                     var terminalSeen = false;
+                    var streamExpectedChoices = DeliveryCapabilities.ExpectedStreamChoicesOf(stream);
                     var tracker = new StreamTerminalTracker(
-                        ExpectedStreamChoices.FromRequestBody(request.Body));
+                        streamExpectedChoices != 0
+                            ? streamExpectedChoices
+                            : ExpectedStreamChoices.FromRequestBody(request.Body));
                     while (stream.Next())
                     {
                         if (requestToken.IsCancellationRequested)
@@ -529,31 +532,46 @@ public static class ResponsesWebSocketEndpoint
                         var eventType = DataString(streamEvent.Data, "type");
                         var status = DataString(streamEvent.Data, "response", "status");
 
-                        if (!await WriteMessageAsync(data).ConfigureAwait(false))
+                        // responses_websocket.go:661-675: the message write is
+                        // gated. The terminal event acknowledges delivery, but
+                        // the loop keeps draining to EOF so the persistent
+                        // stream still records the turn's final state.
+                        var writeError = await stream.DeliverAsync(
+                            async () =>
+                            {
+                                if (!await WriteMessageAsync(data).ConfigureAwait(false))
+                                {
+                                    return new DeliveryWrite(
+                                        false,
+                                        new IOException("failed to write Responses WebSocket message"));
+                                }
+
+                                var terminal = !terminalSeen && tracker.Observe(streamEvent);
+                                if (terminal)
+                                {
+                                    terminalSeen = true;
+                                }
+
+                                // Either type may carry the completion marker,
+                                // but both must be empty or response.completed
+                                // and the status must agree.
+                                return new DeliveryWrite(
+                                    terminal
+                                    && (string.Equals(streamEvent.Type, "response.completed", StringComparison.Ordinal)
+                                        || string.Equals(eventType, "response.completed", StringComparison.Ordinal))
+                                    && (streamEvent.Type.Length == 0
+                                        || string.Equals(streamEvent.Type, "response.completed", StringComparison.Ordinal))
+                                    && (eventType.Length == 0
+                                        || string.Equals(eventType, "response.completed", StringComparison.Ordinal))
+                                    && (status.Length == 0
+                                        || string.Equals(status, "completed", StringComparison.Ordinal)),
+                                    null);
+                            },
+                            requestToken).ConfigureAwait(false);
+
+                        if (writeError is not null)
                         {
                             return false;
-                        }
-
-                        var terminal = !terminalSeen && tracker.Observe(streamEvent);
-                        if (terminal)
-                        {
-                            terminalSeen = true;
-                        }
-
-                        // writeStreamDelivery's stop signal: either type may
-                        // carry the completion marker, but both must be empty
-                        // or response.completed and the status must agree.
-                        if (terminal
-                            && (string.Equals(streamEvent.Type, "response.completed", StringComparison.Ordinal)
-                                || string.Equals(eventType, "response.completed", StringComparison.Ordinal))
-                            && (streamEvent.Type.Length == 0
-                                || string.Equals(streamEvent.Type, "response.completed", StringComparison.Ordinal))
-                            && (eventType.Length == 0
-                                || string.Equals(eventType, "response.completed", StringComparison.Ordinal))
-                            && (status.Length == 0
-                                || string.Equals(status, "completed", StringComparison.Ordinal)))
-                        {
-                            break;
                         }
                     }
 

@@ -778,7 +778,8 @@ internal sealed class CaptureRawProviderStreamMiddleware(
 internal sealed class PassThroughStreamMiddleware(
     PersistentOutboundTransformer outbound,
     PassThroughSettings settings,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken,
+    RequestDeliveryState? deliveryState = null)
     : DummyMiddleware("pass-through-response-stream")
 {
     public override IStream<StreamEvent> TransformInboundRawStream(IStream<StreamEvent> stream)
@@ -798,7 +799,10 @@ internal sealed class PassThroughStreamMiddleware(
             return stream;
         }
 
-        DrainInBackground(stream);
+        // With a delivery observer the gate owns closing the drained pipeline
+        // stream; without one the drain releases it itself, exactly like
+        // pass_through.go:678-696.
+        var drain = DrainInBackground(stream, ownsClose: deliveryState is null);
 
         IStream<StreamEvent> result;
         if (state.RawQueue is { } queue)
@@ -845,16 +849,18 @@ internal sealed class PassThroughStreamMiddleware(
                 PassThrough.ResponsesClientModel(outbound));
         }
 
-        return result;
+        return deliveryState is null
+            ? result
+            : new PassThroughDeliveryStream(result, deliveryState, stream.Dispose, drain);
     }
 
     /// <summary>
     /// Port of the drain goroutine: the transformed stream is discarded, but
     /// consuming it is what keeps the LLM middlewares and persistence alive.
     /// </summary>
-    private static void DrainInBackground(IStream<StreamEvent> stream)
+    private static Task DrainInBackground(IStream<StreamEvent> stream, bool ownsClose)
     {
-        _ = Task.Factory.StartNew(
+        return Task.Factory.StartNew(
             () =>
             {
                 try
@@ -871,12 +877,116 @@ internal sealed class PassThroughStreamMiddleware(
                 }
                 finally
                 {
-                    stream.Dispose();
+                    if (ownsClose)
+                    {
+                        stream.Dispose();
+                    }
                 }
             },
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
+    }
+}
+
+/// <summary>
+/// Port of passThroughDeliveryStream (pass_through.go:725-828): the client-facing
+/// raw stream under the request's delivery observer. Closing it stops the
+/// producer before waiting for the drain, so a failed downstream write (which
+/// stops the raw-queue consumer) cannot deadlock the background reader.
+/// </summary>
+internal sealed class PassThroughDeliveryStream(
+    IStream<StreamEvent> stream,
+    RequestDeliveryState observer,
+    Action? close,
+    Task? done)
+    : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary, IFinalizationWaiter
+{
+    /// <summary>streamTailTimeout: how long a delivered stream waits for the drain.</summary>
+    private static readonly TimeSpan TailTimeout = TimeSpan.FromSeconds(1);
+
+    private bool _closed;
+
+    public StreamEvent? Current => stream.Current;
+
+    public Exception? Err => stream.Err;
+
+    public bool DeliveryAcknowledged => observer.DeliveryAcknowledged;
+
+    public bool Next() => stream.Next();
+
+    public void AcknowledgeDelivery() => observer.TryAcknowledgeDelivery();
+
+    public Task<Exception?> DeliverAsync(
+        Func<Task<DeliveryWrite>> write,
+        CancellationToken cancellationToken)
+        => observer.DeliverAsync(write, cancellationToken);
+
+    public void WaitForFinalization() => observer.WaitForFinalization();
+
+    public void Dispose()
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        _closed = true;
+
+        var delivered = observer.DeliveryAcknowledged;
+        var producerClosed = false;
+
+        // Stop the producer before waiting on the drain. A failed downstream
+        // write stops the pass-through consumer, so nothing reads the raw
+        // queue, the producer blocks on it, and the drain blocks on the
+        // producer; only close() cancels the producer.
+        if (!delivered)
+        {
+            close?.Invoke();
+            producerClosed = true;
+        }
+
+        if (done is not null)
+        {
+            if (delivered)
+            {
+                var drained = false;
+                try
+                {
+                    drained = done.Wait(TailTimeout);
+                }
+                catch (AggregateException)
+                {
+                    // The drain goroutine recovers its own panics; a faulted
+                    // wait still means the reader stopped.
+                    drained = true;
+                }
+
+                if (!drained)
+                {
+                    close?.Invoke();
+                    producerClosed = true;
+                }
+            }
+            else
+            {
+                try
+                {
+                    done.Wait();
+                }
+                catch (AggregateException)
+                {
+                    // Same as above: the drain is done either way.
+                }
+            }
+        }
+
+        if (delivered && !producerClosed)
+        {
+            close?.Invoke();
+        }
+
+        stream.Dispose();
     }
 }
 

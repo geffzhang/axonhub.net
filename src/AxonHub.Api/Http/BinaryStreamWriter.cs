@@ -42,6 +42,7 @@ public static class BinaryStreamWriter
 
         var headersWritten = false;
         var eventsAfterCancel = 0;
+        var terminalDelivered = false;
 
         while (true)
         {
@@ -69,14 +70,24 @@ public static class BinaryStreamWriter
                     // Headers already written: the reference only logs the error.
                 }
 
-                try
-                {
-                    await context.Response.Body.FlushAsync(cancellationToken);
-                }
-                catch (Exception ex) when (IsClientWriteFailure(ex))
-                {
-                    // Client is gone; the reference only logs the failed flush.
-                }
+                // chat.go:767-772: the closing flush is the delivery boundary
+                // for the binary terminal marker.
+                _ = await stream.DeliverAsync(
+                    async () =>
+                    {
+                        try
+                        {
+                            await context.Response.Body.FlushAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (IsClientWriteFailure(ex))
+                        {
+                            return new DeliveryWrite(terminalDelivered, ex);
+                        }
+
+                        return new DeliveryWrite(terminalDelivered, null);
+                    },
+                    cancellationToken).ConfigureAwait(false);
 
                 return;
             }
@@ -91,7 +102,16 @@ public static class BinaryStreamWriter
             }
 
             var current = stream.Current;
-            if (current is null || current.Type == AuthTypes.BinaryStreamDoneEventType || current.Data.Length == 0)
+            if (current is not null && current.Type == AuthTypes.BinaryStreamDoneEventType)
+            {
+                // chat.go:790-793: the done marker is the stream's terminal
+                // event; it is not written, but it authorizes the final flush to
+                // acknowledge delivery.
+                terminalDelivered = true;
+                continue;
+            }
+
+            if (current is null || current.Data.Length == 0)
             {
                 continue;
             }

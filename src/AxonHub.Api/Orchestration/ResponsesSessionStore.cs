@@ -933,7 +933,9 @@ public sealed class ResponsesSessionStore
 /// aggregated response as soon as the terminal event appears (or on dispose for
 /// readers that stop right after it).
 /// </summary>
-internal sealed class ResponsesSessionStream : IStream<StreamEvent>
+internal sealed class ResponsesSessionStream
+    : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary, IFinalizationWaiter,
+      IExpectedStreamChoices
 {
     private readonly ResponsesSessionStore _store;
     private readonly byte[] _requestBody;
@@ -965,6 +967,42 @@ internal sealed class ResponsesSessionStream : IStream<StreamEvent>
     public StreamEvent? Current { get; private set; }
 
     public Exception? Err => _inner.Err;
+
+    public int ExpectedStreamChoices =>
+        _inner is IExpectedStreamChoices choices ? choices.ExpectedStreamChoices : 0;
+
+    public bool DeliveryAcknowledged =>
+        _inner is IDeliveryAcknowledger observer && observer.DeliveryAcknowledged;
+
+    public void AcknowledgeDelivery()
+    {
+        if (_inner is IDeliveryAcknowledger observer)
+        {
+            observer.AcknowledgeDelivery();
+        }
+    }
+
+    public Task<Exception?> DeliverAsync(
+        Func<Task<DeliveryWrite>> write,
+        CancellationToken cancellationToken)
+    {
+        if (_inner is IDeliveryBoundary boundary)
+        {
+            return boundary.DeliverAsync(write, cancellationToken);
+        }
+
+        return DeliveryCapabilities.DeliverWithoutBoundaryAsync(
+            _inner as IDeliveryAcknowledger,
+            write);
+    }
+
+    public void WaitForFinalization()
+    {
+        if (_inner is IFinalizationWaiter waiter)
+        {
+            waiter.WaitForFinalization();
+        }
+    }
 
     public bool Next()
     {

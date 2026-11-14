@@ -39,6 +39,8 @@ public sealed class StreamOutcome
     private Exception? _transportErr;
     private Exception? _contextErr;
     private StreamTerminalState _contextState = StreamTerminalState.None;
+    private bool _deadlineBeforeTerminal;
+    private bool _deliveryAcknowledged;
 
     /// <summary>The provider terminal state; <see cref="StreamTerminalState.None"/> until observed.</summary>
     public StreamTerminalState TerminalState { get; private set; } = StreamTerminalState.None;
@@ -103,6 +105,7 @@ public sealed class StreamOutcome
         {
             _contextState = StreamTerminalState.Failed;
             _contextErr = error;
+            _deadlineBeforeTerminal = _deadlineBeforeTerminal || !_providerTerminal;
             return;
         }
 
@@ -113,8 +116,41 @@ public sealed class StreamOutcome
         }
     }
 
+    /// <summary>
+    /// Port of streamOutcome.observeDeliveryAcknowledgement: the semantic
+    /// terminal event reached the downstream transport.
+    /// </summary>
+    public void ObserveDeliveryAcknowledgement() => _deliveryAcknowledged = true;
+
+    /// <summary>Port of streamOutcome.deliveryState.</summary>
+    public StreamTerminalState DeliveryState() => DeliveryDecision().State;
+
+    /// <summary>
+    /// Port of streamOutcome.deliveryDecision: a completed provider outcome is
+    /// only completed when the transport acknowledged delivery. Otherwise the
+    /// request is incomplete even though generation finished, so an unread
+    /// terminal event is never reported as a completed turn.
+    /// </summary>
+    public StreamOutcomeDecision DeliveryDecision()
+    {
+        var decision = FinalDecision();
+        if (decision.State == StreamTerminalState.Completed && !_deliveryAcknowledged)
+        {
+            return new StreamOutcomeDecision(StreamTerminalState.Incomplete, ErrStreamIncomplete);
+        }
+
+        return decision;
+    }
+
     public StreamOutcomeDecision FinalDecision()
     {
+        // A deadline observed before the provider terminal event outranks an
+        // otherwise successful terminal: the client was already gone.
+        if (_contextState == StreamTerminalState.Failed && _deadlineBeforeTerminal)
+        {
+            return new StreamOutcomeDecision(StreamTerminalState.Failed, _contextErr);
+        }
+
         if (_providerTerminal)
         {
             return new StreamOutcomeDecision(TerminalState, null);
@@ -123,11 +159,6 @@ public sealed class StreamOutcome
         if (_validatedCompleted)
         {
             return new StreamOutcomeDecision(StreamTerminalState.Completed, null);
-        }
-
-        if (_contextState == StreamTerminalState.Failed)
-        {
-            return new StreamOutcomeDecision(StreamTerminalState.Failed, _contextErr);
         }
 
         if (_transportErr is not null)

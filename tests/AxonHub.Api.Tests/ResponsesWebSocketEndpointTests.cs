@@ -82,6 +82,30 @@ public sealed class ResponsesWebSocketEndpointTests
     }
 
     [Fact]
+    public async Task KeepsWritingEventsAfterTheTerminalEventUntilTheStreamEnds()
+    {
+        await using var host = await TestHost.StartAsync((_, _, _) =>
+            Task.FromResult(StreamResult(
+                CreatedEvent,
+                CompletedEvent,
+                """{"type":"response.output_text.delta","delta":"tail"}""")));
+
+        using var socket = await host.ConnectAsync();
+        await SendTextAsync(
+            socket,
+            """{"type":"response.create","model":"gpt-test","input":"hello"}""");
+
+        Assert.Equal("response.created", Text(Parse(await ReadTextAsync(socket)), "type"));
+        Assert.Equal("response.completed", Text(Parse(await ReadTextAsync(socket)), "type"));
+
+        // responses_websocket.go:657-682 keeps draining after the terminal
+        // event so the persistent stream can record the turn's final state.
+        var tail = Parse(await ReadTextAsync(socket));
+        Assert.Equal("response.output_text.delta", Text(tail, "type"));
+        Assert.Equal("tail", Text(tail, "delta"));
+    }
+
+    [Fact]
     public async Task StreamIdIsClientOnlyAndReturnedOnEveryEvent()
     {
         var requests = Channel.CreateUnbounded<HttpRequestData>();

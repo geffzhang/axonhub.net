@@ -501,9 +501,13 @@ public sealed partial class Pipeline
         }
     }
 
-    /// <summary>Port of cancelOnCloseStream: releases the stream context with the stream.</summary>
+    /// <summary>
+    /// Port of cancelOnCloseStream: releases the stream context with the stream
+    /// and forwards acknowledgements, the delivery boundary and finalization.
+    /// The reference deliberately does not expose ExpectedStreamChoices here.
+    /// </summary>
     private sealed class CancelOnCloseStream(IStream<StreamEvent> stream, FirstEventTimeoutGuard guard)
-        : IStream<StreamEvent>
+        : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary, IFinalizationWaiter
     {
         private bool _cancelled;
 
@@ -511,7 +515,32 @@ public sealed partial class Pipeline
 
         public Exception? Err => stream.Err;
 
+        public bool DeliveryAcknowledged
+            => stream is IDeliveryAcknowledger observer && observer.DeliveryAcknowledged;
+
         public bool Next() => stream.Next();
+
+        public void AcknowledgeDelivery()
+            => (stream as IDeliveryAcknowledger)?.AcknowledgeDelivery();
+
+        public Task<Exception?> DeliverAsync(
+            Func<Task<DeliveryWrite>> write,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(write);
+
+            if (stream is IDeliveryBoundary boundary)
+            {
+                return boundary.DeliverAsync(write, cancellationToken);
+            }
+
+            return DeliveryCapabilities.DeliverWithoutBoundaryAsync(
+                stream as IDeliveryAcknowledger,
+                write);
+        }
+
+        public void WaitForFinalization()
+            => (stream as IFinalizationWaiter)?.WaitForFinalization();
 
         public void Dispose()
         {

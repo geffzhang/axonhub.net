@@ -32,9 +32,14 @@ public static class GeminiStreamWriter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(stream);
 
-        // The reference ignores the extra arguments on this writer.
-        _ = expectedChoices;
+        // The reference ignores the error transformer on this writer; the
+        // expected choice count comes from the stream when it exposes one.
         _ = transformStreamError;
+
+        var streamExpectedChoices = DeliveryCapabilities.ExpectedStreamChoicesOf(stream);
+        var tracker = new StreamTerminalTracker(
+            streamExpectedChoices != 0 ? streamExpectedChoices : expectedChoices);
+        var terminalSeen = false;
 
         context.Response.ContentType = "application/json; charset=UTF-8";
 
@@ -64,18 +69,41 @@ public static class GeminiStreamWriter
                     continue;
                 }
 
-                try
-                {
-                    if (!first)
+                // gemini.go:109-122: the event write is gated, but it reports a
+                // non-terminal write; the closing bracket acknowledges.
+                var writeError = await stream.DeliverAsync(
+                    async () =>
                     {
-                        await context.Response.Body.WriteAsync(Comma, cancellationToken).ConfigureAwait(false);
-                    }
+                        try
+                        {
+                            if (!first)
+                            {
+                                await context.Response.Body.WriteAsync(Comma, cancellationToken)
+                                    .ConfigureAwait(false);
+                            }
 
-                    await context.Response.Body.WriteAsync(streamEvent.Data, cancellationToken).ConfigureAwait(false);
-                    first = false;
-                    await context.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (IsBrokenPipe(ex))
+                            await context.Response.Body.WriteAsync(streamEvent.Data, cancellationToken)
+                                .ConfigureAwait(false);
+                            first = false;
+                            await context.Response.Body.FlushAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (IsBrokenPipe(ex))
+                        {
+                            return new DeliveryWrite(false, ex);
+                        }
+
+                        var terminal = tracker.Observe(streamEvent);
+                        if (terminal)
+                        {
+                            terminalSeen = true;
+                        }
+
+                        return new DeliveryWrite(false, null);
+                    },
+                    cancellationToken).ConfigureAwait(false);
+
+                if (writeError is not null)
                 {
                     return;
                 }
@@ -84,14 +112,27 @@ public static class GeminiStreamWriter
             {
                 // stream.Err is dropped exactly like the reference's
                 // log.Printf("stream error: %v") without a client-visible error.
-                try
-                {
-                    await context.Response.Body.WriteAsync(CloseBracket, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (IsBrokenPipe(ex))
-                {
-                    // The reference only logs the failed trailing write.
-                }
+                // gemini.go:143-153: closing the array acknowledges delivery
+                // when a terminal event was already written.
+                _ = await stream.DeliverAsync(
+                    async () =>
+                    {
+                        try
+                        {
+                            await context.Response.Body.WriteAsync(CloseBracket, cancellationToken)
+                                .ConfigureAwait(false);
+                            await context.Response.Body.FlushAsync(cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (IsBrokenPipe(ex))
+                        {
+                            // The reference only logs the failed trailing write.
+                            return new DeliveryWrite(terminalSeen, ex);
+                        }
+
+                        return new DeliveryWrite(terminalSeen, null);
+                    },
+                    cancellationToken).ConfigureAwait(false);
 
                 return;
             }

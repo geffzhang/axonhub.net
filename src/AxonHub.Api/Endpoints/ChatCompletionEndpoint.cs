@@ -210,6 +210,11 @@ public static class ChatCompletionEndpoint
             {
                 context.Response.Headers["Access-Control-Allow-Origin"] = "*";
 
+                // chat.go:154-165 closes and then waits on the orchestrator's
+                // stream, not on the API-level wrappers, so finalization still
+                // works when safeguards/priming wrap it.
+                var resultStream = stream;
+
                 // api/chat.go:169-170: review (and strip) each event before the
                 // error-transforming and codex-priming wrappers see it.
                 Action? abortUpstream = null;
@@ -244,7 +249,15 @@ public static class ChatCompletionEndpoint
                 }
                 finally
                 {
-                    stream.Dispose();
+                    resultStream.Dispose();
+                    if (resultStream is IFinalizationWaiter waiter)
+                    {
+                        // The reference blocks here until source accounting is
+                        // done; the port's synchronous persistence already
+                        // finalized by the time Dispose returned.
+                        waiter.WaitForFinalization();
+                    }
+
                     RecordResponseHeaders(context, orchestrator, requestId);
                 }
 
@@ -414,9 +427,13 @@ public static class ChatCompletionEndpoint
         return new PrimedStream(stream, first);
     }
 
-    /// <summary>Port of api.primedStream (chat.go:171-221).</summary>
+    /// <summary>
+    /// Port of api.primedStream (chat.go:171-251 plus the capability methods in
+    /// stream_delivery.go:27-70): priming must not hide the source's delivery
+    /// capabilities, because the SSE writer gates and acknowledges through them.
+    /// </summary>
     internal sealed class PrimedStream(IStream<StreamEvent> stream, StreamEvent? first)
-        : IStream<StreamEvent>
+        : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary, IFinalizationWaiter, IExpectedStreamChoices
     {
         private bool _pending = true;
 
@@ -436,7 +453,34 @@ public static class ChatCompletionEndpoint
 
         public Exception? Err => stream.Err;
 
+        public int ExpectedStreamChoices => DeliveryCapabilities.ExpectedStreamChoicesOf(stream);
+
+        public bool DeliveryAcknowledged
+            => stream is IDeliveryAcknowledger observer && observer.DeliveryAcknowledged;
+
         public bool Next() => _pending || stream.Next();
+
+        public void AcknowledgeDelivery()
+            => (stream as IDeliveryAcknowledger)?.AcknowledgeDelivery();
+
+        public Task<Exception?> DeliverAsync(
+            Func<Task<DeliveryWrite>> write,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(write);
+
+            if (stream is IDeliveryBoundary boundary)
+            {
+                return boundary.DeliverAsync(write, cancellationToken);
+            }
+
+            return DeliveryCapabilities.DeliverWithoutBoundaryAsync(
+                stream as IDeliveryAcknowledger,
+                write);
+        }
+
+        public void WaitForFinalization()
+            => (stream as IFinalizationWaiter)?.WaitForFinalization();
 
         public void Dispose() => stream.Dispose();
     }

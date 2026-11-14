@@ -48,7 +48,12 @@ public static class SseStreamWriter
             return;
         }
 
-        var tracker = new StreamTerminalTracker(expectedChoices);
+        // The stream's own capability is authoritative when it has one
+        // (InboundPersistentStream in the reference); the argument remains a
+        // seam for callers that have a plain stream.
+        var streamExpectedChoices = DeliveryCapabilities.ExpectedStreamChoicesOf(stream);
+        var tracker = new StreamTerminalTracker(
+            streamExpectedChoices != 0 ? streamExpectedChoices : expectedChoices);
         var terminalSeen = false;
         var eventsAfterCancel = 0;
 
@@ -85,16 +90,33 @@ public static class SseStreamWriter
                 continue;
             }
 
-            if (tracker.Observe(streamEvent))
-            {
-                terminalSeen = true;
-            }
+            // chat.go:356-371: the terminal tracker observes only after the
+            // event was written successfully, and the write runs inside the
+            // stream's delivery boundary so the acknowledgement marks exactly
+            // the terminal event the client received.
+            var writeError = await stream.DeliverAsync(
+                async () =>
+                {
+                    try
+                    {
+                        await WriteEventAsync(context, streamEvent).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (IsClientWriteFailure(ex))
+                    {
+                        return new DeliveryWrite(false, ex);
+                    }
 
-            try
-            {
-                await WriteEventAsync(context, streamEvent);
-            }
-            catch (Exception ex) when (IsClientWriteFailure(ex))
+                    var terminal = !terminalSeen && tracker.Observe(streamEvent);
+                    if (terminal)
+                    {
+                        terminalSeen = true;
+                    }
+
+                    return new DeliveryWrite(terminal, null);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (writeError is not null)
             {
                 return;
             }

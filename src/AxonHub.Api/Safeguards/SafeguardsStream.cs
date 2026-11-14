@@ -339,7 +339,9 @@ public sealed class SafeguardsStream : IStream<StreamEvent>
         Action? abortUpstream)
         => evaluator is null
             ? source
-            : new SafeguardsStream(source, new SafeguardsReviewer(evaluator), cancellationToken, abortUpstream);
+            : DeliveryCapabilities.Preserve(
+                source,
+                new SafeguardsStream(source, new SafeguardsReviewer(evaluator), cancellationToken, abortUpstream));
 
     public StreamEvent? Current => _current;
 

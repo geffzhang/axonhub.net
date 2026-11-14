@@ -347,6 +347,30 @@ public sealed class ChannelTestServiceTests(GrainClusterFixture fixture)
     }
 
     [Fact]
+    public async Task TestChannelReportsAStreamWithoutATerminalEvent()
+    {
+        SeedPrompts();
+        var channel = SeedChannel(policies: """{"stream":"require"}""");
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (_, _, _) => new ListStream<StreamEvent>(
+            [
+                Event("""{"id":"test","model":"test-model","choices":[{"index":0,"delta":{"content":"hello"}}]}"""),
+            ]),
+        };
+        var service = NewService(executor);
+
+        var result = await service.TestChannelAsync(channel.Id, null);
+
+        // tester.go:538-544: content alone does not make a healthy channel;
+        // the stream must also have produced its terminal event. The partial
+        // message is still reported so the operator sees what arrived.
+        Assert.False(result.Success);
+        Assert.Equal("hello", result.Message);
+        Assert.Equal("Stream ended without terminal event", result.Error);
+    }
+
+    [Fact]
     public async Task TestChannelReportsATerminalStreamError()
     {
         SeedPrompts();
