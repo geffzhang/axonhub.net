@@ -228,7 +228,7 @@ public static class ClientAddress
     /// parse time; Contains compares the masked bytes. An IPv4-mapped IPv6
     /// prefix with at least 96 bits is folded to its IPv4 form first.
     /// </summary>
-    private static bool TryParsePrefix(string text, out IPAddress network, out int bits)
+    internal static bool TryParsePrefix(string text, out IPAddress network, out int bits)
     {
         network = IPAddress.None;
         bits = 0;
@@ -343,7 +343,7 @@ public static class ClientAddress
     /// netip.ParseAddr is stricter than IPAddress.TryParse: it rejects IPv4
     /// shorthand ("127.1") and leading zeros in IPv4 octets.
     /// </summary>
-    private static bool TryParseAddress(string text, out IPAddress address)
+    internal static bool TryParseAddress(string text, out IPAddress address)
     {
         address = IPAddress.None;
         if (text.Length == 0 || !IsGoParseable(text))

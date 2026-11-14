@@ -6,6 +6,8 @@ using AxonHub.Api.Safeguards;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
+using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Primitives;
@@ -237,7 +239,7 @@ public static class ChatCompletionEndpoint
                     stream = PrimeCodexTurnStateHeader(context.Response.Headers, stream);
                 }
 
-                var writer = streamWriter ?? new StreamWriterDelegate(SseStreamWriter.WriteAsync);
+                var writer = streamWriter ?? CreateDefaultSseWriter(context, orchestrator.Inbound);
                 try
                 {
                     await writer(
@@ -300,6 +302,41 @@ public static class ChatCompletionEndpoint
     /// ASP.NET freezes headers after the first write, so this matches the
     /// reference's capture at first Write/WriteHeaderNow.
     /// </summary>
+    /// <summary>
+    /// api/openai.go:359-363 and api/anthropic.go:63-66 wire the shared handler
+    /// with the OpenAI and Anthropic heartbeat payloads respectively; the
+    /// reference's gemini/playground/live handlers keep WriteSSEStream and are
+    /// passed an explicit <c>streamWriter</c> by their endpoints, so they never
+    /// reach this factory.
+    /// </summary>
+    private static StreamWriterDelegate CreateDefaultSseWriter(
+        HttpContext context,
+        IInboundTransformer inbound)
+    {
+        // Direct calls (tests/internal handlers) may have no request scope; the
+        // reference's zero SSEKeepAliveConfig is equivalent to no heartbeat.
+        var keepAlive = context.RequestServices?.GetService(typeof(SseKeepAliveSettings))
+            as SseKeepAliveSettings;
+        if (keepAlive is not { Enabled: true })
+        {
+            return new StreamWriterDelegate(SseStreamWriter.WriteAsync);
+        }
+
+        var format = inbound is AnthropicInboundTransformer
+            ? SseHeartbeatFormat.Anthropic
+            : SseHeartbeatFormat.OpenAi;
+
+        return (writerContext, stream, expectedChoices, cancellationToken, transformStreamError) =>
+            SseStreamWriter.WriteWithHeartbeatAsync(
+                writerContext,
+                stream,
+                expectedChoices,
+                cancellationToken,
+                transformStreamError,
+                keepAlive,
+                format);
+    }
+
     private static void RecordResponseHeaders(
         HttpContext context,
         ChatCompletionOrchestrator orchestrator,

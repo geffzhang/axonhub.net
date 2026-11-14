@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading.Channels;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -120,6 +121,187 @@ public static class SseStreamWriter
             {
                 return;
             }
+        }
+    }
+
+    /// <summary>
+    /// Port of writeEncodedSSEStreamWithHeartbeat (api/chat.go:396-500). The
+    /// stream is read on a helper task so an idle upstream can still be kept
+    /// alive; every delivered event restarts the interval, and a write failure
+    /// on the heartbeat is treated as a client disconnect.
+    /// </summary>
+    public static async Task WriteWithHeartbeatAsync(
+        HttpContext context,
+        IStream<StreamEvent> stream,
+        int expectedChoices,
+        CancellationToken cancellationToken,
+        Func<Exception, CancellationToken, Task<Exception?>>? transformStreamError,
+        SseKeepAliveSettings keepAlive,
+        SseHeartbeatFormat heartbeatFormat)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(keepAlive);
+
+        SetHeaders(context.Response);
+
+        try
+        {
+            await FlushWithWriteDeadlineAsync(context);
+        }
+        catch (Exception ex) when (IsClientWriteFailure(ex))
+        {
+            return;
+        }
+
+        var streamExpectedChoices = DeliveryCapabilities.ExpectedStreamChoicesOf(stream);
+        var tracker = new StreamTerminalTracker(
+            streamExpectedChoices != 0 ? streamExpectedChoices : expectedChoices);
+        var terminalSeen = false;
+        var eventsAfterCancel = 0;
+        var timerActive = keepAlive.Enabled;
+
+        var reader = new SseStreamReader(stream);
+        var cancelWait = cancellationToken.CanBeCanceled
+            ? Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)
+            : null;
+
+        try
+        {
+            Task<SseStreamReadResult>? pendingRead = null;
+
+            while (true)
+            {
+                if (timerActive && cancellationToken.IsCancellationRequested)
+                {
+                    // chat.go:432-438: once the request context is done the
+                    // heartbeat timer is stopped and the remaining buffered
+                    // events are drained.
+                    timerActive = false;
+                }
+
+                pendingRead ??= reader.ReadAsync();
+
+                if (timerActive)
+                {
+                    using var heartbeatDelay = new CancellationTokenSource();
+                    var heartbeatTask = Task.Delay(keepAlive.Interval, heartbeatDelay.Token);
+                    var completed = cancelWait is null
+                        ? await Task.WhenAny(pendingRead, heartbeatTask).ConfigureAwait(false)
+                        : await Task.WhenAny(pendingRead, heartbeatTask, cancelWait).ConfigureAwait(false);
+
+                    if (completed == cancelWait)
+                    {
+                        timerActive = false;
+                        continue;
+                    }
+
+                    if (completed == heartbeatTask)
+                    {
+                        if (!await TryWriteHeartbeatAsync(context, heartbeatFormat).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+
+                        continue;
+                    }
+
+                    // The read won the race; cancel the pending delay so it does
+                    // not keep a timer rooted until the interval elapses.
+                    await heartbeatDelay.CancelAsync().ConfigureAwait(false);
+                }
+
+                var result = await pendingRead.ConfigureAwait(false);
+                pendingRead = null;
+
+                if (result.Done)
+                {
+                    await WriteStreamEndAsync(
+                        context,
+                        result.Error,
+                        terminalSeen,
+                        transformStreamError,
+                        cancellationToken);
+                    return;
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    eventsAfterCancel++;
+                    if (eventsAfterCancel > MaxEventsAfterCancel)
+                    {
+                        await WriteStreamEndAsync(
+                            context,
+                            new OperationCanceledException(cancellationToken),
+                            terminalSeen,
+                            transformStreamError,
+                            cancellationToken);
+                        return;
+                    }
+                }
+
+                if (result.Event is not { } streamEvent)
+                {
+                    continue;
+                }
+
+                var writeError = await stream.DeliverAsync(
+                    async () =>
+                    {
+                        try
+                        {
+                            await WriteEventAsync(context, streamEvent).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (IsClientWriteFailure(ex))
+                        {
+                            return new DeliveryWrite(false, ex);
+                        }
+
+                        var terminal = !terminalSeen && tracker.Observe(streamEvent);
+                        if (terminal)
+                        {
+                            terminalSeen = true;
+                        }
+
+                        return new DeliveryWrite(terminal, null);
+                    },
+                    cancellationToken).ConfigureAwait(false);
+
+                if (writeError is not null)
+                {
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            // chat.go:425-427: wait for the blocking reader before the caller
+            // closes the stream, so Next/Current never race with Close.
+            reader.Stop();
+        }
+    }
+
+    private static async Task<bool> TryWriteHeartbeatAsync(
+        HttpContext context,
+        SseHeartbeatFormat format)
+    {
+        var payload = format switch
+        {
+            SseHeartbeatFormat.OpenAi => ": keep-alive\n\n",
+            SseHeartbeatFormat.Anthropic => "event: ping\ndata: {\"type\":\"ping\"}\n\n",
+            _ => throw new ArgumentOutOfRangeException(nameof(format)),
+        };
+
+        try
+        {
+            await WriteWithDeadlineAsync(context, Encoding.UTF8.GetBytes(payload)).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception)
+        {
+            // writeSSEHeartbeatEvent: any heartbeat write error is treated like
+            // a disconnected client and ends the stream.
+            return false;
         }
     }
 
@@ -297,4 +479,102 @@ public static class SseStreamWriter
 
     private static bool IsClientWriteFailure(Exception error)
         => error is IOException or OperationCanceledException or ObjectDisposedException;
+
+    /// <summary>Port of sseStreamReadResult (api/sse_stream_reader.go:14-18).</summary>
+    private sealed record SseStreamReadResult(StreamEvent? Event, Exception? Error, bool Done);
+
+    /// <summary>
+    /// Port of sseStreamReader (api/sse_stream_reader.go): keeps the blocking
+    /// Next/Current pair off the response-writer loop. A panic in the reader is
+    /// surfaced as the reference's "stream reader stopped unexpectedly" error.
+    /// </summary>
+    private sealed class SseStreamReader : IDisposable
+    {
+        private readonly Channel<SseStreamReadResult> _results;
+        private readonly CancellationTokenSource _stop = new();
+        private readonly Task _done;
+
+        public SseStreamReader(IStream<StreamEvent> stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            _results = Channel.CreateBounded<SseStreamReadResult>(
+                new BoundedChannelOptions(1)
+                {
+                    SingleReader = true,
+                    SingleWriter = true,
+                    FullMode = BoundedChannelFullMode.Wait,
+                });
+
+            _done = Task.Run(() => Run(stream));
+        }
+
+        public Task<SseStreamReadResult> ReadAsync()
+            => _results.Reader.ReadAsync().AsTask();
+
+        public void Stop()
+        {
+            _stop.Cancel();
+            try
+            {
+                _done.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                // The reader stopped through the stop token.
+            }
+        }
+
+        public void Dispose()
+        {
+            _stop.Dispose();
+        }
+
+        private void Run(IStream<StreamEvent> stream)
+        {
+            try
+            {
+                while (stream.Next())
+                {
+                    if (stream.Current is not { } current)
+                    {
+                        continue;
+                    }
+
+                    if (!Send(new SseStreamReadResult(current, null, false)))
+                    {
+                        return;
+                    }
+                }
+
+                Send(new SseStreamReadResult(null, stream.Err, true));
+            }
+            catch (Exception ex)
+            {
+                // sse_stream_reader.go:60-70: a panic becomes a terminal error
+                // instead of tearing down the response loop.
+                Send(new SseStreamReadResult(
+                    null,
+                    new InvalidOperationException("stream reader stopped unexpectedly", ex),
+                    true));
+            }
+        }
+
+        private bool Send(SseStreamReadResult result)
+        {
+            try
+            {
+                _results.Writer.WriteAsync(result, _stop.Token).AsTask().GetAwaiter().GetResult();
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+            catch (ChannelClosedException)
+            {
+                return false;
+            }
+        }
+    }
 }

@@ -248,6 +248,26 @@ if (string.IsNullOrEmpty(keyPrefix))
 }
 
 builder.Services.AddSingleton(new ApiKeyAuthOptions(allowNoAuth, trustedProxies, keyPrefix));
+
+// server.ip_access_control.* (config.go:155-159). NewIPAccessControlConfig
+// validates the allowlist at startup and refuses to start on an invalid entry;
+// the constructor call here fails the host build the same way. The snapshot
+// object is mutable so the reload path can replace it atomically (C298).
+var ipAccessControl = new IpAccessControlConfig(
+    IpAccessControlSettings.FromConfiguration(builder.Configuration));
+builder.Services.AddSingleton(ipAccessControl);
+
+// server.cors.* (conf/conf.go:277-285). rs/cors only mounts when enabled, so
+// the ASP.NET Core CORS policy is registered conditionally as well.
+var corsSettings = CorsSettings.FromConfiguration(builder.Configuration);
+if (corsSettings.Enabled)
+{
+    builder.Services.AddCors(options =>
+        options.AddDefaultPolicy(corsSettings.ConfigurePolicy));
+}
+
+// server.sse_keep_alive.* (conf/conf.go:245-246).
+builder.Services.AddSingleton(SseKeepAliveSettings.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<AxonHubDbContext>(static services =>
     services.GetRequiredService<IAxonHubDbContextFactory>().CreateDbContext());
 builder.Services.AddScoped<IProjectStore, ProjectStore>();
@@ -986,6 +1006,11 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
     }
 }
 
+// routes.go:57: IP access control is the very first global middleware. A denied
+// request is answered here (302 when redirect_url is set, otherwise 404) and
+// never reaches tracing, metrics, auth, the static fallback or a route.
+app.UseMiddleware<IpAccessControlMiddleware>();
+
 // Public system surface (routes.go:81-99): /health, /admin/system/status and
 // /admin/system/initialize. The two admin routes sit on the reference's
 // unSecureAdminGroup and are deliberately outside every auth middleware.
@@ -1094,6 +1119,15 @@ app.UseMiddleware<RequestTracingMiddleware>();
 // records after the response with the gin FullPath() template; the fallback
 // (no gin route) records the empty path.
 app.UseMiddleware<HttpMetricsMiddleware>();
+
+// routes.go:67-79: CORS follows metrics and is mounted only when enabled. The
+// reference's catch-all OPTIONS route has no ASP.NET Core equivalent; unmatched
+// preflights have no endpoint metadata, so the middleware applies this default
+// policy to them as well.
+if (corsSettings.Enabled)
+{
+    app.UseCors();
+}
 
 // Group timeouts (routes.go:81-104). They are registered after the global
 // middlewares, matching gin: the globals run before the group's
