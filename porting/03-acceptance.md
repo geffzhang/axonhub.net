@@ -2442,6 +2442,13 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
   库内 1 条 `failed` request（`channel_id` 已回填）、3 条 `failed` execution（`response_status_code=502`、有 `error_message`、
   无延迟指标、`Authorization` 落库为 `******`）、0 条 usage log；请求体以 jsonb 原样落库；容器日志无未处理异常；
   冒烟后删除容器与网络
+- [x] 真实 provider（LlmTestServer） — 2026-11-14：新增 `LlmTestServerE2ETests`，
+  经真实 `HttpExecutor` 访问本地 `E:\GitHub\LlmTestServer`（`/openai/v1`，
+  Bearer `test-key`）。3 例覆盖非流式 chat、流式 chat 的 chunk 拼接与
+  `data:[DONE]` 终止、Anthropic 入站到 OpenAI 上游的 message 信封；设置
+  `AXONHUB_E2E_LLM_TEST_SERVER_URL` 时 3/3 通过，未设置时 3/3 跳过，常规测试
+  不依赖外部进程。该用例不启动 Kestrel/PostgreSQL/Orleans，宿主级链路仍由上述
+  「真实宿主」与容器冒烟覆盖。
 - [ ] 跨平台（Windows / Linux / macOS） — 目前仅在 Windows 11 验证
 - [ ] 跨传输（stdio / HTTP / 进程内） — 仅进程内 HTTP 切片
 
