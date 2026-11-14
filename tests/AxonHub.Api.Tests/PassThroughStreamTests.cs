@@ -852,6 +852,250 @@ public sealed class PassThroughStreamTests
     }
 
     // ------------------------------------------------------------------
+    // rawStreamQueue (live f272549f budgets)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void QueueRejectsASingleEventAboveTheLiveEventLimit()
+    {
+        // rawStreamBacklog.reserve: a single event above 32 MiB fails even
+        // after attachment, with the pre-commit budget sentinel.
+        var backlog = new RawStreamBacklog();
+        _ = backlog.Attach();
+
+        var error = Assert.ThrowsAny<Exception>(
+            () => backlog.Reserve(
+                CancellationToken.None,
+                RawStreamBacklog.MaxRawEventBytes + 1));
+
+        Assert.True(GoErrors.Is(error, PipelineErrors.PreCommitBufferExceeded));
+    }
+
+    [Fact]
+    public void QueuePostAttachByteBudgetWaitsForTheConsumerToRelease()
+    {
+        // rawStreamBacklog.reserve after attachment: capacity is 128 MiB and
+        // a full budget blocks instead of failing.
+        var backlog = new RawStreamBacklog();
+        _ = backlog.Attach();
+        var chunk = RawStreamBacklog.MaxRawEventBytes;
+        for (var i = 0; i < RawStreamBacklog.MaxRawQueueBytes / chunk; i++)
+        {
+            backlog.Reserve(CancellationToken.None, chunk);
+        }
+
+        using var completed = new ManualResetEventSlim(false);
+        var blocked = new Thread(() =>
+        {
+            backlog.Reserve(CancellationToken.None, 1);
+            completed.Set();
+        })
+        {
+            IsBackground = true,
+        };
+        blocked.Start();
+
+        Assert.False(completed.Wait(TimeSpan.FromMilliseconds(150)));
+
+        backlog.Release(chunk);
+
+        Assert.True(completed.Wait(SafetyTimeout));
+    }
+
+    [Fact]
+    public void QueueReserveStopsWaitingWhenTheAttemptIsCanceled()
+    {
+        var backlog = new RawStreamBacklog();
+        _ = backlog.Attach();
+        var chunk = RawStreamBacklog.MaxRawEventBytes;
+        for (var i = 0; i < RawStreamBacklog.MaxRawQueueBytes / chunk; i++)
+        {
+            backlog.Reserve(CancellationToken.None, chunk);
+        }
+
+        using var cts = new CancellationTokenSource();
+        Exception? caught = null;
+        using var completed = new ManualResetEventSlim(false);
+        var blocked = new Thread(() =>
+        {
+            try
+            {
+                backlog.Reserve(cts.Token, 1);
+            }
+            catch (Exception ex)
+            {
+                caught = ex;
+            }
+            finally
+            {
+                completed.Set();
+            }
+        })
+        {
+            IsBackground = true,
+        };
+        blocked.Start();
+
+        cts.Cancel();
+
+        Assert.True(completed.Wait(SafetyTimeout));
+        Assert.IsAssignableFrom<OperationCanceledException>(caught);
+    }
+
+    [Fact]
+    public void QueueAttachKeepsHeldEventsChargedUntilTheyAreRead()
+    {
+        // attach moves the held events without releasing their budget; each
+        // read releases that event's bytes (live raw_stream_queue.go:25-100).
+        var backlog = new RawStreamBacklog();
+        var queue = new RawStreamQueue(backlog);
+        var held = TestChannels.Data("{}");
+        Assert.True(backlog.Hold(held, out _));
+        var heldSize = RawStreamBacklog.EventSize(held);
+        queue.Attach();
+
+        var available = RawStreamBacklog.MaxRawQueueBytes - heldSize;
+        while (available > 0)
+        {
+            var chunk = Math.Min(available, RawStreamBacklog.MaxRawEventBytes);
+            backlog.Reserve(CancellationToken.None, chunk);
+            available -= chunk;
+        }
+
+        using var completed = new ManualResetEventSlim(false);
+        var blocked = new Thread(() =>
+        {
+            backlog.Reserve(CancellationToken.None, 1);
+            completed.Set();
+        })
+        {
+            IsBackground = true,
+        };
+        blocked.Start();
+
+        Assert.False(completed.Wait(TimeSpan.FromMilliseconds(150)));
+
+        Assert.Same(held, queue.Next(CancellationToken.None));
+        Assert.True(completed.Wait(SafetyTimeout));
+    }
+
+    [Fact]
+    public void QueueBlocksLiveSendsUntilTheBoundedChannelDrains()
+    {
+        // Reference TestRawStreamQueue_BlocksLargeLiveEventsUntilConsumerReads:
+        // a full channel applies backpressure instead of dropping the event.
+        var backlog = new RawStreamBacklog();
+        _ = backlog.Attach();
+        var queue = new RawStreamQueue(backlog);
+        for (var i = 0; i < RawStreamQueue.ChannelCapacity; i++)
+        {
+            queue.Enqueue(CancellationToken.None, new StreamEvent());
+        }
+
+        var large = new StreamEvent { Data = new byte[16 * 1024 * 1024] };
+        using var completed = new ManualResetEventSlim(false);
+        var blocked = new Thread(() =>
+        {
+            queue.Enqueue(CancellationToken.None, large);
+            completed.Set();
+        })
+        {
+            IsBackground = true,
+        };
+        blocked.Start();
+
+        Assert.False(completed.Wait(TimeSpan.FromMilliseconds(150)));
+        Assert.True(queue.Channel.TryTake(out _));
+        Assert.True(completed.Wait(SafetyTimeout));
+
+        var drained = new List<StreamEvent>();
+        while (queue.Channel.TryTake(out var sent))
+        {
+            drained.Add(sent);
+        }
+
+        Assert.Same(large, drained[^1]);
+    }
+
+    [Fact]
+    public void QueueNextReturnsHeldEventsBeforeLiveEvents()
+    {
+        var backlog = new RawStreamBacklog();
+        var queue = new RawStreamQueue(backlog);
+        var held1 = TestChannels.Data("held-1");
+        var held2 = TestChannels.Data("held-2");
+        Assert.True(backlog.Hold(held1, out _));
+        Assert.True(backlog.Hold(held2, out _));
+        queue.Attach();
+        var live = TestChannels.Data("live");
+        queue.Enqueue(CancellationToken.None, live);
+        queue.Channel.CompleteAdding();
+
+        Assert.Same(held1, queue.Next(CancellationToken.None));
+        Assert.Same(held2, queue.Next(CancellationToken.None));
+        Assert.Same(live, queue.Next(CancellationToken.None));
+        Assert.Null(queue.Next(CancellationToken.None));
+    }
+
+    [Fact]
+    public void CaptureStreamReportsThePreAttachmentBudgetAsItsError()
+    {
+        // A pipeline that pre-reads filtered events beyond the backlog budget
+        // must fail explicitly instead of stalling or attaching (live
+        // TestPassThroughAnthropicStream_RawBudget).
+        var events = Enumerable
+            .Range(0, RawStreamBacklog.MaxRawPreAttachEvents + 1)
+            .Select(i => new StreamEvent { Type = "ping", Data = Bytes("{}") })
+            .ToList();
+
+        var outbound = Outbound(Request(stream: true));
+        var result = new CaptureRawProviderStreamMiddleware(
+                outbound,
+                PassThroughSettings.Disabled,
+                CancellationToken.None)
+            .TransformOutboundRawStream(new ListStream<StreamEvent>(events));
+
+        var received = Drain(result, RawStreamBacklog.MaxRawPreAttachEvents + 10);
+
+        Assert.Equal(RawStreamBacklog.MaxRawPreAttachEvents, received.Count);
+        Assert.NotNull(result.Err);
+        Assert.True(GoErrors.Is(result.Err, PipelineErrors.PreCommitBufferExceeded));
+        Assert.Contains(
+            "pass-through pre-attachment raw event budget exceeded",
+            result.Err!.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ApplyStreamReadsHeldEventsFromTheQueue()
+    {
+        var outbound = Outbound(Request(stream: true));
+        var backlog = new RawStreamBacklog();
+        var queue = new RawStreamQueue(backlog);
+        var held = TestChannels.Data("held");
+        Assert.True(backlog.Hold(held, out _));
+        var live = TestChannels.Data("live");
+        queue.Enqueue(CancellationToken.None, live);
+        queue.Channel.CompleteAdding();
+        outbound.PassThroughStream = new PassThroughStreamState
+        {
+            RawChannel = queue.Channel,
+            RawQueue = queue,
+            Backlog = backlog,
+            ErrorRef = new PassThroughErrorRef(),
+            Cancel = () => { },
+        };
+
+        var result = new PassThroughStreamMiddleware(
+                outbound,
+                PassThroughSettings.Disabled,
+                CancellationToken.None)
+            .TransformInboundRawStream(new ListStream<StreamEvent>([]));
+
+        Assert.Equal<StreamEvent>([held, live], Drain(result, 10));
+    }
+
+    // ------------------------------------------------------------------
     // Pipeline integration
     // ------------------------------------------------------------------
 

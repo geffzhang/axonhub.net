@@ -1681,7 +1681,23 @@ raw_stream_queue 的 128 MiB 后附着预算、32 MiB 单事件 reserve 与 64 M
 `ResponsesProtocolCodecTests` 28 例、`ResponsesOutboundTransformerTests` WS guard/accept 6 例；
 `PassThroughStreamTests` 改为锁定响应克隆语义。定向运行：Api FullyQualifiedName~Responses|~PassThrough
 346 通过、Api ~WebSocket|~Codex|~ChannelTest 339 通过、Llm ~Responses 428 通过；未跑 Api 全量回归。
-台账：新增 C290（resolved），C289 收窄；290 条（199 resolved / 91 accepted / 0 gap）。
+台账：新增 C290（resolved），C289 收窄；290 条（199 accepted / 0 gap / 91 resolved）。
+
+2026-11-14 更新（§218）：raw stream queue 的预算与背压（C291）。
+按 live f272549f 的 pass_through.go:893-999 与 raw_stream_queue.go 升级 raw 流预算：
+`RawStreamBacklog` 的 pre-attach 上限由 8 MiB 提升到 64 MiB（仍 1024 条），新增单事件 32 MiB、
+后附着 128 MiB 与 count/bytes 记账、`Reserve` / `Release` 及等待唤醒；`attach` 后 held 事件继续占用
+预算，读取时才释放。新增 `RawStreamQueue`（容量 64）：`Attach` 移交 held，`Enqueue` 先预留再阻塞
+写通道，取消时释放预留，`Next` 先 held 后通道并逐条释放，`NextBuffered` 只排干缓冲；事件尺寸为
+Data + Type + LastEventID。扇出线程在 attach 后经 queue 发送，慢消费者以 128 MiB / 1024 条为上限
+施加背压，单事件 >32 MiB 失败并把 `PreCommitBufferExceeded` 写入 per-attempt 错误；apply 经
+`queue.Attach` 接管 held。实现差异：waitCh 用 TaskCompletionSource（异步延续）实现；队列为
+per-attempt 句柄而非 IDisposable（通道由扇出线程 CompleteAdding）；Enqueue 取消沿用 C091 的静默
+结束，Err 由 requestToken 兜底。测试：`PassThroughStreamTests` 新增 8 例（单事件上限、后附着
+128 MiB 阻塞/释放、等待中取消、held 记账到读取、满通道背压、held 优先顺序、pre-attach 溢出显式
+失败、生产 queue 路径）；定向运行 Api ~Responses|~PassThrough 354 通过、
+~WebSocket|~Codex|~ChannelTest 339 通过；未跑 Api 全量回归。台账：新增 C291（resolved），
+C290 收窄，C091 预算表述更新；291 条（199 accepted / 0 gap / 92 resolved）。
 
 ## 30. trace 子系统基础（60 例，2026-11-01）
 

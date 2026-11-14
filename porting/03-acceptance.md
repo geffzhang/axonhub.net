@@ -2077,7 +2077,19 @@ openai/responses-ws。差异：identity 用 span splice 保持其余字节不变
 pre-attach 上限（端口保持 8 MiB/1024 条且无 queue）。测试：新增 76 例（TransportPassThrough 42、
 ProtocolCodec 28、WS guard/accept 6），PassThroughStreamTests 更新克隆语义；定向运行 Api 346、Api
 WebSocket|Codex|ChannelTest 339、Llm 428 通过；未跑 Api 全量回归。台账：C290 新增 resolved，C289
-收窄；lint 通过；02-differences.md 已重新生成；290 条（199 resolved / 91 accepted / 0 gap）。
+收窄；lint 通过；02-differences.md 已重新生成；290 条（199 accepted / 0 gap / 91 resolved）。
+
+§218（2026-11-14）raw stream queue 的预算与背压（C291）。按 live f272549f 移植
+RawStreamBacklog 的 1024 条 / pre-attach 64 MiB、单事件 32 MiB、后附着 128 MiB 与
+Reserve/Release/等待唤醒（attach 后 held 事件在读取前继续占预算）以及 RawStreamQueue
+（容量 64；Attach 移交 held，Enqueue 预留后阻塞，Next 先 held 后通道并逐条释放，
+NextBuffered 只排干缓冲；事件尺寸 Data+Type+LastEventID）；扇出线程 attach 后经 queue 发送，
+预算溢出写入 per-attempt 错误并暴露 PreCommitBufferExceeded，apply 经 queue.Attach 接管 held。
+差异：waitCh 用 TaskCompletionSource、队列为 per-attempt 句柄而非 IDisposable、Enqueue 取消沿用
+C091 的静默结束（Err 由 requestToken 兜底）。测试：PassThroughStreamTests 新增 8 例；
+定向运行 Api Responses|PassThrough 354、Api WebSocket|Codex|ChannelTest 339 通过；未跑 Api
+全量回归。台账：C291 新增 resolved，C290 收窄，C091 预算表述更新；lint 通过；
+02-differences.md 已重新生成；291 条（199 accepted / 0 gap / 92 resolved）。
 
 ## 公开 API 审计
 

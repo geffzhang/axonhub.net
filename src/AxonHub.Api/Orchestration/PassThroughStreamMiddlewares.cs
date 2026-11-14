@@ -34,6 +34,13 @@ internal sealed class PassThroughStreamState
     /// <summary>Events captured before the pass-through consumer attached.</summary>
     public required RawStreamBacklog Backlog { get; init; }
 
+    /// <summary>
+    /// Bounded queue that owns the post-attachment raw channel and the held
+    /// events (the reference's <c>state.RawStreamQueue</c>). Null in the legacy
+    /// channel-only fixtures; production always sets it.
+    /// </summary>
+    public RawStreamQueue? RawQueue { get; init; }
+
     /// <summary>Terminal error of this attempt's fan-out thread.</summary>
     public required PassThroughErrorRef ErrorRef { get; init; }
 
@@ -77,22 +84,29 @@ internal sealed class PassThroughErrorRef
 /// Port of rawStreamBacklog: holds raw provider events of one attempt until the
 /// pass-through consumer attaches, bounded by count and bytes so a stream that
 /// the pipeline filters away (for example Anthropic pings) cannot grow without
-/// limit while the consumer is still unknown.
+/// limit while the consumer is still unknown. After attachment the same budget
+/// object tracks the live queue: events block on the post-attachment 128 MiB
+/// budget and a single event above 32 MiB fails the attempt
+/// (live pass_through.go:893-999).
 /// </summary>
 internal sealed class RawStreamBacklog
 {
+    internal const int MaxRawEventBytes = 32 * 1024 * 1024;
     internal const int MaxRawPreAttachEvents = 1024;
-    internal const int MaxRawPreAttachBytes = 8 * 1024 * 1024;
+    internal const int MaxRawPreAttachBytes = 64 * 1024 * 1024;
+    internal const int MaxRawQueueBytes = 128 * 1024 * 1024;
 
     private readonly object _sync = new();
     private readonly List<StreamEvent> _events = [];
     private bool _attached;
     private int _bytes;
+    private int _count;
+    private TaskCompletionSource<bool>? _waiter;
 
     /// <summary>
     /// Port of rawStreamBacklog.hold: keeps the event for the consumer that has
     /// not attached yet. Returns false (without an error) once attached, in
-    /// which case the caller sends the event through the raw channel.
+    /// which case the caller queues the event for the live consumer.
     /// </summary>
     public bool Hold(StreamEvent @event, out Exception? error)
     {
@@ -106,14 +120,16 @@ internal sealed class RawStreamBacklog
             }
 
             var size = EventSize(@event);
-            if (_events.Count >= MaxRawPreAttachEvents
-                || size > MaxRawPreAttachBytes - _bytes)
+            var maxBytes = MaxRawPreAttachBytes;
+            if (_count >= MaxRawPreAttachEvents
+                || size > maxBytes - _bytes)
             {
                 error = BudgetExceeded();
                 return false;
             }
 
             _bytes += size;
+            _count++;
             _events.Add(@event);
             return true;
         }
@@ -122,7 +138,8 @@ internal sealed class RawStreamBacklog
     /// <summary>
     /// Port of rawStreamBacklog.attach: hands the held events to the consumer;
     /// every later event arrives on the raw channel, so the consumer prepends
-    /// these to preserve order.
+    /// these to preserve order. The held events stay counted until the queue
+    /// releases them (live raw_stream_queue.go:25-40).
     /// </summary>
     public StreamEvent[] Attach()
     {
@@ -135,25 +152,222 @@ internal sealed class RawStreamBacklog
         }
     }
 
+    /// <summary>
+    /// Port of rawStreamBacklog.reserve: charges one event against the live
+    /// budget. Before attachment an overflow fails immediately; afterwards it
+    /// waits for the consumer to release capacity, observing cancellation like
+    /// the reference's <c>waitCh</c> / <c>ctx.Done()</c> select.
+    /// </summary>
+    public void Reserve(CancellationToken cancellationToken, int size)
+    {
+        if (size > MaxRawEventBytes)
+        {
+            throw BudgetExceeded();
+        }
+
+        while (true)
+        {
+            TaskCompletionSource<bool>? waiter;
+
+            lock (_sync)
+            {
+                var maxBytes = _attached ? MaxRawQueueBytes : MaxRawPreAttachBytes;
+                if (_count < MaxRawPreAttachEvents && size <= maxBytes - _bytes)
+                {
+                    _bytes += size;
+                    _count++;
+                    return;
+                }
+
+                if (!_attached)
+                {
+                    throw BudgetExceeded();
+                }
+
+                waiter = _waiter ??= new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            waiter.Task.Wait(cancellationToken);
+        }
+    }
+
+    /// <summary>Port of rawStreamBacklog.release: frees one consumed event.</summary>
+    public void Release(int size)
+    {
+        lock (_sync)
+        {
+            _bytes -= size;
+            _count--;
+            if (_waiter is { } waiter)
+            {
+                _waiter = null;
+                waiter.TrySetResult(true);
+            }
+        }
+    }
+
     internal static Exception BudgetExceeded()
         => GoErrors.Wrap(
             PipelineErrors.PreCommitBufferExceeded,
             "pass-through pre-attachment raw event budget exceeded: ");
 
-    private static int EventSize(StreamEvent @event)
+    internal static int EventSize(StreamEvent @event)
         => @event.Data.Length + @event.Type.Length + (@event.LastEventId?.Length ?? 0);
+}
+
+/// <summary>
+/// Port of rawStreamQueue (live raw_stream_queue.go): the post-attachment raw
+/// channel plus the events held before attachment. Every queued event is
+/// charged to <see cref="RawStreamBacklog"/> on enqueue and released when the
+/// consumer reads it, so a slow client applies backpressure to the provider
+/// reader instead of growing memory without bound.
+/// </summary>
+[SuppressMessage(
+    "Design",
+    "CA1001:Types that own disposable fields should be disposable",
+    Justification = "The queue is a per-attempt handle like PassThroughStreamState: the fan-out thread "
+        + "completes the channel, and disposing it from either side would race the other. The backing "
+        + "BlockingCollection is only ever completed, never disposed, matching the Go channel lifetime.")]
+internal sealed class RawStreamQueue
+{
+    /// <summary>Go channel buffer size in the reference.</summary>
+    public const int ChannelCapacity = 64;
+
+    private readonly RawStreamBacklog _backlog;
+    private readonly BlockingCollection<StreamEvent> _channel;
+    private readonly object _heldSync = new();
+    private readonly List<StreamEvent> _held = [];
+    private readonly List<int> _heldSizes = [];
+
+    public RawStreamQueue(RawStreamBacklog backlog)
+    {
+        _backlog = backlog;
+        _channel = new BlockingCollection<StreamEvent>(
+            new ConcurrentQueue<StreamEvent>(),
+            ChannelCapacity);
+    }
+
+    /// <summary>The channel the fan-out writes and the consumer reads.</summary>
+    public BlockingCollection<StreamEvent> Channel => _channel;
+
+    /// <summary>
+    /// Port of rawStreamQueue.attach: marks the backlog attached and moves its
+    /// events ahead of the channel. The returned array mirrors the reference's
+    /// return value; the consumer reads them through <see cref="Next"/>.
+    /// </summary>
+    public StreamEvent[] Attach()
+    {
+        var events = _backlog.Attach();
+
+        lock (_heldSync)
+        {
+            _held.AddRange(events);
+            foreach (var @event in events)
+            {
+                _heldSizes.Add(RawStreamBacklog.EventSize(@event));
+            }
+        }
+
+        return events;
+    }
+
+    /// <summary>
+    /// Port of rawStreamQueue.enqueue: reserve budget, then block on the bounded
+    /// channel. Cancellation releases the reservation so a retry never leaks
+    /// budget into the next attempt.
+    /// </summary>
+    public void Enqueue(CancellationToken cancellationToken, StreamEvent @event)
+    {
+        var size = RawStreamBacklog.EventSize(@event);
+        _backlog.Reserve(cancellationToken, size);
+
+        try
+        {
+            _channel.Add(@event, cancellationToken);
+        }
+        catch
+        {
+            _backlog.Release(size);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Port of rawStreamQueue.next: held events first, then the blocking
+    /// channel. Returns null when the channel is completed; cancellation is
+    /// propagated as <see cref="OperationCanceledException"/> so the consumer
+    /// can drain what is already buffered.
+    /// </summary>
+    public StreamEvent? Next(CancellationToken cancellationToken)
+    {
+        if (TryTakeHeld(out var held))
+        {
+            return held;
+        }
+
+        if (_channel.TryTake(out var @event, Timeout.Infinite, cancellationToken))
+        {
+            _backlog.Release(RawStreamBacklog.EventSize(@event));
+            return @event;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Port of rawStreamQueue.nextBuffered: never blocks on the producer, so
+    /// already-buffered events survive a client disconnect.
+    /// </summary>
+    public StreamEvent? NextBuffered()
+    {
+        if (TryTakeHeld(out var held))
+        {
+            return held;
+        }
+
+        if (_channel.TryTake(out var @event))
+        {
+            _backlog.Release(RawStreamBacklog.EventSize(@event));
+            return @event;
+        }
+
+        return null;
+    }
+
+    private bool TryTakeHeld(out StreamEvent @event)
+    {
+        lock (_heldSync)
+        {
+            if (_held.Count > 0)
+            {
+                @event = _held[0];
+                _held.RemoveAt(0);
+                var size = _heldSizes[0];
+                _heldSizes.RemoveAt(0);
+                _backlog.Release(size);
+                return true;
+            }
+        }
+
+        @event = null!;
+        return false;
+    }
 }
 
 /// <summary>
 /// Port of passThroughChannelStream: a bounded channel exposed as a stream.
 /// After cancellation it drains already-buffered events and never blocks on the
 /// producer, so a terminal event racing the client disconnect is still seen.
+/// When a <see cref="RawStreamQueue"/> is supplied it owns the held events and
+/// the per-event budget releases.
 /// </summary>
 internal sealed class PassThroughChannelStream(
     CancellationToken requestToken,
     BlockingCollection<StreamEvent> channel,
     PassThroughErrorRef errorRef,
-    Action? cancel) : IStream<StreamEvent>
+    Action? cancel,
+    RawStreamQueue? queue = null) : IStream<StreamEvent>
 {
     private StreamEvent? _current;
     private bool _canceled;
@@ -186,6 +400,18 @@ internal sealed class PassThroughChannelStream(
 
         try
         {
+            if (queue is not null)
+            {
+                var queued = queue.Next(requestToken);
+                if (queued is null)
+                {
+                    return false;
+                }
+
+                _current = queued;
+                return true;
+            }
+
             if (channel.TryTake(out var @event, Timeout.Infinite, requestToken))
             {
                 _current = @event;
@@ -222,7 +448,11 @@ internal sealed class PassThroughChannelStream(
     /// </summary>
     private bool NextBuffered()
     {
-        if (channel.TryTake(out var @event))
+        var @event = queue is not null
+            ? queue.NextBuffered()
+            : channel.TryTake(out var buffered) ? buffered : null;
+
+        if (@event is not null)
         {
             _current = @event;
             return true;
@@ -333,7 +563,10 @@ internal sealed class CaptureRawProviderStreamMiddleware(
     CancellationToken cancellationToken)
     : DummyMiddleware("capture-raw-provider-stream")
 {
-    /// <summary>Go channel buffer size in the reference (both fan-out channels).</summary>
+    /// <summary>
+    /// Go channel buffer size in the reference. The raw side now lives on
+    /// <see cref="RawStreamQueue"/>, which uses the same capacity.
+    /// </summary>
     public const int ChannelCapacity = 64;
 
     [SuppressMessage(
@@ -354,14 +587,15 @@ internal sealed class CaptureRawProviderStreamMiddleware(
         }
 
         var pipelineChannel = new BlockingCollection<StreamEvent>(new ConcurrentQueue<StreamEvent>(), ChannelCapacity);
-        var rawChannel = new BlockingCollection<StreamEvent>(new ConcurrentQueue<StreamEvent>(), ChannelCapacity);
         var backlog = new RawStreamBacklog();
+        var rawQueue = new RawStreamQueue(backlog);
         var errorRef = new PassThroughErrorRef();
         var closer = new PassThroughAttemptCloser(stream, cancellationToken);
 
         outbound.PassThroughStream = new PassThroughStreamState
         {
-            RawChannel = rawChannel,
+            RawChannel = rawQueue.Channel,
+            RawQueue = rawQueue,
             Backlog = backlog,
             ErrorRef = errorRef,
             Cancel = closer.Close,
@@ -371,7 +605,7 @@ internal sealed class CaptureRawProviderStreamMiddleware(
             () => FanOut(
                 stream,
                 pipelineChannel,
-                rawChannel,
+                rawQueue,
                 backlog,
                 errorRef,
                 closer,
@@ -391,7 +625,7 @@ internal sealed class CaptureRawProviderStreamMiddleware(
     private static void FanOut(
         IStream<StreamEvent> source,
         BlockingCollection<StreamEvent> pipelineChannel,
-        BlockingCollection<StreamEvent> rawChannel,
+        RawStreamQueue rawQueue,
         RawStreamBacklog backlog,
         PassThroughErrorRef errorRef,
         PassThroughAttemptCloser closer,
@@ -437,10 +671,18 @@ internal sealed class CaptureRawProviderStreamMiddleware(
 
                 try
                 {
-                    rawChannel.Add(@event, attemptToken);
+                    rawQueue.Enqueue(attemptToken, @event);
                 }
                 catch (OperationCanceledException)
                 {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    // Budget overflow (single event > 32 MiB or a full queue
+                    // that cannot be charged) fails the attempt, matching the
+                    // reference's rawStreamErr assignment.
+                    errorRef.SetIfNull(ex);
                     return;
                 }
             }
@@ -463,7 +705,7 @@ internal sealed class CaptureRawProviderStreamMiddleware(
                     ? new OperationCanceledException(requestToken)
                     : null));
             pipelineChannel.CompleteAdding();
-            rawChannel.CompleteAdding();
+            rawQueue.Channel.CompleteAdding();
             closer.Dispose();
         }
     }
@@ -556,18 +798,35 @@ internal sealed class PassThroughStreamMiddleware(
             return stream;
         }
 
-        var held = state.Backlog.Attach();
-        var rawStream = new PassThroughChannelStream(
-            cancellationToken,
-            state.RawChannel,
-            state.ErrorRef,
-            state.Cancel);
-
         DrainInBackground(stream);
 
-        IStream<StreamEvent> result = held.Length == 0
-            ? rawStream
-            : new PrependStream<StreamEvent>(rawStream, held);
+        IStream<StreamEvent> result;
+        if (state.RawQueue is { } queue)
+        {
+            // The queue owns both the pre-attachment events and the live
+            // channel; every read releases that event's budget (live
+            // raw_stream_queue.go:25-100).
+            queue.Attach();
+            result = new PassThroughChannelStream(
+                cancellationToken,
+                queue.Channel,
+                state.ErrorRef,
+                state.Cancel,
+                queue);
+        }
+        else
+        {
+            var held = state.Backlog.Attach();
+            var rawStream = new PassThroughChannelStream(
+                cancellationToken,
+                state.RawChannel,
+                state.ErrorRef,
+                state.Cancel);
+
+            result = held.Length == 0
+                ? rawStream
+                : new PrependStream<StreamEvent>(rawStream, held);
+        }
 
         // The transport adapter runs first (source -> target), then identity
         // preservation restores the client's model in the adapted payload.
