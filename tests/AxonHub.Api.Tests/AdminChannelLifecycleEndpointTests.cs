@@ -897,7 +897,7 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
 
     public List<(long Id, ChannelUpdateRecord Update)> UpdateCalls { get; } = [];
 
-    public List<(long Id, string EndpointsJson)> SaveEndpointsCalls { get; } = [];
+    public List<(long Id, string EndpointsJson, string? SettingsJson)> SaveEndpointsCalls { get; } = [];
 
     public List<ChannelApiKeyStateRecord> ApiKeyStateCalls { get; } = [];
 
@@ -1163,6 +1163,7 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
     public Task<ChannelRecord?> SaveEndpointsAsync(
         ChannelRecord snapshot,
         string endpointsJson,
+        string? settingsJson,
         CancellationToken cancellationToken = default)
     {
         if (SaveEndpointsFailure is not null)
@@ -1184,12 +1185,14 @@ internal sealed class FakeChannelWriteStore : IChannelWriteStore
             return Task.FromResult<ChannelRecord?>(null);
         }
 
-        SaveEndpointsCalls.Add((row.Id, endpointsJson));
+        SaveEndpointsCalls.Add((row.Id, endpointsJson, settingsJson));
         row.Endpoints = endpointsJson;
+        row.Settings = settingsJson;
         row.UpdatedAt = DateTime.UtcNow;
 
         // ent returns the saved entity; the port projects the loaded snapshot.
         snapshot.Endpoints = endpointsJson;
+        snapshot.Settings = settingsJson;
         snapshot.UpdatedAt = row.UpdatedAt;
         return Task.FromResult<ChannelRecord?>(snapshot);
     }

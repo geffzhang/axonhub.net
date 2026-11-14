@@ -114,8 +114,12 @@ public sealed class AdminChannelEndpointsEndpointTests : IAsyncLifetime
         Assert.Equal(expected, call.EndpointsJson);
         Assert.Equal(expected, channel.Endpoints);
 
-        // The save touches only the endpoints column.
-        Assert.Equal("""{"extraModelPrefix":"cfg"}""", channel.Settings);
+        // The save writes the normalized settings alongside the endpoints.
+        Assert.NotNull(call.SettingsJson);
+        using var settingsDocument = JsonDocument.Parse(channel.Settings!);
+        Assert.Equal(
+            "cfg",
+            settingsDocument.RootElement.GetProperty("extraModelPrefix").GetString());
         Assert.Equal("Alpha", channel.Name);
     }
 
@@ -139,6 +143,111 @@ public sealed class AdminChannelEndpointsEndpointTests : IAsyncLifetime
             data.GetProperty("saveChannelEndpoints").GetProperty("endpoints").EnumerateArray());
         Assert.Equal("[]", Assert.Single(_channels.SaveEndpointsCalls).EndpointsJson);
         Assert.Equal("[]", channel.Endpoints);
+    }
+
+    [Fact]
+    public async Task SaveChannelEndpointsNormalizesResponsesTransportFromTheChannelBaseUrl()
+    {
+        var channel = SeedChannel(baseUrl: "wss://gateway.example/ws");
+
+        var data = await QueryDataAsync(
+            SaveMutation,
+            new
+            {
+                input = new
+                {
+                    channelID = Gid(channel.Id),
+                    endpoints = new object[]
+                    {
+                        new { apiFormat = "openai/responses", path = "/v1/responses" },
+                    },
+                },
+            });
+
+        var endpoint = Assert.Single(
+            data.GetProperty("saveChannelEndpoints")
+                .GetProperty("endpoints")
+                .EnumerateArray()
+                .ToArray());
+        Assert.Equal("openai/responses-ws", endpoint.GetProperty("apiFormat").GetString());
+        Assert.Equal("/v1/responses", endpoint.GetProperty("path").GetString());
+
+        var call = Assert.Single(_channels.SaveEndpointsCalls);
+        Assert.Equal(
+            """[{"api_format":"openai/responses-ws","path":"/v1/responses"}]""",
+            call.EndpointsJson);
+        Assert.Equal(call.EndpointsJson, channel.Endpoints);
+    }
+
+    [Fact]
+    public async Task SaveChannelEndpointsRewritesAnExplicitHttpTransportOverAWebSocketBaseUrl()
+    {
+        var channel = SeedChannel(baseUrl: "wss://gateway.example/ws");
+
+        var data = await QueryDataAsync(
+            SaveMutation,
+            new
+            {
+                input = new
+                {
+                    channelID = Gid(channel.Id),
+                    endpoints = new object[]
+                    {
+                        new
+                        {
+                            apiFormat = "openai/responses",
+                            transport = "http",
+                        },
+                    },
+                },
+            });
+
+        var endpoint = Assert.Single(
+            data.GetProperty("saveChannelEndpoints")
+                .GetProperty("endpoints")
+                .EnumerateArray()
+                .ToArray());
+        Assert.Equal("openai/responses", endpoint.GetProperty("apiFormat").GetString());
+        Assert.Equal(
+            "https://gateway.example/ws",
+            endpoint.GetProperty("baseURL").GetString());
+
+        Assert.Equal(
+            """[{"api_format":"openai/responses","base_url":"https://gateway.example/ws"}]""",
+            Assert.Single(_channels.SaveEndpointsCalls).EndpointsJson);
+    }
+
+    [Fact]
+    public async Task SaveChannelEndpointsRewritesStoredModelProtocolsForAWebSocketChannel()
+    {
+        var channel = SeedChannel(
+            baseUrl: "wss://gateway.example/ws",
+            settings:
+                """{"modelProtocols":[{"model":"m","apiFormats":["openai/responses"],"enabled":true}]}""");
+
+        await QueryDataAsync(
+            SaveMutation,
+            new
+            {
+                input = new
+                {
+                    channelID = Gid(channel.Id),
+                    endpoints = new object[]
+                    {
+                        new { apiFormat = "openai/responses" },
+                    },
+                },
+            });
+
+        Assert.Equal(
+            """[{"api_format":"openai/responses-ws"}]""",
+            Assert.Single(_channels.SaveEndpointsCalls).EndpointsJson);
+
+        using var settingsDocument = JsonDocument.Parse(channel.Settings!);
+        var protocol = settingsDocument.RootElement.GetProperty("modelProtocols")[0];
+        Assert.Equal(
+            "openai/responses-ws",
+            protocol.GetProperty("apiFormats")[0].GetString());
     }
 
     [Fact]
@@ -406,14 +515,15 @@ public sealed class AdminChannelEndpointsEndpointTests : IAsyncLifetime
 
     private ChannelRecord SeedChannel(
         string type = "openai",
-        string? settings = null)
+        string? settings = null,
+        string baseUrl = "https://api.example/v1")
     {
         var record = new ChannelRecord
         {
             CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             UpdatedAt = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc),
             Type = type,
-            BaseUrl = "https://api.example/v1",
+            BaseUrl = baseUrl,
             Name = "Alpha",
             Status = "disabled",
             Credentials = "{}",

@@ -176,10 +176,11 @@ public interface IChannelWriteStore
 
     /// <summary>
     /// Port of ChannelService.SaveChannelEndpoints' save half
-    /// (channel.go:1262-1276): writes only the endpoints column under the
-    /// loaded updated_at guard and returns the saved row. A null result means
-    /// the row vanished or the guard no longer matches (ent not-found, surfaced
-    /// by the caller as "channel was updated concurrently").
+    /// (channel.go:1307-1311): writes the normalized endpoints and the
+    /// normalized settings under the loaded updated_at guard and returns the
+    /// saved row. A null result means the row vanished or the guard no longer
+    /// matches (ent not-found, surfaced by the caller as "channel was updated
+    /// concurrently").
     /// </summary>
     /// <exception cref="StoreFailureException">
     /// The update failed; the message already carries "failed to update channel endpoints".
@@ -187,6 +188,7 @@ public interface IChannelWriteStore
     Task<ChannelRecord?> SaveEndpointsAsync(
         ChannelRecord snapshot,
         string endpointsJson,
+        string? settingsJson,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -684,6 +686,7 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
     public async Task<ChannelRecord?> SaveEndpointsAsync(
         ChannelRecord snapshot,
         string endpointsJson,
+        string? settingsJson,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -694,7 +697,8 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
         int affected;
         try
         {
-            // UpdateOneID(...).Where(UpdatedAtEQ(...)).SetEndpoints(...).Save:
+            // UpdateOneID(...).Where(UpdatedAtEQ(...))
+            //   .SetEndpoints(...).SetSettings(...).Save:
             // the loaded version guards the write in the same statement.
             affected = await db.Channels
                 .Where(row => row.Id == snapshot.Id
@@ -703,6 +707,7 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
                 .ExecuteUpdateAsync(
                     setters => setters
                         .SetProperty(row => row.Endpoints, endpointsJson)
+                        .SetProperty(row => row.Settings, settingsJson)
                         .SetProperty(row => row.UpdatedAt, now),
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -721,8 +726,9 @@ public sealed class ChannelWriteStore(AxonHubDbContext db) : IChannelWriteStore
             return null;
         }
 
-        // ent returns the saved entity: only endpoints and updated_at changed.
+        // ent returns the saved entity: endpoints, settings and updated_at changed.
         snapshot.Endpoints = endpointsJson;
+        snapshot.Settings = settingsJson;
         snapshot.UpdatedAt = now;
         return snapshot;
     }

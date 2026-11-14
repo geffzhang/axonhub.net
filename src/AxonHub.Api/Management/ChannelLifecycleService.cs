@@ -4,6 +4,7 @@ using AxonHub.Api.Billing;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
+using AxonHub.Llm;
 using AxonHub.Llm.Json;
 using AxonHub.Persistence;
 using Microsoft.Extensions.Logging;
@@ -1624,7 +1625,8 @@ public sealed class ChannelLifecycleService(
 
         var error = ChannelValidation.ValidateEndpointsForChannelType(
             snapshot.Type,
-            command.Endpoints);
+            command.Endpoints,
+            snapshot.BaseUrl);
         if (error is not null)
         {
             throw new InvalidOperationException("invalid endpoints: " + error);
@@ -1648,17 +1650,24 @@ public sealed class ChannelLifecycleService(
             throw new InvalidOperationException("failed to get channel: " + ex.Message, ex);
         }
 
+        settings = NormalizeModelProtocols(settings, snapshot);
+
         error = ChannelValidation.ValidateModelProtocols(
             settings,
             snapshot.Type,
-            command.Endpoints);
+            command.Endpoints,
+            snapshot.BaseUrl);
         if (error is not null)
         {
             throw new InvalidOperationException(
                 "invalid endpoints for configured model protocols: " + error);
         }
 
-        var endpointsJson = GoJson.MarshalToString(command.Endpoints);
+        var endpoints = ChannelValidation.NormalizeEndpoints(
+            command.Endpoints,
+            snapshot.BaseUrl);
+        var endpointsJson = GoJson.MarshalToString(endpoints);
+        var settingsJson = settings is null ? null : GoJson.MarshalToString(settings);
 
         ChannelRecord? updated;
         try
@@ -1666,6 +1675,7 @@ public sealed class ChannelLifecycleService(
             updated = await channels.SaveEndpointsAsync(
                     snapshot,
                     endpointsJson,
+                    settingsJson,
                     cancellationToken)
                 .ConfigureAwait(false)
                 ?? throw new ChannelUpdatedConcurrentlyException();
@@ -1678,6 +1688,41 @@ public sealed class ChannelLifecycleService(
         // channel.go:1332: reloadChannelsAfterCommit.
         RequestEnabledChannelsRefresh();
         return updated;
+    }
+
+    /// <summary>
+    /// Port of normalizeModelProtocols (channel_endpoint_responses.go:95-110):
+    /// when the stored channel's Responses intent is WebSocket, rewrite the
+    /// pinned HTTP Responses formats in settings before validation and save.
+    /// </summary>
+    private static ChannelSettingsDraft? NormalizeModelProtocols(
+        ChannelSettingsDraft? settings,
+        ChannelRecord snapshot)
+    {
+        if (settings?.ModelProtocols is not { Count: > 0 } protocols
+            || ChannelEndpoints.LegacyResponsesFormat(snapshot.Endpoints, snapshot.BaseUrl)
+                != ApiFormats.OpenAIResponseWebSocket)
+        {
+            return settings;
+        }
+
+        var normalized = new List<ModelProtocolDraft>(protocols.Count);
+        foreach (var protocol in protocols)
+        {
+            normalized.Add(new ModelProtocolDraft
+            {
+                Model = protocol.Model,
+                ApiFormats = protocol.ApiFormats
+                    .Select(format => format == ApiFormats.OpenAIResponse
+                        ? ApiFormats.OpenAIResponseWebSocket
+                        : format)
+                    .ToArray(),
+                Enabled = protocol.Enabled,
+            });
+        }
+
+        settings.ModelProtocols = normalized;
+        return settings;
     }
 
     /// <summary>

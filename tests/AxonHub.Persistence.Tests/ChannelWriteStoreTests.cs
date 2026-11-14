@@ -953,7 +953,7 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
-    public async Task SaveEndpointsWritesTheJsonAndStampsUpdatedAt()
+    public async Task SaveEndpointsWritesBothJsonColumnsAndStampsUpdatedAt()
     {
         await using var db = new TestDatabase(fixture);
         await db.MigrateAsync();
@@ -971,10 +971,12 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
 
         const string json =
             """[{"api_format":"openai/chat_completions"},{"api_format":"openai/embedding","path":"/custom"}]""";
+        const string settingsJson = """{"extraModelPrefix":"next"}""";
 
-        var saved = await store.SaveEndpointsAsync(snapshot!, json);
+        var saved = await store.SaveEndpointsAsync(snapshot!, json, settingsJson);
         Assert.NotNull(saved);
         Assert.Equal(json, saved!.Endpoints);
+        Assert.Equal(settingsJson, saved.Settings);
         Assert.True(saved.UpdatedAt > channel.UpdatedAt);
 
         await using var verify = db.Factory.CreateDbContext();
@@ -988,11 +990,11 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
             endpoints[0].GetProperty("api_format").GetString());
         Assert.Equal("/custom", endpoints[1].GetProperty("path").GetString());
 
-        // SaveChannelEndpoints writes only the endpoints column; jsonb
-        // re-renders the untouched settings with its own spacing.
+        // SaveChannelEndpoints writes the normalized settings in the same
+        // guarded update; jsonb re-renders it with its own spacing.
         using var settingsDocument = JsonDocument.Parse(reloaded.Settings!);
         Assert.Equal(
-            "cfg",
+            "next",
             settingsDocument.RootElement.GetProperty("extraModelPrefix").GetString());
         Assert.True(reloaded.UpdatedAt > channel.UpdatedAt);
     }
@@ -1012,7 +1014,10 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
         Assert.NotNull(snapshot);
         snapshot!.UpdatedAt = snapshot.UpdatedAt.AddSeconds(-1);
 
-        Assert.Null(await store.SaveEndpointsAsync(snapshot, """[{"api_format":"openai/chat_completions"}]"""));
+        Assert.Null(await store.SaveEndpointsAsync(
+            snapshot,
+            """[{"api_format":"openai/chat_completions"}]""",
+            snapshot.Settings));
 
         // A vanished or soft-deleted id never matches the guarded UPDATE.
         var liveSnapshot = await store.GetAsync(channel.Id);
@@ -1024,7 +1029,8 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
                 UpdatedAt = liveSnapshot!.UpdatedAt,
                 DeletedAt = 0,
             },
-            "[]"));
+            "[]",
+            null));
         Assert.Null(await store.SaveEndpointsAsync(
             new ChannelRecord
             {
@@ -1032,7 +1038,8 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
                 UpdatedAt = deleted.UpdatedAt,
                 DeletedAt = deleted.DeletedAt,
             },
-            "[]"));
+            "[]",
+            null));
 
         await using var verify = db.Factory.CreateDbContext();
         var reloaded = await verify.Channels.SingleAsync(row => row.Id == channel.Id);
@@ -1054,7 +1061,7 @@ public sealed class ChannelWriteStoreTests(PostgresFixture fixture)
             endpoints: """[{"api_format":"openai/chat_completions"}]""");
 
         var snapshot = await store.GetAsync(channel.Id);
-        var saved = await store.SaveEndpointsAsync(snapshot!, "[]");
+        var saved = await store.SaveEndpointsAsync(snapshot!, "[]", snapshot!.Settings);
 
         Assert.NotNull(saved);
         Assert.Equal("[]", saved!.Endpoints);

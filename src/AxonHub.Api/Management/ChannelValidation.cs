@@ -534,7 +534,8 @@ public static class ChannelValidation
     public static string? ValidateModelProtocols(
         ChannelSettingsDraft? settings,
         string channelType,
-        IReadOnlyList<ChannelEndpointDraft>? endpoints)
+        IReadOnlyList<ChannelEndpointDraft>? endpoints,
+        string? baseUrl = null)
     {
         if (settings?.ModelProtocols is null || settings.ModelProtocols.Count == 0)
         {
@@ -542,12 +543,14 @@ public static class ChannelValidation
         }
 
         var available = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var endpoint in ChannelMapping.DefaultEndpoints(channelType))
+        foreach (var endpoint in ChannelEndpoints.NormalizeEndpoints(
+                     ChannelEndpoints.DefaultsForChannelType(channelType),
+                     baseUrl))
         {
             available.Add(endpoint.ApiFormat);
         }
 
-        foreach (var endpoint in endpoints ?? [])
+        foreach (var endpoint in NormalizeEndpoints(endpoints ?? [], baseUrl))
         {
             available.Add(endpoint.ApiFormat);
         }
@@ -831,13 +834,28 @@ public static class ChannelValidation
                 : rule.DisableUntilTimezone,
         };
 
-    /// <summary>Port of ValidateEndpoints (channel_endpoint.go:41-86, frozen order).</summary>
-    public static string? ValidateEndpoints(IReadOnlyList<ChannelEndpointDraft> endpoints)
+    /// <summary>
+    /// Port of ValidateEndpoints (channel_endpoint.go:44-85): an explicit
+    /// transport is validated before the endpoint is normalized against the
+    /// channel base URL; the normalized copy is what the format, duplicate,
+    /// websocket and path checks see.
+    /// </summary>
+    public static string? ValidateEndpoints(
+        IReadOnlyList<ChannelEndpointDraft> endpoints,
+        string? baseUrl = null)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < endpoints.Count; i++)
         {
-            var endpoint = endpoints[i];
+            var source = endpoints[i];
+            if (source.Transport is { Length: > 0 } transport
+                && transport != "http"
+                && transport != "websocket")
+            {
+                return $"endpoint[{i}]: unsupported transport {GoCast.GoQuote(transport)}";
+            }
+
+            var endpoint = NormalizeEndpoints([source], baseUrl)[0];
             if (endpoint.ApiFormat.Length == 0)
             {
                 return $"endpoint[{i}]: api_format is required";
@@ -851,13 +869,6 @@ public static class ChannelValidation
             if (!seen.Add(endpoint.ApiFormat))
             {
                 return $"endpoint[{i}]: duplicate api_format {GoCast.GoQuote(endpoint.ApiFormat)}";
-            }
-
-            if (endpoint.Transport is { Length: > 0 } transport
-                && transport != "http"
-                && transport != "websocket")
-            {
-                return $"endpoint[{i}]: unsupported transport {GoCast.GoQuote(transport)}";
             }
 
             if (EndpointTransport(endpoint) == "websocket"
@@ -884,6 +895,70 @@ public static class ChannelValidation
 
         return null;
     }
+
+    /// <summary>
+    /// Port of NormalizeEndpoints (channel_endpoint_responses.go:17-49) for the
+    /// write draft: legacy explicit transport wins over the inherited base URL
+    /// scheme, Responses-family endpoints are rewritten, and the transport is
+    /// cleared. The input list is never mutated.
+    /// </summary>
+    public static IReadOnlyList<ChannelEndpointDraft> NormalizeEndpoints(
+        IReadOnlyList<ChannelEndpointDraft> endpoints,
+        string? baseUrl)
+    {
+        var normalized = new List<ChannelEndpointDraft>(endpoints.Count);
+        foreach (var source in endpoints)
+        {
+            var endpoint = CloneEndpoint(source);
+            if (endpoint.ApiFormat != ApiFormats.OpenAIResponse
+                && endpoint.ApiFormat != ApiFormats.OpenAIResponseWebSocket)
+            {
+                normalized.Add(endpoint);
+                continue;
+            }
+
+            var resolvedBase = endpoint.BaseUrl is { Length: > 0 }
+                ? endpoint.BaseUrl
+                : baseUrl ?? string.Empty;
+
+            if (endpoint.ApiFormat == ApiFormats.OpenAIResponse)
+            {
+                var legacy = CloneEndpoint(endpoint);
+                legacy.BaseUrl = resolvedBase;
+                if (EndpointTransport(legacy) == "websocket")
+                {
+                    endpoint.ApiFormat = ApiFormats.OpenAIResponseWebSocket;
+                }
+                else if (endpoint.Transport == "http")
+                {
+                    var trimmed = resolvedBase.Trim();
+                    var lowered = trimmed.ToLowerInvariant();
+                    if (lowered.StartsWith("wss://", StringComparison.Ordinal))
+                    {
+                        endpoint.BaseUrl = "https://" + trimmed["wss://".Length..];
+                    }
+                    else if (lowered.StartsWith("ws://", StringComparison.Ordinal))
+                    {
+                        endpoint.BaseUrl = "http://" + trimmed["ws://".Length..];
+                    }
+                }
+            }
+
+            endpoint.Transport = null;
+            normalized.Add(endpoint);
+        }
+
+        return normalized;
+    }
+
+    private static ChannelEndpointDraft CloneEndpoint(ChannelEndpointDraft endpoint)
+        => new()
+        {
+            ApiFormat = endpoint.ApiFormat,
+            Path = endpoint.Path,
+            BaseUrl = endpoint.BaseUrl,
+            Transport = endpoint.Transport,
+        };
 
     /// <summary>Port of endpointTransport (channel_llm.go:288-302).</summary>
     private static string EndpointTransport(ChannelEndpointDraft endpoint)
@@ -916,10 +991,11 @@ public static class ChannelValidation
     /// <summary>Port of validateEndpointsForChannelType (channel_endpoint.go:346-376).</summary>
     public static string? ValidateEndpointsForChannelType(
         string channelType,
-        IReadOnlyList<ChannelEndpointDraft>? endpoints)
+        IReadOnlyList<ChannelEndpointDraft>? endpoints,
+        string? baseUrl = null)
     {
         var list = endpoints ?? [];
-        var error = ValidateEndpoints(list);
+        var error = ValidateEndpoints(list, baseUrl);
         if (error is not null)
         {
             return error;
