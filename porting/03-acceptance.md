@@ -2169,6 +2169,19 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 56 通过；相关 10 类 244 通过；未跑 Api 全量回归。台账：C255 转 resolved；296 条
 （198 accepted / 0 gap / 98 resolved）。
 
+§224（2026-11-14）Api 全量回归与测试宿主修复。首轮全量（日志 `.agent/summary/_api_full_181.log`）
+为失败 19 / 通过 6510 / 总计 6529（19m57s），测试主机在汇总前崩溃（EXIT=1）。三类确定性失败：
+(1) `UsageCostInjectionTests.StreamChunksCarryInjectedCost` 未 `AcknowledgeDelivery`，关闭被记为
+下游取消（`sourceEnd=Canceled`），usage 被 provenance 门判为非 final；测试在 `Dispose` 前显式确认。
+(2) `GrainSchedulerBridgeTests` 的测试 silo 未注册 `IChannelCredentialRecoveryRunner`（激活器启动时
+激活 `ChannelCredentialRecoveryGrain`）；`GrainClusterFixture` 增加 fake runner 并在 `Configure`
+注册、`DisposeAsync` 清理。(3) `AdminSystemEndpointTests` 17 例的最小宿主未注册 `ProjectPrivacy` /
+`RolePrivacy` / `UserProjectPrivacy`（`ProjectManagementService` 构造依赖）；`InitializeAsync` 补齐。
+定向重跑三类 25/25 通过。全量重跑：失败 0 / 通过 6953 / 跳过 0 / 总计 6953，42m22s，EXIT=0
+（日志 `.agent/summary/_api_full_182.log`），测试主机未再崩溃；6953 为本轮完整计数，上次 6529 为
+崩溃中断时的部分计数（静态计数 `[Fact]` 4135 + `[InlineData]` 2660 已超过 6529）。生产代码无改动，
+三处修改均在测试；未提交。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

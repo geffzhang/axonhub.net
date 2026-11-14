@@ -72,6 +72,9 @@ public sealed class GrainClusterFixture : IAsyncLifetime
     /// <summary>The channel-probe grain's runner seam (C249).</summary>
     public FakeChannelProbeRunRunner ChannelProbeRun { get; } = new();
 
+    /// <summary>The expired-disabled-key cleanup grain's runner seam.</summary>
+    public FakeChannelCredentialRecoveryRunner ChannelCredentialRecovery { get; } = new();
+
     /// <summary>
     /// The orchestrator's model-association selector. The reference's tests
     /// mark the context with <c>authz.WithTestBypass</c>, which allows every
@@ -97,6 +100,7 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.VideoStorageSchedule = VideoStorageSchedule;
         GrainTestSiloConfigurator.VideoStorageScan = VideoStorageScan;
         GrainTestSiloConfigurator.ChannelProbeRun = ChannelProbeRun;
+        GrainTestSiloConfigurator.ChannelCredentialRecovery = ChannelCredentialRecovery;
 
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<GrainTestSiloConfigurator>();
@@ -122,6 +126,7 @@ public sealed class GrainClusterFixture : IAsyncLifetime
         GrainTestSiloConfigurator.VideoStorageSchedule = null;
         GrainTestSiloConfigurator.VideoStorageScan = null;
         GrainTestSiloConfigurator.ChannelProbeRun = null;
+        GrainTestSiloConfigurator.ChannelCredentialRecovery = null;
     }
 }
 
@@ -155,6 +160,8 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
 
     public static FakeChannelProbeRunRunner? ChannelProbeRun { get; set; }
 
+    public static FakeChannelCredentialRecoveryRunner? ChannelCredentialRecovery { get; set; }
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         ArgumentNullException.ThrowIfNull(siloBuilder);
@@ -187,6 +194,10 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             // The scheduler activator arms ChannelProbeGrain at startup, and the
             // grain's constructor requires this runner.
             services.AddSingleton<IChannelProbeRunRunner>(ChannelProbeRun!);
+
+            // The activator also arms the expired-disabled-key cleanup grain
+            // (channel.go:204-223), whose constructor requires this runner.
+            services.AddSingleton<IChannelCredentialRecoveryRunner>(ChannelCredentialRecovery!);
         });
     }
 }
@@ -396,6 +407,26 @@ public sealed class FakeChannelProbeRunRunner : IChannelProbeRunRunner
     }
 
     public Task RunProbeAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        Calls++;
+        return Failure is null ? Task.CompletedTask : Task.FromException(Failure);
+    }
+}
+
+public sealed class FakeChannelCredentialRecoveryRunner : IChannelCredentialRecoveryRunner
+{
+    public int Calls { get; private set; }
+
+    public Exception? Failure { get; set; }
+
+    public void Reset()
+    {
+        Calls = 0;
+        Failure = null;
+    }
+
+    public Task RunRecoveryAsync(CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
         Calls++;

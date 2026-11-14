@@ -165,6 +165,10 @@ public sealed class UsageCostInjectionTests(GrainClusterFixture fixture)
             }
         }
 
+        // A normal consumer read completes the delivery; without the
+        // acknowledgement the lifecycle treats the close as a downstream
+        // cancel and refuses the usage as non-final (C292/C294).
+        result.Stream.AcknowledgeDelivery();
         result.Stream.Dispose();
 
         var usageChunk = Assert.Single(

@@ -56,6 +56,9 @@ public sealed class AdminSystemEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<ISystemSettingsAdminService, SystemSettingsAdminService>();
         builder.Services.AddSingleton<IManagementIdentity>(new FakeManagementIdentity(null));
         builder.Services.AddScoped<PermissionValidator>();
+        builder.Services.AddScoped<ProjectPrivacy>();
+        builder.Services.AddScoped<RolePrivacy>();
+        builder.Services.AddScoped<UserProjectPrivacy>();
         builder.Services.AddScoped<ProjectManagementService>();
         builder.Services.AddScoped<ISystemInitializationService, SystemInitializationService>();
 
