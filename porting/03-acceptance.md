@@ -2194,6 +2194,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §232（2026-11-14）create/update 写入面的 live 校验顺序与归一化。C144 转 resolved：`createChannel` 在 settings 块之前用 `baseURL` 校验端点，执行 `normalizeModelProtocols` 与 `NormalizeEndpoints`，再跑 settings 校验（含 `ValidateModelProtocols`）与 Vertex 校验；`updateChannel` 在 settings 校验后加载 effective type/baseURL/endpoints，先校验端点，再归一化 settings.modelProtocols 与 endpoints，按归一化 settings 校验 model protocols，并把归一化结果写回 command。`ValidateModelProtocols` 新增可选 `baseUrl`，可用格式按归一化后的默认端点与 input endpoints 计算；`NormalizeModelProtocols` 改为接收 endpoints/baseUrl 并返回 changed 标记，供 update 决定是否回写 settings。表示层剩余差异（代理枚举大小写、retryable .NET Regex、Command Code .NET Uri）拆到新登记的 C306（accepted）。定向 create/update 40/40、save/lifecycle 62/62、bulk/settings 47/47；未跑 Api 全量，新增 Api 2 例待下次全量计入。台账 306 条（199 accepted / 107 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§233（2026-11-14）safeguards 评审器日志。C264 转 resolved：`SafeguardsEndpointOptions` 新增可空 `ILogger<SafeguardsEvaluator>`，Anthropic Messages 处理器从 `ILoggerFactory` 注入；`SafeguardsEvaluator` 用 `LoggerMessage.Define` 在 live `evaluator.go:287,301` 的两处输出 warning——denial escalation assessed（Model / ToolId / PreviousOutcome / Outcome）与 reviewer fallback（Model / NextModel / Reason / PendingTools）；未注入 logger 时保持静默。classifier 的 operation name "safeguards-classifier" 未设置，拆到新登记的 C307（accepted）。定向 Safeguards 100/100；未跑 Api 全量，新增 Api 1 例待下次全量计入。台账 307 条（199 accepted / 108 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

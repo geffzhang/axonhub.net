@@ -2,6 +2,7 @@ using System.Text.Json;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Orchestration;
 using AxonHub.Llm.Http;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Safeguards;
 
@@ -29,6 +30,12 @@ public sealed class SafeguardsEndpointOptions
     /// explicitly (C062).
     /// </summary>
     public Func<ChatCompletionOrchestrator, RequestIdentity, HttpRequestData, SafeguardsClassifierFunc>? ClassifierFactory { get; init; }
+
+    /// <summary>
+    /// Optional reviewer observability seam (live evaluator.go:287,301). Null
+    /// keeps library callers and tests silent.
+    /// </summary>
+    public ILogger<SafeguardsEvaluator>? Logger { get; init; }
 }
 
 /// <summary>
@@ -127,12 +134,13 @@ public static class SafeguardsRequest
     public static Prepared Prepare(
         HttpRequestData request,
         SafeguardsConfig config,
-        SafeguardsClassifierFunc? call)
+        SafeguardsClassifierFunc? call,
+        ILogger<SafeguardsEvaluator>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(config);
 
-        var evaluator = SafeguardsEvaluator.Create(request.Body, config, call);
+        var evaluator = SafeguardsEvaluator.Create(request.Body, config, call, logger);
         if (evaluator is null)
         {
             return new Prepared(null, request);

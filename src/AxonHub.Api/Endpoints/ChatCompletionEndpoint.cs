@@ -127,7 +127,11 @@ public static class ChatCompletionEndpoint
             SafeguardsRequest.Prepared prepared;
             try
             {
-                prepared = SafeguardsRequest.Prepare(genericRequest, config, classifier);
+                prepared = SafeguardsRequest.Prepare(
+                    genericRequest,
+                    config,
+                    classifier,
+                    safeguards.Logger);
             }
             catch (SafeguardsDecodeException ex)
             {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using AxonHub.Api.Safeguards;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Tests;
 
@@ -17,12 +18,14 @@ public sealed class SafeguardsFallbackTests
 
     private static SafeguardsEvaluator FallbackEvaluator(
         SafeguardsConfig config,
-        SafeguardsClassifierFunc call)
+        SafeguardsClassifierFunc call,
+        ILogger<SafeguardsEvaluator>? logger = null)
     {
         var evaluator = SafeguardsEvaluator.Create(
             Encoding.UTF8.GetBytes(RequestBody),
             config,
-            call);
+            call,
+            logger);
         Assert.NotNull(evaluator);
         return evaluator!;
     }
@@ -461,6 +464,78 @@ public sealed class SafeguardsFallbackTests
         if (scenario is not ("approve" or "deny"))
         {
             Assert.Equal("original denial", result["danger"].Explanation);
+        }
+    }
+
+    [Fact]
+    public void FallbackWarningsCarryTheReferenceFields()
+    {
+        var logger = new RecordingLogger();
+
+        Task<string> Call(CancellationToken cancellationToken, SafeguardsClassifierRequest request)
+            => Task.FromResult(
+                request.Model == "primary"
+                    ? """{"verdicts":{"safe":{"flagged":false},"danger":{"flagged":true,"explanation":"original denial"}}}"""
+                    : """{"verdicts":{"danger":{"flagged":false}}}""");
+
+        var evaluator = FallbackEvaluator(
+            new SafeguardsConfig
+            {
+                ClassifierModel = "primary",
+                FallbackModels = ["backup"],
+                EscalateOnDenial = true,
+                TimeoutNanoseconds = 1_000_000_000,
+            },
+            Call,
+            logger);
+
+        Verdicts(evaluator);
+
+        var fallback = Assert.Single(
+            logger.Entries,
+            static entry => entry.Message.StartsWith(
+                "Safeguards reviewer fallback",
+                StringComparison.Ordinal));
+        Assert.Equal("primary", fallback.Values["Model"]);
+        Assert.Equal("backup", fallback.Values["NextModel"]);
+        Assert.Equal("denial", fallback.Values["Reason"]);
+        Assert.Equal(1, Assert.IsType<int>(fallback.Values["PendingTools"]));
+
+        var escalation = Assert.Single(
+            logger.Entries,
+            static entry => entry.Message.StartsWith(
+                "Safeguards denial escalation assessed",
+                StringComparison.Ordinal));
+        Assert.Equal("backup", escalation.Values["Model"]);
+        Assert.Equal("danger", escalation.Values["ToolId"]);
+        Assert.Equal("flagged", escalation.Values["PreviousOutcome"]);
+        Assert.Equal("not_flagged", escalation.Values["Outcome"]);
+        Assert.All(
+            logger.Entries,
+            static entry => Assert.Equal(LogLevel.Warning, entry.Level));
+    }
+
+    private sealed class RecordingLogger : ILogger<SafeguardsEvaluator>
+    {
+        public List<(LogLevel Level, string Message, IReadOnlyDictionary<string, object?> Values)>
+            Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var values = state is IEnumerable<KeyValuePair<string, object?>> pairs
+                ? pairs.ToDictionary(static pair => pair.Key, static pair => pair.Value)
+                : new Dictionary<string, object?>();
+            Entries.Add((logLevel, formatter(state, exception), values));
         }
     }
 }

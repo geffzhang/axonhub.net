@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Transformer.Shared;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Safeguards;
 
@@ -15,6 +16,18 @@ public sealed class SafeguardsEvaluator
     private const int MaxContextBytes = 16000;
     private const int MaxToolBytes = 64000;
     private const int MaxVerdictBytes = 64000;
+
+    private static readonly Action<ILogger, string, string, string, string, Exception?>
+        LogDenialEscalationAssessed = LoggerMessage.Define<string, string, string, string>(
+            LogLevel.Warning,
+            new EventId(0, "SafeguardsDenialEscalationAssessed"),
+            "Safeguards denial escalation assessed model={Model} tool_id={ToolId} previous_outcome={PreviousOutcome} outcome={Outcome}");
+
+    private static readonly Action<ILogger, string, string, string, int, Exception?>
+        LogReviewerFallback = LoggerMessage.Define<string, string, string, int>(
+            LogLevel.Warning,
+            new EventId(0, "SafeguardsReviewerFallback"),
+            "Safeguards reviewer fallback model={Model} next_model={NextModel} reason={Reason} pending_tools={PendingTools}");
 
     private static readonly string[] ContextKeys =
     [
@@ -37,6 +50,7 @@ public sealed class SafeguardsEvaluator
     private readonly string _context;
     private readonly string _transcript;
     private readonly bool _contextTooLong;
+    private readonly ILogger<SafeguardsEvaluator>? _logger;
 
     private SafeguardsEvaluator(
         string system,
@@ -48,7 +62,8 @@ public sealed class SafeguardsEvaluator
         SafeguardsClassifierFunc? call,
         string context,
         string transcript,
-        bool contextTooLong)
+        bool contextTooLong,
+        ILogger<SafeguardsEvaluator>? logger)
     {
         _system = system;
         _escalateOnDenial = escalateOnDenial;
@@ -60,6 +75,7 @@ public sealed class SafeguardsEvaluator
         _context = context;
         _transcript = transcript;
         _contextTooLong = contextTooLong;
+        _logger = logger;
     }
 
     /// <summary>The reviewer prompt actually used (for diagnostics/tests).</summary>
@@ -80,7 +96,8 @@ public sealed class SafeguardsEvaluator
     public static SafeguardsEvaluator? Create(
         byte[]? body,
         SafeguardsConfig config,
-        SafeguardsClassifierFunc? call)
+        SafeguardsClassifierFunc? call,
+        ILogger<SafeguardsEvaluator>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -169,7 +186,8 @@ public sealed class SafeguardsEvaluator
                 call,
                 Encoding.UTF8.GetString(env),
                 RenderTranscript(messages ?? [], transcriptBudget),
-                env.Length > MaxContextBytes);
+                env.Length > MaxContextBytes,
+                logger);
         }
 
         return null;
@@ -366,6 +384,18 @@ public sealed class SafeguardsEvaluator
                             Outcome = SafeguardsLiterals.NotFlagged,
                         };
 
+                    if (_logger is not null
+                        && verdicts[tool.Id].Type == SafeguardsLiterals.Evaluated)
+                    {
+                        LogDenialEscalationAssessed(
+                            _logger,
+                            model,
+                            tool.Id,
+                            verdicts[tool.Id].Outcome,
+                            verdict.Outcome,
+                            null);
+                    }
+
                     verdicts[tool.Id] = verdict;
 
                     if (index == 0 && _escalateOnDenial && verdict.Outcome == SafeguardsLiterals.Flagged)
@@ -381,6 +411,19 @@ public sealed class SafeguardsEvaluator
             if (pending.Count == 0)
             {
                 break;
+            }
+
+            if (_logger is not null
+                && index + 1 < _models.Count
+                && !deadline.IsExpired)
+            {
+                LogReviewerFallback(
+                    _logger,
+                    model,
+                    _models[index + 1],
+                    reason,
+                    pending.Count,
+                    null);
             }
         }
 

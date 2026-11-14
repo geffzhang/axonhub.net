@@ -1516,7 +1516,8 @@ static Task HandleAnthropicMessagesAsync(
     ChatCompletionOrchestrator orchestrator,
     AnthropicInboundTransformer anthropic,
     IClaudeCodeSafeguardsSettingsService safeguardsSettings,
-    ClaudeCodeSafeguardsServerDefaults safeguardsDefaults)
+    ClaudeCodeSafeguardsServerDefaults safeguardsDefaults,
+    ILoggerFactory loggerFactory)
 {
     var safeguards = new SafeguardsEndpointOptions
     {
@@ -1526,6 +1527,7 @@ static Task HandleAnthropicMessagesAsync(
                 await safeguardsSettings.GetRuntimeConfigAsync(cancellationToken)),
         ClassifierFactory = static (parent, identity, request) =>
             SafeguardsClassifier.Create(parent, identity, request.SessionId, request.SessionScope),
+        Logger = loggerFactory.CreateLogger<SafeguardsEvaluator>(),
     };
 
     return ChatCompletionEndpoint.HandleAsync(
