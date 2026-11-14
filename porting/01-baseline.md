@@ -35,7 +35,7 @@
 运行方式：
 
 ```
-python -I C:\Users\geffz\.claude\skills\cross-lang-porting\scripts\diff_corpus.py verify \
+python -I porting/scripts/diff_corpus.py verify \
   --cmd "dotnet run --project tools/AxonHub.CorpusRunner --no-build -- --mode <mode>" \
   --corpus corpus/<mode>
 ```

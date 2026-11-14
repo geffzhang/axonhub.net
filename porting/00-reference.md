@@ -26,7 +26,7 @@
 每个切片验收前执行：
 
 ```powershell
-python -I C:\Users\geffz\.claude\skills\cross-lang-porting\scripts\reference_lock.py check `
+python -I porting\scripts\reference_lock.py check `
   --repo E:\GitHub\axonhub-ref --dest E:\GitHub\axonhub.net\porting\reference-lock.json
 ```
 
