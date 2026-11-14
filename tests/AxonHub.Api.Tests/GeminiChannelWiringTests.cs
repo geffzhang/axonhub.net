@@ -105,6 +105,26 @@ public sealed class GeminiChannelWiringTests
     }
 
     [Fact]
+    public void GeminiVertexUsesTheSelectedKeysProjectAndRegion()
+    {
+        var transformer = Assert.IsType<GeminiOutboundTransformer>(
+            ChannelOutboundFactory.Create(
+                Candidate(
+                    ChannelOutboundFactory.GeminiVertexChannelType,
+                    "https://us-central1-aiplatform.googleapis.com",
+                    """{"vertexApiKeys":[{"projectID":"proj-a","apiKey":"vk-a","region":"europe-west1"}]}"""),
+                Request(),
+                DateTimeOffset.UnixEpoch));
+
+        var httpRequest = transformer.TransformRequest(Request());
+
+        Assert.Equal(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/proj-a/locations/europe-west1"
+            + "/publishers/google/models/gemini-2.5-flash:generateContent",
+            httpRequest.Url);
+    }
+
+    [Fact]
     public void AChannelWithoutKeysIsRejectedBeforeTheTransformerIsBuilt()
     {
         var error = Assert.Throws<InvalidOperationException>(

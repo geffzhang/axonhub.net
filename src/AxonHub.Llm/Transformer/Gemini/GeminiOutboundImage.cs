@@ -138,7 +138,7 @@ public sealed partial class GeminiOutboundTransformer
         // For Vertex AI platform
         if (_config.PlatformType == GeminiConstants.PlatformVertex)
         {
-            var baseUrl = TrimSingleTrailingSlash(_config.BaseUrl);
+            var baseUrl = TrimSingleTrailingSlash(ResolveBaseUrl());
             if (baseUrl.Contains("/v1/", StringComparison.Ordinal))
             {
                 return $"{baseUrl}/publishers/google/models/{llmReq.Model}:generateContent";
@@ -148,7 +148,7 @@ public sealed partial class GeminiOutboundTransformer
         }
 
         // Standard Gemini API format
-        return $"{_config.BaseUrl}/{version}/models/{llmReq.Model}:generateContent";
+        return $"{ResolveBaseUrl()}/{version}/models/{llmReq.Model}:generateContent";
     }
 
     /// <summary>Port of buildImageConfig (image.go:129-147).</summary>

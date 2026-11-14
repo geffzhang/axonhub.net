@@ -1032,6 +1032,10 @@ public static class ChannelOutboundFactory
             GeminiVertexChannelType => new GeminiOutboundTransformer(new GeminiOutboundConfig
             {
                 BaseUrl = candidate.BaseUrl ?? string.Empty,
+                BaseUrlProvider = CreateVertexBaseUrlProvider(
+                    candidate,
+                    candidate.BaseUrl ?? string.Empty,
+                    provider),
                 ApiKeyProvider = provider,
                 PlatformType = GeminiConstants.PlatformVertex,
                 ChannelApiKeyIndex = provider.KeyIndex,
@@ -1423,7 +1427,7 @@ public static class ChannelOutboundFactory
                 });
             case ApiFormats.GeminiContents:
             case ApiFormats.GeminiEmbedding:
-                return new GeminiOutboundTransformer(new GeminiOutboundConfig
+                var geminiConfig = new GeminiOutboundConfig
                 {
                     BaseUrl = baseUrl,
                     EndpointPath = path,
@@ -1432,7 +1436,16 @@ public static class ChannelOutboundFactory
                         : null,
                     ApiKeyProvider = apiKeyProvider,
                     ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
-                });
+                };
+                if (candidate.Type == GeminiVertexChannelType)
+                {
+                    geminiConfig.BaseUrlProvider = CreateVertexBaseUrlProvider(
+                        candidate,
+                        baseUrl,
+                        apiKeyProvider);
+                }
+
+                return new GeminiOutboundTransformer(geminiConfig);
             case ApiFormats.JinaRerank:
             case ApiFormats.JinaEmbedding:
                 return new JinaOutboundTransformer(new JinaOutboundConfig
@@ -2182,4 +2195,56 @@ public static class ChannelOutboundFactory
             SessionIdProvider = () => request.RawRequest?.SessionId,
             SessionScopeProvider = () => request.RawRequest?.SessionScope,
         });
+
+    /// <summary>
+    /// channel_llm.go:1599-1623: resolves the Vertex resource root for the key
+    /// the outbound selected. Each vertexApiKeys entry carries its own project
+    /// and region; an unmatched key falls back to the configured base URL.
+    /// </summary>
+    private static Func<string?>? CreateVertexBaseUrlProvider(
+        ChannelCandidate candidate,
+        string baseUrl,
+        IApiKeyProvider apiKeyProvider)
+    {
+        var bindings = ChannelCredentials.GetVertexApiKeys(candidate.Credentials);
+        if (bindings.Count == 0)
+        {
+            return null;
+        }
+
+        return () =>
+        {
+            var apiKey = apiKeyProvider.Get();
+            foreach (var binding in bindings)
+            {
+                if (string.Equals(binding.ApiKey, apiKey, StringComparison.Ordinal))
+                {
+                    return VertexServiceBaseUrl(baseUrl)
+                        + "/v1/projects/" + binding.ProjectId.Trim()
+                        + "/locations/" + binding.Region.Trim();
+                }
+            }
+
+            return null;
+        };
+    }
+
+    /// <summary>
+    /// channel_llm.go:1566-1579: reduce a channel Base URL to the Vertex
+    /// service root, dropping a stored projects/locations path and a trailing
+    /// /v1.
+    /// </summary>
+    private static string VertexServiceBaseUrl(string baseUrl)
+    {
+        var trimmed = baseUrl.Trim().TrimEnd('/');
+        var projects = trimmed.IndexOf("/projects/", StringComparison.Ordinal);
+        if (projects >= 0)
+        {
+            trimmed = trimmed[..projects];
+        }
+
+        return trimmed.EndsWith("/v1", StringComparison.Ordinal)
+            ? trimmed[..^"/v1".Length]
+            : trimmed;
+    }
 }

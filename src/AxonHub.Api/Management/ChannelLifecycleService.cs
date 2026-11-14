@@ -2114,14 +2114,46 @@ public sealed class ChannelLifecycleService(
                 credentials.ApiKey = null;
             }
 
+            var removedVertices = new List<VertexApiKeyDraft>();
+            if (credentials.VertexApiKeys is { Count: > 0 } vertexKeys)
+            {
+                var keptVertices = new List<VertexApiKeyDraft>(vertexKeys.Count);
+                foreach (var vertex in vertexKeys)
+                {
+                    if (keysToDelete.Contains(vertex.ApiKey))
+                    {
+                        removedVertices.Add(vertex);
+                        continue;
+                    }
+
+                    keptVertices.Add(vertex);
+                }
+
+                // Go assigns an empty non-nil slice; omitempty drops it again.
+                credentials.VertexApiKeys = keptVertices.Count == 0 ? null : keptVertices;
+            }
+
             var credentialsJson = GoJson.MarshalToString(credentials);
 
-            // The key set is measured before the preserve-last-key restore, so
-            // the reference reports ONE_KEY_PRESERVED based on this snapshot.
+            // channel_apikey.go:344-373: Vertex triples are removed before the
+            // generic preserve-last-key rule; the first removed triple is
+            // restored in full so its project and region binding survives.
             var preserveOneKey = ChannelCredentials.GetAllApiKeys(credentialsJson).Count == 0;
             if (preserveOneKey)
             {
-                credentials.ApiKeys = [keys[0]];
+                if (removedVertices.Count > 0)
+                {
+                    var keptVertices = credentials.VertexApiKeys is null
+                        ? new List<VertexApiKeyDraft>()
+                        : new List<VertexApiKeyDraft>(credentials.VertexApiKeys);
+                    keptVertices.Add(removedVertices[0]);
+                    credentials.VertexApiKeys = keptVertices;
+                }
+                else
+                {
+                    credentials.ApiKeys = [keys[0]];
+                }
+
                 credentialsJson = GoJson.MarshalToString(credentials);
             }
 

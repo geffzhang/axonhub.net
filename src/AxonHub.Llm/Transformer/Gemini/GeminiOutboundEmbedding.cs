@@ -219,7 +219,7 @@ public sealed partial class GeminiOutboundTransformer
         // For Vertex AI platform
         if (_config.PlatformType == GeminiConstants.PlatformVertex)
         {
-            var baseUrl = TrimSingleTrailingSlash(_config.BaseUrl);
+            var baseUrl = TrimSingleTrailingSlash(ResolveBaseUrl());
             if (baseUrl.Contains("/v1/", StringComparison.Ordinal))
             {
                 return $"{baseUrl}/publishers/google/models/{model}:{action}";
@@ -228,7 +228,7 @@ public sealed partial class GeminiOutboundTransformer
             return $"{baseUrl}/v1/publishers/google/models/{model}:{action}";
         }
 
-        return $"{_config.BaseUrl}/{version}/models/{model}:{action}";
+        return $"{ResolveBaseUrl()}/{version}/models/{model}:{action}";
     }
 
     /// <summary>Port of transformEmbeddingResponse (embedding.go:190-222).</summary>

@@ -21,6 +21,14 @@ public sealed class GeminiOutboundConfig
     /// <summary>The base URL for the Gemini API.</summary>
     public string BaseUrl { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Port of gemini.Config.BaseURLProvider (outbound.go:32-34): resolves a
+    /// request-specific base URL after the API key provider selected the
+    /// credential. gemini_vertex uses it to bind each key to its project and
+    /// region; null or an empty result falls back to <see cref="BaseUrl"/>.
+    /// </summary>
+    public Func<string?>? BaseUrlProvider { get; set; }
+
     /// <summary>Provides API keys for authentication.</summary>
     public IApiKeyProvider? ApiKeyProvider { get; set; }
 
@@ -55,6 +63,7 @@ public static class GeminiOutboundConfigExtensions
         var cleaned = new GeminiOutboundConfig
         {
             BaseUrl = config.BaseUrl,
+            BaseUrlProvider = config.BaseUrlProvider,
             ApiKeyProvider = config.ApiKeyProvider,
             ChannelApiKeyIndex = config.ChannelApiKeyIndex,
             EndpointPath = config.EndpointPath,

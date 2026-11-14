@@ -489,6 +489,121 @@ public sealed class AdminChannelApiKeyEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DeleteRemovesTheMatchingVertexTripleAndKeepsTheOthers()
+    {
+        var channel = SeedChannel(
+            credentials: """{"apiKeys":["a"],"vertexApiKeys":[{"projectID":"p1","apiKey":"va","region":"r1"},{"projectID":"p2","apiKey":"vb","region":"r2"}]}""",
+            disabledApiKeys:
+                """[{"key":"va","disabledAt":"2026-01-01T00:00:00Z","errorCode":429},{"key":"vb","disabledAt":"2026-01-01T00:00:00Z","errorCode":429}]""");
+
+        var data = await QueryDataAsync(
+            DeleteMutation,
+            new
+            {
+                channelID = Gid(channel.Id),
+                keys = new[] { "va" },
+            });
+
+        var payload = data.GetProperty("deleteDisabledChannelAPIKeys");
+        Assert.True(payload.GetProperty("success").GetBoolean());
+        Assert.Equal(string.Empty, payload.GetProperty("message").GetString());
+        Assert.Equal(
+            """{"apiKeys":["a"],"vertexApiKeys":[{"projectID":"p2","apiKey":"vb","region":"r2"}]}""",
+            channel.Credentials);
+        Assert.Equal(
+            "vb",
+            Assert.Single(DisabledRecords(channel)).GetProperty("key").GetString());
+    }
+
+    [Fact]
+    public async Task DeleteRestoresTheFirstRemovedVertexTripleWhenNoKeyRemains()
+    {
+        var channel = SeedChannel(
+            credentials: """{"vertexApiKeys":[{"projectID":"p1","apiKey":"va","region":"r1"},{"projectID":"p2","apiKey":"vb","region":"r2"}]}""",
+            disabledApiKeys:
+                """[{"key":"va","disabledAt":"2026-01-01T00:00:00Z","errorCode":429},{"key":"vb","disabledAt":"2026-01-01T00:00:00Z","errorCode":429}]""");
+
+        var data = await QueryDataAsync(
+            DeleteMutation,
+            new
+            {
+                channelID = Gid(channel.Id),
+                keys = new[] { "va", "vb" },
+            });
+
+        var payload = data.GetProperty("deleteDisabledChannelAPIKeys");
+        Assert.True(payload.GetProperty("success").GetBoolean());
+        Assert.Equal("ONE_KEY_PRESERVED", payload.GetProperty("message").GetString());
+
+        // The first removed triple is restored in full: project and region
+        // survive the preserve-last-key rule (channel_apikey.go:357-362).
+        Assert.Equal(
+            """{"vertexApiKeys":[{"projectID":"p1","apiKey":"va","region":"r1"}]}""",
+            channel.Credentials);
+        Assert.Empty(DisabledRecords(channel));
+    }
+
+    [Fact]
+    public async Task DeleteKeepsAFlatKeyWithoutRestoringAVertexTriple()
+    {
+        var channel = SeedChannel(
+            credentials: """{"apiKey":"flat","vertexApiKeys":[{"projectID":"p1","apiKey":"va","region":"r1"}]}""",
+            disabledApiKeys:
+                """[{"key":"va","disabledAt":"2026-01-01T00:00:00Z","errorCode":429}]""");
+
+        var data = await QueryDataAsync(
+            DeleteMutation,
+            new
+            {
+                channelID = Gid(channel.Id),
+                keys = new[] { "va" },
+            });
+
+        var payload = data.GetProperty("deleteDisabledChannelAPIKeys");
+        Assert.Equal(string.Empty, payload.GetProperty("message").GetString());
+        Assert.Equal("""{"apiKey":"flat"}""", channel.Credentials);
+        Assert.Empty(DisabledRecords(channel));
+    }
+
+    [Fact]
+    public async Task DisableOfTheLastVertexKeyDisablesTheChannel()
+    {
+        var channel = SeedChannel(
+            credentials: """{"vertexApiKeys":[{"projectID":"p1","apiKey":"va","region":"r1"}]}""");
+
+        await QueryDataAsync(
+            DisableMutation,
+            new { channelID = Gid(channel.Id), key = "va" });
+
+        Assert.Equal("disabled", channel.Status);
+        Assert.Equal("All API keys disabled (last error: 0)", channel.ErrorMessage);
+        Assert.Equal(
+            "va",
+            Assert.Single(DisabledRecords(channel)).GetProperty("key").GetString());
+    }
+
+    [Fact]
+    public async Task EnableOfAVertexKeyRecoversTheChannel()
+    {
+        var channel = SeedChannel(
+            status: "disabled",
+            credentials: """{"vertexApiKeys":[{"projectID":"p1","apiKey":"va","region":"r1"}]}""",
+            disabledApiKeys:
+                """[{"key":"va","disabledAt":"2026-01-01T00:00:00Z","errorCode":429}]""",
+            errorMessage: "All API keys disabled (last error: 429)",
+            autoDisabledAt: new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        await QueryDataAsync(
+            EnableMutation,
+            new { channelID = Gid(channel.Id), key = "va" });
+
+        Assert.Empty(DisabledRecords(channel));
+        Assert.Equal("enabled", channel.Status);
+        Assert.Null(channel.ErrorMessage);
+        Assert.Null(channel.AutoDisabledAt);
+    }
+
+    [Fact]
     public async Task DeleteRecoversTheChannelWhenAnEnabledCredentialRemains()
     {
         var channel = SeedChannel(

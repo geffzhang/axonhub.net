@@ -13,6 +13,9 @@ namespace AxonHub.Abstractions;
 /// reads the two JSON documents leniently and treats anything it cannot decode
 /// as "no usable key"; the difference is registered as C013.
 /// </remarks>
+/// <summary>Port of objects.VertexAPIKey (internal/objects/channel.go:503-508).</summary>
+public readonly record struct VertexApiKey(string ProjectId, string ApiKey, string Region);
+
 public static class ChannelCredentials
 {
     /// <summary>
@@ -141,7 +144,11 @@ public static class ChannelCredentials
         }
     }
 
-    /// <summary>Port of GetAllAPIKeys: legacy apiKey (unless OAuth) first, then apiKeys.</summary>
+    /// <summary>
+    /// Port of GetAllAPIKeys (internal/objects/channel.go:510-534): legacy
+    /// apiKey (unless OAuth) first, then apiKeys, then the non-empty apiKey of
+    /// every vertexApiKeys entry.
+    /// </summary>
     public static IReadOnlyList<string> GetAllApiKeys(string? credentialsJson)
     {
         var keys = new List<string>();
@@ -171,6 +178,7 @@ public static class ChannelCredentials
             var oauthPresent = false;
             var apiKey = string.Empty;
             List<string>? apiKeys = null;
+            List<VertexApiKey>? vertexApiKeys = null;
 
             foreach (var property in root.EnumerateObject())
             {
@@ -185,6 +193,9 @@ public static class ChannelCredentials
                         break;
                     case "apikeys":
                         apiKeys = ReadStringArray(property.Value);
+                        break;
+                    case "vertexapikeys":
+                        vertexApiKeys = ReadVertexApiKeys(property.Value);
                         break;
                     case "oauth":
                         oauthPresent = property.Value.ValueKind == JsonValueKind.Object
@@ -209,10 +220,101 @@ public static class ChannelCredentials
             {
                 keys.AddRange(apiKeys);
             }
+
+            if (vertexApiKeys is not null)
+            {
+                foreach (var credential in vertexApiKeys)
+                {
+                    if (credential.ApiKey.Length > 0)
+                    {
+                        keys.Add(credential.ApiKey);
+                    }
+                }
+            }
         }
 
         return keys;
     }
+
+    /// <summary>
+    /// Parses the project-bound Vertex credentials (live channel.go:503-508) for
+    /// the outbound base-URL provider and the API key bookkeeping.
+    /// </summary>
+    public static IReadOnlyList<VertexApiKey> GetVertexApiKeys(string? credentialsJson)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return [];
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(credentialsJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return [];
+            }
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (FoldAscii(property.Name) == "vertexapikeys")
+                {
+                    return ReadVertexApiKeys(property.Value);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // C013: malformed credentials count as no usable key.
+        }
+
+        return [];
+    }
+
+    private static List<VertexApiKey> ReadVertexApiKeys(JsonElement element)
+    {
+        var keys = new List<VertexApiKey>();
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return keys;
+        }
+
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var projectId = string.Empty;
+            var apiKey = string.Empty;
+            var region = string.Empty;
+            foreach (var property in item.EnumerateObject())
+            {
+                switch (FoldAscii(property.Name))
+                {
+                    case "projectid":
+                        projectId = ReadString(property.Value);
+                        break;
+                    case "apikey":
+                        apiKey = ReadString(property.Value);
+                        break;
+                    case "region":
+                        region = ReadString(property.Value);
+                        break;
+                }
+            }
+
+            keys.Add(new VertexApiKey(projectId, apiKey, region));
+        }
+
+        return keys;
+    }
+
+    private static string ReadString(JsonElement element)
+        => element.ValueKind == JsonValueKind.String
+            ? element.GetString() ?? string.Empty
+            : string.Empty;
 
     /// <summary>
     /// Port of GetAllCredentialRefs (internal/objects/channel.go:398-414): the

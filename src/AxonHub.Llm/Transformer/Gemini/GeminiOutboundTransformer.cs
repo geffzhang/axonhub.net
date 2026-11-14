@@ -161,7 +161,7 @@ public sealed partial class GeminiOutboundTransformer : IOutboundTransformer, IA
     {
         if (_config.EndpointPath is { Length: > 0 } endpointPath)
         {
-            return TrimSingleTrailingSlash(_config.BaseUrl) + endpointPath;
+            return TrimSingleTrailingSlash(ResolveBaseUrl()) + endpointPath;
         }
 
         // Determine endpoint based on streaming
@@ -185,7 +185,7 @@ public sealed partial class GeminiOutboundTransformer : IOutboundTransformer, IA
         // If base URL starts with Cloudflare gateway, don't add /v1 prefix
         if (_config.PlatformType == GeminiConstants.PlatformVertex)
         {
-            var baseUrl = TrimSingleTrailingSlash(_config.BaseUrl);
+            var baseUrl = TrimSingleTrailingSlash(ResolveBaseUrl());
             if (baseUrl.Contains("/v1/", StringComparison.Ordinal))
             {
                 return $"{baseUrl}/publishers/google/models/{llmReq.Model}:{action}";
@@ -195,7 +195,27 @@ public sealed partial class GeminiOutboundTransformer : IOutboundTransformer, IA
         }
 
         // Format: /base_url/{version}/models/{model}:generateContent
-        return $"{_config.BaseUrl}/{version}/models/{llmReq.Model}:{action}";
+        return $"{ResolveBaseUrl()}/{version}/models/{llmReq.Model}:{action}";
+    }
+
+    /// <summary>
+    /// Port of resolveBaseURL (outbound.go:198-209): a per-request provider,
+    /// when configured, selects a credential-bound base URL after the API key
+    /// provider has selected the key; an empty result falls back to the
+    /// configured base URL.
+    /// </summary>
+    private string ResolveBaseUrl()
+    {
+        if (_config.BaseUrlProvider is not null)
+        {
+            var requestBaseUrl = _config.BaseUrlProvider();
+            if (!string.IsNullOrEmpty(requestBaseUrl))
+            {
+                return requestBaseUrl;
+            }
+        }
+
+        return _config.BaseUrl;
     }
 
     /// <summary>Port of TransformResponse (outbound.go:238-270).</summary>
