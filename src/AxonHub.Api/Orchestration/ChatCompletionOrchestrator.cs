@@ -821,6 +821,23 @@ public sealed class ChatCompletionOrchestrator
         // read by the outbound transformer and by the continuation middlewares.
         outbound.ResponsesContinuation = responsesContinuation;
 
+        // orchestrator.go:186-188: newStreamLifecycle separates downstream loss
+        // from the execution context. The port creates it only when the request
+        // recorder exists: without an inbound persistent stream nothing would
+        // close it on a streaming response (C293).
+        StreamLifecycle? lifecycle = null;
+        var executionToken = cancellationToken;
+        if (_requestChainRecorder is not null)
+        {
+            lifecycle = new StreamLifecycle(
+                cancellationToken,
+                () => identity.RequestDeadlineExpired?.Invoke() == true
+                    ? new TimeoutException("context deadline exceeded")
+                    : new OperationCanceledException(cancellationToken));
+            executionToken = lifecycle.ExecutionToken;
+            outbound.Lifecycle = lifecycle;
+        }
+
         // orchestrator.go mounts injectPrompts then protectPrompts as inbound
         // middlewares; the reference reads the enabled prompts and rules from
         // its live caches there. The port takes both snapshots before building
@@ -953,11 +970,6 @@ public sealed class ChatCompletionOrchestrator
         // request (orchestrator.go's finalizeTransportRequest registration).
         options.Middlewares.Add(new TransportRequestFinalizerMiddleware(outbound));
 
-        // The delivery lifecycle is shared by the client-facing persistent
-        // stream and the pass-through gate (orchestrator.go creates it before
-        // the middleware chain; stream_lifecycle.go:37-55).
-        var deliveryState = _requestChainRecorder is not null ? new RequestDeliveryState() : null;
-
         // Response pass-through middlewares run before persistence so the raw
         // provider response/stream is what the request row stores when
         // pass-through is enabled (orchestrator.go:258-263).
@@ -965,8 +977,8 @@ public sealed class ChatCompletionOrchestrator
         options.Middlewares.Add(new PassThroughStreamMiddleware(
             outbound,
             passThroughSettings,
-            cancellationToken,
-            deliveryState));
+            executionToken,
+            lifecycle));
 
         // Registered after the metrics middleware so it runs first on the way
         // out, matching the reference order (persistRequestExecution is the last
@@ -980,13 +992,13 @@ public sealed class ChatCompletionOrchestrator
                 inbound,
                 request,
                 _timeProvider,
-                cancellationToken,
+                executionToken,
                 onRequestCreated,
                 performance,
                 identity,
                 _usageCostService,
                 _previousChannels,
-                deliveryState);
+                lifecycle);
             options.Middlewares.Add(persistence);
         }
 
@@ -1009,7 +1021,7 @@ public sealed class ChatCompletionOrchestrator
         options.Middlewares.Add(new ChannelLimiterMiddleware(
             outbound,
             _channelLimiterManager,
-            cancellationToken,
+            executionToken,
             _channelLimiterMetrics,
             _timeProvider));
         if (includeRateLimits)
@@ -1025,7 +1037,7 @@ public sealed class ChatCompletionOrchestrator
         options.Middlewares.Add(new CaptureRawProviderStreamMiddleware(
             outbound,
             passThroughSettings,
-            cancellationToken));
+            executionToken));
 
         // orchestrator.go:352: remember the completed Responses turn (or its
         // metadata-only projection) so the next request can continue it.
@@ -1044,10 +1056,15 @@ public sealed class ChatCompletionOrchestrator
             PipelineResult result;
             try
             {
-                result = pipeline.Process(request, cancellationToken);
+                result = pipeline.Process(request, executionToken);
             }
             catch (Exception ex)
             {
+                // orchestrator.go:366-367: close the lifecycle before the
+                // detached failure persistence, so an unacknowledged tail is
+                // aborted and accounted first.
+                persistence?.CloseRequestDelivery();
+
                 // Port of orchestrator.Process's error branch: mark the last
                 // execution and the request canceled (client cancellation) or failed.
                 persistence?.FinalizeFailure(ex);
@@ -1124,6 +1141,11 @@ public sealed class ChatCompletionOrchestrator
             // orchestrator.go:432-434: a completed non-stream Responses turn is
             // recorded before the request ends.
             responsesContinuation?.Accept();
+
+            // orchestrator.go:435: a non-stream response cannot be closed by a
+            // returned stream, so the lifecycle ends here. A streaming result
+            // keeps it alive until the client-facing stream is disposed.
+            persistence?.CloseRequestDelivery();
 
             return new ChatCompletionResult
             {

@@ -1722,6 +1722,25 @@ Api ~Stream|~Orchestrat|~Chat|~Responses|~WebSocket|~Codex|~ChannelTest|~Safegua
 ~Pipeline|~RequestChain 942 通过；未跑 Api 全量回归。台账：新增 C292（resolved），C255 收窄仍为
 accepted，C292 相关条目（C091 等）不变；292 条（199 accepted / 0 gap / 93 resolved）。
 
+2026-11-14 更新（§220）：streamLifecycle / tail accounting（C293）。
+按 live f272549f `internal/server/orchestrator/stream_lifecycle.go` 移植：execution token 与下游取消分离，
+watcher 监听 downstream/shutdown/stopWatch；ack 前下游取消中止执行，ack 后仅打开记账窗口；DeliverAsync 以
+SemaphoreSlim 跨异步写串行化并对成功 terminal 置 ack；Close 在 ack+tail 时只等尾部记账、未 ack+tail 时先
+abort 再等 ReaderDone 与 ReaderDoneFunc 双屏障；tail owner 1 秒窗口、256 事件 / 1 MiB 预算、超时后 abort 并
+等 collector 返回；sourceEnd（unknown/clean-eof/semantic/error/canceled/budget）贯穿
+attempt.SourceEnd/AccountingSourceEnd 与 retry 的 WaitForAccounting；outbound 的 tail 事件只记 chunk 摘要与
+terminal 证据，inbound 的 RequestRawStream 按 live 顺序（先 inner、再 lifecycle、随后观察并 finalize）。
+orchestrator 仅在存在 request recorder 时创建 lifecycle，非流式与错误路径都会关闭；
+PassThroughStreamMiddleware 的门观察者改为 StreamLifecycle；删除 RequestDeliveryState。实现差异：Go mutex
+跨 await → SemaphoreSlim、取消回调只发布事件由 watcher 转换状态；端口 execution 不重施加 deadline（由
+RequestTimeoutMiddleware 取消下游 token、downstreamCause 保持 TimeoutException 区分）；生产不接 host
+shutdown（C255）。测试：新增 `StreamLifecycleTests` 15 例（16 个用例，镜像参照 11 个测试函数，
+TestPassThroughDetachKeepsRawOwner 不镜像），`StreamDeliveryTests` 改型后 12 例；定向运行 28 通过、
+RequestChainPersistence|PassThroughStream|ResponsesTransportPassThrough|PersistentOutboundCancellation|
+LivePreviewOrchestrator|RequestTimeout 125 通过；未跑 Api 全量回归。台账：新增 C293（resolved）与 C294
+（accepted：usage 记账 provenance 门未移植），C255 收窄为 host shutdown / pass-through detach / request
+chunk 来源；294 条（200 accepted / 0 gap / 94 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

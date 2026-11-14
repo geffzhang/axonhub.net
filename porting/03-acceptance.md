@@ -625,7 +625,9 @@ keep-alive 代替（C252），per-event `LLMRequestTimeout` 由每个 response.c
 （C253 于 §214 resolved），`shared.ResponsesLane` continuation lease 已由 §216 / C289 移植
 （基线 `responsesSessionStore` 由 §215 / C288 移植），`writeStreamDelivery` 交付边界已由
 §219 / C292 移植（WebSocket 在 response.completed 后继续读到 EOF），streamLifecycle /
-tail accounting 残余保留为 C255 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
+tail accounting 已由 §220 / C293 移植（execution/shutdown 上下文分离、双屏障、1 秒 / 256 事件 /
+1 MiB）；usage 记账的 provenance 门（AccountingEvidence / accountingMayBeFinal）保留为 C294
+accepted，host shutdown 与 pass-through detach 残余保留为 C255 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
 实现按 gorilla `SetReadLimit` 语义以 CloseMessageTooBig 关闭。
 
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
@@ -2105,6 +2107,21 @@ Dispose 顺序、pass-through 下 request chunk 来源）保留在 C255 accepted
 5、StreamDeliveryTests 12、SseStreamWriterTests +2、WS 与 ChannelTest 各 +1；定向运行 Llm 390、
 Api 942 通过；未跑 Api 全量回归。台账：C292 新增 resolved，C255 收窄；lint 通过；
 02-differences.md 已重新生成；292 条（199 accepted / 0 gap / 93 resolved）。
+
+§220（2026-11-14）streamLifecycle / tail accounting（C293）。按 live f272549f
+internal/server/orchestrator/stream_lifecycle.go 移植：execution token 与下游取消分离，
+watcher 监听 downstream/shutdown/stopWatch，ack 前取消中止执行、ack 后仅打开记账窗口；
+DeliverAsync 以 SemaphoreSlim 串行化并在成功 terminal 时置 ack；Close 在 ack+tail 时只等尾部记账、
+未 ack+tail 时 abort 后等 ReaderDone / ReaderDoneFunc 双屏障；tail owner 1 秒窗口、256 事件 / 1 MiB、
+超时后 abort 并等 collector 返回；sourceEnd 贯穿 attempt.SourceEnd / AccountingSourceEnd 与 retry 的
+WaitForAccounting；outbound tail 只记 chunk 摘要与 terminal 证据，inbound RequestRawStream 按 live
+顺序关闭（inner → lifecycle → 观察/finalize → inner）；orchestrator 仅在有 request recorder 时创建
+lifecycle；删除 RequestDeliveryState。差异：Go mutex 跨 await → SemaphoreSlim、取消回调只发布事件；
+端口 execution 不重施加 deadline（RequestTimeoutMiddleware + downstreamCause 保持 TimeoutException
+区分）；生产不接 host shutdown（C255）。测试：StreamLifecycleTests 15 例（16 用例）、
+StreamDeliveryTests 12 例；定向运行 28 通过、相关 125 通过；未跑 Api 全量回归。台账：C293 新增
+resolved，C294 新增 accepted（usage 记账 provenance 门未移植），C255 收窄；lint 通过；
+02-differences.md 已重新生成；294 条（200 accepted / 0 gap / 94 resolved）。
 
 ## 公开 API 审计
 

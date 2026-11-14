@@ -113,6 +113,13 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     internal ResponsesContinuation? ResponsesContinuation { get; set; }
 
     /// <summary>
+    /// The request's stream lifecycle (streamLifecycleFromContext in the
+    /// reference). A retry must wait for the previous attempt's accounting tail
+    /// before it takes over the shared source (C293).
+    /// </summary>
+    public StreamLifecycle? Lifecycle { get; set; }
+
+    /// <summary>
     /// The actual outbound provider request of the latest attempt
     /// (the reference's <c>state.RawProviderRequest</c>), stored by the
     /// pass-through body middleware before any enable check so the emitted API
@@ -763,6 +770,10 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     {
         _ = cancellationToken;
 
+        // outbound.go:991-993 — a retry must not start while the previous
+        // attempt still owns the source's accounting tail.
+        Lifecycle?.WaitForAccounting();
+
         // outbound.go:823 — release the previous attempt's fan-out thread
         // before switching candidates.
         ResetPassThroughStreamState();
@@ -842,6 +853,10 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     public Exception? TryPrepareForRetry(CancellationToken cancellationToken)
     {
         _ = cancellationToken;
+
+        // outbound.go:1095-1097 — a same-channel retry must also wait for the
+        // previous attempt's accounting tail (C293).
+        Lifecycle?.WaitForAccounting();
 
         // outbound.go:739 — a same-channel retry re-runs the pass-through check.
         PassThroughApplied = false;

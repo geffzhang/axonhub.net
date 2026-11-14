@@ -48,11 +48,12 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
     private readonly IPreviousChannelProvider? _previousChannels;
 
     /// <summary>
-    /// Delivery facts shared with the pass-through gate (streamLifecycle in the
-    /// reference). Created by the orchestrator so both layers observe the same
-    /// acknowledgement.
+    /// The request's stream lifecycle (streamLifecycle in the reference),
+    /// created by the orchestrator so the pass-through gate, the inbound stream
+    /// and the outbound tail owner observe the same acknowledgement. Null only
+    /// for directly constructed middleware in tests.
     /// </summary>
-    private readonly RequestDeliveryState _deliveryState;
+    private readonly StreamLifecycle? _lifecycle;
 
     /// <summary>Per-request stream state shared by the inbound and outbound streams.</summary>
     private readonly RequestStreamState _streamState = new();
@@ -88,7 +89,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         RequestIdentity? identity = null,
         IUsageCostService? usageCostService = null,
         IPreviousChannelProvider? previousChannels = null,
-        RequestDeliveryState? deliveryState = null)
+        StreamLifecycle? lifecycle = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -107,13 +108,13 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         _performance = performance;
         _identity = identity ?? RequestIdentity.Default;
         _previousChannels = previousChannels;
-        _deliveryState = deliveryState ?? new RequestDeliveryState();
+        _lifecycle = lifecycle;
         _requestTerminalTracker = new StreamTerminalTracker(
             ExpectedStreamChoices.FromRequestBody(rawRequest.Body));
     }
 
-    /// <summary>The request's delivery state (streamLifecycle in the reference).</summary>
-    public RequestDeliveryState DeliveryState => _deliveryState;
+    /// <summary>The request's stream lifecycle (streamLifecycle in the reference).</summary>
+    public StreamLifecycle? Lifecycle => _lifecycle;
 
     /// <summary>Port of persistRequest.OnInboundLlmRequest: create the request row once.</summary>
     public override LlmRequest TransformInboundLlmRequest(LlmRequest request)
@@ -528,52 +529,115 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
             _timeProvider.GetUtcNow().UtcDateTime));
     }
 
-    private void ObserveExecutionRawEvent(ExecutionAttempt attempt, StreamEvent? streamEvent)
+    private void ObserveExecutionRawEvent(
+        ExecutionAttempt attempt,
+        StreamEvent? streamEvent,
+        ExecutionRawStream source)
     {
         if (streamEvent is null)
         {
             return;
         }
 
-        if (attempt.UpstreamModelId.Length == 0)
+        // The accounting tail runs concurrently with the consumer, so the
+        // shared chunk/tracker/source-end state is observed under one lock.
+        lock (attempt.Sync)
         {
-            attempt.UpstreamModelId = RequestChainPayloads.EventModel(streamEvent, attempt.ApiFormat);
+            if (IsDoneSentinel(streamEvent.Data)
+                && StreamTerminalTracker.IsNonChoiceTerminalEvent(streamEvent))
+            {
+                source.SourceEnd = SourceEndReason.Semantic;
+            }
+
+            if (attempt.UpstreamModelId.Length == 0)
+            {
+                attempt.UpstreamModelId = RequestChainPayloads.EventModel(streamEvent, attempt.ApiFormat);
+            }
+
+            // Only a size summary is kept for binary audio payloads.
+            attempt.Chunks.Add(StreamEvent.SummarizeBinaryChunk(streamEvent)!);
+
+            if (attempt.TerminalState != StreamTerminalState.None)
+            {
+                return;
+            }
+
+            if (attempt.Tracker.Observe(streamEvent))
+            {
+                var state = StreamTerminalClassifier.ClassifyAcceptedTerminalEvent(streamEvent);
+                attempt.TerminalState = state;
+                _streamState.OutboundStreamTerminal = state;
+
+                // markPerformanceTerminal stops the latency clock at the terminal
+                // event, not at Close.
+                var now = _timeProvider.GetUtcNow();
+                attempt.EndedAt = now;
+
+                if (state != StreamTerminalState.Completed)
+                {
+                    attempt.TerminalError = StreamTerminalClassifier.TerminalErrorMessage(streamEvent, state);
+                }
+
+                // The channel outcome follows the same classification:
+                // completed and incomplete count as success, canceled is not a
+                // channel fault.
+                _performance?.Current?.MarkStreamTerminal(state, attempt.TerminalError, now);
+
+                attempt.Outcome.ObserveTerminal(state);
+
+                if (StreamTerminalTracker.IsNonChoiceTerminalEvent(streamEvent))
+                {
+                    source.SourceEnd = SourceEndReason.Semantic;
+                }
+            }
         }
+    }
 
-        // Only a size summary is kept for binary audio payloads.
-        attempt.Chunks.Add(StreamEvent.SummarizeBinaryChunk(streamEvent)!);
-
-        if (attempt.TerminalState != StreamTerminalState.None)
+    /// <summary>
+    /// Port of OutboundPersistentStream.consumeTailEvent: the tail only retains
+    /// chunks and terminal evidence. It must not touch the latency clock or mark
+    /// the channel, because the consumer already owns those decisions.
+    /// </summary>
+    private void ConsumeTailEvent(ExecutionAttempt attempt, StreamEvent? streamEvent)
+    {
+        if (streamEvent is null)
         {
             return;
         }
 
-        if (attempt.Tracker.Observe(streamEvent))
+        lock (attempt.Sync)
         {
-            var state = StreamTerminalClassifier.ClassifyAcceptedTerminalEvent(streamEvent);
-            attempt.TerminalState = state;
-            _streamState.OutboundStreamTerminal = state;
+            attempt.Chunks.Add(StreamEvent.SummarizeBinaryChunk(streamEvent)!);
 
-            // markPerformanceTerminal stops the latency clock at the terminal
-            // event, not at Close.
-            var now = _timeProvider.GetUtcNow();
-            attempt.EndedAt = now;
-
-            if (state != StreamTerminalState.Completed)
+            if (attempt.TerminalState == StreamTerminalState.None
+                && attempt.Tracker.Observe(streamEvent))
             {
-                attempt.TerminalError = StreamTerminalClassifier.TerminalErrorMessage(streamEvent, state);
+                attempt.TerminalState = StreamTerminalClassifier.ClassifyAcceptedTerminalEvent(streamEvent);
+                _streamState.OutboundStreamTerminal = attempt.TerminalState;
+                attempt.Outcome.ObserveTerminal(attempt.TerminalState);
             }
-
-            // The channel outcome follows the same classification: completed and
-            // incomplete count as success, canceled is not a channel fault.
-            _performance?.Current?.MarkStreamTerminal(state, attempt.TerminalError, now);
-
-            attempt.Outcome.ObserveTerminal(state);
         }
     }
 
-    /// <summary>Port of OutboundPersistentStream.Close.</summary>
-    private void FinalizeExecutionStream(ExecutionAttempt attempt, Exception? streamError)
+    private static bool IsDoneSentinel(byte[] data)
+        => data.Length == 6
+            && data[0] == (byte)'['
+            && data[1] == (byte)'D'
+            && data[2] == (byte)'O'
+            && data[3] == (byte)'N'
+            && data[4] == (byte)'E'
+            && data[5] == (byte)']';
+
+    /// <summary>Port of OutboundPersistentStream.Close/finalizeClose.</summary>
+    /// <param name="tailSourceEnd">
+    /// The lifecycle tail owner's end reason. The reference stores it on the
+    /// stream before finalizing so accounting can distinguish a truncated tail
+    /// from a clean one.
+    /// </param>
+    private void FinalizeExecutionStream(
+        ExecutionAttempt attempt,
+        Exception? streamError,
+        SourceEndReason tailSourceEnd)
     {
         if (attempt.Closed || attempt.ExecutionId == 0)
         {
@@ -581,8 +645,10 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         }
 
         attempt.Closed = true;
+        attempt.SourceEnd = tailSourceEnd;
 
-        var contextError = ContextCancellationError();
+        var contextError = ExecutionContextError();
+        var sourceEnd = AccountingSourceEnd(attempt, streamError, contextError);
         var outcome = attempt.Outcome;
 
         outcome.ObserveTransportError(streamError);
@@ -601,7 +667,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
             // response even if a transport or context error arrives afterward.
             if (attempt.TerminalState != StreamTerminalState.None)
             {
-                PersistExecutionResponseChunks(attempt, now);
+                PersistExecutionResponseChunks(attempt, now, sourceEnd);
                 return;
             }
 
@@ -691,16 +757,49 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
             if (responseBody is { Length: > 0 })
             {
-                PersistAggregatedExecution(attempt, responseBody, meta, now);
+                PersistAggregatedExecution(attempt, responseBody, meta, now, sourceEnd);
                 return;
             }
 
-            PersistExecutionResponseChunks(attempt, now);
+            PersistExecutionResponseChunks(attempt, now, sourceEnd);
         });
     }
 
+    /// <summary>
+    /// Port of OutboundPersistentStream.accountingSourceEnd: a transport error
+    /// outranks the recorded stream end; otherwise a semantic/clean/budget end
+    /// from the lifecycle is kept, and a canceled execution is reported as such.
+    /// </summary>
+    private static SourceEndReason AccountingSourceEnd(
+        ExecutionAttempt attempt,
+        Exception? streamError,
+        Exception? contextError)
+    {
+        if (streamError is not null)
+        {
+            return SourceEndReason.Error;
+        }
+
+        if (attempt.SourceEnd is SourceEndReason.Semantic
+            or SourceEndReason.CleanEof
+            or SourceEndReason.Budget)
+        {
+            return attempt.SourceEnd;
+        }
+
+        if (contextError is not null)
+        {
+            return SourceEndReason.Canceled;
+        }
+
+        return SourceEndReason.Unknown;
+    }
+
     /// <summary>Port of OutboundPersistentStream.persistResponseChunks.</summary>
-    private void PersistExecutionResponseChunks(ExecutionAttempt attempt, DateTimeOffset now)
+    private void PersistExecutionResponseChunks(
+        ExecutionAttempt attempt,
+        DateTimeOffset now,
+        SourceEndReason sourceEnd)
     {
         byte[] responseBody;
         ResponseMeta meta;
@@ -732,7 +831,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
             return;
         }
 
-        PersistAggregatedExecution(attempt, responseBody, meta, now);
+        PersistAggregatedExecution(attempt, responseBody, meta, now, sourceEnd);
     }
 
     /// <summary>Port of OutboundPersistentStream.persistAggregatedResponse.</summary>
@@ -740,8 +839,15 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         ExecutionAttempt attempt,
         byte[] responseBody,
         ResponseMeta meta,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        SourceEndReason sourceEnd)
     {
+        // C294: the reference gates usage creation on
+        // accountingMayBeFinal(apiFormat, meta, sourceEnd), which needs the
+        // aggregators' AccountingEvidence; the port logs usage unconditionally
+        // until that provenance is ported.
+        attempt.AccountingSourceEnd = sourceEnd;
+
         if (meta.Usage is { } usage)
         {
             LogUsage(usage, attempt);
@@ -828,9 +934,16 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
     /// <summary>Port of InboundPersistentStream.AcknowledgeDelivery.</summary>
     public void AcknowledgeRequestDelivery()
     {
-        if (!_deliveryState.TryAcknowledgeDelivery())
+        if (_lifecycle is { } lifecycle)
         {
-            return;
+            // The lifecycle owns the race against downstream cancellation. A
+            // direct acknowledgement is only valid while the downstream is
+            // still active, so a rejected one must not promote the request.
+            lifecycle.AcknowledgeDelivery();
+            if (!lifecycle.DeliveryAcknowledged)
+            {
+                return;
+            }
         }
 
         _requestOutcome.ObserveDeliveryAcknowledgement();
@@ -842,13 +955,44 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
     /// is the delivery boundary, so the acknowledgement belongs to the request
     /// row even when the write went through a pass-through gate.
     /// </summary>
-    private Task<Exception?> DeliverRequestAsync(
+    private async Task<Exception?> DeliverRequestAsync(
         Func<Task<DeliveryWrite>> write,
         CancellationToken cancellationToken)
-        => _deliveryState.DeliverAsync(write, cancellationToken);
+    {
+        if (_lifecycle is { } lifecycle)
+        {
+            // Deliver acknowledges a successful terminal write under its own
+            // lock, exactly like the reference.
+            return await lifecycle.DeliverAsync(write, cancellationToken).ConfigureAwait(false);
+        }
 
-    /// <summary>Port of the delivery-state half of InboundPersistentStream.Close.</summary>
-    public void CloseRequestDelivery() => _deliveryState.MarkClosed();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return new OperationCanceledException(cancellationToken);
+        }
+
+        var result = await write().ConfigureAwait(false);
+        if (result.Error is null && result.Terminal)
+        {
+            AcknowledgeRequestDelivery();
+        }
+
+        return result.Error;
+    }
+
+    /// <summary>
+    /// Port of the lifecycle half of InboundPersistentStream.Close (and of the
+    /// orchestrator's explicit lifecycleOwner.Close calls). Idempotent.
+    /// </summary>
+    public void CloseRequestDelivery() => _lifecycle?.Close();
+
+    /// <summary>
+    /// Go: <c>ctx.Err()</c> for the execution context. With a lifecycle the
+    /// execution context is only canceled through the lifecycle; without one it
+    /// is the client request token.
+    /// </summary>
+    private Exception? ExecutionContextError()
+        => _lifecycle is { } lifecycle ? lifecycle.ExecutionError : ContextCancellationError();
 
     /// <summary>Port of InboundPersistentStream.Close.</summary>
     private void FinalizeRequestStream(Exception? streamError)
@@ -860,7 +1004,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
         _requestFinalized = true;
 
-        var contextError = ContextCancellationError();
+        var contextError = ExecutionContextError();
         var outcome = _requestOutcome;
 
         outcome.ObserveTransportError(streamError);
@@ -869,7 +1013,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         // The lifecycle acknowledgement is authoritative at close time; the
         // pass-through gate may have acknowledged through the shared state
         // without going through AcknowledgeRequestDelivery.
-        if (_deliveryState.DeliveryAcknowledged)
+        if (_streamState.DeliveryAcknowledged || _lifecycle?.DeliveryAcknowledged == true)
         {
             outcome.ObserveDeliveryAcknowledgement();
             _streamState.DeliveryAcknowledged = true;
@@ -1193,6 +1337,18 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
         public List<StreamEvent> Chunks { get; } = [];
 
+        /// <summary>
+        /// Go's OutboundPersistentStream.stateMu: serialises the consumer's
+        /// observation with the concurrent accounting tail.
+        /// </summary>
+        public object Sync { get; } = new();
+
+        /// <summary>Go's OutboundPersistentStream.sourceEnd.</summary>
+        public SourceEndReason SourceEnd { get; set; } = SourceEndReason.Unknown;
+
+        /// <summary>Go's PersistenceState.AccountingSourceEnd.</summary>
+        public SourceEndReason AccountingSourceEnd { get; set; } = SourceEndReason.Unknown;
+
         public StreamTerminalTracker Tracker { get; init; } = null!;
 
         public StreamOutcome Outcome { get; } = new();
@@ -1224,52 +1380,232 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
     }
 
     /// <summary>Port of OutboundPersistentStream's stream surface.</summary>
-    private sealed class ExecutionRawStream(
-        IStream<StreamEvent> stream,
-        RequestChainPersistenceMiddleware owner,
-        ExecutionAttempt attempt) : IStream<StreamEvent>
+    private sealed class ExecutionRawStream : IStream<StreamEvent>
     {
+        private readonly IStream<StreamEvent> stream;
+        private readonly RequestChainPersistenceMiddleware owner;
+        private readonly ExecutionAttempt attempt;
+        private readonly object _readerSync = new();
+        private readonly object _finalizeSync = new();
+        private readonly TaskCompletionSource _consumerDone =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource? _activeReader;
+        private bool _finalizationHeld;
         private bool _disposed;
+        private bool _finalized;
+
+        public ExecutionRawStream(
+            IStream<StreamEvent> stream,
+            RequestChainPersistenceMiddleware owner,
+            ExecutionAttempt attempt)
+        {
+            this.stream = stream;
+            this.owner = owner;
+            this.attempt = attempt;
+
+            if (owner._lifecycle is { } lifecycle)
+            {
+                // HoldFinalization must run before consumption: the consumer's
+                // close then only requests cleanup, and the lifecycle tail owner
+                // performs the final accounting once readers and consumers are
+                // quiescent.
+                _finalizationHeld = true;
+                lifecycle.RegisterTailOwner(new StreamTailOwner
+                {
+                    Source = stream,
+                    ReaderDone = _consumerDone.Task,
+                    ReaderDoneFunc = ReaderDone,
+                    Abort = Abort,
+                    OnEvent = streamEvent =>
+                    {
+                        owner.ConsumeTailEvent(attempt, streamEvent);
+                        return null;
+                    },
+                    SourceEnd = () =>
+                    {
+                        lock (attempt.Sync)
+                        {
+                            return SourceEnd;
+                        }
+                    },
+                    Finalize = sourceEnd =>
+                    {
+                        FinalizeAccounting(sourceEnd);
+                        return null;
+                    },
+                });
+            }
+        }
+
+        /// <summary>Go's OutboundPersistentStream.sourceEnd.</summary>
+        public SourceEndReason SourceEnd { get; set; } = SourceEndReason.Unknown;
 
         public StreamEvent? Current
         {
             get
             {
                 var streamEvent = stream.Current;
-                owner.ObserveExecutionRawEvent(attempt, streamEvent);
+                if (streamEvent is not null)
+                {
+                    owner.ObserveExecutionRawEvent(attempt, streamEvent, this);
+                }
+
                 return streamEvent;
             }
         }
 
         public Exception? Err => stream.Err;
 
-        public bool Next() => stream.Next();
+        public bool Next()
+        {
+            var reader = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_readerSync)
+            {
+                _activeReader = reader;
+            }
+
+            try
+            {
+                if (stream.Next())
+                {
+                    return true;
+                }
+
+                lock (attempt.Sync)
+                {
+                    var error = stream.Err;
+                    if (error is not null)
+                    {
+                        SourceEnd = SourceEndReason.Error;
+                    }
+                    else if (SourceEnd == SourceEndReason.Semantic)
+                    {
+                        // A [DONE]/non-choice terminal already certified the
+                        // end; EOF must not demote it to a clean end.
+                    }
+                    else if (owner.ExecutionContextError() is not null)
+                    {
+                        SourceEnd = SourceEndReason.Canceled;
+                    }
+                    else
+                    {
+                        SourceEnd = SourceEndReason.CleanEof;
+                    }
+                }
+
+                return false;
+            }
+            finally
+            {
+                lock (_readerSync)
+                {
+                    if (ReferenceEquals(_activeReader, reader))
+                    {
+                        reader.TrySetResult();
+                        _activeReader = null;
+                    }
+                }
+            }
+        }
+
+        /// <summary>Go's OutboundPersistentStream.readerDone.</summary>
+        private Task? ReaderDone()
+        {
+            lock (_readerSync)
+            {
+                return _activeReader?.Task;
+            }
+        }
+
+        /// <summary>
+        /// Go's tail-owner abort: release the consumer barrier and close the
+        /// source so a reader blocked inside Next can return. The reference
+        /// ignores the close error here.
+        /// </summary>
+        private void Abort()
+        {
+            _consumerDone.TrySetResult();
+            try
+            {
+                stream.Dispose();
+            }
+            catch (Exception)
+            {
+                // The tail is aborting a blocked read; the close result is moot.
+            }
+        }
 
         public void Dispose()
         {
-            if (_disposed)
+            bool held;
+            lock (_finalizeSync)
             {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _disposed = true;
+                held = _finalizationHeld;
+            }
+
+            if (held)
+            {
+                // The source owner finalizes after quiescence.
+                _consumerDone.TrySetResult();
                 return;
             }
 
-            _disposed = true;
             try
             {
-                owner.FinalizeExecutionStream(attempt, stream.Err);
+                owner.FinalizeExecutionStream(attempt, stream.Err, SourceEnd);
             }
             finally
             {
                 stream.Dispose();
             }
         }
+
+        /// <summary>Port of OutboundPersistentStream.FinalizeAccounting.</summary>
+        private void FinalizeAccounting(SourceEndReason sourceEnd)
+        {
+            lock (_finalizeSync)
+            {
+                if (_finalized)
+                {
+                    return;
+                }
+
+                _finalized = true;
+                _finalizationHeld = false;
+            }
+
+            try
+            {
+                owner.FinalizeExecutionStream(attempt, stream.Err, sourceEnd);
+            }
+            finally
+            {
+                // finalizeClose ends with ts.stream.Close().
+                stream.Dispose();
+            }
+        }
     }
 
     /// <summary>Port of InboundPersistentStream's stream surface.</summary>
-    private sealed class RequestRawStream(IStream<StreamEvent> stream, RequestChainPersistenceMiddleware owner)
-        : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary, IFinalizationWaiter,
-          IExpectedStreamChoices
+    private sealed class RequestRawStream : IStream<StreamEvent>, IDeliveryAcknowledger,
+        IDeliveryBoundary, IFinalizationWaiter, IExpectedStreamChoices
     {
-        private bool _disposed;
+        private readonly IStream<StreamEvent> stream;
+        private readonly RequestChainPersistenceMiddleware owner;
+        private readonly object _closeSync = new();
+        private TaskCompletionSource? _closeDone;
+
+        public RequestRawStream(IStream<StreamEvent> stream, RequestChainPersistenceMiddleware owner)
+        {
+            this.stream = stream;
+            this.owner = owner;
+        }
 
         public StreamEvent? Current
         {
@@ -1283,7 +1619,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
         public Exception? Err => stream.Err;
 
-        public bool DeliveryAcknowledged => owner._deliveryState.DeliveryAcknowledged;
+        public bool DeliveryAcknowledged
+            => owner._lifecycle?.DeliveryAcknowledged ?? owner._streamState.DeliveryAcknowledged;
 
         public int ExpectedStreamChoices => owner._requestTerminalTracker.ExpectedChoices;
 
@@ -1296,30 +1633,83 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
             CancellationToken cancellationToken)
             => owner.DeliverRequestAsync(write, cancellationToken);
 
-        public void WaitForFinalization() => owner._deliveryState.WaitForFinalization();
+        public void WaitForFinalization() => owner._lifecycle?.WaitForFinalization();
 
         public void Dispose()
         {
-            if (_disposed)
+            TaskCompletionSource done;
+            Task? pending;
+            lock (_closeSync)
             {
+                if (_closeDone is not null)
+                {
+                    done = null!;
+                    pending = _closeDone.Task;
+                }
+                else
+                {
+                    done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _closeDone = done;
+                    pending = null;
+                }
+            }
+
+            if (pending is not null)
+            {
+                // The reference's closeMu makes a repeated close wait for the
+                // first one instead of returning early.
+                pending.GetAwaiter().GetResult();
                 return;
             }
 
-            _disposed = true;
+            try
+            {
+                CloseCore();
+            }
+            finally
+            {
+                done.TrySetResult();
+            }
+        }
+
+        private void CloseCore()
+        {
+            if (owner._lifecycle is null)
+            {
+                try
+                {
+                    owner.FinalizeRequestStream(stream.Err);
+                }
+                finally
+                {
+                    stream.Dispose();
+                }
+
+                return;
+            }
+
+            // InboundPersistentStream.Close: close the inner stream first to
+            // quiesce the drain goroutine, then the lifecycle (which waits for
+            // the tail), and only then observe the errors and finalize.
+            try
+            {
+                stream.Dispose();
+            }
+            catch (Exception)
+            {
+                // Go ignores this first close's error (`_ = ts.stream.Close()`).
+            }
+
+            owner.CloseRequestDelivery();
+
             try
             {
                 owner.FinalizeRequestStream(stream.Err);
             }
             finally
             {
-                try
-                {
-                    stream.Dispose();
-                }
-                finally
-                {
-                    owner.CloseRequestDelivery();
-                }
+                // Every return path ends with `return ts.stream.Close()`.
+                stream.Dispose();
             }
         }
     }

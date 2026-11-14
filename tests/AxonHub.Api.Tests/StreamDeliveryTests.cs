@@ -18,44 +18,46 @@ public sealed class StreamDeliveryTests
     private static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
-    public void DeliveryStateAcknowledgesOnlyOnce()
+    public void StreamLifecycleAcknowledgesOnlyOnce()
     {
-        var state = new RequestDeliveryState();
+        var lifecycle = new StreamLifecycle(CancellationToken.None);
 
-        Assert.False(state.DeliveryAcknowledged);
-        Assert.True(state.TryAcknowledgeDelivery());
-        Assert.False(state.TryAcknowledgeDelivery());
-        Assert.True(state.DeliveryAcknowledged);
+        Assert.False(lifecycle.DeliveryAcknowledged);
+        Assert.True(lifecycle.TryAcknowledgeDelivery());
+        Assert.False(lifecycle.TryAcknowledgeDelivery());
+        Assert.True(lifecycle.DeliveryAcknowledged);
 
-        state.MarkClosed();
+        lifecycle.Close();
 
-        Assert.False(state.TryAcknowledgeDelivery());
+        Assert.False(lifecycle.TryAcknowledgeDelivery());
     }
 
     [Fact]
-    public async Task DeliveryStateAcknowledgesTerminalWritesOnly()
+    public async Task StreamLifecycleAcknowledgesTerminalWritesOnly()
     {
-        var state = new RequestDeliveryState();
+        var lifecycle = new StreamLifecycle(CancellationToken.None);
 
-        Assert.Null(await state.DeliverAsync(
+        Assert.Null(await lifecycle.DeliverAsync(
             () => Task.FromResult(new DeliveryWrite(Terminal: false, Error: null)),
             CancellationToken.None));
-        Assert.False(state.DeliveryAcknowledged);
+        Assert.False(lifecycle.DeliveryAcknowledged);
 
-        Assert.Null(await state.DeliverAsync(
+        Assert.Null(await lifecycle.DeliverAsync(
             () => Task.FromResult(new DeliveryWrite(Terminal: true, Error: null)),
             CancellationToken.None));
-        Assert.True(state.DeliveryAcknowledged);
+        Assert.True(lifecycle.DeliveryAcknowledged);
+
+        lifecycle.Close();
     }
 
     [Fact]
-    public async Task DeliveryStateRefusesWritesAfterClose()
+    public async Task StreamLifecycleRefusesWritesAfterClose()
     {
-        var state = new RequestDeliveryState();
-        state.MarkClosed();
+        var lifecycle = new StreamLifecycle(CancellationToken.None);
+        lifecycle.Close();
         var writes = 0;
 
-        var error = await state.DeliverAsync(
+        var error = await lifecycle.DeliverAsync(
             () =>
             {
                 writes++;
@@ -65,18 +67,18 @@ public sealed class StreamDeliveryTests
 
         Assert.IsType<OperationCanceledException>(error);
         Assert.Equal(0, writes);
-        Assert.False(state.DeliveryAcknowledged);
+        Assert.False(lifecycle.DeliveryAcknowledged);
     }
 
     [Fact]
-    public async Task DeliveryStateReleasesFinalizationWaitersOnClose()
+    public async Task StreamLifecycleReleasesFinalizationWaitersOnClose()
     {
-        var state = new RequestDeliveryState();
+        var lifecycle = new StreamLifecycle(CancellationToken.None);
 
-        var waiter = Task.Run(state.WaitForFinalization);
+        var waiter = Task.Run(lifecycle.WaitForFinalization);
         Assert.False(waiter.IsCompleted);
 
-        state.MarkClosed();
+        lifecycle.Close();
 
         await waiter.WaitAsync(SafetyTimeout);
     }
@@ -124,7 +126,7 @@ public sealed class StreamDeliveryTests
     [Fact]
     public async Task PassThroughGateStopsTheProducerBeforeWaitingForTheDrain()
     {
-        var state = new RequestDeliveryState();
+        var state = new StreamLifecycle(CancellationToken.None);
         var order = new List<string>();
         var drain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var inner = new TrackingStream(order);
@@ -139,14 +141,15 @@ public sealed class StreamDeliveryTests
             drain.Task);
 
         await Task.Run(gate.Dispose).WaitAsync(SafetyTimeout);
+        state.Close();
         Assert.Equal(["close", "inner-dispose"], order);
     }
 
     [Fact]
     public async Task PassThroughGateWaitsForTheDrainAfterDelivery()
     {
-        var state = new RequestDeliveryState();
-        Assert.True(state.TryAcknowledgeDelivery());
+        var state = new StreamLifecycle(CancellationToken.None);
+        state.AcknowledgeDelivery();
 
         var order = new List<string>();
         var drain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -165,8 +168,8 @@ public sealed class StreamDeliveryTests
     [Fact]
     public async Task PassThroughGateClosesTheProducerAfterTheTailTimeout()
     {
-        var state = new RequestDeliveryState();
-        Assert.True(state.TryAcknowledgeDelivery());
+        var state = new StreamLifecycle(CancellationToken.None);
+        state.AcknowledgeDelivery();
 
         var order = new List<string>();
         var drain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -182,13 +185,14 @@ public sealed class StreamDeliveryTests
         // streamTailTimeout: an acknowledged stream waits one second for the
         // drain, then closes the producer so a blocked reader cannot stall the
         // request teardown.
+        state.Close();
         Assert.Equal(["close", "inner-dispose"], order);
     }
 
     [Fact]
     public async Task PassThroughGateIsIdempotentAndForwardsAcknowledgement()
     {
-        var state = new RequestDeliveryState();
+        var state = new StreamLifecycle(CancellationToken.None);
         var order = new List<string>();
         var gate = new PassThroughDeliveryStream(
             new TrackingStream(order),
@@ -203,6 +207,7 @@ public sealed class StreamDeliveryTests
         await Task.Run(gate.Dispose).WaitAsync(SafetyTimeout);
         await Task.Run(gate.Dispose).WaitAsync(SafetyTimeout);
 
+        state.Close();
         Assert.Equal(["close", "inner-dispose"], order);
     }
 

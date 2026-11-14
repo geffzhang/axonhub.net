@@ -779,7 +779,7 @@ internal sealed class PassThroughStreamMiddleware(
     PersistentOutboundTransformer outbound,
     PassThroughSettings settings,
     CancellationToken cancellationToken,
-    RequestDeliveryState? deliveryState = null)
+    StreamLifecycle? lifecycle = null)
     : DummyMiddleware("pass-through-response-stream")
 {
     public override IStream<StreamEvent> TransformInboundRawStream(IStream<StreamEvent> stream)
@@ -802,7 +802,7 @@ internal sealed class PassThroughStreamMiddleware(
         // With a delivery observer the gate owns closing the drained pipeline
         // stream; without one the drain releases it itself, exactly like
         // pass_through.go:678-696.
-        var drain = DrainInBackground(stream, ownsClose: deliveryState is null);
+        var drain = DrainInBackground(stream, ownsClose: lifecycle is null);
 
         IStream<StreamEvent> result;
         if (state.RawQueue is { } queue)
@@ -849,9 +849,9 @@ internal sealed class PassThroughStreamMiddleware(
                 PassThrough.ResponsesClientModel(outbound));
         }
 
-        return deliveryState is null
+        return lifecycle is null
             ? result
-            : new PassThroughDeliveryStream(result, deliveryState, stream.Dispose, drain);
+            : new PassThroughDeliveryStream(result, lifecycle, stream.Dispose, drain);
     }
 
     /// <summary>
@@ -897,7 +897,7 @@ internal sealed class PassThroughStreamMiddleware(
 /// </summary>
 internal sealed class PassThroughDeliveryStream(
     IStream<StreamEvent> stream,
-    RequestDeliveryState observer,
+    StreamLifecycle observer,
     Action? close,
     Task? done)
     : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary, IFinalizationWaiter
@@ -915,7 +915,7 @@ internal sealed class PassThroughDeliveryStream(
 
     public bool Next() => stream.Next();
 
-    public void AcknowledgeDelivery() => observer.TryAcknowledgeDelivery();
+    public void AcknowledgeDelivery() => observer.AcknowledgeDelivery();
 
     public Task<Exception?> DeliverAsync(
         Func<Task<DeliveryWrite>> write,

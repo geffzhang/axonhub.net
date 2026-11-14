@@ -22,6 +22,7 @@ public sealed class StreamTerminalTracker(int expectedChoices)
         "message_stop",
         "speech.audio.done",
         "transcript.text.done",
+        AuthTypes.BinaryStreamDoneEventType,
     };
 
     private readonly HashSet<int> _choices = [];
@@ -111,6 +112,17 @@ public sealed class StreamTerminalTracker(int expectedChoices)
 
         return _terminal;
     }
+
+    /// <summary>
+    /// Port of orchestrator.isNonChoiceTerminalEvent: the event itself names a
+    /// non-choice terminal type, either on the transport event or in its JSON
+    /// payload. Outbound accounting uses this to certify a semantic end rather
+    /// than an unexplained EOF.
+    /// </summary>
+    public static bool IsNonChoiceTerminalEvent(StreamEvent? streamEvent)
+        => streamEvent is not null
+            && (NonChoiceTerminalEvents.Contains(streamEvent.Type)
+                || NonChoiceTerminalEvents.Contains(DataString(streamEvent.Data, "type")));
 
     private static bool IsDoneEvent(byte[] data)
         => data.Length == 6

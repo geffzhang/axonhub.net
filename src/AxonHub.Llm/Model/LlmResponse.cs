@@ -220,6 +220,17 @@ public sealed class TopLogprob
     public List<int>? Bytes { get; set; }
 }
 
+/// <summary>Port of llm.SourceEndReason.</summary>
+public enum SourceEndReason
+{
+    Unknown = 0,
+    CleanEof,
+    Semantic,
+    Error,
+    Canceled,
+    Budget,
+}
+
 /// <summary>Port of llm.ResponseMeta.</summary>
 public sealed class ResponseMeta
 {
