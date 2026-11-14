@@ -26,6 +26,9 @@ public static class AnthropicAggregator
         var contentBlocks = new List<AnthropicMessageContentBlock>();
         AnthropicUsage? usage = null;
         string? stopReason = null;
+        var messageDeltaUsage = false;
+        var streamError = false;
+        var usageEvidence = AccountingEvidence.Unavailable;
 
         // Go accumulates input_json_delta bytes in the block's json.RawMessage;
         // an invalid fragment only fails later, when json.Marshal writes the
@@ -133,6 +136,7 @@ public static class AnthropicAggregator
 
                     if (parsed.Usage is { } deltaUsage)
                     {
+                        messageDeltaUsage = true;
                         if (usage is null)
                         {
                             usage = deltaUsage;
@@ -174,7 +178,27 @@ public static class AnthropicAggregator
                     // entirely (difference ledger).
                     break;
                 case "message_stop":
-                    // Final event, no additional processing needed.
+                    // The completed message boundary is what makes the usage the
+                    // provider reported final; without it the usage may be a
+                    // partial snapshot.
+                    if (messageStart is not null && messageDeltaUsage && !streamError)
+                    {
+                        usageEvidence = AccountingEvidence.ExplicitFinal;
+                    }
+
+                    break;
+                case "error":
+                    streamError = true;
+
+                    // An error before message_stop means the message never
+                    // completed, so its usage may be partial. An error after
+                    // message_stop cannot retract usage the provider already
+                    // delivered with a completed message.
+                    if (usageEvidence != AccountingEvidence.ExplicitFinal)
+                    {
+                        usageEvidence = AccountingEvidence.Unavailable;
+                    }
+
                     break;
             }
         }
@@ -232,11 +256,13 @@ public static class AnthropicAggregator
                 Id = message.Id,
                 Usage = ConvertToLlmUsage(usage, platformType),
                 Completed = completed,
+                AccountingEvidence = usageEvidence,
             }
             : new ResponseMeta
             {
                 Id = message.Id,
                 Completed = completed,
+                AccountingEvidence = AccountingEvidence.Unavailable,
             };
 
         return data;

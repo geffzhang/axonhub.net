@@ -32,6 +32,15 @@ internal sealed class ResponsesStreamAggregator
 
     public ResponsesUsage? Usage { get; private set; }
 
+    /// <summary>
+    /// Port of streamAggregator.terminalSeen / terminalUsage (aggregator.go:36-41):
+    /// usage delivered with a terminal response event is the provider's final
+    /// measurement, unlike the in-progress snapshots.
+    /// </summary>
+    public bool TerminalSeen { get; private set; }
+
+    public ResponsesUsage? TerminalUsage { get; private set; }
+
     /// <summary>Terminal error snapshot (Go: <c>responseError</c>).</summary>
     public ResponsesError? ResponseError { get; private set; }
 
@@ -541,6 +550,8 @@ internal sealed class ResponsesStreamAggregator
                 }
 
             case ResponsesStreamEventTypes.ResponseCompleted:
+                TerminalSeen = true;
+                TerminalUsage = ev.Response?.Usage;
                 ApplyResponseSnapshot(ev.Response);
 
                 // The terminal event wins over a missing or stale in-progress
@@ -557,6 +568,8 @@ internal sealed class ResponsesStreamAggregator
                 break;
 
             case ResponsesStreamEventTypes.ResponseFailed:
+                TerminalSeen = true;
+                TerminalUsage = ev.Response?.Usage;
                 ApplyResponseSnapshot(ev.Response);
                 if (ev.Response?.Status is null)
                 {
@@ -566,6 +579,8 @@ internal sealed class ResponsesStreamAggregator
                 break;
 
             case ResponsesStreamEventTypes.ResponseCancelled:
+                TerminalSeen = true;
+                TerminalUsage = ev.Response?.Usage;
                 ApplyResponseSnapshot(ev.Response);
                 if (ev.Response?.Status is null)
                 {
@@ -575,6 +590,8 @@ internal sealed class ResponsesStreamAggregator
                 break;
 
             case ResponsesStreamEventTypes.ResponseIncomplete:
+                TerminalSeen = true;
+                TerminalUsage = ev.Response?.Usage;
                 ApplyResponseSnapshot(ev.Response);
                 if (ev.Response?.Status is null)
                 {
@@ -939,11 +956,20 @@ internal static class ResponsesAggregate
         {
             Id = agg.ResponseId,
             Completed = agg.Status == "completed",
+            AccountingEvidence = AccountingEvidence.Unavailable,
         };
 
         if (agg.Usage is not null)
         {
             meta.Usage = agg.Usage.ToUsage();
+        }
+
+        // The terminal snapshot overrides whatever the in-progress events
+        // reported, and only it proves the usage final.
+        if (agg.TerminalSeen && agg.TerminalUsage is not null)
+        {
+            meta.Usage = agg.TerminalUsage.ToUsage();
+            meta.AccountingEvidence = AccountingEvidence.ExplicitFinal;
         }
 
         return body;

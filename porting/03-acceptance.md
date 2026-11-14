@@ -626,8 +626,9 @@ keep-alive 代替（C252），per-event `LLMRequestTimeout` 由每个 response.c
 （基线 `responsesSessionStore` 由 §215 / C288 移植），`writeStreamDelivery` 交付边界已由
 §219 / C292 移植（WebSocket 在 response.completed 后继续读到 EOF），streamLifecycle /
 tail accounting 已由 §220 / C293 移植（execution/shutdown 上下文分离、双屏障、1 秒 / 256 事件 /
-1 MiB）；usage 记账的 provenance 门（AccountingEvidence / accountingMayBeFinal）保留为 C294
-accepted，host shutdown 与 pass-through detach 残余保留为 C255 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
+1 MiB）；usage 记账的 provenance 门（AccountingEvidence / accountingMayBeFinal）已由 §221 / C294 移植
+（三 aggregator 证据分类、持久化门控与 "Authoritative usage unavailable" 警告），host shutdown 与
+pass-through detach 残余保留为 C255 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
 实现按 gorilla `SetReadLimit` 语义以 CloseMessageTooBig 关闭。
 
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
@@ -2122,6 +2123,21 @@ lifecycle；删除 RequestDeliveryState。差异：Go mutex 跨 await → Semaph
 StreamDeliveryTests 12 例；定向运行 28 通过、相关 125 通过；未跑 Api 全量回归。台账：C293 新增
 resolved，C294 新增 accepted（usage 记账 provenance 门未移植），C255 收窄；lint 通过；
 02-differences.md 已重新生成；294 条（200 accepted / 0 gap / 94 resolved）。
+
+§221（2026-11-14）usage 记账 provenance 门（C294）。按 live f272549f llm/model.go 与
+internal/server/orchestrator/outbound.go 移植：ResponseMeta 新增 [JsonIgnore] AccountingEvidence
+（unavailable / explicit-final / clean-end-candidate）与 AccountingFinal(sourceEnd)（explicit-final
+恒真；clean-end-candidate 仅 clean-eof / semantic 为真）；Anthropic、OpenAI chat、Responses 三个 raw
+aggregator 分别以 message_start/message_delta/message_stop、seen/finished choices 与 zero-choice
+usage、terminal response 事件分类证据，错误或截断降级为 unavailable（message_stop 之后的 error 不撤回
+终值）；PersistAggregatedExecution 先在 attempt 写 AccountingFinal / AccountingSourceEnd（只写不读），
+usage 非空且 accountingMayBeFinal 为真才写 usage log，否则按 budget / provider-error / truncated /
+absent 记 "Authoritative usage unavailable" 警告；无证据的格式回退 usage 非空；非流式路径无门；
+WithInbound / WithChannelSelector 透传 loggerFactory。测试：ResponseMetaAccountingTests 3、
+AnthropicAggregatorTests +3、OpenAiAggregatorTests provenance 矩阵、ResponsesAggregatorTests terminal
+usage 用例、AccountingProvenanceTests 23；Llm 全量 3294 通过，Api 定向 AccountingProvenance 23 与相关
+四类 40 通过；未跑 Api 全量回归。台账：C294 由 accepted 改为 resolved，C255 收窄不变；lint 通过；
+02-differences.md 已重新生成；294 条（199 accepted / 0 gap / 95 resolved）。
 
 ## 公开 API 审计
 

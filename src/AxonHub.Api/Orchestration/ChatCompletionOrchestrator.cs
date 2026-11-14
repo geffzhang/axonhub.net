@@ -14,6 +14,7 @@ using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.Shared;
+using Microsoft.Extensions.Logging;
 using Orleans;
 using IModelSettingsProvider = AxonHub.Api.Models.IModelSettingsProvider;
 using ModelSettings = AxonHub.Api.Models.ModelSettings;
@@ -64,6 +65,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly LiveStreamRegistry? _liveStreamRegistry;
     private readonly ISystemSettingsAdminService? _systemSettings;
     private readonly ResponsesSessionStore? _responsesSessions;
+    private readonly ILoggerFactory? _loggerFactory;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -95,7 +97,8 @@ public sealed class ChatCompletionOrchestrator
         LiveStreamRegistry? liveStreamRegistry = null,
         ISystemSettingsAdminService? systemSettings = null,
         ChannelCopilotTokenCache? copilotTokens = null,
-        ResponsesSessionStore? responsesSessions = null)
+        ResponsesSessionStore? responsesSessions = null,
+        ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -194,6 +197,10 @@ public sealed class ChatCompletionOrchestrator
         // like the reference's nil responsesSessions.
         _responsesSessions = responsesSessions;
 
+        // Production resolves this from the host's logging services; direct
+        // constructions stay silent like a nil slog logger.
+        _loggerFactory = loggerFactory;
+
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
         // is the same as no provider.
@@ -242,7 +249,8 @@ public sealed class ChatCompletionOrchestrator
             liveStreamRegistry: _liveStreamRegistry,
             systemSettings: _systemSettings,
             copilotTokens: _copilotTokens,
-            responsesSessions: _responsesSessions);
+            responsesSessions: _responsesSessions,
+            loggerFactory: _loggerFactory);
     }
 
     /// <summary>
@@ -286,7 +294,8 @@ public sealed class ChatCompletionOrchestrator
             liveStreamRegistry: _liveStreamRegistry,
             systemSettings: _systemSettings,
             copilotTokens: _copilotTokens,
-            responsesSessions: _responsesSessions);
+            responsesSessions: _responsesSessions,
+            loggerFactory: _loggerFactory);
     }
 
     /// <summary>
@@ -998,7 +1007,8 @@ public sealed class ChatCompletionOrchestrator
                 identity,
                 _usageCostService,
                 _previousChannels,
-                lifecycle);
+                lifecycle,
+                _loggerFactory?.CreateLogger<RequestChainPersistenceMiddleware>());
             options.Middlewares.Add(persistence);
         }
 

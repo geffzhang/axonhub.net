@@ -168,6 +168,78 @@ public sealed class AnthropicAggregatorTests
     }
 
     // ------------------------------------------------------------------
+    // Accounting provenance
+    // (TestAggregateStreamChunks_MessageStopFinalizesOrderedUsage,
+    // _MessageDeltaUsageWithoutStartUsage, _MissingMessageStopLeavesUsageUnavailable)
+    // ------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(12, 34)]
+    [InlineData(0, 0)]
+    public void MessageStopFinalizesOrderedUsage(long input, long output)
+    {
+        var chunks = new[]
+        {
+            Chunk("{\"type\":\"message_start\",\"message\":{\"id\":\"msg\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude\",\"usage\":{\"input_tokens\":" + input + ",\"output_tokens\":0}}}"),
+            Chunk("{\"type\":\"message_delta\",\"usage\":{\"input_tokens\":" + input + ",\"output_tokens\":" + output + "},\"delta\":{\"stop_reason\":\"end_turn\"}}"),
+            Chunk("""{"type":"message_stop"}"""),
+        };
+
+        _ = AnthropicAggregator.AggregateStreamChunks(chunks, AnthropicPlatformType.Direct, out var meta);
+
+        Assert.Equal(AccountingEvidence.ExplicitFinal, meta.AccountingEvidence);
+        Assert.Equal(input + output, meta.Usage!.TotalTokens);
+    }
+
+    [Fact]
+    public void MessageDeltaUsageWithoutStartUsageIsExplicitFinal()
+    {
+        var baseChunks = new[]
+        {
+            Chunk("""{"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","content":[],"model":"claude"}}"""),
+            Chunk("""{"type":"message_delta","usage":{"input_tokens":12,"output_tokens":34},"delta":{"stop_reason":"end_turn"}}"""),
+            Chunk("""{"type":"message_stop"}"""),
+        };
+
+        _ = AnthropicAggregator.AggregateStreamChunks(baseChunks, AnthropicPlatformType.Direct, out var meta);
+        Assert.Equal(AccountingEvidence.ExplicitFinal, meta.AccountingEvidence);
+        Assert.Equal(46, meta.Usage!.TotalTokens);
+
+        // A trailing error after the completion boundary cannot retract usage
+        // the provider already delivered with the completed message.
+        var withError = baseChunks.Append(Chunk("""{"type":"error"}""")).ToArray();
+        _ = AnthropicAggregator.AggregateStreamChunks(withError, AnthropicPlatformType.Direct, out meta);
+        Assert.Equal(AccountingEvidence.ExplicitFinal, meta.AccountingEvidence);
+        Assert.Equal(46, meta.Usage!.TotalTokens);
+
+        // An error before the completion boundary still invalidates the usage.
+        var beforeStop = new[]
+        {
+            baseChunks[0],
+            baseChunks[1],
+            Chunk("""{"type":"error"}"""),
+            baseChunks[2],
+        };
+        _ = AnthropicAggregator.AggregateStreamChunks(beforeStop, AnthropicPlatformType.Direct, out meta);
+        Assert.Equal(AccountingEvidence.Unavailable, meta.AccountingEvidence);
+    }
+
+    [Fact]
+    public void MissingMessageStopLeavesUsageUnavailable()
+    {
+        var chunks = new[]
+        {
+            Chunk("""{"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","content":[],"model":"claude","usage":{"input_tokens":12,"output_tokens":0}}}"""),
+            Chunk("""{"type":"message_delta","usage":{"input_tokens":12,"output_tokens":34},"delta":{"stop_reason":"end_turn"}}"""),
+        };
+
+        _ = AnthropicAggregator.AggregateStreamChunks(chunks, AnthropicPlatformType.Direct, out var meta);
+
+        Assert.Equal(AccountingEvidence.Unavailable, meta.AccountingEvidence);
+        Assert.NotNull(meta.Usage);
+    }
+
+    // ------------------------------------------------------------------
     // Edge cases (TestAggregateStreamChunks_EdgeCases)
     // ------------------------------------------------------------------
 

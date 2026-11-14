@@ -1741,6 +1741,29 @@ LivePreviewOrchestrator|RequestTimeout 125 通过；未跑 Api 全量回归。�
 （accepted：usage 记账 provenance 门未移植），C255 收窄为 host shutdown / pass-through detach / request
 chunk 来源；294 条（200 accepted / 0 gap / 94 resolved）。
 
+2026-11-14 更新（§221）：usage 记账 provenance 门（C294）。
+按 live f272549f `llm/model.go` 与 `internal/server/orchestrator/outbound.go` 移植：`ResponseMeta` 新增
+`AccountingEvidence`（unavailable / explicit-final / clean-end-candidate，`[JsonIgnore]`，Go 零值对应
+Unavailable=0）与 `AccountingFinal(sourceEnd)`（explicit-final 恒真，clean-end-candidate 仅 clean-eof /
+semantic 为真）；Anthropic aggregator 以 message_start 的 usage 为基线、message_delta 合并，message_stop
+且无 stream error 置 ExplicitFinal，error 在非 ExplicitFinal 时降级 Unavailable（message_stop 之后的
+error 不撤回终值）；OpenAI chat aggregator 记录 seen/finished choices 与 zero-choice usage 计数，
+choices 为空的 final usage 置 ExplicitFinal、finish_reason 后带 usage 置 CleanEndCandidate、结束时仍为
+CleanEndCandidate 且重复 zero-choice usage 时降级 Unavailable；Responses aggregator 在 completed / failed /
+cancelled / incomplete 记录 terminal usage，非空时覆盖 meta.Usage 并置 ExplicitFinal，否则 Unavailable。
+`RequestChainPersistenceMiddleware.PersistAggregatedExecution` 先在 attempt 写 AccountingFinal /
+AccountingSourceEnd（与 live 一致只写不读），仅当 usage 非空且 accountingMayBeFinal(apiFormat, meta,
+sourceEnd) 时写 usage log；openai/chat、openai/responses、openai/responses-ws、openai/responses_compact、
+anthropic/messages 只认 AccountingFinal，其余格式回退 usage 非空；不写时按 budget / provider-error /
+truncated / absent 记录 "Authoritative usage unavailable" 警告（LoggerMessage 源生成委托）；非流式路径
+与 live 一致无门；WithInbound / WithChannelSelector 透传 loggerFactory。测试：`ResponseMetaAccountingTests`
+3 例；`AnthropicAggregatorTests` 新增 message_stop 终值 / message_delta 无 start / 缺 message_stop 3 例；
+`OpenAiAggregatorTests` 重写 provenance 矩阵与 clean EOF 用例；`ResponsesAggregatorTests` 新增 terminal
+usage 矩阵与缺失 terminal usage 用例；`AccountingProvenanceTests` 23 例（门控 9、budget 1、reason 4、
+chat 5、Responses failed 2、Anthropic message_stop 2）。定向运行：Llm 全量 3294/3294 通过；Api
+AccountingProvenanceTests 23/23、相关四类 40/40；未跑 Api 全量回归。台账：C294 由 accepted 改为
+resolved，C255 收窄不变；294 条（199 accepted / 0 gap / 95 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

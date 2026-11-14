@@ -33,6 +33,46 @@ public sealed class ResponsesAggregatorTests
         Assert.Equal("canceled", body.Status);
     }
 
+    public static TheoryData<string, long, long> TerminalUsageCases => new()
+    {
+        { "response.completed", 12, 34 },
+        { "response.completed", 0, 0 },
+        { "response.failed", 12, 34 },
+        { "response.failed", 0, 0 },
+        { "response.incomplete", 12, 34 },
+        { "response.incomplete", 0, 0 },
+        { "response.cancelled", 12, 34 },
+        { "response.cancelled", 0, 0 },
+    };
+
+    // Port of TestAggregateStreamChunks_TerminalUsageIsExplicitFinal.
+    [Theory]
+    [MemberData(nameof(TerminalUsageCases))]
+    public void TerminalUsageIsExplicitFinal(string terminal, long input, long output)
+    {
+        var json =
+            "{\"type\":\"" + terminal + "\",\"response\":{\"id\":\"resp\",\"status\":\"failed\",\"usage\":{\"input_tokens\":" + input
+            + ",\"output_tokens\":" + output + ",\"total_tokens\":" + (input + output) + "}}}";
+
+        _ = Aggregate(json, out var meta);
+
+        Assert.Equal(AccountingEvidence.ExplicitFinal, meta.AccountingEvidence);
+        Assert.Equal(input + output, meta.Usage!.TotalTokens);
+    }
+
+    // Port of TestAggregateStreamChunks_MissingTerminalUsageIsUnavailable.
+    [Fact]
+    public void MissingTerminalUsageIsUnavailable()
+    {
+        _ = Aggregate(
+            """{"type":"response.in_progress","response":{"id":"resp","usage":{"input_tokens":12,"output_tokens":34,"total_tokens":46}}}""",
+            """{"type":"response.completed","response":{"id":"resp","status":"completed"}}""",
+            out var meta);
+
+        Assert.Equal(AccountingEvidence.Unavailable, meta.AccountingEvidence);
+        Assert.NotNull(meta.Usage);
+    }
+
     public static TheoryData<string, string, string> CompletedSnapshots => new()
     {
         { "no status", "", "completed" },

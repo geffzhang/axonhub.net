@@ -38,6 +38,10 @@ public static class OpenAiAggregator
 
         OpenAiResponse? lastChunkResponse = null;
         OpenAiUsage? usage = null;
+        var usageEvidence = AccountingEvidence.Unavailable;
+        var seenChoices = new HashSet<long>();
+        var finishedChoices = new HashSet<long>();
+        var zeroChoiceUsages = 0;
         var systemFingerprint = string.Empty;
         var serviceTier = string.Empty;
         var choicesAggs = new Dictionary<long, ChoiceAggregator>();
@@ -66,6 +70,12 @@ public static class OpenAiAggregator
                 // Go decodes a null element as the zero Choice struct.
                 var choice = rawChoice ?? new OpenAiChoice();
                 var choiceIndex = choice.Index;
+
+                seenChoices.Add(choiceIndex);
+                if (choice.FinishReason is not null)
+                {
+                    finishedChoices.Add(choiceIndex);
+                }
 
                 if (!choicesAggs.TryGetValue(choiceIndex, out var choiceAgg))
                 {
@@ -184,6 +194,34 @@ public static class OpenAiAggregator
             if (parsed.Usage is not null)
             {
                 usage = parsed.Usage;
+                usageEvidence = AccountingEvidence.Unavailable;
+
+                if (parsed.Choices is { Count: > 0 } && IsZeroUsage(parsed.Usage))
+                {
+                    zeroChoiceUsages++;
+                }
+
+                if (parsed.Choices is not { Count: > 0 } && AllChoicesFinished(seenChoices, finishedChoices))
+                {
+                    // A usage-only chunk after every choice finished cannot be a
+                    // mid-stream snapshot: the provider closed the stream.
+                    usageEvidence = AccountingEvidence.ExplicitFinal;
+                }
+                else if (parsed.Choices is { Count: > 0 } && AllChoicesFinished(seenChoices, finishedChoices))
+                {
+                    usageEvidence = AccountingEvidence.CleanEndCandidate;
+                }
+                else if (parsed.Choices is not { Count: > 0 } && seenChoices.Count > 0)
+                {
+                    // A trailing usage-only chunk after observed output is a
+                    // clean-EOF candidate even when the provider omitted
+                    // finish_reason.
+                    usageEvidence = AccountingEvidence.CleanEndCandidate;
+                }
+            }
+            else if (parsed.Choices is { Count: > 0 })
+            {
+                usageEvidence = AccountingEvidence.Unavailable;
             }
 
             foreach (var citation in parsed.Citations ?? [])
@@ -308,6 +346,16 @@ public static class OpenAiAggregator
 
         var responseUsage = usage.ToLlmUsage();
 
+        // Repeated all-zero usage snapshots on choice chunks are the provider's
+        // placeholder, not a final measurement: a clean end that reports the
+        // placeholder more than once carries no trustworthy usage.
+        if (usageEvidence == AccountingEvidence.CleanEndCandidate
+            && zeroChoiceUsages > 1
+            && IsZeroUsage(usage))
+        {
+            usageEvidence = AccountingEvidence.Unavailable;
+        }
+
         var response = new LlmResponse
         {
             Id = lastChunkResponse.Id,
@@ -329,10 +377,22 @@ public static class OpenAiAggregator
             Id = response.Id,
             Usage = responseUsage,
             Completed = completed,
+            AccountingEvidence = usageEvidence,
         };
 
         return WithCitations(GoJson.Marshal(response), citations);
     }
+
+    /// <summary>Port of allChoicesFinished (aggregator.go:496-502).</summary>
+    private static bool AllChoicesFinished(HashSet<long> seen, HashSet<long> finished)
+        => seen.Count > 0 && seen.Count == finished.Count;
+
+    /// <summary>Port of isZeroUsage (aggregator.go:504-506).</summary>
+    private static bool IsZeroUsage(OpenAiUsage? usage)
+        => usage is not null
+            && usage.PromptTokens == 0
+            && usage.CompletionTokens == 0
+            && usage.TotalTokens == 0;
 
     /// <summary>
     /// Go: <c>json.Marshal(&llm.Response{})</c>. The zero response has a nil

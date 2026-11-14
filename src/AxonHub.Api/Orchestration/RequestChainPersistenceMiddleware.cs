@@ -12,6 +12,7 @@ using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
 using AxonHub.Persistence;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -35,6 +36,13 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
     private const string StatusCanceled = "canceled";
     private const int MinLatencyMs = 10;
 
+    /// <summary>Port of the slog warning persistAggregatedResponse emits (outbound.go:574-581).</summary>
+    private static readonly Action<ILogger, long, string, Exception?> LogAuthoritativeUsageUnavailable =
+        LoggerMessage.Define<long, string>(
+            LogLevel.Warning,
+            new EventId(0, "AuthoritativeUsageUnavailable"),
+            "Authoritative usage unavailable (execution_id={ExecutionId}, reason={Reason})");
+
     private readonly IRequestChainRecorder _recorder;
     private readonly IUsageCostService? _usageCostService;
     private readonly PersistentOutboundTransformer _outbound;
@@ -54,6 +62,12 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
     /// for directly constructed middleware in tests.
     /// </summary>
     private readonly StreamLifecycle? _lifecycle;
+
+    /// <summary>
+    /// The reference reports unusable accounting through slog. The port keeps
+    /// the logger optional so direct constructions stay silent.
+    /// </summary>
+    private readonly ILogger? _logger;
 
     /// <summary>Per-request stream state shared by the inbound and outbound streams.</summary>
     private readonly RequestStreamState _streamState = new();
@@ -89,7 +103,8 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         RequestIdentity? identity = null,
         IUsageCostService? usageCostService = null,
         IPreviousChannelProvider? previousChannels = null,
-        StreamLifecycle? lifecycle = null)
+        StreamLifecycle? lifecycle = null,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -109,6 +124,7 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         _identity = identity ?? RequestIdentity.Default;
         _previousChannels = previousChannels;
         _lifecycle = lifecycle;
+        _logger = logger;
         _requestTerminalTracker = new StreamTerminalTracker(
             ExpectedStreamChoices.FromRequestBody(rawRequest.Body));
     }
@@ -842,15 +858,23 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         DateTimeOffset now,
         SourceEndReason sourceEnd)
     {
-        // C294: the reference gates usage creation on
-        // accountingMayBeFinal(apiFormat, meta, sourceEnd), which needs the
-        // aggregators' AccountingEvidence; the port logs usage unconditionally
-        // until that provenance is ported.
         attempt.AccountingSourceEnd = sourceEnd;
+        attempt.AccountingFinal = meta.AccountingFinal(sourceEnd);
 
-        if (meta.Usage is { } usage)
+        var accountingMayBeFinal = AccountingMayBeFinal(attempt.ApiFormat, meta, sourceEnd);
+
+        if (accountingMayBeFinal && meta.Usage is { } usage)
         {
             LogUsage(usage, attempt);
+        }
+
+        if ((meta.Usage is null || !accountingMayBeFinal) && _logger is { } logger)
+        {
+            LogAuthoritativeUsageUnavailable(
+                logger,
+                attempt.ExecutionId,
+                AccountingUnavailableReason(meta, sourceEnd),
+                null);
         }
 
         TryPersist(() => _recorder.UpdateExecutionResult(
@@ -867,6 +891,56 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
         // Save all response chunks at once; a chunk failure never rolls back
         // the finalized status.
         TryPersist(() => _recorder.SaveExecutionChunks(attempt.ExecutionId, attempt.Chunks));
+    }
+
+    /// <summary>Port of accountingMayBeFinal (outbound.go:583-596).</summary>
+    internal static bool AccountingMayBeFinal(
+        string format,
+        ResponseMeta meta,
+        SourceEndReason sourceEnd)
+    {
+        if (meta.AccountingFinal(sourceEnd))
+        {
+            return true;
+        }
+
+        // The named raw aggregators own provenance. Other adapters retain their
+        // established usage behavior until they provide the same evidence.
+        return format switch
+        {
+            ApiFormats.OpenAIChatCompletion
+                or ApiFormats.OpenAIResponse
+                or ApiFormats.OpenAIResponseWebSocket
+                or ApiFormats.OpenAIResponseCompact
+                or ApiFormats.AnthropicMessage => false,
+            _ => meta.Usage is not null,
+        };
+    }
+
+    /// <summary>Port of accountingUnavailableReason (outbound.go:598-612).</summary>
+    internal static string AccountingUnavailableReason(ResponseMeta meta, SourceEndReason sourceEnd)
+    {
+        if (sourceEnd == SourceEndReason.Budget)
+        {
+            return "budget";
+        }
+
+        if (sourceEnd == SourceEndReason.Error)
+        {
+            return "provider-error";
+        }
+
+        if (sourceEnd == SourceEndReason.Canceled)
+        {
+            return "truncated";
+        }
+
+        if (meta.AccountingEvidence == AccountingEvidence.CleanEndCandidate)
+        {
+            return "truncated";
+        }
+
+        return "absent";
     }
 
     /// <summary>Port of persistRequestExecutionFailure.</summary>
@@ -1348,6 +1422,9 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
 
         /// <summary>Go's PersistenceState.AccountingSourceEnd.</summary>
         public SourceEndReason AccountingSourceEnd { get; set; } = SourceEndReason.Unknown;
+
+        /// <summary>Go's PersistenceState.AccountingFinal (written, never read).</summary>
+        public bool AccountingFinal { get; set; }
 
         public StreamTerminalTracker Tracker { get; init; } = null!;
 

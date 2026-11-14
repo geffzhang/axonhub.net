@@ -231,6 +231,19 @@ public enum SourceEndReason
     Budget,
 }
 
+/// <summary>
+/// Port of llm.AccountingEvidence (llm/model.go:829-835): how much the usage a
+/// raw aggregator observed can be trusted. Go's zero value is the empty string;
+/// the port has no nameless enum member, and every consumer treats unknown
+/// evidence like <see cref="Unavailable"/> (no accounting may be final).
+/// </summary>
+public enum AccountingEvidence
+{
+    Unavailable = 0,
+    ExplicitFinal,
+    CleanEndCandidate,
+}
+
 /// <summary>Port of llm.ResponseMeta.</summary>
 public sealed class ResponseMeta
 {
@@ -243,6 +256,23 @@ public sealed class ResponseMeta
     [JsonPropertyName("completed")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Completed { get; set; }
+
+    /// <summary>
+    /// Go tags this field <c>json:"-"</c>: provenance is internal and never
+    /// reaches the client or the stored response body.
+    /// </summary>
+    [JsonIgnore]
+    public AccountingEvidence AccountingEvidence { get; set; } = AccountingEvidence.Unavailable;
+
+    /// <summary>Port of ResponseMeta.AccountingFinal (llm/model.go:848-857).</summary>
+    public bool AccountingFinal(SourceEndReason sourceEnd)
+        => AccountingEvidence switch
+        {
+            AccountingEvidence.ExplicitFinal => true,
+            AccountingEvidence.CleanEndCandidate
+                => sourceEnd is SourceEndReason.CleanEof or SourceEndReason.Semantic,
+            _ => false,
+        };
 }
 
 /// <summary>
