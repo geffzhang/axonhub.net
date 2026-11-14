@@ -16,6 +16,12 @@ public sealed class ChannelPerformanceRecord
 {
     public required long ChannelId { get; init; }
 
+    /// <summary>
+    /// The client's requested model (the reference's GetRequestedModel), used
+    /// as the (channel, model) key of the model circuit breaker (C036).
+    /// </summary>
+    public string ModelId { get; init; } = string.Empty;
+
     public required DateTimeOffset StartTime { get; init; }
 
     /// <summary>

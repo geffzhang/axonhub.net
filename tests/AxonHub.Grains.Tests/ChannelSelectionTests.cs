@@ -1,4 +1,5 @@
 using AxonHub.Abstractions;
+using AxonHub.Grains;
 using AxonHub.Grains.Abstractions;
 
 namespace AxonHub.Grains.Tests;
@@ -350,6 +351,50 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture)
         Assert.Equal(
             [2402L, 2401L, 2403L],
             result.Select(candidate => candidate.ChannelId).ToArray());
+    }
+
+    [Fact]
+    public void CircuitBreakerScoreUsesTheModelState()
+    {
+        var breaker = new ModelCircuitBreaker(new FixedTimeProvider(Now));
+        var candidate = Candidate(2501, weight: 100);
+
+        var closed = ScoreWithBreaker(breaker, candidate);
+        Assert.InRange(closed, 400.0, 400.5);
+
+        for (var i = 0; i < ModelCircuitBreaker.HalfOpenThreshold; i++)
+        {
+            breaker.RecordError(candidate.ChannelId, "m");
+        }
+
+        var halfOpen = ScoreWithBreaker(breaker, candidate);
+        Assert.InRange(halfOpen, 260.0, 260.5);
+
+        for (var i = ModelCircuitBreaker.HalfOpenThreshold;
+             i < ModelCircuitBreaker.OpenThreshold;
+             i++)
+        {
+            breaker.RecordError(candidate.ChannelId, "m");
+        }
+
+        Assert.Equal(200.0, ScoreWithBreaker(breaker, candidate));
+    }
+
+    private double ScoreWithBreaker(
+        ModelCircuitBreaker breaker,
+        ChannelCandidate candidate)
+        => LoadBalancerScoring.StrategyScore(
+            LoadBalancerStrategies.CircuitBreaker,
+            candidate,
+            NeutralMetrics(),
+            Now,
+            _rateLimitAware,
+            breaker,
+            "m");
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     [Fact]

@@ -48,7 +48,9 @@ public static class LoadBalancerScoring
         ChannelCandidate candidate,
         ChannelMetricsSnapshot metrics,
         DateTimeOffset now,
-        RateLimitAwareScorer rateLimitAware)
+        RateLimitAwareScorer rateLimitAware,
+        ModelCircuitBreaker? modelCircuitBreaker = null,
+        string? modelId = null)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(metrics);
@@ -74,8 +76,7 @@ public static class LoadBalancerScoring
                 + rateLimitScore,
             LoadBalancerStrategies.CircuitBreaker =>
                 WeightScore(candidate.OrderingWeight)
-                + CircuitBreakerClosedScore
-                + (Random.Shared.NextDouble() * 0.5)
+                + CircuitBreakerScore(candidate, now, modelCircuitBreaker, modelId)
                 + rateLimitScore,
             _ =>
                 ErrorAwareScore(metrics, now)
@@ -83,6 +84,30 @@ public static class LoadBalancerScoring
                 + LatencyNeutralScore
                 + rateLimitScore,
         };
+    }
+
+    /// <summary>
+    /// lb_strategy_model_aware_circuit_breaker.go: the effective weight is 1.0
+    /// while closed, 0.3 while half-open, and 0 while open unless the probe
+    /// window has opened. A positive weight contributes maxScore plus the
+    /// reference's 0-0.5 random tie-breaker.
+    /// </summary>
+    private static double CircuitBreakerScore(
+        ChannelCandidate candidate,
+        DateTimeOffset now,
+        ModelCircuitBreaker? modelCircuitBreaker,
+        string? modelId)
+    {
+        var weight = modelCircuitBreaker is null || string.IsNullOrEmpty(modelId)
+            ? 1.0
+            : modelCircuitBreaker.GetEffectiveWeight(candidate.ChannelId, modelId, now);
+        var score = weight * CircuitBreakerClosedScore;
+        if (weight > 0)
+        {
+            score += Random.Shared.NextDouble() * 0.5;
+        }
+
+        return score;
     }
 
     /// <summary>

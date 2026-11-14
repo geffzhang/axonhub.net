@@ -7,6 +7,7 @@ using AxonHub.Api.Persistence;
 using AxonHub.Api.PromptProtection;
 using AxonHub.Api.Prompts;
 using AxonHub.Api.Settings;
+using AxonHub.Grains;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
@@ -68,6 +69,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly ResponsesSessionStore? _responsesSessions;
     private readonly ILoggerFactory? _loggerFactory;
     private readonly ServerLifetime? _serverLifetime;
+    private readonly ModelCircuitBreaker? _modelCircuitBreaker;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -101,7 +103,8 @@ public sealed class ChatCompletionOrchestrator
         ChannelCopilotTokenCache? copilotTokens = null,
         ResponsesSessionStore? responsesSessions = null,
         ILoggerFactory? loggerFactory = null,
-        ServerLifetime? serverLifetime = null)
+        ServerLifetime? serverLifetime = null,
+        ModelCircuitBreaker? modelCircuitBreaker = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -209,6 +212,11 @@ public sealed class ChatCompletionOrchestrator
         // keeps the shutdown half of newStreamLifecycle unobserved exactly like
         // a context without a lifecycle.Manager.
         _serverLifetime = serverLifetime;
+
+        // Production passes the process-wide model circuit breaker; direct
+        // constructions leave it null, so scoring and tracking stay inactive
+        // like the reference's nil ModelCircuitBreaker.
+        _modelCircuitBreaker = modelCircuitBreaker;
 
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
@@ -596,7 +604,8 @@ public sealed class ChatCompletionOrchestrator
                 includeRateLimits: true,
                 ensureUsage: false,
                 cancellationToken,
-                responsesContinuation: responsesContinuation)
+                responsesContinuation: responsesContinuation,
+                loadBalancerStrategy: effectivePolicy.LoadBalancerStrategy)
             .ConfigureAwait(false);
     }
 
@@ -730,7 +739,8 @@ public sealed class ChatCompletionOrchestrator
                 // registry (tester.go:295-316), so channel tests never publish
                 // preview buffers even though they share this production
                 // instance.
-                livePreview: false)
+                livePreview: false,
+                loadBalancerStrategy: effectivePolicy.LoadBalancerStrategy)
             .ConfigureAwait(false);
     }
 
@@ -811,7 +821,8 @@ public sealed class ChatCompletionOrchestrator
         CancellationToken cancellationToken,
         ProxyConfig? proxyOverride = null,
         bool livePreview = true,
-        ResponsesContinuation? responsesContinuation = null)
+        ResponsesContinuation? responsesContinuation = null,
+        string loadBalancerStrategy = "")
     {
         // channel_llm.go:122-130,700-774: the reference builds the channel's
         // transformer with the channel's proxy-aware client, and the same client
@@ -955,7 +966,9 @@ public sealed class ChatCompletionOrchestrator
                 performance,
                 _timeProvider,
                 _apiKeySelection,
-                _autoDisableQueue)));
+                _autoDisableQueue,
+                _modelCircuitBreaker,
+                loadBalancerStrategy == LoadBalancerStrategies.CircuitBreaker)));
 
         // Channel request rewriting runs after the outbound transform (so the
         // body it patches is the provider body) and before persistence (so the

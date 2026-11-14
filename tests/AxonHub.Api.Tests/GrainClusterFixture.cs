@@ -1,6 +1,7 @@
 using AxonHub.Abstractions;
 using AxonHub.Api.Models;
 using AxonHub.Api.Orchestration;
+using AxonHub.Grains;
 using AxonHub.Grains.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
@@ -174,6 +175,7 @@ internal sealed class GrainTestSiloConfigurator : ISiloConfigurator
             services.AddSingleton<IEnabledChannelProvider>(ChannelProvider!);
             services.AddSingleton<IEnabledChannelSource>(ChannelProvider!);
             services.AddSingleton(TimeProvider.System);
+            services.AddSingleton(new ModelCircuitBreaker(TimeProvider.System));
             services.AddSingleton(RateLimitTracker!);
             services.AddSingleton(ChannelLimiterManager!);
             services.AddSingleton<IChannelTokenSource>(TokenSource!);

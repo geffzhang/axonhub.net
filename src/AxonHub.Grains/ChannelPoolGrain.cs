@@ -27,7 +27,8 @@ namespace AxonHub.Grains;
 /// </summary>
 public sealed class ChannelPoolGrain(
     IGrainFactory grainFactory,
-    ChannelLimiterManager channelLimiterManager)
+    ChannelLimiterManager channelLimiterManager,
+    ModelCircuitBreaker modelCircuitBreaker)
     : Grain, IChannelPoolGrain
 {
     private readonly RateLimitAwareScorer _rateLimitAware = new(channelLimiterManager);
@@ -221,7 +222,14 @@ public sealed class ChannelPoolGrain(
         ChannelCandidate candidate,
         ChannelMetricsSnapshot metrics,
         DateTimeOffset now)
-        => LoadBalancerScoring.StrategyScore(strategy, candidate, metrics, now, _rateLimitAware);
+        => LoadBalancerScoring.StrategyScore(
+            strategy,
+            candidate,
+            metrics,
+            now,
+            _rateLimitAware,
+            modelCircuitBreaker,
+            this.GetPrimaryKeyString());
 
     private sealed record ScoredCandidate(
         ChannelCandidate Candidate,

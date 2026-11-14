@@ -2,6 +2,7 @@ using System.Text;
 using AxonHub.Abstractions;
 using AxonHub.Api.Http;
 using AxonHub.Api.Management;
+using AxonHub.Grains;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -38,6 +39,8 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
     private readonly TimeProvider _timeProvider;
     private readonly ChannelApiKeySelectionRegistry? _apiKeySelection;
     private readonly IChannelAutoDisableEvaluationQueue? _autoDisableQueue;
+    private readonly ModelCircuitBreaker? _modelCircuitBreaker;
+    private readonly bool _trackModelCircuitBreaker;
 
     private bool _stream;
 
@@ -47,7 +50,9 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         ChannelPerformanceState state,
         TimeProvider timeProvider,
         ChannelApiKeySelectionRegistry? apiKeySelection = null,
-        IChannelAutoDisableEvaluationQueue? autoDisableQueue = null)
+        IChannelAutoDisableEvaluationQueue? autoDisableQueue = null,
+        ModelCircuitBreaker? modelCircuitBreaker = null,
+        bool trackModelCircuitBreaker = false)
     {
         ArgumentNullException.ThrowIfNull(outbound);
         ArgumentNullException.ThrowIfNull(metrics);
@@ -60,6 +65,8 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         _timeProvider = timeProvider;
         _apiKeySelection = apiKeySelection;
         _autoDisableQueue = autoDisableQueue;
+        _modelCircuitBreaker = modelCircuitBreaker;
+        _trackModelCircuitBreaker = trackModelCircuitBreaker;
 
         // The persistent-stream middleware reports an aggregated completion
         // through the same state; the sink is Record, so both paths share the
@@ -104,6 +111,9 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         _state.Current = new ChannelPerformanceRecord
         {
             ChannelId = channelId,
+            ModelId = _outbound.OriginalModel.Length > 0
+                ? _outbound.OriginalModel
+                : _outbound.CurrentModel,
             StartTime = _timeProvider.GetUtcNow(),
             Stream = _stream,
             ApiKey = apiKey,
@@ -196,6 +206,22 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         else
         {
             _metrics.RecordFailure(record.ChannelId, record.EndTime);
+        }
+
+        // model_circuit_breaker.go:71-113: the reference tracker records the
+        // model outcome only under the circuit-breaker policy.
+        if (_trackModelCircuitBreaker
+            && _modelCircuitBreaker is not null
+            && record.ModelId.Length > 0)
+        {
+            if (record.Success)
+            {
+                _modelCircuitBreaker.RecordSuccess(record.ChannelId, record.ModelId);
+            }
+            else
+            {
+                _modelCircuitBreaker.RecordError(record.ChannelId, record.ModelId);
+            }
         }
     }
 

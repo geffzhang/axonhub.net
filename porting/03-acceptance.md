@@ -2202,6 +2202,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §236（2026-11-15）API key 鉴权的进程内缓存。C026 转 resolved：新增 `ApiKeyCache`（单例）与 `CachingApiKeyStore` 装饰器；`IApiKeyStore` 的 DI 注册改为装饰器，`GetByKeyAsync` 命中缓存直接返回，`Create` / `Update` / `BulkUpdateStatus` 成功后清空缓存；`GetById` / `List` / `Count` / `Exists` 与项目读取仍直达数据库。缺失 key 不缓存；外部直接改库在写入或重启前不可见，与参照的进程内缓存范围一致。用户停用/删除 personal key 的级联仍未移植（C176(6)），该路径不产生写。定向 `CachingApiKeyStoreTests` 5/5、Api `ConfigurationSurfaceTests` 10/10（Program DI 编译）；未跑 Api 全量（新增 Persistence 5 例待下次全量计入）。台账 307 条（196 accepted / 111 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§237（2026-11-15）模型级熔断计分与记录。C036 转 resolved：新增 `ModelCircuitBreaker`（closed/half_open/open；3/5 阈值、30m TTL、5m 探针间隔、0.3 半开权重、探针失败 2^n 上限 8 的退避）；`ChannelPoolGrain` 以请求模型为 key 读取有效权重（closed 200+随机、half_open 60+随机、open 0），`ChannelMetricsMiddleware` 在有效策略为 circuit-breaker 时按 (channel, 请求模型) 记录成功/失败。探针租约原语已实现，但 tracker 的本地跳过与并发单探针未接入，拆到新登记的 C308（accepted）。定向 Grains 36/36、Api 跟踪 3/3、orchestrator 回归 36/36；未跑 Api 全量（新增 Grains 4 例、Api 3 例待下次全量计入）。台账 308 条（196 accepted / 112 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

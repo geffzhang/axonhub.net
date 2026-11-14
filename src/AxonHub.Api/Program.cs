@@ -24,6 +24,7 @@ using AxonHub.Api.Settings;
 using AxonHub.Api.Static;
 using AxonHub.Api.Storage;
 using AxonHub.Api.Traces;
+using AxonHub.Grains;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -105,6 +106,7 @@ builder.Services.AddSingleton<
 builder.Services.AddSingleton<IChannelTokenStore, ChannelTokenStore>();
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(new ModelCircuitBreaker(TimeProvider.System));
 
 // The reference's HTTP client has no request timeout (llm/httpclient/client.go);
 // timeouts come from the retry policy scopes inside the pipeline. Redirects are
