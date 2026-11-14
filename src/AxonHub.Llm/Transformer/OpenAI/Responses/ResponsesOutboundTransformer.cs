@@ -194,6 +194,22 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             throw new InvalidOperationException("chat request is nil");
         }
 
+        // Only chat requests can ride the WebSocket transport (outbound.go:214-220):
+        // compact and native image requests must not be converted into it.
+        if (ApiFormat == ApiFormats.OpenAIResponseWebSocket)
+        {
+            switch (request.RequestType)
+            {
+                case null:
+                case "":
+                case RequestTypes.Chat:
+                    break;
+                default:
+                    throw TransformerErrors.UnsupportedConversion(
+                        "WebSocket Responses requires a chat request");
+            }
+        }
+
         var originalRequestType = request.RequestType;
         var isImageRequest = originalRequestType == RequestTypes.Image;
 
@@ -393,7 +409,10 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
                 Type = AuthTypes.Bearer,
                 ApiKey = apiKey,
             },
-            ApiFormat = ApiFormats.OpenAIResponse,
+            // outbound.go:357 sets the emitted API format from the transformer
+            // (openai/responses-ws under the WebSocket transport); response
+            // transport adaptation depends on reading it back here.
+            ApiFormat = ApiFormat,
             TransformerMetadata = request.TransformerMetadata,
             SkipInboundQueryMerge = true,
             Metadata = null,

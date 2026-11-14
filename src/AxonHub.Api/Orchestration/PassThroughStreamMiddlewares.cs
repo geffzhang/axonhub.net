@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
+using AxonHub.Llm.Transformer.OpenAI.Responses;
 
 namespace AxonHub.Api.Orchestration;
 
@@ -242,7 +243,11 @@ internal sealed class CaptureRawProviderResponseMiddleware(
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        if (PassThrough.IsEnabled(outbound, settings))
+        // Adaptation and identity preservation need the untouched provider
+        // payload even when the channel's pass-through setting is off.
+        if (PassThrough.IsEnabled(outbound, settings)
+            || PassThrough.TransportAdaptationEnabled(outbound)
+            || PassThrough.IdentityPreservationEnabled(outbound))
         {
             outbound.RawProviderResponse = response;
         }
@@ -251,7 +256,12 @@ internal sealed class CaptureRawProviderResponseMiddleware(
     }
 }
 
-/// <summary>Port of applyPassThroughResponse.</summary>
+/// <summary>
+/// Port of applyPassThroughResponse: replaces the transformed response with the
+/// raw provider response when pass-through, Responses transport adaptation or
+/// Responses identity preservation applies, unless the outbound transformer
+/// vetoes it via <see cref="AxonHub.Llm.Transformer.IPassThroughResponsePolicy"/>.
+/// </summary>
 internal sealed class PassThroughResponseMiddleware(
     PersistentOutboundTransformer outbound,
     PassThroughSettings settings)
@@ -261,12 +271,58 @@ internal sealed class PassThroughResponseMiddleware(
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        if (!PassThrough.IsEnabled(outbound, settings))
+        var passThrough = PassThrough.IsEnabled(outbound, settings);
+        var adaptation = PassThrough.TransportAdaptationEnabled(outbound);
+        var identity = PassThrough.IdentityPreservationEnabled(outbound);
+        if (!passThrough && !adaptation && !identity)
         {
             return response;
         }
 
-        return outbound.RawProviderResponse ?? response;
+        if (!PassThrough.AllowPassThroughResponse(outbound))
+        {
+            return response;
+        }
+
+        var raw = outbound.RawProviderResponse;
+        if (raw is null)
+        {
+            return response;
+        }
+
+        if (passThrough || identity)
+        {
+            var cloned = raw.ShallowClone();
+            if (identity)
+            {
+                // Same transport: only the model the provider echoed back is
+                // restored to the client's requested value.
+                cloned.Body = PassThrough.PreserveResponsesModel(
+                    raw.Body,
+                    PassThrough.ResponsesClientModel(outbound));
+            }
+
+            return cloned;
+        }
+
+        var llmRequest = outbound.CurrentLlmRequest;
+        var providerRequest = outbound.RawProviderRequest;
+        if (llmRequest is null || providerRequest is null)
+        {
+            return response;
+        }
+
+        var source = llmRequest.ApiFormat;
+        var target = providerRequest.ApiFormat;
+        var body = ResponsesProtocolCodec.AdaptResponseBody(raw.Body, target, source);
+        body = PassThrough.PreserveResponsesModel(body, PassThrough.ResponsesClientModel(outbound));
+
+        var adapted = raw.ShallowClone();
+        adapted.Body = body;
+        // The inbound response owns the request plumbing the client sees.
+        adapted.Request = response.Request;
+
+        return adapted;
     }
 }
 
@@ -290,7 +346,9 @@ internal sealed class CaptureRawProviderStreamMiddleware(
     {
         ArgumentNullException.ThrowIfNull(stream);
 
-        if (!PassThrough.IsEnabled(outbound, settings))
+        if (!PassThrough.IsEnabled(outbound, settings)
+            && !PassThrough.TransportAdaptationEnabled(outbound)
+            && !PassThrough.IdentityPreservationEnabled(outbound))
         {
             return stream;
         }
@@ -485,7 +543,9 @@ internal sealed class PassThroughStreamMiddleware(
     {
         ArgumentNullException.ThrowIfNull(stream);
 
-        if (!PassThrough.IsEnabled(outbound, settings))
+        var adaptation = PassThrough.TransportAdaptationEnabled(outbound);
+        var identity = PassThrough.IdentityPreservationEnabled(outbound);
+        if (!PassThrough.IsEnabled(outbound, settings) && !adaptation && !identity)
         {
             return stream;
         }
@@ -505,9 +565,28 @@ internal sealed class PassThroughStreamMiddleware(
 
         DrainInBackground(stream);
 
-        return held.Length == 0
+        IStream<StreamEvent> result = held.Length == 0
             ? rawStream
             : new PrependStream<StreamEvent>(rawStream, held);
+
+        // The transport adapter runs first (source -> target), then identity
+        // preservation restores the client's model in the adapted payload.
+        if (adaptation)
+        {
+            result = new ResponsesTransportStream(
+                result,
+                outbound.RawProviderRequest!.ApiFormat,
+                outbound.CurrentLlmRequest!.ApiFormat ?? string.Empty);
+        }
+
+        if (adaptation || identity)
+        {
+            result = new ResponsesIdentityStream(
+                result,
+                PassThrough.ResponsesClientModel(outbound));
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -540,4 +619,74 @@ internal sealed class PassThroughStreamMiddleware(
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
     }
+}
+
+/// <summary>
+/// Port of responsesTransportStream: validates and normalizes each raw provider
+/// event for the client's Responses transport without rebuilding provider
+/// items. An adaptation failure becomes the stream's terminal error and stops
+/// delivery, exactly like the reference's wrapper.
+/// </summary>
+internal sealed class ResponsesTransportStream(
+    IStream<StreamEvent> stream,
+    string source,
+    string target) : IStream<StreamEvent>
+{
+    private StreamEvent? _current;
+    private Exception? _error;
+
+    public StreamEvent? Current => _current;
+
+    public Exception? Err => _error ?? stream.Err;
+
+    public bool Next()
+    {
+        if (_error is not null || !stream.Next())
+        {
+            return false;
+        }
+
+        try
+        {
+            _current = ResponsesProtocolCodec.AdaptStreamEvent(stream.Current, source, target);
+        }
+        catch (Exception ex)
+        {
+            _error = ex;
+            return false;
+        }
+
+        return true;
+    }
+
+    public void Dispose() => stream.Dispose();
+}
+
+/// <summary>
+/// Port of responsesIdentityStream: restores the client's requested model in
+/// every provider event it echoes back (the provider may have rewritten it to
+/// the upstream model id).
+/// </summary>
+internal sealed class ResponsesIdentityStream(
+    IStream<StreamEvent> stream,
+    string clientModel) : IStream<StreamEvent>
+{
+    private StreamEvent? _current;
+
+    public StreamEvent? Current => _current;
+
+    public Exception? Err => stream.Err;
+
+    public bool Next()
+    {
+        if (!stream.Next())
+        {
+            return false;
+        }
+
+        _current = PassThrough.PreserveResponsesStreamEventModel(stream.Current, clientModel);
+        return true;
+    }
+
+    public void Dispose() => stream.Dispose();
 }

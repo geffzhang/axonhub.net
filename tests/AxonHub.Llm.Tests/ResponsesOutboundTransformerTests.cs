@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
+using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 
@@ -21,6 +22,55 @@ public sealed class ResponsesOutboundTransformerTests
     {
         var ex = Assert.Throws<ArgumentException>(() => ResponsesOutboundTransformer.Create(baseUrl, apiKey));
         Assert.Equal("apiKey or baseURL is empty", ex.Message);
+    }
+
+    private static ResponsesOutboundTransformer WebSocketTransformer()
+        => new(new ResponsesOutboundConfig
+        {
+            BaseUrl = "https://api.openai.com/v1",
+            ApiKeyProvider = new StaticApiKeyProvider("test-key"),
+            Transport = ResponsesOutboundTransformer.TransportWebSocket,
+        });
+
+    [Theory]
+    [InlineData(RequestTypes.Compact)]
+    [InlineData(RequestTypes.Image)]
+    [InlineData("responses")]
+    public void WebSocketTransportRejectsNonChatRequests(string requestType)
+    {
+        // outbound.go:214-220: only chat requests ride the WebSocket transport.
+        var request = new LlmRequest
+        {
+            Model = "gpt-5",
+            RequestType = requestType,
+            Messages = [new Message { Role = "user", Content = MessageContent.FromText("hi") }],
+        };
+
+        var error = Assert.Throws<TransformerException>(
+            () => WebSocketTransformer().TransformRequest(request));
+
+        Assert.Equal(TransformerErrorKind.UnsupportedConversion, error.Kind);
+        Assert.Equal(
+            "unsupported conversion: WebSocket Responses requires a chat request",
+            error.Message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(RequestTypes.Chat)]
+    public void WebSocketTransportAcceptsChatRequests(string? requestType)
+    {
+        var request = new LlmRequest
+        {
+            Model = "gpt-5",
+            RequestType = requestType,
+            Messages = [new Message { Role = "user", Content = MessageContent.FromText("hi") }],
+        };
+
+        var httpRequest = WebSocketTransformer().TransformRequest(request);
+
+        Assert.Equal(ApiFormats.OpenAIResponseWebSocket, httpRequest.ApiFormat);
     }
 
     [Theory]

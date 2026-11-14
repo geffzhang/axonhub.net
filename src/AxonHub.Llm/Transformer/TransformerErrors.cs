@@ -7,6 +7,14 @@ public enum TransformerErrorKind
     InvalidRequest,
     InvalidModel,
     InvalidResponse,
+
+    /// <summary>
+    /// Port of <c>transformer.ErrUnsupportedConversion</c>: the requested
+    /// protocol/transport pair cannot be produced. Retrying cannot repair it,
+    /// so the pipeline stops before the retry policy runs
+    /// (llm/pipeline/pipeline.go:326-328).
+    /// </summary>
+    UnsupportedConversion,
 }
 
 /// <summary>
@@ -42,9 +50,30 @@ public static class TransformerErrors
     public static TransformerException InvalidModel(string detail)
         => new(TransformerErrorKind.InvalidModel, "model not found: " + detail);
 
+    /// <summary>Port of <c>fmt.Errorf("%w: %s", ErrUnsupportedConversion, detail)</c>.</summary>
+    public static TransformerException UnsupportedConversion(string detail)
+        => new(TransformerErrorKind.UnsupportedConversion, "unsupported conversion: " + detail);
+
     public static TransformerException InvalidResponse(string detail)
         => new(TransformerErrorKind.InvalidResponse, "invalid response: " + detail);
 
     public static TransformerException InvalidResponse(string detail, Exception inner)
         => new(TransformerErrorKind.InvalidResponse, "invalid response: " + detail, inner);
+
+    /// <summary>
+    /// Port of <c>errors.Is(err, transformer.ErrUnsupportedConversion)</c>: the
+    /// sentinel may sit anywhere in the wrap chain, not only at its head.
+    /// </summary>
+    public static bool IsUnsupportedConversion(Exception? error)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+        {
+            if (current is TransformerException { Kind: TransformerErrorKind.UnsupportedConversion })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

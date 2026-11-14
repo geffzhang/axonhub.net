@@ -925,6 +925,14 @@ public sealed class ChatCompletionOrchestrator
         // can still modify the replayed body, the User-Agent policy before the
         // header overrides (which may still change the User-Agent).
         options.Middlewares.Add(new PassThroughRequestBodyMiddleware(outbound, passThroughSettings));
+
+        // orchestrator.go:279-287: between two Responses transports (HTTP vs
+        // WebSocket) the raw inbound body replaces the generic-model roundtrip
+        // so provider item IDs and unknown fields survive. It runs after the
+        // pass-through body — which records the provider request — and before
+        // the Codex header replay.
+        options.Middlewares.Add(new ResponsesTransportRequestBodyMiddleware(outbound));
+
         options.Middlewares.Add(new PassThroughRequestHeadersMiddleware(outbound));
 
         // orchestrator.go:312: the continuation writes its effective input (and

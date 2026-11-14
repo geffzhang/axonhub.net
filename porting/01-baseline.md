@@ -1660,6 +1660,29 @@ Api FullyQualifiedName~Responses 142 通过、Llm ResponsesLaneTests + Responses
 通过、Persistence 1 通过；未跑 Api 全量回归。台账：新增 C289（resolved），C254 转 resolved，C255 / C288
 更新；289 条（199 accepted / 0 gap / 90 resolved）。
 
+2026-11-14 更新（§217）：Responses transport adaptation / identity preservation（C290）。
+按 live f272549f 移植 pass-through 的 Responses HTTP/WebSocket 传输适配：Llm 新增
+`ResponsesProtocolCodec`（`IsResponsesFormat` 仅认 openai/responses 与 openai/responses-ws；
+`AdaptRequestBody` 的格式门、response.create 来源与 HTTP warmup 拒绝、type/stream_id/generate 清理与
+WS 目标回填、ordinal 键排序紧凑 marshal；`AdaptResponseBody` 的 id 必填与字节克隆；
+`AdaptStreamEvent` 的事件 type 一致性与 completed 校验），Api 新增 `TransportAdaptationEnabled` /
+`IdentityPreservationEnabled` / `ResponsesClientModel` / `PreserveResponsesModel` /
+`PreserveResponsesStreamEventModel`（model 与 response.model 双路径 span splice 字节替换），并按
+orchestrator.go 的接线顺序接入 `ResponsesTransportRequestBodyMiddleware`、三条件门控的
+capture/apply 与 stream 双层包装（transport 在外、identity 在内）；Codex header 重放判据改为
+`PassThroughApplied && IsResponsesFormat(LlmRequest.APIFormat)`。配套修正
+`ResponsesOutboundTransformer` 的 wire `ApiFormat`（outbound.go:357，WS 端点发出
+openai/responses-ws）与 WS RequestType guard（仅 chat/空可走 WebSocket），prompt protection 的
+raw 字段补丁补上 openai/responses-ws。实现差异：identity 用 span splice 保持其余字节不变（C039），
+codec 解析前兼容 Go 接受的非法 UTF-8 字符串且返回体保留原始字节（C008），
+`IPassThroughResponsePolicy` 仅有接口（live 唯一实现属于未移植的 cloudflare SystemOne）。残余缺口：
+raw_stream_queue 的 128 MiB 后附着预算、32 MiB 单事件 reserve 与 64 MiB pre-attach 上限未移植，
+端口保持基线 8 MiB / 1024 条且无 queue 层。测试：新增 `ResponsesTransportPassThroughTests` 42 例、
+`ResponsesProtocolCodecTests` 28 例、`ResponsesOutboundTransformerTests` WS guard/accept 6 例；
+`PassThroughStreamTests` 改为锁定响应克隆语义。定向运行：Api FullyQualifiedName~Responses|~PassThrough
+346 通过、Api ~WebSocket|~Codex|~ChannelTest 339 通过、Llm ~Responses 428 通过；未跑 Api 全量回归。
+台账：新增 C290（resolved），C289 收窄；290 条（199 resolved / 91 accepted / 0 gap）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

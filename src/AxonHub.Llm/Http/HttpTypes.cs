@@ -194,6 +194,22 @@ public sealed class HttpResponseData
 
     [JsonIgnore]
     public HttpRequestMessage? RawRequest { get; set; }
+
+    /// <summary>
+    /// Go's struct copy (<c>cloned := *response</c>): every field carries over
+    /// and the headers dictionary, body array and request pointers stay shared
+    /// with the source, exactly like copying the reference's struct value.
+    /// </summary>
+    public HttpResponseData ShallowClone() => new()
+    {
+        StatusCode = StatusCode,
+        Headers = Headers,
+        Body = Body,
+        Stream = Stream,
+        Request = Request,
+        RawResponse = RawResponse,
+        RawRequest = RawRequest,
+    };
 }
 
 /// <summary>Port of httpclient.StreamEvent.</summary>

@@ -409,8 +409,10 @@ public sealed class PassThroughStreamTests
     }
 
     [Fact]
-    public void ApplyResponseEnabledReturnsRaw()
+    public void ApplyResponseEnabledReturnsACloneOfRaw()
     {
+        // The reference returns &cloned (a struct copy), not the captured
+        // pointer, so later mutations of the raw response never leak out.
         var outbound = Outbound(Request(stream: null));
         var raw = new HttpResponseData { StatusCode = 200, Body = Bytes("raw") };
         outbound.RawProviderResponse = raw;
@@ -419,7 +421,12 @@ public sealed class PassThroughStreamTests
         var result = new PassThroughResponseMiddleware(outbound, PassThroughSettings.Disabled)
             .TransformInboundRawResponse(transformed);
 
-        Assert.Same(raw, result);
+        Assert.NotSame(raw, result);
+        Assert.NotSame(transformed, result);
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal("raw", Encoding.UTF8.GetString(result.Body!));
+        Assert.Same(raw.Headers, result.Headers);
+        Assert.Same(raw.Body, result.Body);
     }
 
     [Fact]

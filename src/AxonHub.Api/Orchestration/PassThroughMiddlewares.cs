@@ -1,7 +1,11 @@
+using System.Text;
+using System.Text.Json;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
+using AxonHub.Llm.Json;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Transformer;
+using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.Shared;
 
 namespace AxonHub.Api.Orchestration;
@@ -38,9 +42,147 @@ internal static class PassThrough
         "Thread-Id",
     ];
 
+    /// <summary>The paths preserveResponsesModel patches, in reference order.</summary>
+    private static readonly string[] ResponsesModelPaths = ["model", "response.model"];
+
+    private static readonly JsonReaderOptions ResponsesReaderOptions = new() { MaxDepth = 10_000 };
+
     /// <summary>Port of passThroughStreamAligned.</summary>
     public static bool StreamAligned(bool? originalStream, bool? effectiveStream)
         => (originalStream ?? false) == (effectiveStream ?? false);
+
+    /// <summary>Port of responsestransformer.IsResponsesFormat.</summary>
+    public static bool IsResponsesFormat(string? apiFormat)
+        => ResponsesProtocolCodec.IsResponsesFormat(apiFormat);
+
+    /// <summary>
+    /// Port of responsesTransportAdaptationEnabled: the client and provider
+    /// speak different Responses transports (HTTP vs WebSocket).
+    /// </summary>
+    public static bool TransportAdaptationEnabled(PersistentOutboundTransformer? outbound)
+    {
+        if (outbound?.CurrentLlmRequest is not { } llmRequest
+            || outbound.RawProviderRequest is not { } providerRequest)
+        {
+            return false;
+        }
+
+        var source = llmRequest.ApiFormat;
+        var target = providerRequest.ApiFormat;
+        if (string.Equals(source, target, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return ResponsesProtocolCodec.IsResponsesFormat(source)
+            && ResponsesProtocolCodec.IsResponsesFormat(target);
+    }
+
+    /// <summary>
+    /// Port of responsesIdentityPreservationEnabled: both sides speak the same
+    /// Responses transport, so only the model echoed in provider payloads is
+    /// restored to the client's value.
+    /// </summary>
+    public static bool IdentityPreservationEnabled(PersistentOutboundTransformer? outbound)
+    {
+        if (outbound?.CurrentLlmRequest is not { } llmRequest
+            || outbound.RawProviderRequest is not { } providerRequest)
+        {
+            return false;
+        }
+
+        return string.Equals(llmRequest.ApiFormat, providerRequest.ApiFormat, StringComparison.Ordinal)
+            && ResponsesProtocolCodec.IsResponsesFormat(llmRequest.ApiFormat);
+    }
+
+    /// <summary>
+    /// Port of responsesClientModel: gjson's <c>model</c> read of the inbound
+    /// body (or its parsed form when the raw body is empty).
+    /// </summary>
+    public static string ResponsesClientModel(PersistentOutboundTransformer? outbound)
+    {
+        var request = outbound?.CurrentLlmRequest?.RawRequest;
+        if (request is null)
+        {
+            return string.Empty;
+        }
+
+        var body = request.Body;
+        if (body is null || body.Length == 0)
+        {
+            body = request.JsonBody;
+        }
+
+        return body is null || body.Length == 0
+            ? string.Empty
+            : OverrideJson.Get(body, "model").StringValue;
+    }
+
+    /// <summary>
+    /// Port of preserveResponsesModel: rewrite the model the provider echoed
+    /// back to the client's requested value. Each patch touches only the
+    /// matched value's bytes; a failed patch keeps the original body.
+    /// </summary>
+    public static byte[] PreserveResponsesModel(byte[]? body, string clientModel)
+    {
+        var data = body ?? [];
+        if (clientModel.Length == 0)
+        {
+            return (byte[])data.Clone();
+        }
+
+        var patched = (byte[])data.Clone();
+        foreach (var path in ResponsesModelPaths)
+        {
+            if (!OverrideJson.Get(patched, path).Exists)
+            {
+                continue;
+            }
+
+            if (!TrySetResponsesModelValue(patched, path, clientModel, out var next))
+            {
+                return (byte[])data.Clone();
+            }
+
+            patched = next;
+        }
+
+        return patched;
+    }
+
+    /// <summary>Port of preserveResponsesStreamEventModel.</summary>
+    public static StreamEvent? PreserveResponsesStreamEventModel(StreamEvent? @event, string clientModel)
+    {
+        if (@event is null || clientModel.Length == 0)
+        {
+            return @event;
+        }
+
+        return new StreamEvent
+        {
+            LastEventId = @event.LastEventId,
+            Type = @event.Type,
+            Data = PreserveResponsesModel(@event.Data, clientModel),
+            CleanEofCompletionEvidence = @event.CleanEofCompletionEvidence,
+            Size = @event.Size,
+            Headers = @event.Headers,
+        };
+    }
+
+    /// <summary>Port of allowPassThroughBody.</summary>
+    public static bool AllowPassThroughBody(
+        PersistentOutboundTransformer outbound,
+        LlmRequest? llmRequest,
+        HttpRequestData? providerRequest)
+        => outbound.CurrentTransformer is not IPassThroughBodyPolicy policy
+            || policy.AllowPassThroughBody(llmRequest, providerRequest);
+
+    /// <summary>Port of allowPassThroughResponse.</summary>
+    public static bool AllowPassThroughResponse(PersistentOutboundTransformer outbound)
+        => outbound.CurrentTransformer is not IPassThroughResponsePolicy policy
+            || policy.AllowPassThroughResponse(
+                outbound.CurrentLlmRequest,
+                outbound.RawProviderRequest);
 
     /// <summary>
     /// Port of isPassThroughEnabled: the effective flag is the channel-level
@@ -128,6 +270,7 @@ internal static class PassThrough
         ApiFormats.OpenAIChatCompletion
             or ApiFormats.OpenAICompletion
             or ApiFormats.OpenAIResponse
+            or ApiFormats.OpenAIResponseWebSocket
             or ApiFormats.OpenAIResponseCompact
             or ApiFormats.OpenAIEmbedding
             or ApiFormats.OpenAIModeration
@@ -230,6 +373,125 @@ internal static class PassThrough
 
         return true;
     }
+
+    /// <summary>
+    /// Port of sjson.SetBytes for the two fixed model paths: only the matched
+    /// value's byte range is replaced so every other byte of the provider
+    /// payload survives. <see cref="OverrideJson.TrySet"/> re-renders the whole
+    /// document, which identity preservation must not do (C039).
+    /// </summary>
+    private static bool TrySetResponsesModelValue(
+        ReadOnlySpan<byte> document,
+        string path,
+        string value,
+        out byte[] patched)
+    {
+        patched = [];
+        var parts = path.Split('.');
+
+        if (!TryFindPathValue(document, 0, parts, 0, out var start, out var end))
+        {
+            return false;
+        }
+
+        var quoted = ResponsesModelJsonValue(value);
+        var result = new byte[document.Length - (end - start) + quoted.Length];
+        document[..start].CopyTo(result);
+        quoted.CopyTo(result.AsSpan(start));
+        document[end..].CopyTo(result.AsSpan(start + quoted.Length));
+        patched = result;
+        return true;
+    }
+
+    /// <summary>
+    /// gjson object-path lookup: the first member with the exact key wins and
+    /// arrays are only reachable by index (an object key on an array does not
+    /// resolve).
+    /// </summary>
+    private static bool TryFindPathValue(
+        ReadOnlySpan<byte> document,
+        int offset,
+        string[] parts,
+        int depth,
+        out int start,
+        out int end)
+    {
+        start = 0;
+        end = 0;
+
+        var reader = new Utf8JsonReader(document[offset..], ResponsesReaderOptions);
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+        {
+            return false;
+        }
+
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            var key = reader.GetString();
+            if (!reader.Read())
+            {
+                return false;
+            }
+
+            var valueStart = offset + checked((int)reader.TokenStartIndex);
+            if (string.Equals(key, parts[depth], StringComparison.Ordinal))
+            {
+                if (depth + 1 == parts.Length)
+                {
+                    if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+                    {
+                        reader.Skip();
+                    }
+
+                    start = valueStart;
+                    end = offset + checked((int)reader.BytesConsumed);
+                    return true;
+                }
+
+                return reader.TokenType == JsonTokenType.StartObject
+                    && TryFindPathValue(document, valueStart, parts, depth + 1, out start, out end);
+            }
+
+            if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+            {
+                reader.Skip();
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// sjson's encoding for a string value: printable ASCII without quote or
+    /// backslash is emitted verbatim; everything else goes through Go's
+    /// json.Marshal (HTML escaping included).
+    /// </summary>
+    private static byte[] ResponsesModelJsonValue(string value)
+    {
+        var utf8 = Encoding.UTF8.GetBytes(value);
+        var simple = true;
+        foreach (var b in utf8)
+        {
+            if (b < ' ' || b > 0x7F || b == '"' || b == '\\')
+            {
+                simple = false;
+                break;
+            }
+        }
+
+        if (!simple)
+        {
+            // json.Marshal(string): HTML escaping, lowercase hex control
+            // escapes and raw UTF-8 for everything else.
+            return Encoding.UTF8.GetBytes(GoJson.Quote(value));
+        }
+
+        var quoted = new byte[utf8.Length + 2];
+        quoted[0] = (byte)'"';
+        utf8.CopyTo(quoted.AsSpan(1));
+        quoted[^1] = (byte)'"';
+        return quoted;
+    }
 }
 
 /// <summary>
@@ -249,7 +511,10 @@ internal sealed class PassThroughRequestBodyMiddleware(
 
         outbound.RawProviderRequest = request;
 
-        if (!PassThrough.IsEnabled(outbound, settings))
+        // Responses transport adaptation (HTTP <-> WebSocket) replays the
+        // inbound body too, even when the channel has pass-through disabled.
+        if (!PassThrough.IsEnabled(outbound, settings)
+            && !PassThrough.TransportAdaptationEnabled(outbound))
         {
             return request;
         }
@@ -325,8 +590,77 @@ internal sealed class PassThroughRequestBodyMiddleware(
 
     /// <summary>Port of allowPassThroughBody.</summary>
     private bool AllowPassThroughBody(LlmRequest llmRequest, HttpRequestData providerRequest)
-        => outbound.CurrentTransformer is not IPassThroughBodyPolicy policy
-            || policy.AllowPassThroughBody(llmRequest, providerRequest);
+        => PassThrough.AllowPassThroughBody(outbound, llmRequest, providerRequest);
+}
+
+/// <summary>
+/// Port of applyResponsesTransportRequestBody
+/// (orchestrator/pass_through.go:159-208): between two Responses transports
+/// (HTTP vs WebSocket) the inbound payload is replayed instead of round-tripped
+/// through the unified model, so provider item IDs, unknown fields and raw item
+/// bytes survive. Lane routing belongs to the caller; stream_id is dropped.
+/// </summary>
+internal sealed class ResponsesTransportRequestBodyMiddleware(PersistentOutboundTransformer outbound)
+    : DummyMiddleware("responses-transport-request-body")
+{
+    public override HttpRequestData TransformOutboundRawRequest(HttpRequestData request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!PassThrough.TransportAdaptationEnabled(outbound))
+        {
+            return request;
+        }
+
+        var llmRequest = outbound.CurrentLlmRequest;
+        if (llmRequest is null)
+        {
+            // The gating above already proved it non-null; the reference
+            // dereferences state.LlmRequest here.
+            return request;
+        }
+
+        if (!PassThrough.AllowPassThroughBody(outbound, llmRequest, request))
+        {
+            return request;
+        }
+
+        var source = llmRequest.ApiFormat;
+        var target = request.ApiFormat;
+
+        if (!PassThrough.TryMergeRequestBodyWithPromptProtection(
+                outbound.EffectiveResponsesRequestBody(),
+                source,
+                llmRequest.Model,
+                outbound.PromptProtectionMaskRules,
+                out var body,
+                out _))
+        {
+            // The reference logs and keeps the outbound body.
+            return request;
+        }
+
+        if (outbound.PromptProtectionBodyCheck is { } bodyCheck
+            && bodyCheck.Validate(body) is not null)
+        {
+            return request;
+        }
+
+        body = ResponsesProtocolCodec.AdaptRequestBody(body, source, target);
+
+        if (!PassThrough.TryMergeRequestBody(body, target, llmRequest.Model, out var adapted, out var error))
+        {
+            throw new InvalidOperationException(error);
+        }
+
+        request.Body = adapted;
+        request.ContentType = "application/json";
+        request.Headers ??= [];
+        HttpClientUtils.HeaderSet(request.Headers, "Content-Type", "application/json");
+        outbound.PassThroughApplied = true;
+
+        return request;
+    }
 }
 
 /// <summary>
@@ -344,7 +678,7 @@ internal sealed class PassThroughRequestHeadersMiddleware(PersistentOutboundTran
         var llmRequest = outbound.CurrentLlmRequest;
         if (!outbound.PassThroughApplied
             || llmRequest is null
-            || !string.Equals(llmRequest.ApiFormat, ApiFormats.OpenAIResponse, StringComparison.Ordinal)
+            || !PassThrough.IsResponsesFormat(llmRequest.ApiFormat)
             || llmRequest.RawRequest is null)
         {
             return request;

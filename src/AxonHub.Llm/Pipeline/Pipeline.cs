@@ -78,6 +78,13 @@ public sealed partial class Pipeline
                 throw ResponsesRecovery.Error();
             }
 
+            // A transport pairing the transformers cannot produce is not
+            // repairable by another attempt (pipeline.go:326-328).
+            if (TransformerErrors.IsUnsupportedConversion(lastErr))
+            {
+                throw lastErr;
+            }
+
             // Resource limits are local facts about this attempt's payload; retrying
             // would hit the same limit, so they bypass the whole retry policy.
             if (GoErrors.IsAny(lastErr, PipelineErrors.PreCommitBufferExceeded, StreamLimits.EventTooLarge))

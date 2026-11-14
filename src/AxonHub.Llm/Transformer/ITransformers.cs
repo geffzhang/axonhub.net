@@ -94,6 +94,18 @@ public interface IPassThroughBodyPolicy
 }
 
 /// <summary>
+/// Port of transformer.PassThroughResponsePolicy (llm/transformer/interfaces.go:69-75):
+/// lets outbound transformers veto raw response pass-through. Transformers whose
+/// raw provider payload is not the client-facing payload implement this to keep
+/// pass-through from restoring the wrapped body.
+/// </summary>
+public interface IPassThroughResponsePolicy
+{
+    /// <summary>Whether the raw provider response may replace the transformed response.</summary>
+    bool AllowPassThroughResponse(LlmRequest? llmRequest, HttpRequestData? providerRequest);
+}
+
+/// <summary>
 /// Optional marker recognising the official Codex response-header contract.
 /// The reference asserts it structurally inside
 /// <c>PersistentOutboundTransformer.SupportsCodexResponseHeaders</c>

@@ -2062,6 +2062,23 @@ inner 链复现；残余缺口为 transport adaptation / identity preservation �
 C254 转 resolved，C255 / C288 更新；lint 通过；02-differences.md 已重新生成；289 条
 （199 accepted / 0 gap / 90 resolved）。
 
+§217（2026-11-14）Responses transport adaptation / identity preservation（C290）。按 live f272549f
+移植 pass-through 的 Responses HTTP/WebSocket 适配：Llm 新增 ResponsesProtocolCodec（IsResponsesFormat
+仅认 openai/responses 与 openai/responses-ws；AdaptRequestBody 的格式门、response.create 来源与
+HTTP warmup 拒绝、type/stream_id/generate 清理与 WS 目标回填、ordinal 键排序紧凑 marshal；
+AdaptResponseBody 的 id 必填与字节克隆；AdaptStreamEvent 的 type 一致性与 completed 校验），Api 新增
+TransportAdaptationEnabled / IdentityPreservationEnabled / ResponsesClientModel /
+PreserveResponsesModel / PreserveResponsesStreamEventModel，并接入
+ResponsesTransportRequestBodyMiddleware、三条件门控 capture/apply 与 transport→identity 双层流包装；
+Codex header 重放判据改为 PassThroughApplied && IsResponsesFormat。配套修正
+ResponsesOutboundTransformer 的 wire ApiFormat 与 WS RequestType guard，prompt protection 支持
+openai/responses-ws。差异：identity 用 span splice 保持其余字节不变（C039）、codec 兼容非法 UTF-8
+字符串（C008）、IPassThroughResponsePolicy 仅有接口；残余缺口为 raw_stream_queue 的后附着预算与
+pre-attach 上限（端口保持 8 MiB/1024 条且无 queue）。测试：新增 76 例（TransportPassThrough 42、
+ProtocolCodec 28、WS guard/accept 6），PassThroughStreamTests 更新克隆语义；定向运行 Api 346、Api
+WebSocket|Codex|ChannelTest 339、Llm 428 通过；未跑 Api 全量回归。台账：C290 新增 resolved，C289
+收窄；lint 通过；02-differences.md 已重新生成；290 条（199 resolved / 91 accepted / 0 gap）。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

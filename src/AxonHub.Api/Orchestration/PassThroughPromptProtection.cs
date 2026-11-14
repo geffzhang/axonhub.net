@@ -304,6 +304,7 @@ internal static class PassThroughPromptProtection
                 return true;
 
             case ApiFormats.OpenAIResponse:
+            case ApiFormats.OpenAIResponseWebSocket:
             case ApiFormats.OpenAIResponseCompact:
                 fields = OpenAIResponsesPromptTextFields(body);
                 return true;
