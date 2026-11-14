@@ -627,8 +627,9 @@ keep-alive 代替（C252），per-event `LLMRequestTimeout` 由每个 response.c
 §219 / C292 移植（WebSocket 在 response.completed 后继续读到 EOF），streamLifecycle /
 tail accounting 已由 §220 / C293 移植（execution/shutdown 上下文分离、双屏障、1 秒 / 256 事件 /
 1 MiB）；usage 记账的 provenance 门（AccountingEvidence / accountingMayBeFinal）已由 §221 / C294 移植
-（三 aggregator 证据分类、持久化门控与 "Authoritative usage unavailable" 警告），host shutdown 与
-pass-through detach 残余保留为 C255 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
+（三 aggregator 证据分类、持久化门控与 "Authoritative usage unavailable" 警告），host shutdown 已由
+§222 / C295 接入（ServerLifetime → StreamLifecycle shutdown token/cause），pass-through detach 与
+request chunk 来源残余保留为 C255 accepted。超大帧（128 MiB + 1）的关闭行为未在测试中构造（分配代价高），
 实现按 gorilla `SetReadLimit` 语义以 CloseMessageTooBig 关闭。
 
 Grain 与 API 测试用 Orleans `TestCluster` 在进程内起一个 silo，`IEnabledChannelProvider` 由假实现注入，
@@ -2138,6 +2139,21 @@ AnthropicAggregatorTests +3、OpenAiAggregatorTests provenance 矩阵、Response
 usage 用例、AccountingProvenanceTests 23；Llm 全量 3294 通过，Api 定向 AccountingProvenance 23 与相关
 四类 40 通过；未跑 Api 全量回归。台账：C294 由 accepted 改为 resolved，C255 收窄不变；lint 通过；
 02-differences.md 已重新生成；294 条（199 accepted / 0 gap / 95 resolved）。
+
+§222（2026-11-14）host 生命周期接入（C295）与聚合完成性能上报（C296）。按 live f272549f
+internal/server/lifecycle/lifecycle.go、server.go:36-39,101-109 与 cmd/axonhub/main.go:141-153 新增
+AxonHub.Api.Lifecycle.ServerLifetime（CTS + lock 的一次性 Shutdown，nil cause → "server shutdown"，
+对应 context.WithCancelCause + sync.Once），DI 单例注册并在 ApplicationStopping 中先于 HTTP 关闭取消；
+ChatCompletionOrchestrator 注入并把 Token/Cause 传入 StreamLifecycle，WithInbound / WithChannelSelector
+透传，直接构造等价于没有 manager 的 ctx。附带修复 C293 延迟 finalize 导致的聚合完成计数丢失：
+ChannelPerformanceState 增加 OnCompleted（ChannelMetricsMiddleware 绑定为 Record）与 ReportCompleted()
+（仅 IsValid 时上报），RequestChainPersistenceMiddleware 的 aggregatedCompleted 分支在 MarkStreamTerminal
+后上报（live enqueueCompletedPerformance）；on-close 仍只上报流内已标记的记录，两入口按 TerminalState==None
+互斥。测试：ServerLifetimeTests 5 例（含 HostShutdownCancelsAcknowledgedStreamExecution）；
+AggregatedCompletionWithoutTerminalEventCountsSuccess 改为先 AcknowledgeDelivery 再 Dispose；相关 9 类
+188、pass-through / persistence / live-preview / timeout 6 类 125 通过；未跑 Api 全量回归。台账：C295 / C296
+新增 resolved，C255 收窄为 pass-through detach 与 request chunk 来源；lint 通过；02-differences.md
+已重新生成；296 条（199 accepted / 0 gap / 97 resolved）。
 
 ## 公开 API 审计
 

@@ -1,6 +1,7 @@
 using AxonHub.Abstractions;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Billing;
+using AxonHub.Api.Lifecycle;
 using AxonHub.Api.Management;
 using AxonHub.Api.Persistence;
 using AxonHub.Api.PromptProtection;
@@ -66,6 +67,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly ISystemSettingsAdminService? _systemSettings;
     private readonly ResponsesSessionStore? _responsesSessions;
     private readonly ILoggerFactory? _loggerFactory;
+    private readonly ServerLifetime? _serverLifetime;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -98,7 +100,8 @@ public sealed class ChatCompletionOrchestrator
         ISystemSettingsAdminService? systemSettings = null,
         ChannelCopilotTokenCache? copilotTokens = null,
         ResponsesSessionStore? responsesSessions = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        ServerLifetime? serverLifetime = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -201,6 +204,12 @@ public sealed class ChatCompletionOrchestrator
         // constructions stay silent like a nil slog logger.
         _loggerFactory = loggerFactory;
 
+        // Production passes the server lifetime attached to every request
+        // context by server.New; direct constructions leave it null, which
+        // keeps the shutdown half of newStreamLifecycle unobserved exactly like
+        // a context without a lifecycle.Manager.
+        _serverLifetime = serverLifetime;
+
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
         // is the same as no provider.
@@ -250,7 +259,8 @@ public sealed class ChatCompletionOrchestrator
             systemSettings: _systemSettings,
             copilotTokens: _copilotTokens,
             responsesSessions: _responsesSessions,
-            loggerFactory: _loggerFactory);
+            loggerFactory: _loggerFactory,
+            serverLifetime: _serverLifetime);
     }
 
     /// <summary>
@@ -295,7 +305,8 @@ public sealed class ChatCompletionOrchestrator
             systemSettings: _systemSettings,
             copilotTokens: _copilotTokens,
             responsesSessions: _responsesSessions,
-            loggerFactory: _loggerFactory);
+            loggerFactory: _loggerFactory,
+            serverLifetime: _serverLifetime);
     }
 
     /// <summary>
@@ -842,7 +853,9 @@ public sealed class ChatCompletionOrchestrator
                 cancellationToken,
                 () => identity.RequestDeadlineExpired?.Invoke() == true
                     ? new TimeoutException("context deadline exceeded")
-                    : new OperationCanceledException(cancellationToken));
+                    : new OperationCanceledException(cancellationToken),
+                _serverLifetime?.Token ?? default,
+                () => _serverLifetime?.Cause);
             executionToken = lifecycle.ExecutionToken;
             outbound.Lifecycle = lifecycle;
         }

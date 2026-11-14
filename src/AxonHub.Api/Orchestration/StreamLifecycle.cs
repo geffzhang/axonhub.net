@@ -62,8 +62,8 @@ public sealed class StreamLifecycle
     /// deadline stays distinguishable from a client disconnect.
     /// </param>
     /// <param name="shutdown">
-    /// The application shutdown token. The port has no lifecycle manager yet,
-    /// so production callers leave it default (C255).
+    /// The server lifetime token (Go: <c>lifecycle.FromContext(ctx).Context()</c>).
+    /// Direct constructions leave it default, like a context without a manager.
     /// </param>
     /// <param name="shutdownCause">Builds the shutdown cause.</param>
     public StreamLifecycle(

@@ -22,8 +22,13 @@ namespace AxonHub.Api.Orchestration;
 /// aggregated completion are marked by the persistent-stream counterpart, so a
 /// canceled stream is never counted as a channel fault and a stream that ends
 /// without a terminal event (and without a complete aggregate) records nothing.
-/// The on-close hook reports the record after the inner stream has finalized,
-/// mirroring recordPerformanceStream.Close + enqueueCompletedPerformance.
+/// Reporting has two entry points, exactly like the reference: the stream's
+/// on-close hook reports a record that was completed while streaming
+/// (recordPerformanceStream.Close), and the aggregated-completion branch reports
+/// the record it just marked through <see cref="ChannelPerformanceState.ReportCompleted"/>
+/// (enqueueCompletedPerformance in outbound.go). The latter is needed because the
+/// performance stream closes before finalization runs, so its on-close report
+/// sees an incomplete record and stays silent.
 /// </remarks>
 public sealed class ChannelMetricsMiddleware : DummyMiddleware
 {
@@ -55,6 +60,11 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
         _timeProvider = timeProvider;
         _apiKeySelection = apiKeySelection;
         _autoDisableQueue = autoDisableQueue;
+
+        // The persistent-stream middleware reports an aggregated completion
+        // through the same state; the sink is Record, so both paths share the
+        // reference's single AsyncRecordPerformance entry point.
+        state.OnCompleted = Record;
     }
 
     /// <summary>Port of performanceRecording.OnInboundLlmRequest: the client's stream intent.</summary>
@@ -151,10 +161,10 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
 
     /// <summary>
     /// Port of performanceRecording.OnOutboundLlmStream. recordPerformanceStream
-    /// only reports the record on Close; the outcome itself was marked by the
-    /// persistent stream (terminal event or aggregation). Disposing the inner
-    /// stream first lets the aggregated-completion mark happen before the report,
-    /// matching OutboundPersistentStream.Close and enqueueCompletedPerformance.
+    /// only reports the record on Close, and only when the outcome was already
+    /// marked by the persistent stream (a terminal event seen while streaming).
+    /// An aggregate completed during finalization is reported by the
+    /// aggregated-completion branch itself (enqueueCompletedPerformance).
     /// </summary>
     public override IStream<LlmResponse> TransformOutboundLlmStream(IStream<LlmResponse> stream)
         => new PerformanceStream(stream, this);

@@ -1764,6 +1764,27 @@ chat 5、Responses failed 2、Anthropic message_stop 2）。定向运行：Llm �
 AccountingProvenanceTests 23/23、相关四类 40/40；未跑 Api 全量回归。台账：C294 由 accepted 改为
 resolved，C255 收窄不变；294 条（199 accepted / 0 gap / 95 resolved）。
 
+2026-11-14 更新（§222）：host 生命周期接入（C295）与聚合完成的性能上报（C296）。
+按 live f272549f `internal/server/lifecycle/lifecycle.go`、`internal/server/server.go:36-39,101-109` 与
+`cmd/axonhub/main.go:141-153` 接入 host shutdown：新增 `AxonHub.Api.Lifecycle.ServerLifetime`
+（Token / Cause / 一次性 Shutdown，nil cause 替换为 "server shutdown"，对应 context.WithCancelCause +
+sync.Once），DI 单例注册，`ApplicationStopping` 回调先于 HTTP 关闭执行（server.Shutdown 先
+lifetime.Shutdown(context.Cause(ctx))）；ChatCompletionOrchestrator 注入 serverLifetime 并在创建
+StreamLifecycle 时传 shutdown Token/Cause，WithInbound / WithChannelSelector 透传；直接构造的
+orchestrator 保持默认 token，等价于没有 manager 的 ctx。附带修复 C293 延迟 finalize 引入的聚合完成性能
+上报回归：live recordPerformanceStream.Close 只上报已带终态的记录（enqueueCompletedPerformance 在
+RequestCompleted 为假时直接返回），聚合完成分支（outbound.go:305-306、314-315）在 markPerformanceTerminal
+之后显式 enqueueCompletedPerformance；端口在 ChannelPerformanceState 增加 OnCompleted
+（ChannelMetricsMiddleware 绑定为 Record）与 ReportCompleted()（仅 IsValid 时上报），
+RequestChainPersistenceMiddleware 的 aggregatedCompleted 分支在 MarkStreamTerminal 后调用；终态在流内
+标记的路径仍由 PerformanceStream.Dispose 上报，两条入口按 TerminalState==None 互斥。测试：新增
+`ServerLifetimeTests` 5 例（Cause 初值 / Shutdown 保存 cause / 首次调用生效 / 默认 cause 文案 /
+HostShutdownCancelsAcknowledgedStreamExecution）；`AggregatedCompletionWithoutTerminalEventCountsSuccess`
+改为先 AcknowledgeDelivery 再 Dispose。定向运行：相关 9 类 188 通过、
+RequestChainPersistence|PassThroughStream|ResponsesTransportPassThrough|PersistentOutboundCancellation|
+LivePreviewOrchestrator|RequestTimeout 125 通过；未跑 Api 全量回归。台账：新增 C295 / C296（均 resolved），
+C255 收窄为 pass-through detach 与 request chunk 来源；296 条（199 accepted / 0 gap / 97 resolved）。
+
 ## 30. trace 子系统基础（60 例，2026-11-01）
 
 参照路线：`internal/tracing/tracing.go`（配置、`GenerateTraceID` / `GenerateRequestID`、

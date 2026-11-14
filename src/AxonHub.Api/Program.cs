@@ -9,6 +9,7 @@ using AxonHub.Api.Diagnostics;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.GraphQL;
 using AxonHub.Api.Http;
+using AxonHub.Api.Lifecycle;
 using AxonHub.Api.Management;
 using AxonHub.Api.Metrics;
 using AxonHub.Api.Models;
@@ -339,6 +340,10 @@ builder.Services.AddScoped<IApiKeyProfileQuotaReader>(
 // (orchestrator.DefaultSelector, candidates.go:110-398).
 builder.Services.AddScoped<IModelCandidateSelector, ModelCandidateSelector>();
 builder.Services.AddScoped<ChatCompletionOrchestrator>();
+
+// lifecycle.New in server.New: stream executions stop when the server stops,
+// independently from the client connection's lifetime.
+builder.Services.AddSingleton<ServerLifetime>();
 
 // Live stream preview (biz.LiveStreamRegistry + chunkbuffer): the
 // orchestrator's live-preview middleware registers buffers for active streams,
@@ -949,6 +954,13 @@ builder.Host.UseOrleans(silo =>
 builder.Services.AddHostedService<GrainSchedulerActivator>();
 
 var app = builder.Build();
+
+// Server.Shutdown cancels the lifecycle before HTTP shutdown (server.go:101-109);
+// ApplicationStopping is the host's equivalent hook. Go passes
+// context.Cause(ctx), which is nil during a normal shutdown, so the manager
+// substitutes "server shutdown".
+var serverLifetime = app.Services.GetRequiredService<ServerLifetime>();
+app.Lifetime.ApplicationStopping.Register(() => serverLifetime.Shutdown());
 
 // server.request_timeout / server.llm_request_timeout (conf/conf.go:223-224),
 // read once at startup like the reference's immutable server.Config.

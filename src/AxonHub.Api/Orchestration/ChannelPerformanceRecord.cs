@@ -111,4 +111,25 @@ public sealed class ChannelPerformanceRecord
 public sealed class ChannelPerformanceState
 {
     public ChannelPerformanceRecord? Current { get; set; }
+
+    /// <summary>
+    /// The reporting sink, bound by the performance middleware. The reference
+    /// reaches the same sink through <c>PersistenceState.ChannelService</c>.
+    /// </summary>
+    public Action<ChannelPerformanceRecord?>? OnCompleted { get; set; }
+
+    /// <summary>
+    /// Port of enqueueCompletedPerformance (outbound.go:241-249): report the
+    /// record only once it carries a final outcome. The aggregated-completion
+    /// branch calls this because the performance stream has already closed by
+    /// the time finalization runs, and closing an unmarked record reports
+    /// nothing.
+    /// </summary>
+    public void ReportCompleted()
+    {
+        if (Current is { IsValid: true } record && OnCompleted is { } onCompleted)
+        {
+            onCompleted(record);
+        }
+    }
 }

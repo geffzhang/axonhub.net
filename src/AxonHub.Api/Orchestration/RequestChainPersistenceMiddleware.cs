@@ -748,6 +748,12 @@ public sealed class RequestChainPersistenceMiddleware : DummyMiddleware, IReques
                 // complete aggregate without a terminal event counts as success.
                 attempt.EndedAt ??= now;
                 _performance?.Current?.MarkStreamTerminal(StreamTerminalState.Completed, string.Empty, now);
+
+                // outbound.go:305-306/314-315: the aggregate is completed here,
+                // after the performance stream has closed, so this branch must
+                // report the record it just marked. Closing the unmarked record
+                // earlier intentionally reports nothing.
+                _performance?.ReportCompleted();
             }
 
             if (outcome.HasFinalEvidence)

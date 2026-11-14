@@ -5,6 +5,7 @@ using AxonHub.Api.Persistence;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
+using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.OpenAI;
 
@@ -686,11 +687,14 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
     }
 
     /// <summary>
-    /// No terminal event, but every buffered choice reported a finish reason and
-    /// the aggregate is complete: the reference marks the attempt successful
-    /// (OutboundPersistentStream.Close's aggregated-completion branch), even
-    /// though the stream tracker never saw a terminal event (here because the
-    /// client asked for two choices and the provider sent one).
+    /// No terminal event, but the buffered chunks aggregate into a complete
+    /// response and the transport acknowledged delivery: the reference marks the
+    /// attempt successful from OutboundPersistentStream.Close's
+    /// aggregated-completion branch. The acknowledgement matters twice: an
+    /// unacknowledged close cancels the execution, and with a canceled execution
+    /// the reference only trusts a multi-choice aggregate after every expected
+    /// choice finished (outbound.go:294-296) — here the provider sent one of the
+    /// two choices.
     /// </summary>
     [Fact]
     public async Task AggregatedCompletionWithoutTerminalEventCountsSuccess()
@@ -728,6 +732,7 @@ public sealed class ChatCompletionOrchestratorTests(GrainClusterFixture fixture)
             _ = result.Stream.Current;
         }
 
+        result.Stream.AcknowledgeDelivery();
         result.Stream.Dispose();
 
         Assert.Equal(new long[] { 5102 }, metrics.Successes);
