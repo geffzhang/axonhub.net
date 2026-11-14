@@ -810,6 +810,13 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             return false;
         }
 
+        // Local circuit-breaker bounce: never retry the same channel
+        // (outbound.go:1040-1042).
+        if (error is ModelCircuitBreakerSkipException)
+        {
+            return false;
+        }
+
         // Local admission rejection: the same channel cannot make progress until
         // its local queue/RPM state changes, so bounce immediately to the next
         // candidate instead of burning a same-channel retry

@@ -1,5 +1,6 @@
 using System.Net;
 using AxonHub.Api.Orchestration;
+using AxonHub.Grains;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
@@ -44,6 +45,66 @@ public sealed class PersistentOutboundRetryTests
         // 429 exits before the remaining-model branch even though a model is left.
         Assert.False(harness.Transformer.CanRetry(
             new HttpClientError("POST", "https://upstream.test/chat", 429, "429 Too Many Requests")));
+    }
+
+    [Fact]
+    public void CircuitBreakerSkipsNeverRetryTheSameChannel()
+    {
+        var harness = new Harness(CandidateWithModels(904, "m1", "m2"));
+        harness.Transformer.TransformRequest(Request("m1"));
+
+        // outbound.go:1040-1042: a local circuit-breaker skip bounces to the
+        // next channel instead of burning a same-channel retry.
+        Assert.False(harness.Transformer.CanRetry(
+            new ModelCircuitBreakerSkipException(904, "m1")));
+    }
+
+    [Fact]
+    public void CircuitBreakerSkipIsNotRecordedAndTheProbeLeaseIsClaimed()
+    {
+        var harness = new Harness(CandidateWithModels(905, "m1"));
+        harness.Transformer.TransformRequest(Request("m1"));
+
+        var time = new ManualTimeProvider(Now);
+        var breaker = new ModelCircuitBreaker(time);
+        for (var i = 0; i < ModelCircuitBreaker.OpenThreshold; i++)
+        {
+            breaker.RecordError(905, "m1");
+        }
+
+        var state = new ChannelPerformanceState();
+        var middleware = new ChannelMetricsMiddleware(
+            harness.Transformer,
+            harness.Metrics,
+            state,
+            time,
+            apiKeySelection: null,
+            autoDisableQueue: null,
+            modelCircuitBreaker: breaker,
+            trackModelCircuitBreaker: true);
+
+        var skip = Assert.Throws<ModelCircuitBreakerSkipException>(
+            () => middleware.TransformOutboundRawRequest(new HttpRequestData()));
+        Assert.Equal("skip candidate by circuit breaker", skip.Message);
+        Assert.Empty(harness.Metrics.Failures);
+
+        time.Advance(ModelCircuitBreaker.ProbeInterval + TimeSpan.FromSeconds(1));
+        middleware.TransformOutboundRawRequest(new HttpRequestData());
+
+        Assert.NotNull(state.Current);
+        Assert.True(state.Current!.WasProbe);
+
+        middleware.TransformOutboundLlmResponse(new LlmResponse());
+        Assert.Equal(ModelCircuitBreakerState.Closed, breaker.GetStats(905, "m1").State);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
     }
 
     [Fact]

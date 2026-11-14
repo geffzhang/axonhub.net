@@ -108,12 +108,32 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
             apiKey = ChannelCredentials.OAuthCredentialRef;
         }
 
+        var modelId = _outbound.OriginalModel.Length > 0
+            ? _outbound.OriginalModel
+            : _outbound.CurrentModel;
+        var wasProbe = false;
+        if (_trackModelCircuitBreaker
+            && _modelCircuitBreaker is not null
+            && modelId.Length > 0
+            && _modelCircuitBreaker.GetStats(channelId, modelId).State
+                == ModelCircuitBreakerState.Open)
+        {
+            if (!_modelCircuitBreaker.TryBeginProbe(
+                    channelId,
+                    modelId,
+                    _timeProvider.GetUtcNow()))
+            {
+                throw new ModelCircuitBreakerSkipException(channelId, modelId);
+            }
+
+            wasProbe = true;
+        }
+
         _state.Current = new ChannelPerformanceRecord
         {
             ChannelId = channelId,
-            ModelId = _outbound.OriginalModel.Length > 0
-                ? _outbound.OriginalModel
-                : _outbound.CurrentModel,
+            ModelId = modelId,
+            WasProbe = wasProbe,
             StartTime = _timeProvider.GetUtcNow(),
             Stream = _stream,
             ApiKey = apiKey,
@@ -143,6 +163,13 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
     public override void OnOutboundRawError(Exception error)
     {
         ArgumentNullException.ThrowIfNull(error);
+
+        // A model circuit skip is a local bounce, not a channel fault
+        // (model_circuit_breaker.go:103).
+        if (error is ModelCircuitBreakerSkipException)
+        {
+            return;
+        }
 
         if (_state.Current is not { } record)
         {
@@ -185,6 +212,13 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
     /// </summary>
     private void Record(ChannelPerformanceRecord? record)
     {
+        // Release a probe lease even when the attempt was canceled; the
+        // reference releases before its context.Canceled check.
+        if (record is { WasProbe: true } && _modelCircuitBreaker is not null)
+        {
+            _modelCircuitBreaker.EndProbe(record.ChannelId, record.ModelId);
+        }
+
         if (record is not { IsValid: true } || record.Canceled)
         {
             return;
@@ -220,7 +254,10 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
             }
             else
             {
-                _modelCircuitBreaker.RecordError(record.ChannelId, record.ModelId);
+                _modelCircuitBreaker.RecordError(
+                    record.ChannelId,
+                    record.ModelId,
+                    record.WasProbe);
             }
         }
     }

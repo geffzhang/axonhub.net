@@ -2204,6 +2204,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §237（2026-11-15）模型级熔断计分与记录。C036 转 resolved：新增 `ModelCircuitBreaker`（closed/half_open/open；3/5 阈值、30m TTL、5m 探针间隔、0.3 半开权重、探针失败 2^n 上限 8 的退避）；`ChannelPoolGrain` 以请求模型为 key 读取有效权重（closed 200+随机、half_open 60+随机、open 0），`ChannelMetricsMiddleware` 在有效策略为 circuit-breaker 时按 (channel, 请求模型) 记录成功/失败。探针租约原语已实现，但 tracker 的本地跳过与并发单探针未接入，拆到新登记的 C308（accepted）。定向 Grains 36/36、Api 跟踪 3/3、orchestrator 回归 36/36；未跑 Api 全量（新增 Grains 4 例、Api 3 例待下次全量计入）。台账 308 条（196 accepted / 112 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§238（2026-11-15）模型熔断 tracker 的本地跳过与单探针租约。C308 转 resolved：`ChannelMetricsMiddleware.TransformOutboundRawRequest` 在策略为 circuit-breaker 且 (channel, model) 为 open 时先 `TryBeginProbe`，失败抛 `ModelCircuitBreakerSkipException`（message 与参照一致），`OnOutboundRawError` 对该异常直接返回、不记指标/熔断失败；`PersistentOutboundTransformer.CanRetry` 对该异常返回 false，管线切换下一候选；`Record` 在成功/失败/取消时统一 `EndProbe`，失败按 `WasProbe` 传入 `RecordError` 应用 2^n 探针退避。定向 `PersistentOutboundRetryTests|ModelCircuitBreakerTrackingTests` 21/21，Grains 熔断用例 4/4；未跑 Api 全量（新增 Api 2 例待下次全量计入）。台账 308 条（195 accepted / 113 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

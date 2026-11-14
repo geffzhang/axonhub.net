@@ -22,6 +22,12 @@ public sealed class ChannelPerformanceRecord
     /// </summary>
     public string ModelId { get; init; } = string.Empty;
 
+    /// <summary>
+    /// True when this attempt claimed the open model circuit's single probe
+    /// lease (model_circuit_breaker.go:TryBeginProbe).
+    /// </summary>
+    public bool WasProbe { get; init; }
+
     public required DateTimeOffset StartTime { get; init; }
 
     /// <summary>
