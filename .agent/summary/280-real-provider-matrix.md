@@ -32,7 +32,7 @@ AXONHUB_E2E_LLM_TEST_SERVER_KEY=test-key \
 新增 `LlmTestServerProviderMatrixTests`，15 例；加上原有 3 例共 18 例：
 
 | 上游协议 | 入站协议 | 覆盖 |
-|---|---|---|
+| --- | --- | --- |
 | OpenAI Chat | OpenAI | 非流式、流式 chunk 拼接与 `[DONE]`（原有） |
 | OpenAI Chat | Anthropic | Anthropic message 信封（原有） |
 | Anthropic Messages | Anthropic | 非流式 message；流式 `content_block_delta` + `message_stop` |
@@ -65,8 +65,26 @@ Responses / Embeddings 断言各自 usage 字段。
 ## 测试结果
 
 - 启用本地 server：`LlmTestServer` 过滤 **18/18 通过**。
+- 发布镜像 `ghcr.io/managedcode/llm-test-server:1.0.6`（digest
+  `sha256:ca9d1…2d5b`）本地容器复跑：**18/18 通过**。
 - 未启用：18/18 跳过，full Api 默认回归不受影响。
 - Api 全量（默认跳过 E2E）本轮后台复跑，结果见验收账。
+
+## CI
+
+`.github/workflows/tests.yml` 新增 `e2e-llm` job：
+
+- 使用 GHCR 1.0.6 镜像（tag + 多架构 digest 双重固定）；
+- 注入 `LlmTestServer__RequiredBearerToken=test-key`；
+- runner 侧轮询 `/admin-api/models` 直到就绪；
+- 设置 `AXONHUB_E2E_LLM_TEST_SERVER_URL` 后只跑
+  `FullyQualifiedName~LlmTestServer`，不拖慢全量 Api job；
+- PR、push、nightly、workflow_dispatch 都会运行。
+
+远端首次运行：`LlmTestServer E2E` job 通过；同工作流的
+`AxonHub.Llm.Tests` 出现一个既有的 30ms/150ms 计时竞态
+（`NonStreamTimeoutUsesTheChannelOverride`）。已把该用例改为等待
+pipeline 取消令牌（而非固定延迟），本地 Llm 全量 3437/3437。
 
 ## 边界
 

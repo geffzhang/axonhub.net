@@ -78,9 +78,19 @@ public sealed class PipelineResponseTimeoutTests
     {
         var executor = new MockExecutor
         {
+            // Block until the pipeline's timeout cancels the attempt. A fixed
+            // delay races the timer on loaded CI runners: if the delay wins,
+            // the executor returns successfully and the test never observes
+            // the timeout.
             DoFn = (cancellationToken, _) =>
             {
-                Task.Delay(150, cancellationToken).GetAwaiter().GetResult();
+                if (!cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5)))
+                {
+                    throw new InvalidOperationException(
+                        "the pipeline did not cancel the non-stream attempt");
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
                 return new HttpResponseData();
             },
         };
