@@ -62,6 +62,27 @@ public sealed class ResponseTimeoutProviderTests
         Assert.Equal(ToDuration(nonStreamSeconds), nonStream);
     }
 
+    [Theory]
+    [InlineData(null, 0, false)]
+    [InlineData("{}", 0, false)]
+    [InlineData("""{"maxSingleChannelRetries":5}""", 5, true)]
+    [InlineData("""{"maxSingleChannelRetries":0}""", 0, true)]
+    public void SameChannelRetryLimitReadsTheChannelOverride(
+        string? settings,
+        int expectedLimit,
+        bool expectedOverride)
+    {
+        var transformer = new PersistentOutboundTransformer(
+            [new ChannelCandidate { Settings = settings }],
+            new TestTimeProvider(DateTimeOffset.UtcNow),
+            new RecordingMetricsRecorder());
+
+        var (limit, hasOverride) = transformer.SameChannelRetryLimit();
+
+        Assert.Equal(expectedLimit, limit);
+        Assert.Equal(expectedOverride, hasOverride);
+    }
+
     [Fact]
     public void NoCandidatesReturnNoOverrides()
     {

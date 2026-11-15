@@ -106,7 +106,7 @@ public sealed partial class Pipeline
             //    would spend the budget without new information.
             if (!timeoutRetry && _outbound is IChannelRetryable channelRetryable)
             {
-                if (sameChannelRetries < _options.MaxSameChannelRetries && channelRetryable.CanRetry(lastErr))
+                if (sameChannelRetries < MaxSameChannelRetriesFor() && channelRetryable.CanRetry(lastErr))
                 {
                     var prepareErr = channelRetryable.TryPrepareForRetry(cancellationToken);
                     if (prepareErr is null)
@@ -291,6 +291,30 @@ public sealed partial class Pipeline
         }
 
         return (streamFirstEventTimeout, nonStreamTimeout);
+    }
+
+    /// <summary>
+    /// Port of maxSameChannelRetriesFor (pipeline.go:486-503): a channel-level
+    /// override applies only while retries are enabled; it cannot turn a
+    /// globally disabled retry policy back on.
+    /// </summary>
+    internal int MaxSameChannelRetriesFor()
+    {
+        if (_options.RetriesDisabled)
+        {
+            return 0;
+        }
+
+        if (_outbound is IChannelSameChannelRetryLimit provider)
+        {
+            var (limit, hasOverride) = provider.SameChannelRetryLimit();
+            if (hasOverride)
+            {
+                return limit;
+            }
+        }
+
+        return _options.MaxSameChannelRetries;
     }
 
     /// <summary>Port of pipeline.notStream.</summary>

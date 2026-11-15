@@ -28,7 +28,7 @@ namespace AxonHub.Api.Orchestration;
 /// </remarks>
 public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetryable,
     IChannelRetryable, IChannelCustomizedExecutor, ITransportRequestFinalizer,
-    IResponseTimeoutProvider
+    IResponseTimeoutProvider, IChannelSameChannelRetryLimit
 {
     private readonly ChannelCandidate[] _candidates;
     private readonly TimeProvider _timeProvider;
@@ -208,6 +208,23 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
 
     private static TimeSpan? SecondsToDuration(int? seconds)
         => seconds is { } value ? TimeSpan.FromSeconds(value) : null;
+
+    /// <summary>
+    /// Port of SameChannelRetryLimit (outbound.go:900-912): a channel-level
+    /// maxSingleChannelRetries overrides the global retry policy; unset keeps
+    /// the global value. A globally disabled retry policy still wins because
+    /// the pipeline checks RetriesDisabled first.
+    /// </summary>
+    public (int Limit, bool HasOverride) SameChannelRetryLimit()
+    {
+        if (CurrentCandidate is not { } candidate)
+        {
+            return (0, false);
+        }
+
+        var limit = ChannelTransformOptions.SettingsOf(candidate)?.MaxSingleChannelRetries;
+        return limit is { } value ? (value, true) : (0, false);
+    }
 
     /// <summary>
     /// The channel key the current attempt sent upstream, when the provider

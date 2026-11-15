@@ -47,13 +47,18 @@ internal sealed class MockInbound : IInboundTransformer
 /// type assertions always succeed; the C# double implements them all too.
 /// </summary>
 internal sealed class MockOutbound : IOutboundTransformer, IRetryable, IChannelRetryable,
-    IResponseTimeoutProvider
+    IResponseTimeoutProvider, IChannelSameChannelRetryLimit
 {
     public string ApiFormat => string.Empty;
 
     public TimeSpan? StreamFirstEventTimeoutOverride { get; set; }
 
     public TimeSpan? NonStreamTimeoutOverride { get; set; }
+
+    public int? SameChannelRetryLimitOverride { get; set; }
+
+    public (int Limit, bool HasOverride) SameChannelRetryLimit()
+        => SameChannelRetryLimitOverride is { } limit ? (limit, true) : (0, false);
 
     public (TimeSpan? StreamFirstEventTimeout, TimeSpan? NonStreamTimeout) ResponseTimeouts()
         => (StreamFirstEventTimeoutOverride, NonStreamTimeoutOverride);

@@ -192,7 +192,8 @@ public sealed partial class Pipeline
         return ResponseHeaders.WithResponseHeaders(inboundStream, responseHeaders)!;
     }
 
-    private bool HasStreamRetryBudget() => _options.MaxSameChannelRetries > 0 || _options.MaxChannelRetries > 0;
+    private bool HasStreamRetryBudget()
+        => MaxSameChannelRetriesFor() > 0 || _options.MaxChannelRetries > 0;
 
     private static bool ShouldWrapPreReadStreamError(Exception err)
         => !GoErrors.IsAny(

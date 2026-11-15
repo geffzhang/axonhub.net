@@ -916,6 +916,9 @@ public sealed class ChatCompletionOrchestrator
             EmptyResponseDetection = retryPolicy.Enabled && retryPolicy.EmptyResponseDetection,
             StreamFirstEventTimeout = retryPolicy.Enabled ? retryPolicy.StreamFirstEventTimeout : TimeSpan.Zero,
             NonStreamTimeout = retryPolicy.Enabled ? retryPolicy.NonStreamTimeout : TimeSpan.Zero,
+            // A channel-level retry override must not re-enable retries when the
+            // global policy is off (orchestrator.go:259-264).
+            RetriesDisabled = !retryPolicy.Enabled,
         };
         // One performance state per client request, shared by the metrics
         // middleware and the persistent-stream counterpart so both mark the

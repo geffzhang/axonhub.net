@@ -13,6 +13,12 @@ public sealed class PipelineOptions
     /// <summary>Maximum number of same-channel retries.</summary>
     public int MaxSameChannelRetries { get; set; }
 
+    /// <summary>
+    /// The global retry policy is switched off. A channel-level override only
+    /// adjusts the count and must not switch retries back on.
+    /// </summary>
+    public bool RetriesDisabled { get; set; }
+
     /// <summary>Delay between retries.</summary>
     public TimeSpan RetryDelay { get; set; }
 
