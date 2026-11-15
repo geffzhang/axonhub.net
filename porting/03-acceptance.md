@@ -2277,6 +2277,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §274（2026-11-15）Codex 原生 Images 端点（live #2651）。C330 登记并转 resolved：Codex 通道的 Images 请求不再转换为 Responses `image_generation` 工具，而是由 `CodexImageOutboundTransformer` 走原生 OpenAI Images 端点，复用 Codex OAuth token、Originator、Session-Id 与账号头，并启用 JSON edit。`CodexOutboundTransformer` 与 `CodexExecutor` 对 image 请求返回 invalid_request；Responses outbound 同样拒绝 image 请求。图片编辑 JSON 支持 `image`/`images` 的 data URL、HTTP URL 与 `file_id` 引用、mask 引用、`model` 嵌入与不支持的字段校验；通道工厂把 codex/fenno 的 `image_generation`/`image_edit` 端点路由到该 outbound。新增/更新 Codex、ResponsesImage、OpenAI Image 与 Api wiring 测试；Codex 116/116，Image 246/246，Api Codex/image 69/69，Llm 全量 3437/3437。未跑 Api 全量。台账 330 条（189 accepted / 141 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§275（2026-11-15）M5 公开 API 表面审计收口。C331 登记为 accepted：HTTP 路由 **76/76**、admin GraphQL 根字段 **219/220**（`nodes` 按 C269 有意裁剪）已机器审计；字段级 SDL 签名不做自动 diff——gqlgen 与 HotChocolate 在可空性、列表包装、输入类型命名与 resolver 方法名上存在系统性表示差异，当前由各端点/字段行为测试锁定形状。导出清单（非一一映射）：参照 `llm/` 262 个非测试 Go 文件，导出 type 524 / func 318 / method 622；`internal/server` 305 文件，type 606 / func 279 / method 1241。端口 public 类型 / public 方法：`AxonHub.Llm` 723 / 1259（279 文件）、`AxonHub.Persistence` 252 / 444（60）、`AxonHub.Grains` 17 / 75（21）、`AxonHub.Grains.Abstractions` 63 / 38（31）、`AxonHub.Api` 1394 / 2582（405）。平台限制：仅 PostgreSQL（参照默认 SQLite + PostgreSQL，见 C011）、未移植前端、GCP 交互式 web/installed 客户端不支持、自写 TLS/SSE 不声明 ALPN。台账 331 条（190 accepted / 141 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
