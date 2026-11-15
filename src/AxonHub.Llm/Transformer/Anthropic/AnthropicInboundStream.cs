@@ -176,7 +176,10 @@ internal sealed class AnthropicInboundStream : IStream<StreamEvent>
         {
             _hasStarted = true;
 
-            var usage = new AnthropicUsage { InputTokens = 1, OutputTokens = 1 };
+            // Usage is unknown until the provider reports it. The API layer can
+            // add a client-only input estimate without contaminating persisted
+            // usage (#2749).
+            var usage = new AnthropicUsage();
             if (chunk.Usage is not null)
             {
                 usage = AnthropicConvertFromLlm.ConvertToAnthropicUsage(chunk.Usage);

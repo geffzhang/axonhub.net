@@ -924,7 +924,7 @@ public sealed class AnthropicInboundStreamTests
         Assert.Equal(
             "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_wire\",\"type\":\"message\","
             + "\"role\":\"assistant\",\"content\":[],\"model\":\"claude\","
-            + "\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cache_creation_input_tokens\":0,"
+            + "\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"cache_creation_input_tokens\":0,"
             + "\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,"
             + "\"ephemeral_1h_input_tokens\":0}}}}",
             raw[0]);

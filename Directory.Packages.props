@@ -27,6 +27,9 @@
     <PackageVersion Include="BCrypt.Net-Next" Version="4.2.0" />
     <!-- 备份存储：S3 用官方 SDK（参照 aws-sdk-go-v2）；GCS/WebDAV 走 HTTP，见 Storage/ -->
     <PackageVersion Include="AWSSDK.S3" Version="4.0.20.4" />
+    <!-- Anthropic 初始 input usage 估算：参照 tiktoken-go 的 o200k_base 词表 -->
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="3.0.0" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="3.0.0" />
     <!-- 测试 -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AxonHub.Abstractions;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Billing;
@@ -1141,6 +1142,16 @@ public sealed class ChatCompletionOrchestrator
             // headers only when the selected outbound advertises the contract.
             var codexResponseHeadersSupported = outbound.SupportsCodexResponseHeaders();
 
+            // orchestrator.go:389-407: pipeline retries have finished, so snapshot
+            // the final route; display estimates must not share calibration
+            // across routes.
+            var route = new ResponseRoute(
+                outbound.CurrentChannelId,
+                ReadProviderModel(outbound.RawProviderRequest?.Body) is { Length: > 0 } providerModel
+                    ? providerModel
+                    : outbound.CurrentModel,
+                outbound.RawProviderRequest?.ApiFormat ?? string.Empty);
+
             if (result.Stream)
             {
                 // The stream outlives this method. Stop the attempt's transformer
@@ -1179,6 +1190,7 @@ public sealed class ChatCompletionOrchestrator
                 return new ChatCompletionResult
                 {
                     Stream = stream,
+                    Route = route,
                     CodexResponseHeadersSupported = codexResponseHeadersSupported,
                 };
             }
@@ -1197,6 +1209,7 @@ public sealed class ChatCompletionOrchestrator
             return new ChatCompletionResult
             {
                 Response = result.Response,
+                Route = route,
                 CodexResponseHeadersSupported = codexResponseHeadersSupported,
             };
         }
@@ -1568,7 +1581,49 @@ public sealed class ChatCompletionOrchestrator
             return new PromptProtectionRuleProtector([]);
         }
     }
+
+    /// <summary>
+    /// Go: <c>gjson.GetBytes(body, "model").String()</c>. Malformed bodies and
+    /// non-object roots yield the empty string.
+    /// </summary>
+    private static string ReadProviderModel(byte[]? body)
+    {
+        if (body is not { Length: > 0 })
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("model", out var model))
+            {
+                return string.Empty;
+            }
+
+            return model.ValueKind switch
+            {
+                JsonValueKind.String => model.GetString() ?? string.Empty,
+                JsonValueKind.Number => model.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+                _ => model.GetRawText(),
+            };
+        }
+        catch (JsonException)
+        {
+            return string.Empty;
+        }
+    }
 }
+
+/// <summary>
+/// Port of orchestrator.ResponseRoute: identifies the committed upstream
+/// attempt without retaining mutable persistence state or provider credentials.
+/// </summary>
+public sealed record ResponseRoute(long ChannelId, string Model, string ApiFormat);
 
 /// <summary>Port of orchestrator.ChatCompletionResult (chat subset).</summary>
 public sealed class ChatCompletionResult
@@ -1576,6 +1631,9 @@ public sealed class ChatCompletionResult
     public HttpResponseData? Response { get; init; }
 
     public IStream<StreamEvent>? Stream { get; init; }
+
+    /// <summary>The final route after pipeline retries, for display estimates.</summary>
+    public ResponseRoute Route { get; init; } = new(0, string.Empty, string.Empty);
 
     /// <summary>
     /// Port of orchestrator.ChatCompletionResult.CodexResponseHeadersSupported:

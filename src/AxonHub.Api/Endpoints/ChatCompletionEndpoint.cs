@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AxonHub.Api.AnthropicUsage;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Http;
 using AxonHub.Api.Orchestration;
@@ -55,6 +56,7 @@ public static class ChatCompletionEndpoint
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(orchestrator);
 
+        var started = DateTimeOffset.UtcNow;
         var cancellationToken = context.RequestAborted;
 
         HttpRequestData genericRequest;
@@ -228,6 +230,17 @@ public static class ChatCompletionEndpoint
                 {
                     abortUpstream = processCancellation.Cancel;
                 }
+
+                // api/chat.go:154: wrap after persistence, before safeguards, so
+                // only the client sees the initial input estimate.
+                var calibration = AnthropicInputUsageCalibration.Create(
+                    cancellationToken,
+                    InputUsageCache.Shared,
+                    result.Route,
+                    started,
+                    identity.ProjectId,
+                    identity.ApiKeyId);
+                stream = AnthropicInputUsageStream.Wrap(stream, genericRequest, calibration);
 
                 stream = SafeguardsStream.Wrap(
                     stream,
