@@ -133,9 +133,18 @@ if (string.IsNullOrWhiteSpace(connectionString))
 
 // Persistence: one connection factory feeds the write side (EF Core) and the
 // read side (Dapper), matching the reference's single PostgreSQL database.
+var orleansCluster = OrleansClusterOptions.FromConfiguration(builder.Configuration, connectionString);
+builder.Services.AddSingleton(orleansCluster);
 builder.Services.AddSingleton(new PostgresConnectionFactory(connectionString));
 builder.Services.AddSingleton<IAxonHubDbContextFactory>(
     static services => services.GetRequiredService<PostgresConnectionFactory>());
+if (orleansCluster.Enabled)
+{
+    builder.Services.AddSingleton<ICacheRevisionSource, PostgresCacheRevisionSource>();
+    builder.Services.AddSingleton<PostgresChannelAdmissionStore>();
+    builder.Services.AddSingleton<IChannelLimiterStatsSource, PostgresChannelLimiterStatsSource>();
+    builder.Services.AddSingleton<IChannelConcurrencyAdmission, PostgresChannelConcurrencyAdmission>();
+}
 
 // Enabled-channel cache: the reference keeps one in-memory snapshot per
 // process (ChannelService.enabledChannelsCache, refreshed every minute and on
@@ -365,14 +374,16 @@ builder.Services.AddScoped<ApiKeyStore>();
 builder.Services.AddScoped<IApiKeyStore>(static services =>
     new CachingApiKeyStore(
         services.GetRequiredService<ApiKeyStore>(),
-        services.GetRequiredService<ApiKeyCache>()));
+        services.GetRequiredService<ApiKeyCache>(),
+        services.GetRequiredService<OrleansClusterOptions>().Enabled));
 builder.Services.AddScoped<IApiKeyAuthenticator, ApiKeyAuthenticator>();
 builder.Services.AddSingleton<SystemValueCache>();
 builder.Services.AddScoped<SystemStore>();
 builder.Services.AddScoped<ISystemStore>(static services =>
     new CachingSystemStore(
         services.GetRequiredService<SystemStore>(),
-        services.GetRequiredService<SystemValueCache>()));
+        services.GetRequiredService<SystemValueCache>(),
+        services.GetRequiredService<OrleansClusterOptions>().Enabled));
 builder.Services.AddScoped<IOidcIdentityAdminStore, OidcIdentityAdminStore>();
 builder.Services.AddScoped<ISystemSettingsAdminService, SystemSettingsAdminService>();
 // First-run initialization (biz/system.go:698-846): owner user, default
@@ -928,7 +939,9 @@ builder.Services.AddScoped<PromptManagementService>();
 builder.Services.AddSingleton<DataStorageCache>();
 builder.Services.AddScoped<DataStorageStore>();
 builder.Services.AddScoped<IDataStorageStore>(static services =>
-    new CachingDataStorageStore(
+    services.GetRequiredService<OrleansClusterOptions>().Enabled
+    ? services.GetRequiredService<DataStorageStore>()
+    : new CachingDataStorageStore(
         services.GetRequiredService<DataStorageStore>(),
         services.GetRequiredService<DataStorageCache>()));
 builder.Services.AddScoped<DataStoragePrivacy>();
@@ -944,7 +957,9 @@ builder.Services.AddScoped<IBackupBatchSource, BackupStore>();
 builder.Services.AddScoped<IBackupRestoreStore, BackupRestoreStore>();
 builder.Services.AddSingleton<DataStorageBackendFactory>();
 builder.Services.AddSingleton<IDataStorageBackendFactory>(static services =>
-    new CachingDataStorageBackendFactory(
+    services.GetRequiredService<OrleansClusterOptions>().Enabled
+    ? services.GetRequiredService<DataStorageBackendFactory>()
+    : new CachingDataStorageBackendFactory(
         services.GetRequiredService<DataStorageBackendFactory>(),
         services.GetRequiredService<DataStorageCache>()));
 builder.Services.AddScoped<BackupService>();
@@ -1036,11 +1051,18 @@ builder.Services.AddScoped<OidcService>();
 
 // The OIDC login flow (oidc.go:509-1300): state/PKCE caches, the oauth2 token
 // exchange, ID-token/JWKS verification, UserInfo, and the exchange-code store.
-// The reference's default cache.mode is "memory"; the Redis modes are not
-// ported (C171).
+// Single-silo OIDC state stays in memory; cluster state is atomically consumed in PostgreSQL.
 var oidcLoginOptions = OidcLoginOptions.FromConfiguration(builder.Configuration);
 builder.Services.AddSingleton(oidcLoginOptions);
-builder.Services.AddSingleton<IOidcCache, OidcMemoryCache>();
+if (orleansCluster.Enabled)
+{
+    builder.Services.AddSingleton<PostgresOidcStateStore>();
+    builder.Services.AddSingleton<IOidcCache, PostgresOidcCache>();
+}
+else
+{
+    builder.Services.AddSingleton<IOidcCache, OidcMemoryCache>();
+}
 builder.Services.AddSingleton<IOidcTokenClient>(
     static _ => new OidcTokenClient(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
 builder.Services.AddSingleton<IOidcJwksClient>(
@@ -1066,10 +1088,6 @@ builder.Services.AddAxonHubGraphQL();
 // reference (internal/server/gql/openapi/graphql.go); the port hosts it as a
 // named HotChocolate schema.
 builder.Services.AddAxonHubOpenApiGraphQL();
-
-var orleansCluster = OrleansClusterOptions.FromConfiguration(
-    builder.Configuration,
-    connectionString);
 
 builder.Host.UseOrleans(silo =>
 {
@@ -1168,6 +1186,9 @@ await using (var connection = await app.Services.GetRequiredService<PostgresConn
         // The Orleans silo starts later (as a hosted service); its membership
         // and reminder tables must exist before the first join.
         await OrleansSchema.EnsureCreatedAsync(connection);
+        await PostgresCacheRevisionSource.EnsureCreatedAsync(connection);
+        await PostgresChannelAdmissionStore.EnsureCreatedAsync(connection);
+        await PostgresOidcStateStore.EnsureCreatedAsync(connection);
     }
 
     // datamigrate.Migrator.Run skips every version-tracked migration until

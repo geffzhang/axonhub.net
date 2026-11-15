@@ -41,6 +41,7 @@ public static class CliCommand
         {
             "reload" => RunReload(stdout, stderr),
             "config" => RunConfig(args, stdout, stderr),
+            "admission" => AdmissionCommand.Run(args, stdout, stderr),
             "version" or "--version" or "-v" => RunVersion(stdout),
             "help" or "--help" or "-h" => RunHelp(stdout),
             "build-info" => RunBuildInfo(stdout),
@@ -98,6 +99,8 @@ public static class CliCommand
         WriteLine(stdout, "  axonhub config preview     Preview configuration");
         WriteLine(stdout, "  axonhub config validate    Validate configuration");
         WriteLine(stdout, "  axonhub config get <key>   Get a specific config value");
+        WriteLine(stdout, "  axonhub admission list     Inspect durable concurrency permits");
+        WriteLine(stdout, "  axonhub admission release <id> --confirm-upstream-stopped");
         WriteLine(stdout, "  axonhub version            Show version");
         WriteLine(stdout, "  axonhub help               Show this help message");
         WriteLine(stdout, string.Empty);

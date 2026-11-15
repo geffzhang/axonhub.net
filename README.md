@@ -42,7 +42,7 @@ AxonHub 的对外 API、管理面 GraphQL、渠道/模型/追踪/计费等行为
 | 管理面 REST + GraphQL + 前端资源 | ✅ 已移植 |
 | 多 silo 集群（AdoNet membership + durable reminder） | ✅ opt-in，默认单 silo |
 | 部署资产（本地脚本、systemd、Nginx、Helm） | ✅ 见 [`deploy/`](deploy/) |
-| Go 参照行为对照与差异台账 | ✅ 336 条，0 个未解释缺口 |
+| Go 参照行为对照与差异台账 | ✅ 337 条，0 个未解释缺口 |
 | 本地测试 | **11161 例**（见[测试](#测试)） |
 | 远端 CI | Llm / Grains / Persistence / 真实 provider E2E 全绿；Api 全量 nightly |
 
@@ -390,7 +390,7 @@ corpus/                         差分语料
 - **验收标准**：可观察行为等价，不是逐行翻译。HTTP 路由、GraphQL 根字段、
   错误文案、流式事件顺序、工具调用、usage/成本、事务与并发语义均有测试。
 - **差异**：所有已知差异编号为 `C###`，记录现象、原因、决策与测试；
-  当前 **336 条（191 accepted / 145 resolved / 0 gap）**，见
+  当前 **337 条（192 accepted / 145 resolved / 0 gap）**，见
   [`porting/differences.jsonl`](porting/differences.jsonl) 与
   [`porting/02-differences.md`](porting/02-differences.md)。
 - **验收**：测试总数、通过/失败/跳过、公开 API 表面、容器冒烟与 E2E

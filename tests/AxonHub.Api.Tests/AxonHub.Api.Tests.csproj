@@ -15,6 +15,7 @@
     <!-- UseInMemoryReminderService for the §149 scheduler grains. -->
     <PackageReference Include="Microsoft.Orleans.Reminders" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />

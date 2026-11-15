@@ -27,6 +27,7 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
     private readonly CancellationToken _cancellationToken;
     private readonly ChannelLimiterMetrics? _metrics;
     private readonly TimeProvider _timeProvider;
+    private readonly IChannelConcurrencyAdmission? _admission;
     private LimiterSlot? _current;
 
     public ChannelLimiterMiddleware(
@@ -34,7 +35,8 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
         ChannelLimiterManager manager,
         CancellationToken cancellationToken,
         ChannelLimiterMetrics? metrics = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IChannelConcurrencyAdmission? admission = null)
         : base("channel-limiter")
     {
         ArgumentNullException.ThrowIfNull(outbound);
@@ -45,6 +47,7 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
         _cancellationToken = cancellationToken;
         _metrics = metrics;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _admission = admission;
     }
 
     public override HttpRequestData TransformOutboundRawRequest(HttpRequestData request)
@@ -57,11 +60,11 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
             return request;
         }
 
-        var limiter = _manager.GetOrCreate(
+        var limiter = _admission is null ? _manager.GetOrCreate(
             candidate.ChannelId,
             candidate.ChannelName,
-            candidate.RateLimitSettings);
-        if (limiter is null)
+            candidate.RateLimitSettings) : null;
+        if (_admission is null && limiter is null)
         {
             return request;
         }
@@ -72,7 +75,17 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
 
         try
         {
-            limiter.Acquire(_cancellationToken);
+            if (_admission is not null)
+            {
+                var permit = _admission.Acquire(
+                    candidate.ChannelId, candidate.RateLimitSettings, _cancellationToken);
+                _current = permit is null ? null : new LimiterSlot(permit.Dispose, retainOnDisposeFailure: true);
+            }
+            else
+            {
+                limiter!.Acquire(_cancellationToken);
+                _current = new LimiterSlot(limiter.Release);
+            }
         }
         catch (ChannelQueueException ex)
         {
@@ -93,8 +106,6 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
             candidate.ChannelId,
             candidate.ChannelName,
             _timeProvider.GetElapsedTime(acquireStart));
-
-        _current = new LimiterSlot(limiter);
 
         return request;
     }
@@ -122,15 +133,19 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
     private void ReleaseCurrent() => _current?.Release();
 
     /// <summary>One acquire/release pair, guarded so every release path is idempotent.</summary>
-    private sealed class LimiterSlot(ChannelLimiter limiter)
+    private sealed class LimiterSlot(Action release, bool retainOnDisposeFailure = false)
     {
         private int _released;
+
+        public bool RetainOnDisposeFailure => retainOnDisposeFailure;
+
+        public void Retain() => Interlocked.Exchange(ref _released, 1);
 
         public void Release()
         {
             if (Interlocked.Exchange(ref _released, 1) == 0)
             {
-                limiter.Release();
+                release();
             }
         }
     }
@@ -175,6 +190,15 @@ internal sealed class ChannelLimiterMiddleware : DummyMiddleware
             try
             {
                 inner.Dispose();
+            }
+            catch
+            {
+                if (slot.RetainOnDisposeFailure)
+                {
+                    slot.Retain();
+                }
+
+                throw;
             }
             finally
             {

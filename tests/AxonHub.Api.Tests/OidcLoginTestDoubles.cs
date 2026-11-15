@@ -10,6 +10,9 @@ namespace AxonHub.Api.Tests;
 /// </summary>
 internal sealed class FakeOidcCache : IOidcCache
 {
+    private readonly TaskCompletionSource _stateReaders = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _stateReadCount;
+
     public Dictionary<string, byte[]> Entries { get; } = new(StringComparer.Ordinal);
 
     public Dictionary<string, TimeSpan> Expirations { get; } = new(StringComparer.Ordinal);
@@ -18,6 +21,10 @@ internal sealed class FakeOidcCache : IOidcCache
 
     public Exception? GetFailure { get; set; }
 
+    public string? GetFailureKeyPrefix { get; set; }
+
+    public bool SynchronizeStateReads { get; set; }
+
     public Exception? SetFailure { get; set; }
 
     /// <summary>Only a set whose key starts with this prefix fails.</summary>
@@ -25,16 +32,45 @@ internal sealed class FakeOidcCache : IOidcCache
 
     public Exception? DeleteFailure { get; set; }
 
-    public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
+    public async Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
-        if (GetFailure is not null)
+        if (GetFailure is not null
+            && (GetFailureKeyPrefix is null || key.StartsWith(GetFailureKeyPrefix, StringComparison.Ordinal)))
         {
-            return Task.FromException<byte[]?>(GetFailure);
+            throw GetFailure;
         }
 
-        return Task.FromResult(
-            Entries.TryGetValue(key, out var value) ? value : (byte[]?)null);
+        var result = Entries.GetValueOrDefault(key);
+        if (SynchronizeStateReads && key.StartsWith(OidcLoginService.StateKeyPrefix, StringComparison.Ordinal))
+        {
+            if (Interlocked.Increment(ref _stateReadCount) == 2)
+            {
+                _stateReaders.SetResult();
+            }
+
+            await _stateReaders.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+        }
+
+        return result;
+    }
+
+    public Task<byte[]?> ConsumeAsync(string key, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (Entries)
+        {
+            if (GetFailure is not null
+                && (GetFailureKeyPrefix is null || key.StartsWith(GetFailureKeyPrefix, StringComparison.Ordinal)))
+            {
+                return Task.FromException<byte[]?>(GetFailure);
+            }
+
+            DeletedKeys.Add(key);
+            Entries.Remove(key, out var value);
+            Expirations.Remove(key);
+            return Task.FromResult(value);
+        }
     }
 
     public Task SetAsync(

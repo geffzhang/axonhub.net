@@ -349,7 +349,7 @@ public sealed class OidcLoginServiceTests
     }
 
     [Fact]
-    public async Task AStateCacheFailureIsReportedAsAnInvalidState()
+    public async Task AStateCacheFailureIsReportedAsAnInfrastructureFailure()
     {
         await CreateAsync(Provider());
         _cache.GetFailure = new InvalidOperationException("boom");
@@ -357,7 +357,81 @@ public sealed class OidcLoginServiceTests
         var exception = await Assert.ThrowsAsync<OidcFlowException>(
             () => _login.CallbackAsync("okta", "code", "state", BaseUrl));
 
+        Assert.Equal("failed to consume OIDC state", exception.Message);
+        Assert.Same(_cache.GetFailure, exception.InnerException);
+        Assert.Empty(_tokens.Requests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SimultaneousCallbacksAcrossServicesConsumeStateBeforeProviderAccess(bool link)
+    {
+        await CreateLoggedInCallbackAsync(Provider(enablePkce: true));
+        _cache.Entries[OidcLoginService.PkceKeyPrefix + "state-1"] = "verifier"u8.ToArray();
+        if (link)
+        {
+            _cache.Entries[OidcLoginService.LinkStateKeyPrefix + "state-1"] = "42"u8.ToArray();
+        }
+
+        _cache.SynchronizeStateReads = true;
+        var other = NewLoginService();
+        var results = await Task.WhenAll(AttemptAsync(_login), AttemptAsync(other));
+
+        Assert.Single(results, exception => exception is null);
+        var failure = Assert.Single(results, exception => exception is not null);
+        Assert.Equal("invalid or expired state parameter", failure!.Message);
+        Assert.Single(_tokens.Requests);
+        Assert.Single(_store.Identities);
+        Assert.Equal(link ? 0 : 1, _store.CreationRequests.Count);
+        Assert.DoesNotContain(OidcLoginService.PkceKeyPrefix + "state-1", _cache.Entries.Keys);
+        Assert.DoesNotContain(OidcLoginService.LinkStateKeyPrefix + "state-1", _cache.Entries.Keys);
+
+        async Task<Exception?> AttemptAsync(OidcLoginService service)
+        {
+            try
+            {
+                await service.CallbackAsync("okta", "code", "state-1", BaseUrl);
+                return null;
+            }
+            catch (OidcFlowException exception)
+            {
+                return exception;
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(OidcLoginService.PkceKeyPrefix, "failed to consume OIDC PKCE verifier")]
+    [InlineData(OidcLoginService.LinkStateKeyPrefix, "failed to consume OIDC link state")]
+    public async Task AnAuxiliaryCacheFailureCannotBecomeALogin(string prefix, string message)
+    {
+        await CreateLoggedInCallbackAsync(Provider(enablePkce: true));
+        _cache.Entries[OidcLoginService.PkceKeyPrefix + "state-1"] = "verifier"u8.ToArray();
+        _cache.GetFailureKeyPrefix = prefix;
+        _cache.GetFailure = new InvalidOperationException("database unavailable");
+
+        var exception = await Assert.ThrowsAsync<OidcFlowException>(
+            () => _login.CallbackAsync("okta", "code", "state-1", BaseUrl));
+
+        Assert.Equal(message, exception.Message);
+        Assert.Same(_cache.GetFailure, exception.InnerException);
+        Assert.Empty(_store.Identities);
+        Assert.Empty(_store.CreationRequests);
+    }
+
+    [Fact]
+    public async Task CallbackDoesNotDependOnABestEffortDelete()
+    {
+        await CreateLoggedInCallbackAsync();
+        _cache.DeleteFailure = new InvalidOperationException("delete unavailable");
+
+        await _login.CallbackAsync("okta", "code", "state-1", BaseUrl);
+        var exception = await Assert.ThrowsAsync<OidcFlowException>(
+            () => _login.CallbackAsync("okta", "code", "state-1", BaseUrl));
+
         Assert.Equal("invalid or expired state parameter", exception.Message);
+        Assert.Single(_tokens.Requests);
     }
 
     [Fact]
@@ -1197,7 +1271,7 @@ public sealed class OidcLoginServiceTests
     }
 
     [Fact]
-    public async Task AnExchangeCacheFailureFailsAsAnInvalidCode()
+    public async Task AnExchangeCacheFailureIsReportedAsAnInfrastructureFailure()
     {
         await CreateAsync(Provider());
         _cache.GetFailure = new InvalidOperationException("boom");
@@ -1205,6 +1279,23 @@ public sealed class OidcLoginServiceTests
         var exception = await Assert.ThrowsAsync<OidcFlowException>(
             () => _login.ExchangeCodeAsync("code-1"));
 
+        Assert.Equal("failed to consume OIDC exchange code", exception.Message);
+        Assert.Same(_cache.GetFailure, exception.InnerException);
+    }
+
+    [Fact]
+    public async Task ExchangeDoesNotDependOnABestEffortDelete()
+    {
+        await CreateAsync(Provider());
+        var user = _store.AddUser();
+        _cache.Entries[OidcLoginService.ExchangeKeyPrefix + "code-1"] =
+            System.Text.Encoding.UTF8.GetBytes(user.Id.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+        _cache.DeleteFailure = new InvalidOperationException("delete unavailable");
+
+        Assert.Same(user, await _login.ExchangeCodeAsync("code-1"));
+        var exception = await Assert.ThrowsAsync<OidcFlowException>(
+            () => NewLoginService().ExchangeCodeAsync("code-1"));
         Assert.Equal("invalid or expired exchange code", exception.Message);
     }
 
@@ -1275,7 +1366,11 @@ public sealed class OidcLoginServiceTests
             _clock,
             NullLogger<OidcProviderRegistry>.Instance);
         await _registry.InitializeAsync();
-        _login = new OidcLoginService(
+        _login = NewLoginService();
+    }
+
+    private OidcLoginService NewLoginService()
+        => new(
             _registry,
             _cache,
             _tokens,
@@ -1285,7 +1380,6 @@ public sealed class OidcLoginServiceTests
             _store,
             _clock,
             NullLogger<OidcLoginService>.Instance);
-    }
 
     private static OidcProviderRuntime Runtime(OidcProviderConfig config)
     {

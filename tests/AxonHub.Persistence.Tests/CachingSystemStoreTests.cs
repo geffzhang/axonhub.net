@@ -10,6 +10,20 @@ namespace AxonHub.Persistence.Tests;
 public sealed class CachingSystemStoreTests
 {
     [Fact]
+    public async Task ClusterReadsObserveWritesFromAnotherReplica()
+    {
+        var inner = new CountingSystemStore();
+        await inner.SetAsync("setting", "old");
+        var first = new CachingSystemStore(inner, new SystemValueCache(), bypassCache: true);
+        var second = new CachingSystemStore(inner, new SystemValueCache(), bypassCache: true);
+
+        Assert.Equal("old", (await second.GetByKeyAsync("setting"))!.Value);
+        await first.SetAsync("setting", "new");
+        Assert.Equal("new", (await second.GetByKeyAsync("setting"))!.Value);
+        Assert.Equal(2, inner.GetCalls);
+    }
+
+    [Fact]
     public async Task GetByKeyCachesUntilAWrite()
     {
         var inner = new CountingSystemStore();

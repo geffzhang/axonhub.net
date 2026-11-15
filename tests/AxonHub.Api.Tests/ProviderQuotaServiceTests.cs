@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AxonHub.Api.Management;
+using AxonHub.Api.Lifecycle;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
@@ -26,6 +27,32 @@ public sealed class ProviderQuotaServiceTests
     // ------------------------------------------------------------------
     // Cache loading / reading / invalidation
     // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task ClusterReadsUseSharedQuotaRowsAndSettingsWithoutStartupSnapshots()
+    {
+        var harness = new QuotaHarness();
+        harness.Statuses.Add(new ProviderQuotaStatusRecord
+        {
+            ChannelId = 7,
+            ProviderType = "claudecode",
+            Status = ProviderQuotaStatuses.Available,
+            Ready = true,
+        });
+        var settings = new ProviderQuotaCollectionSettingsService(harness.Systems, harness.SettingsCache);
+        var services = new TestServiceProvider(
+            (typeof(IProviderQuotaStatusStore), harness.Statuses),
+            (typeof(IProviderQuotaCollectionSettingsService), settings));
+        using var service = new ProviderQuotaService(
+            services, harness.SettingsCache, new ProviderQuotaCheckerRegistry([]),
+            harness.Time, NullLogger<ProviderQuotaService>.Instance,
+            clusterOptions: new OrleansClusterOptions { Enabled = true });
+
+        Assert.NotNull(service.GetQuotaStatus(7));
+        await harness.Systems.SetAsync(
+            ProviderQuotaCollectionSettingsService.SystemKey, """{"enabled":false}""");
+        Assert.Null(service.GetQuotaStatus(7));
+    }
 
     [Fact]
     public async Task InitializeLoadsEveryLiveRowIntoTheCache()

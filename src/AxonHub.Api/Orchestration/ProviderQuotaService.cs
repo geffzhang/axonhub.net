@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AxonHub.Abstractions;
 using AxonHub.Api.Management;
+using AxonHub.Api.Lifecycle;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Pipeline;
@@ -189,6 +190,7 @@ public sealed class ProviderQuotaService :
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, QuotaChannelStatus> _quotaCache = new();
     private readonly IQuotaGroupExecutor? _groupExecutor;
     private readonly IProviderQuotaCoordinatorClient? _coordinator;
+    private readonly bool _sharedReads;
 
     /// <summary>
     /// Port of <c>svc.mu</c>: serializes the whole collection run with cache
@@ -210,7 +212,8 @@ public sealed class ProviderQuotaService :
         TimeProvider time,
         ILogger<ProviderQuotaService> logger,
         IQuotaGroupExecutor? groupExecutor = null,
-        IProviderQuotaCoordinatorClient? coordinator = null)
+        IProviderQuotaCoordinatorClient? coordinator = null,
+        OrleansClusterOptions? clusterOptions = null)
     {
         _scopeFactory = scopeFactory;
         _settingsCache = settingsCache;
@@ -219,6 +222,7 @@ public sealed class ProviderQuotaService :
         _logger = logger;
         _groupExecutor = groupExecutor;
         _coordinator = coordinator;
+        _sharedReads = clusterOptions?.Enabled == true;
     }
 
     /// <summary>
@@ -263,6 +267,35 @@ public sealed class ProviderQuotaService :
     /// </summary>
     public QuotaChannelStatus? GetQuotaStatus(long channelId)
     {
+        if (_sharedReads)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var record = scope.ServiceProvider.GetRequiredService<IProviderQuotaStatusStore>()
+                .GetByChannelIdAsync(channelId).GetAwaiter().GetResult();
+            if (record is null)
+            {
+                return null;
+            }
+
+            var settings = scope.ServiceProvider.GetRequiredService<IProviderQuotaCollectionSettingsService>()
+                .GetAsync().GetAwaiter().GetResult();
+            if (record.ProviderType.Length > 0
+                && (!settings.Enabled
+                    || !settings.Providers.TryGetValue(record.ProviderType, out var enabled)
+                    || !enabled))
+            {
+                return null;
+            }
+
+            return new QuotaChannelStatus
+            {
+                ProviderType = record.ProviderType,
+                Status = record.Status,
+                Ready = record.Ready,
+                Limits = ProviderQuotaData.CloneLimits(ExtractLimitsFromQuotaData(record.QuotaData)),
+            };
+        }
+
         if (!_quotaCache.TryGetValue(channelId, out var status))
         {
             return null;

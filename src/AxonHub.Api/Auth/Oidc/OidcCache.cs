@@ -3,13 +3,15 @@ namespace AxonHub.Api.Auth.Oidc;
 /// <summary>
 /// The byte cache behind the OIDC login flow (reference:
 /// <c>OIDCService.cache xcache.Cache[[]byte]</c>, oidc.go:176-182). The
-/// reference builds it from <c>cache.mode</c>; the default is <c>memory</c>
-/// (conf/conf.go:312), which the port reproduces here. The redis and two-level
-/// modes are unported (C171).
+/// default single-silo backend is memory; clustered hosts use PostgreSQL.
+/// One-time credentials must use <see cref="ConsumeAsync"/>, not Get + Delete.
 /// </summary>
 public interface IOidcCache
 {
     Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>Atomically removes and returns a live value, or null if absent/expired.</summary>
+    Task<byte[]?> ConsumeAsync(string key, CancellationToken cancellationToken = default);
 
     Task SetAsync(
         string key,
@@ -46,6 +48,23 @@ public sealed class OidcMemoryCache(TimeProvider timeProvider) : IOidcCache
             if (timeProvider.GetUtcNow() > entry.ExpiresAt)
             {
                 _entries.Remove(key);
+                return Task.FromResult<byte[]?>(null);
+            }
+
+            return Task.FromResult<byte[]?>(entry.Value);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<byte[]?> ConsumeAsync(string key, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_mutex)
+        {
+            if (!_entries.Remove(key, out var entry)
+                || timeProvider.GetUtcNow() > entry.ExpiresAt)
+            {
                 return Task.FromResult<byte[]?>(null);
             }
 

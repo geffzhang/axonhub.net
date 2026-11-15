@@ -75,6 +75,64 @@ PostgreSQL 承载 membership + durable reminder；内置 PostgreSQL 只允许
 新增 §285 的 Api 用例 1 例；仍未做全量合并复跑，上表保持最后一次全量
 实测（11145）。
 
+### §286 多副本一致性
+
+在 opt-in Orleans 集群中沿用 PostgreSQL，不引入 Redis：
+
+- API key、系统设置、存储和配额关键读使用共享数据库；渠道、模型和渠道价格
+  以写事务内递增的 revision 刷新快照，避免丢失通知或旧值回填。
+- 每渠道事务行锁协调持久 FIFO、全局并发及有界队列；排队者重读已提交上限，
+  取消与授权共用同一把锁。负载打分和指标读取共享占位统计。
+- OIDC callback state、PKCE、link 和 exchange 使用共享 TTL 状态和原子消费；
+  回调、交换可以跨副本，重复消费不能再次成功。
+- 数据库故障不回退到本地准入。已获准占位不自动过期，流关闭失败也不释放；
+  只能确认上游停止后按 ID 执行
+  `admission release <id> --confirm-upstream-stopped`。
+- 空库业务迁移使用事务 advisory lock，避免多副本首次启动的 DDL 竞争。
+
+验证（2026-11-16，.NET SDK 10.0.401，PostgreSQL 17 / Testcontainers）：
+
+```powershell
+dotnet build AxonHub.slnx -c Release --no-restore
+dotnet test tests\AxonHub.Api.Tests\AxonHub.Api.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~AdmissionCliTests|FullyQualifiedName~ChannelLimiterMiddlewareTests|FullyQualifiedName~ProviderQuotaServiceTests|FullyQualifiedName~OidcCacheTests|FullyQualifiedName~OidcLoginServiceTests|FullyQualifiedName~OidcLoginEndpointTests|FullyQualifiedName~CliCommandTests|FullyQualifiedName~MultiReplicaBusinessTests" --blame-hang-timeout 8m
+dotnet test tests\AxonHub.Grains.Tests\AxonHub.Grains.Tests.csproj -c Release --no-build --no-restore --filter "FullyQualifiedName~EnabledChannelsGrainTests|FullyQualifiedName~ChannelLimiter|FullyQualifiedName~ChannelPool"
+dotnet test tests\AxonHub.Persistence.Tests\AxonHub.Persistence.Tests.csproj -c Release --no-build --no-restore --filter "FullyQualifiedName~ClusterCacheRevisionTests|FullyQualifiedName~ChannelAdmissionStoreTests|FullyQualifiedName~CachingApiKeyStoreTests|FullyQualifiedName~CachingSystemStoreTests|FullyQualifiedName~PostgresOidcStateStoreTests"
+```
+
+Release 构建 **0 警告、0 错误**；上述定向 API **199**、Grains **34**、
+Persistence **23**，合计 **256 通过、0 失败、0 跳过**。
+审查发现 OIDC 建表尚未串行化；新增 8 连接同步初始化回归，修复前复现
+PostgreSQL `23505 pg_type_typname_nsp_index`，修复后通过。OIDC 建表和建索引
+现同样处于事务 advisory lock 内，避免仅修复业务迁移而遗漏共享状态表。
+本轮未全量复跑，不能将这些定向结果视为上文历史全量总数的更新。
+
+`MultiReplicaBusinessTests.SharedBusinessStateAdmissionOidcAndFailureRecovery`
+是其中 **1 例**综合验收，不将其内部阶段计为多个测试。Debug 先通过后，
+主流程独立执行上述 Release 命令再次通过，业务用例覆盖：
+
+- 私有 PostgreSQL 17、两个真实 API/Kestrel/Orleans 子进程和受控上游/IdP，
+  不使用外部凭据；所有进程、监听和容器由测试创建并清理。
+- 预热两个副本后，提交 API key 禁用、轮换及系统设置变更，后续真实 HTTP
+  立即观察新值，旧 key 返回 401。管理写入使用直接提交 SQL，
+  本例不重复断言管理端 HTTP mutation 的鉴权与实现。
+- authorize A → callback B → exchange A；回调和交换重放均失败，
+  并发跨副本 exchange 恰有一个成功。受控 IdP 校验 S256 PKCE；
+  本例不覆盖签名 ID token / JWKS 密码学验证。
+- `maxConcurrent=1`、两张等待票据；第四个请求得到 429 且未到达上游。
+  逐个释放受控响应，实测到达顺序保持 FIFO、上游活跃请求峰值为 1。
+- 停止数据库后，已预热副本的业务请求失败且上游到达数不增加；
+  原端口恢复数据库后，无需重启 API 即可再次成功。鉴权可能先于准入 SQL
+  拒绝请求，本例不将其冒充单独绕过鉴权的准入数据库故障注入。
+- 强杀持有请求的 A，等待真实 membership 变为 Dead；占位仍保留，
+  B 对原渠道请求得到 429 且不触达上游。新增独立渠道后 B 真实业务成功，
+  验证存活副本及渠道 Grain 可继续服务，而不是仅检查 `/health`。
+  不宣称原渠道会自动释放不确定占位，也未执行人工确认释放。
+
+运维、升级排空和能力边界见
+[`deploy/helm/README.md`](../deploy/helm/README.md) 的“多副本一致性”。
+差异登记为 C337；其他 provider OAuth 管理状态、实时流预览和 WebSocket
+并未全部改为共享状态，也不保证上游 exactly-once 或所有 Grain 内存窗口持久化。
+
 命令：`dotnet test AxonHub.slnx`（2026-11-06，Windows 11 / .NET SDK 10.0.401；
 Antigravity Llm 层切片（§55）与通道接线（§56）、OpenaiResponses 通道接线（§57）、Commandcode 通道接线（§58）、别名通道类型接线（§59）、xai_subscription 通道与订阅 Llm 子包（§60）、anthropic_gcp 通道与 Vertex 执行器（§61）、静态托管与 SPA fallback（§62）、管理面 system-settings（§63）、管理面 users / roles（§64）、管理面 channels 读取（§65）、管理面 channels 生命周期写入（§66）、管理面 channels createChannel（§67）与 updateChannel（§68）、批量写入（§69）、端点保存（§70）、API key 记账（§71）、端点自动检测（§72）、定价写入（§73）、通道自动定价（§74）、通道重复 / 批量创建 / 批量导入（§75）、通道测试（§76）、模型同步（§77）、通道覆盖模板（§78）、自助身份（§79）、管理面登录（§80）、管理面 GraphQL 鉴权（§81）、OIDC 提供方配置 / providers 列表（§82）、OIDC 登录流程（§83）、权限校验（§84）与项目成员（§85）与项目管理（§86）、API key 管理（§87）、模型管理（§88）、公开模型列表（§89）、模型关联路由（§90）、trace/thread 通道粘性路由（§91）、配额路由闸门（§95）、通道变换选项（§96）、API key profile 模型映射（§97）、orchestrator 入站中间件（§98）、项目提示词注入（§99）、项目提示词管理面（§100）、追踪 / 线程管理面（§101）、请求管理面（§102）、用量日志管理面（§103）、analytics 页（§104）与 dashboard 首页（§105）、数据存储管理面（§106）、备份 / 恢复与自动备份管理面（§107）落地后复跑，全绿；§108 的数据存储后端与自动备份调度随后落地。该次运行记录保留为历史，表中数字已由下方最近一次全量覆盖）。
 

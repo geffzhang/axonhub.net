@@ -16,6 +16,63 @@ namespace AxonHub.Api.Tests;
 public sealed class ChannelLimiterMiddlewareTests
 {
     [Fact]
+    public void FailedUpstreamDisposalRetainsTheGlobalPermitEvenIfErrorHooksRun()
+    {
+        var admission = new RecordingAdmission();
+        var middleware = new ChannelLimiterMiddleware(
+            RateLimitTestData.Outbound(RateLimitTestData.Concurrency(1), 1, "cluster"),
+            new ChannelLimiterManager(), CancellationToken.None, admission: admission);
+        middleware.TransformOutboundRawRequest(new HttpRequestData());
+        var stream = middleware.TransformOutboundLlmStream(new FailingDisposeStream());
+        Assert.Throws<IOException>(stream.Dispose);
+        middleware.OnOutboundRawError(new IOException("uncertain"));
+        Assert.Equal(0, admission.Releases);
+    }
+
+    private sealed class FailingDisposeStream : IStream<LlmResponse>
+    {
+        public LlmResponse? Current => null;
+        public Exception? Err => null;
+        public bool Next() => true;
+        public void Dispose() => throw new IOException("upstream disposal failed");
+    }
+
+    [Fact]
+    public void ClusterAdmissionDoesNotAcquireALocalSlotAndReleasesOnce()
+    {
+        var admission = new RecordingAdmission();
+        var manager = new ChannelLimiterManager();
+        var outbound = RateLimitTestData.Outbound(RateLimitTestData.Concurrency(1), 1, "cluster");
+        var middleware = new ChannelLimiterMiddleware(
+            outbound, manager, CancellationToken.None, admission: admission);
+
+        middleware.TransformOutboundRawRequest(new HttpRequestData());
+        Assert.Equal(1, admission.Acquires);
+        Assert.False(manager.TryGetStats(1, out _, out _));
+        middleware.OnOutboundRawError(new InvalidOperationException("test"));
+        middleware.TransformOutboundLlmResponse(new LlmResponse());
+        Assert.Equal(1, admission.Releases);
+    }
+
+    private sealed class RecordingAdmission : IChannelConcurrencyAdmission
+    {
+        public int Acquires { get; private set; }
+        public int Releases { get; private set; }
+
+        public IDisposable? Acquire(
+            long channelId, ChannelRateLimitSettings? settings, CancellationToken cancellationToken)
+        {
+            Acquires++;
+            return new Permit(this);
+        }
+
+        private sealed class Permit(RecordingAdmission owner) : IDisposable
+        {
+            public void Dispose() => owner.Releases++;
+        }
+    }
+
+    [Fact]
     public void AcquireAndReleaseOnResponse()
     {
         var settings = RateLimitTestData.Concurrency(2);

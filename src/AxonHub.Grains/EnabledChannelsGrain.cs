@@ -31,7 +31,8 @@ namespace AxonHub.Grains;
 public sealed class EnabledChannelsGrain(
     IEnabledChannelSource source,
     TimeProvider timeProvider,
-    ILogger<EnabledChannelsGrain> logger) : Grain, IEnabledChannelsGrain
+    ILogger<EnabledChannelsGrain> logger,
+    ICacheRevisionSource? revisionSource = null) : Grain, IEnabledChannelsGrain
 {
     /// <summary>Reference <c>RefreshInterval: time.Minute</c>.</summary>
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
@@ -55,6 +56,7 @@ public sealed class EnabledChannelsGrain(
     private IGrainTimer? _debounceTimer;
     private DateTimeOffset _debounceDeadline;
     private bool _pendingForceRefresh;
+    private long? _revision;
 
     public override Task OnActivateAsync(CancellationToken cancellationToken)
     {
@@ -66,11 +68,15 @@ public sealed class EnabledChannelsGrain(
 
     public async Task<EnabledChannelsSnapshot> GetSnapshotAsync()
     {
-        if (!_loaded)
+        var revision = revisionSource is null
+            ? (long?)null
+            : await revisionSource.GetRevisionAsync().ConfigureAwait(true);
+        if (!_loaded || revision != _revision)
         {
             // The reference loads synchronously in NewChannelService and panics
             // on failure; the port's first caller gets the error instead.
             await RefreshCoreAsync(force: true, CancellationToken.None).ConfigureAwait(true);
+            _revision = revision;
         }
 
         return BuildSnapshot();

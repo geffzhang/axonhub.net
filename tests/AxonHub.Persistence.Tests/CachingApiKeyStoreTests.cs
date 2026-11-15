@@ -10,6 +10,21 @@ namespace AxonHub.Persistence.Tests;
 public sealed class CachingApiKeyStoreTests
 {
     [Fact]
+    public async Task ClusterReadsDoNotReuseAnotherReplicasRevokedKey()
+    {
+        var inner = new CountingApiKeyStore();
+        var id = await inner.CreateAsync(new ApiKeyRecord { Key = "sk-old", Name = "one" });
+        var first = new CachingApiKeyStore(inner, new ApiKeyCache(), bypassCache: true);
+        var second = new CachingApiKeyStore(inner, new ApiKeyCache(), bypassCache: true);
+
+        Assert.NotNull(await second.GetByKeyAsync("sk-old"));
+        await first.UpdateAsync(new ApiKeyUpdate { Id = id, Key = "sk-new" });
+
+        Assert.Null(await second.GetByKeyAsync("sk-old"));
+        Assert.NotNull(await second.GetByKeyAsync("sk-new"));
+    }
+
+    [Fact]
     public async Task GetByKeyCachesUntilAWrite()
     {
         var inner = new CountingApiKeyStore();

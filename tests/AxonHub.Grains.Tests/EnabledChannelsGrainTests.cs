@@ -1,5 +1,7 @@
 using AxonHub.Abstractions;
+using AxonHub.Grains;
 using AxonHub.Grains.Abstractions;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AxonHub.Grains.Tests;
 
@@ -16,6 +18,33 @@ public sealed class EnabledChannelsGrainTests(GrainClusterFixture fixture)
 {
     private static readonly DateTime Start = new(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
     private static readonly long[] ExpectedChannelIds = [101L, 102L];
+
+    [Fact]
+    public async Task ClusterRevisionInvalidatesEvenWhenTimestampsAreUnchanged()
+    {
+        var source = new FakeEnabledChannelProvider { LatestUpdatedAt = Start };
+        source.Set(Channel(101, "old"));
+        var revision = new RevisionSource();
+        var grain = new EnabledChannelsGrain(
+            source, TimeProvider.System, NullLogger<EnabledChannelsGrain>.Instance, revision);
+        Assert.Equal("old", Assert.Single((await grain.GetSnapshotAsync()).Channels).Name);
+
+        source.Set(Channel(101, "new"));
+        revision.Revision++;
+
+        Assert.Equal("new", Assert.Single((await grain.GetSnapshotAsync()).Channels).Name);
+        Assert.Equal(2, source.ListEnabledCalls);
+        await grain.GetSnapshotAsync();
+        Assert.Equal(2, source.ListEnabledCalls);
+    }
+
+    private sealed class RevisionSource : ICacheRevisionSource
+    {
+        public long Revision { get; set; }
+
+        public Task<long> GetRevisionAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(Revision);
+    }
 
     [Fact]
     public async Task ColdLoadServesTheEnabledSnapshot()

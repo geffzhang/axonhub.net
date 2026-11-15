@@ -73,6 +73,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly ServerLifetime? _serverLifetime;
     private readonly ModelCircuitBreaker? _modelCircuitBreaker;
     private readonly IChannelRefreshSource? _channelRefreshSource;
+    private readonly IChannelConcurrencyAdmission? _channelConcurrencyAdmission;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -108,7 +109,8 @@ public sealed class ChatCompletionOrchestrator
         ILoggerFactory? loggerFactory = null,
         ServerLifetime? serverLifetime = null,
         ModelCircuitBreaker? modelCircuitBreaker = null,
-        IChannelRefreshSource? channelRefreshSource = null)
+        IChannelRefreshSource? channelRefreshSource = null,
+        IChannelConcurrencyAdmission? channelConcurrencyAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -146,6 +148,7 @@ public sealed class ChatCompletionOrchestrator
         _rateLimitRecorder = rateLimitRecorder
             ?? new InMemoryChannelRateLimitRecorder(rateLimitTracker ?? new ChannelRequestTracker(timeProvider));
         _channelLimiterManager = channelLimiterManager ?? new ChannelLimiterManager();
+        _channelConcurrencyAdmission = channelConcurrencyAdmission;
 
         // Production registers the same metrics singleton the middlewares emit
         // to; direct constructions leave it null, which makes every instrument
@@ -1080,7 +1083,8 @@ public sealed class ChatCompletionOrchestrator
             _channelLimiterManager,
             executionToken,
             _channelLimiterMetrics,
-            _timeProvider));
+            _timeProvider,
+            _channelConcurrencyAdmission));
         if (includeRateLimits)
         {
             options.Middlewares.Add(new RateLimitAdmissionMiddleware(outbound, _rateLimitRecorder, _timeProvider));

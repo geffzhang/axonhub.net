@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -78,8 +77,6 @@ public sealed class OidcLoginService(
             LogLevel.Warning,
             new EventId(0, "OidcSyncUserInfoLinkFailed"),
             "Failed to sync user info during OIDC link for user {UserId}");
-
-    private static readonly ConcurrentExchangeLocks ExchangeLocks = new();
 
     private DateTime Now => timeProvider.GetUtcNow().UtcDateTime;
 
@@ -263,37 +260,20 @@ public sealed class OidcLoginService(
             throw new OidcFlowException("OIDC provider not found: " + providerIdentifier);
         }
 
-        byte[]? stateValue;
-        try
-        {
-            stateValue = await cache.GetAsync(StateKeyPrefix + state, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            throw new OidcFlowException("invalid or expired state parameter", ex);
-        }
+        var stateValue = await ConsumeAsync(StateKeyPrefix + state, "state", cancellationToken)
+            .ConfigureAwait(false);
 
         if (stateValue is null || stateValue.Length == 0)
         {
             throw new OidcFlowException("invalid or expired state parameter");
         }
 
-        await TryDeleteAsync(StateKeyPrefix + state, cancellationToken).ConfigureAwait(false);
-
         string? codeVerifier = null;
         if (provider.Config.EnablePkce)
         {
-            byte[]? verifierBytes;
-            try
-            {
-                verifierBytes = await cache.GetAsync(PkceKeyPrefix + state, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                throw new OidcFlowException("invalid PKCE verifier or verifier expired", ex);
-            }
+            var verifierBytes = await ConsumeAsync(
+                    PkceKeyPrefix + state, "PKCE verifier", cancellationToken)
+                .ConfigureAwait(false);
 
             if (verifierBytes is null || verifierBytes.Length == 0)
             {
@@ -301,8 +281,11 @@ public sealed class OidcLoginService(
             }
 
             codeVerifier = Encoding.UTF8.GetString(verifierBytes);
-            await TryDeleteAsync(PkceKeyPrefix + state, cancellationToken).ConfigureAwait(false);
         }
+
+        var linkValue = await ConsumeAsync(
+                LinkStateKeyPrefix + state, "link state", cancellationToken)
+            .ConfigureAwait(false);
 
         var redirect = provider.RedirectUrl;
         if (baseUrl.Length > 0 && !redirect.StartsWith("http", StringComparison.Ordinal))
@@ -455,22 +438,8 @@ public sealed class OidcLoginService(
                 "failed to resolve subject from id_token or user_info");
         }
 
-        byte[]? linkValue;
-        try
-        {
-            linkValue = await cache.GetAsync(LinkStateKeyPrefix + state, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            linkValue = null;
-        }
-
         if (linkValue is not null && linkValue.Length > 0)
         {
-            await TryDeleteAsync(LinkStateKeyPrefix + state, cancellationToken)
-                .ConfigureAwait(false);
-
             var linkText = Encoding.UTF8.GetString(linkValue);
             if (!OidcProtocol.TryAtoi(linkText, out var userId, out var atoiError))
             {
@@ -802,57 +771,36 @@ public sealed class OidcLoginService(
         string code,
         CancellationToken cancellationToken = default)
     {
-        var cacheKey = ExchangeKeyPrefix + code;
-        var gate = ExchangeLocks.GetOrAdd(cacheKey);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var userBytes = await ConsumeAsync(
+                ExchangeKeyPrefix + code, "exchange code", cancellationToken)
+            .ConfigureAwait(false);
+        if (userBytes is null)
+        {
+            throw new OidcFlowException("invalid or expired exchange code");
+        }
+
+        if (!OidcProtocol.TryAtoi(Encoding.UTF8.GetString(userBytes), out var userId, out var atoiError))
+        {
+            throw new OidcFlowException("invalid user ID format in cache: " + atoiError);
+        }
+
+        UserRecord? user;
         try
         {
-            byte[]? userBytes;
-            try
-            {
-                userBytes = await cache.GetAsync(cacheKey, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                throw new OidcFlowException("invalid or expired exchange code", ex);
-            }
-
-            if (userBytes is null)
-            {
-                throw new OidcFlowException("invalid or expired exchange code");
-            }
-
-            await TryDeleteAsync(cacheKey, cancellationToken).ConfigureAwait(false);
-
-            if (!OidcProtocol.TryAtoi(Encoding.UTF8.GetString(userBytes), out var userId, out var atoiError))
-            {
-                throw new OidcFlowException("invalid user ID format in cache: " + atoiError);
-            }
-
-            UserRecord? user;
-            try
-            {
-                user = await store.GetUserByIdAsync(userId, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                throw new OidcFlowException("user not found: " + ex.Message, ex);
-            }
-
-            if (user is null)
-            {
-                throw new OidcFlowException("user not found: ent: user not found");
-            }
-
-            return user;
+            user = await store.GetUserByIdAsync(userId, cancellationToken)
+                .ConfigureAwait(false);
         }
-        finally
+        catch (Exception ex)
         {
-            gate.Release();
-            ExchangeLocks.TryRemove(cacheKey);
+            throw new OidcFlowException("user not found: " + ex.Message, ex);
         }
+
+        if (user is null)
+        {
+            throw new OidcFlowException("user not found: ent: user not found");
+        }
+
+        return user;
     }
 
     private async Task<OidcIdentityRecord> CreateIdentityAsync(
@@ -1082,15 +1030,22 @@ public sealed class OidcLoginService(
         return (firstName, lastName);
     }
 
-    private async Task TryDeleteAsync(string key, CancellationToken cancellationToken)
+    private async Task<byte[]?> ConsumeAsync(
+        string key,
+        string description,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await cache.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
+            return await cache.ConsumeAsync(key, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (OperationCanceledException)
         {
-            // The reference discards every cache delete error.
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new OidcFlowException("failed to consume OIDC " + description, exception);
         }
     }
 
@@ -1111,18 +1066,4 @@ public sealed class OidcLoginService(
         IReadOnlyList<long> AddRoleIds,
         IReadOnlyList<string> RoleNamesForCreate);
 
-    /// <summary>
-    /// The reference's <c>sync.Map</c> of per-code mutexes. A small wrapper
-    /// keeps the remove-after-release discipline in one place.
-    /// </summary>
-    private sealed class ConcurrentExchangeLocks
-    {
-        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _locks =
-            new(StringComparer.Ordinal);
-
-        public SemaphoreSlim GetOrAdd(string key)
-            => _locks.GetOrAdd(key, static _ => new SemaphoreSlim(1, 1));
-
-        public void TryRemove(string key) => _locks.TryRemove(key, out _);
-    }
 }

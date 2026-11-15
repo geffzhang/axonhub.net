@@ -28,8 +28,12 @@ public sealed class SystemValueCache
 /// cache, so all keys are re-read after a mutation. External direct database
 /// edits stay invisible until a write or restart, matching the reference's
 /// in-process cache.
+/// Cluster hosts set bypassCache so other replicas cannot retain stale settings.
 /// </summary>
-public sealed class CachingSystemStore(ISystemStore inner, SystemValueCache cache) : ISystemStore
+public sealed class CachingSystemStore(
+    ISystemStore inner,
+    SystemValueCache cache,
+    bool bypassCache = false) : ISystemStore
 {
     public async Task<long> CreateAsync(
         SystemRecord system,
@@ -49,13 +53,13 @@ public sealed class CachingSystemStore(ISystemStore inner, SystemValueCache cach
         string key,
         CancellationToken cancellationToken = default)
     {
-        if (cache.TryGet(key, out var cached))
+        if (!bypassCache && cache.TryGet(key, out var cached))
         {
             return cached;
         }
 
         var record = await inner.GetByKeyAsync(key, cancellationToken).ConfigureAwait(false);
-        if (record is not null)
+        if (!bypassCache && record is not null)
         {
             cache.Set(key, record);
         }

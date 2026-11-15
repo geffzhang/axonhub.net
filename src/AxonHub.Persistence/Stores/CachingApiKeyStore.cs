@@ -26,8 +26,12 @@ public sealed class ApiKeyCache
 /// <see cref="ApiKeyCache"/>; every write through the store clears the cache.
 /// External direct database edits stay invisible until a write or restart,
 /// matching the reference's in-process API key cache.
+/// Cluster hosts set bypassCache to read committed database values on every lookup.
 /// </summary>
-public sealed class CachingApiKeyStore(IApiKeyStore inner, ApiKeyCache cache) : IApiKeyStore
+public sealed class CachingApiKeyStore(
+    IApiKeyStore inner,
+    ApiKeyCache cache,
+    bool bypassCache = false) : IApiKeyStore
 {
     public Task<T> RunInTransactionAsync<T>(
         Func<CancellationToken, Task<T>> action,
@@ -58,13 +62,13 @@ public sealed class CachingApiKeyStore(IApiKeyStore inner, ApiKeyCache cache) : 
         string key,
         CancellationToken cancellationToken = default)
     {
-        if (cache.TryGet(key, out var cached))
+        if (!bypassCache && cache.TryGet(key, out var cached))
         {
             return cached;
         }
 
         var record = await inner.GetByKeyAsync(key, cancellationToken).ConfigureAwait(false);
-        if (record is not null)
+        if (!bypassCache && record is not null)
         {
             cache.Set(key, record);
         }

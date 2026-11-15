@@ -20,6 +20,11 @@ public static class DatabaseMigrator
             .ConfigureAwait(false);
 
         await connection.ExecuteAsync(new CommandDefinition(
+            "SELECT pg_advisory_xact_lock(681524900)",
+            transaction: transaction,
+            cancellationToken: cancellationToken)).ConfigureAwait(false);
+
+        await connection.ExecuteAsync(new CommandDefinition(
             DatabaseSchema.Initial,
             transaction: transaction,
             cancellationToken: cancellationToken)).ConfigureAwait(false);

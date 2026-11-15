@@ -13,7 +13,14 @@ namespace AxonHub.Grains.Abstractions;
 /// channels without a concurrency limit return <see langword="null"/> so callers
 /// fast-path past admission control.
 /// </remarks>
-public sealed class ChannelLimiterManager
+public interface IChannelLimiterStatsSource
+{
+    bool TryGetStats(long channelId, out int inFlight, out int waiting);
+
+    IReadOnlyList<ChannelLimiterSnapshot> Snapshot();
+}
+
+public sealed class ChannelLimiterManager(IChannelLimiterStatsSource? sharedStats = null)
 {
     private readonly Dictionary<long, LimiterEntry> _entries = [];
     private readonly object _lock = new();
@@ -67,6 +74,11 @@ public sealed class ChannelLimiterManager
     /// </summary>
     public bool TryGetStats(long channelId, out int inFlight, out int waiting)
     {
+        if (sharedStats is not null)
+        {
+            return sharedStats.TryGetStats(channelId, out inFlight, out waiting);
+        }
+
         ChannelLimiter limiter;
         lock (_lock)
         {
@@ -89,6 +101,11 @@ public sealed class ChannelLimiterManager
     /// <summary>A point-in-time copy of every tracked limiter's state.</summary>
     public IReadOnlyList<ChannelLimiterSnapshot> Snapshot()
     {
+        if (sharedStats is not null)
+        {
+            return sharedStats.Snapshot();
+        }
+
         KeyValuePair<long, LimiterEntry>[] entries;
         lock (_lock)
         {

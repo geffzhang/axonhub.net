@@ -6,6 +6,8 @@
 - 本地安装通过 `dotnet publish` 生成自包含单文件，而不是下载 Go release；
 - 管理面 `frontend/dist` 由安装脚本复制到运行目录；
 - Kubernetes 多副本使用 Orleans AdoNet membership + durable reminder；
+- 集群模式通过 PostgreSQL 提供关键配置一致读取、全局 FIFO 并发准入和 OIDC
+  单次状态消费；故障占位不会自动释放，处置步骤见 [Helm 文档](helm/README.md#多副本一致性)；
 - Docker Compose 仍以仓库根目录的 `docker-compose.yml` 为准。
 
 ## 目录

@@ -154,13 +154,40 @@ spec:
 - **membership**：AdoNet membership 记录每个 silo 的心跳；失联 silo 被标记
   dead 后，placement 不再分配新激活。
 - **grain**：这些 grain 的状态主要来自数据库/进程内缓存；激活丢失后会在存活
-  silo 重新激活并从数据库重建。Channel limiter 的瞬时窗口状态会丢失，和
-  参照实现进程重启的语义一致。
+  silo 重新激活。RPM/TPM、冷却、黏性选路等内存窗口可能丢失，不能视为完整
+  状态恢复；全局并发的已获准占位独立保存在 PostgreSQL，不随激活丢失。
 - **reminders**：AdoNet reminder 表持久化；拥有 reminder 的 silo 离开后，
   另一个 silo 接管并继续触发。错过的一次 occurrence 不会回补（与参照 cron
   一致）。
-- **HTTP**：每个 Pod 都可以接收请求；Service/Ingress 无需 sticky session，
-  grain 调用会在集群内路由。
+- **HTTP/OIDC**：每个 Pod 都可以接收请求；grain 调用在集群内路由，OIDC 临时
+  状态和单次 exchange code 在 PostgreSQL 原子消费，不需要 sticky session。
+  其他未共享的 provider OAuth 管理会话、实时流预览和 WebSocket 连接仍有节点
+  亲和性，不能因此推断所有交互都可任意切换 Pod。
+
+## 缓存、全局并发与故障处置
+
+集群模式下 API Key、系统配置、供应商配额及存储配置直接读取业务库；
+渠道/模型写入与缓存版本更新在同一事务提交，渠道快照在服务请求时校验版本。
+这是正确性优先的方案，会增加读库和协调开销；请据实际负载规划数据库连接池。
+纯展示型 dashboard 缓存仍允许短时陈旧。
+
+渠道 `maxConcurrent` 和 FIFO 队列对所有副本合并计数。请求退出时释放自己的
+唯一占位；取消、重试和重复释放不能挪用其他请求的名额。降低容量不会中断已在途
+请求。未获准票据 30 秒无续期可回收；**已获准占位不自动过期**，包括节点强杀
+或无法确认上游连接已关闭的场景。数据库不可用时 fail-closed，不退回本地限制。
+
+容量因故障减少时，使用相同业务库配置运行：
+
+```bash
+dotnet AxonHub.Api.dll admission list
+dotnet AxonHub.Api.dll admission release <permit-id> --confirm-upstream-stopped
+```
+
+必须先确认对应上游操作已停止，再按 ID 释放；不要清空整张表。上游服务可能在
+断开连接后继续计算，所以这里不保证远端计算 exactly-once。
+
+首次从旧版本升级时先停止入口流量、排空旧请求，再切换全部副本；旧版 Pod 的
+本地限制和新版的共享占位不能混用来保证全局上限。单 silo 降级也需要先排空。
 
 ## 单 silo 回退
 
