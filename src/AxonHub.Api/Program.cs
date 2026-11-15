@@ -181,6 +181,10 @@ builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorde
 builder.Services.AddSingleton<IChannelPricingSource, PostgresChannelPricingSource>();
 builder.Services.AddScoped<IUsageCostService, UsageCostService>();
 
+// Same-channel retry guard: re-read the stored channel before spending the
+// remaining retry budget (retry_channel_refresh.go, #2545).
+builder.Services.AddSingleton<IChannelRefreshSource, PostgresChannelRefreshSource>();
+
 // RPM/TPM/cooldown live in the channel grain (one owner per channel), so the
 // API middlewares write through the same authority ChannelPoolGrain scores
 // from; the reference's per-process tracker remains the in-memory fallback for

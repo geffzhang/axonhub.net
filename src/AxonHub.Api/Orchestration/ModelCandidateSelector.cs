@@ -770,7 +770,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
     /// buildCodexOutbound (channel_llm.go:304-317): trim, then map through the
     /// channel's model entries; an unsupported model keeps its trimmed value.
     /// </summary>
-    private static string ResolveDefaultTestModel(ChannelDescriptor channel)
+    internal static string ResolveDefaultTestModel(ChannelDescriptor channel)
     {
         var model = channel.DefaultTestModel.Trim();
         if (model.Length == 0)

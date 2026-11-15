@@ -165,6 +165,24 @@ public sealed class ChannelCandidate
     /// </summary>
     [Id(25)]
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>
+    /// Copies the candidate and its model entries. The same-channel credential
+    /// refresh mutates a copy so a rebuild failure leaves the pinned candidate
+    /// untouched (retry_channel_refresh.go).
+    /// </summary>
+    public ChannelCandidate Clone()
+    {
+        var clone = (ChannelCandidate)MemberwiseClone();
+        clone.Models = [.. Models.Select(model => new ChannelCandidateModel
+        {
+            RequestModel = model.RequestModel,
+            ActualModel = model.ActualModel,
+            Source = model.Source,
+        })];
+        clone.ModelApiFormats = ModelApiFormats is null ? null : [.. ModelApiFormats];
+        return clone;
+    }
 }
 
 /// <summary>

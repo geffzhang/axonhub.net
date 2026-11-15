@@ -1,7 +1,9 @@
 using System.Text;
 using AxonHub.Abstractions;
+using AxonHub.Api.Management;
 using AxonHub.Api.PromptProtection;
 using AxonHub.Grains.Abstractions;
+using AxonHub.Persistence;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -36,6 +38,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     private readonly Func<ChannelCandidate, LlmRequest, DateTimeOffset, IOutboundTransformer> _factory;
     private readonly ChannelProxyExecutors? _proxyExecutors;
     private readonly ProxyConfig? _proxyOverride;
+    private readonly IChannelRefreshSource? _channelRefresh;
 
     private int _candidateIndex;
     private int _modelIndex;
@@ -58,7 +61,8 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
         IChannelMetricsRecorder metrics,
         Func<ChannelCandidate, LlmRequest, DateTimeOffset, IOutboundTransformer>? factory = null,
         ChannelProxyExecutors? proxyExecutors = null,
-        ProxyConfig? proxyOverride = null)
+        ProxyConfig? proxyOverride = null,
+        IChannelRefreshSource? channelRefresh = null)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -71,6 +75,7 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             ChannelOutboundFactory.Create(candidate, request, now));
         _proxyExecutors = proxyExecutors;
         _proxyOverride = proxyOverride;
+        _channelRefresh = channelRefresh;
     }
 
     /// <summary>The channel serving the current attempt, or 0 before the first transform.</summary>
@@ -913,10 +918,162 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     private static bool ChannelRetriesOn429(ChannelCandidate candidate)
         => candidate.RetrySettings.RetryableStatusCodes.Contains(429);
 
+    /// <summary>
+    /// retry_channel_refresh.go's errChannelUnavailableForRetry: the pipeline
+    /// stops retrying this candidate and switches to the next one, or ends the
+    /// request when there is none.
+    /// </summary>
+    public static readonly Exception ChannelUnavailableForRetry = new PipelineSentinelException(
+        "current channel is no longer available for retry");
+
+    /// <summary>
+    /// Port of refreshChannelBeforeRetry (retry_channel_refresh.go): re-read the
+    /// stored channel so a credential disabled mid-request is not retried, and
+    /// a channel that left service stops consuming the same-channel budget.
+    /// Transient read failures leave the pinned candidate untouched.
+    /// </summary>
+    private Exception? RefreshChannelBeforeRetry()
+    {
+        if (_channelRefresh is null
+            || CurrentCandidate is not { } candidate
+            || CurrentLlmRequest is null)
+        {
+            return null;
+        }
+
+        var lookup = _channelRefresh.GetEnabledChannel(candidate.ChannelId);
+        if (lookup.Failed)
+        {
+            // A degraded read must never cancel an otherwise legitimate retry.
+            return null;
+        }
+
+        if (lookup.Channel is not { } fresh)
+        {
+            // Deleted, disabled or unknown: the channel cannot serve anymore.
+            return ChannelUnavailableForRetry;
+        }
+
+        // A channel that authenticates without any credential has nothing to
+        // refresh. Check the pinned snapshot, not the stored row: a channel
+        // served with a credential that has since lost all of them must still
+        // end the retry.
+        if (ChannelCredentials.GetAllCredentialRefs(candidate.Credentials).Count == 0)
+        {
+            return null;
+        }
+
+        var currentRef = CurrentRetryCredentialRef(candidate);
+        if (currentRef.Length == 0)
+        {
+            return null;
+        }
+
+        List<DisabledApiKey> disabledKeys;
+        try
+        {
+            disabledKeys = ChannelWriteSerialization.ParseDisabledApiKeys(fresh.DisabledApiKeys);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // A stored document the reference's ent scan would reject is a
+            // degraded read; leave the pinned candidate untouched.
+            return null;
+        }
+
+        var enabledRefs = ChannelCredentials.GetEnabledCredentialRefs(
+            fresh.Credentials,
+            disabledKeys,
+            _timeProvider.GetUtcNow());
+        if (enabledRefs.Contains(currentRef, StringComparer.Ordinal))
+        {
+            return null;
+        }
+
+        if (enabledRefs.Count == 0)
+        {
+            // The candidate was credentialed and the channel has no usable
+            // credential left; continuing would resend a rejected credential.
+            return ChannelUnavailableForRetry;
+        }
+
+        var refreshed = candidate.Clone();
+        ApplyStoredChannel(refreshed, fresh);
+
+        IOutboundTransformer rebuilt;
+        try
+        {
+            rebuilt = _factory(refreshed, CurrentLlmRequest, _timeProvider.GetUtcNow());
+        }
+        catch (Exception)
+        {
+            // The refreshed snapshot is the only way this candidate can
+            // authenticate with an enabled credential; without a transformer
+            // the retry cannot succeed.
+            return ChannelUnavailableForRetry;
+        }
+
+        StopTransformer(_current);
+        _current = rebuilt;
+        _candidates[_candidateIndex] = refreshed;
+        return null;
+    }
+
+    /// <summary>
+    /// The credential the current attempt authenticated with. OAuth channels do
+    /// not pass through the key provider, so they carry the fixed OAuth
+    /// credential reference, matching the auto-disable bookkeeping.
+    /// </summary>
+    private string CurrentRetryCredentialRef(ChannelCandidate candidate)
+    {
+        var apiKey = CurrentApiKey ?? string.Empty;
+        if (apiKey.Length == 0 && ChannelCredentials.IsOAuth(candidate.Credentials))
+        {
+            apiKey = ChannelCredentials.OAuthCredentialRef;
+        }
+
+        return apiKey;
+    }
+
+    /// <summary>
+    /// Applies the stored channel fields to the refreshed candidate copy while
+    /// preserving the candidate's model list, score, placement and per-request
+    /// key override.
+    /// </summary>
+    private static void ApplyStoredChannel(
+        ChannelCandidate candidate,
+        ChannelDescriptor channel)
+    {
+        candidate.ChannelName = channel.Name;
+        candidate.OrderingWeight = channel.OrderingWeight;
+        candidate.UpdatedAt = channel.UpdatedAt;
+        candidate.Type = channel.Type;
+        candidate.BaseUrl = channel.BaseUrl;
+        candidate.Credentials = channel.Credentials;
+        candidate.DisabledApiKeys = channel.DisabledApiKeys;
+        candidate.RetrySettings = ChannelRetrySettings.Parse(channel.Settings);
+        candidate.OverrideSettings = ChannelOverrideSettings.Parse(channel.Settings);
+        candidate.RateLimitSettings = ChannelRateLimitSettings.Parse(channel.Settings);
+        candidate.PassThroughSettings = ChannelPassThroughSettings.Parse(channel.Settings);
+        candidate.DefaultTestModel = ModelCandidateSelector.ResolveDefaultTestModel(channel);
+        candidate.Settings = channel.Settings;
+        candidate.Endpoints = channel.Endpoints;
+        candidate.Tags = channel.Tags;
+        candidate.Policies = channel.Policies;
+    }
+
     /// <summary>Port of PrepareForRetry: count the retry attempt on the same channel.</summary>
     public Exception? TryPrepareForRetry(CancellationToken cancellationToken)
     {
         _ = cancellationToken;
+
+        // retry_channel_refresh.go: re-read the stored channel before spending
+        // any of the same-channel budget.
+        var refreshError = RefreshChannelBeforeRetry();
+        if (refreshError is not null)
+        {
+            return refreshError;
+        }
 
         // outbound.go:1095-1097 — a same-channel retry must also wait for the
         // previous attempt's accounting tail (C293).

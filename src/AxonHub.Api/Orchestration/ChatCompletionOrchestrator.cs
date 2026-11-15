@@ -17,6 +17,7 @@ using AxonHub.Llm.Streams;
 using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.Shared;
+using AxonHub.Persistence;
 using Microsoft.Extensions.Logging;
 using Orleans;
 using IModelSettingsProvider = AxonHub.Api.Models.IModelSettingsProvider;
@@ -71,6 +72,7 @@ public sealed class ChatCompletionOrchestrator
     private readonly ILoggerFactory? _loggerFactory;
     private readonly ServerLifetime? _serverLifetime;
     private readonly ModelCircuitBreaker? _modelCircuitBreaker;
+    private readonly IChannelRefreshSource? _channelRefreshSource;
 
     public ChatCompletionOrchestrator(
         IGrainFactory grainFactory,
@@ -105,7 +107,8 @@ public sealed class ChatCompletionOrchestrator
         ResponsesSessionStore? responsesSessions = null,
         ILoggerFactory? loggerFactory = null,
         ServerLifetime? serverLifetime = null,
-        ModelCircuitBreaker? modelCircuitBreaker = null)
+        ModelCircuitBreaker? modelCircuitBreaker = null,
+        IChannelRefreshSource? channelRefreshSource = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inbound);
@@ -218,6 +221,11 @@ public sealed class ChatCompletionOrchestrator
         // constructions leave it null, so scoring and tracking stay inactive
         // like the reference's nil ModelCircuitBreaker.
         _modelCircuitBreaker = modelCircuitBreaker;
+
+        // Production passes the stored-channel refresh seam so a credential
+        // disabled mid-request is re-read before a same-channel retry; direct
+        // constructions leave it null and keep the pinned candidate as before.
+        _channelRefreshSource = channelRefreshSource;
 
         // Production passes biz.PromptService (through the orchestrator's
         // PromptProvider state); the tester mounts an empty stub instead, which
@@ -848,7 +856,8 @@ public sealed class ChatCompletionOrchestrator
                 _apiKeySelection,
                 _copilotTokens),
             _channelProxyExecutors,
-            proxyOverride);
+            proxyOverride,
+            _channelRefreshSource);
 
         // orchestrator.go:232-233: PersistenceState.ResponsesContinuation is
         // read by the outbound transformer and by the continuation middlewares.

@@ -28,24 +28,27 @@ public sealed class PostgresEnabledChannelSource(IAxonHubDbContextFactory dbFact
         var store = new ChannelStore(context);
         var channels = await store.ListEnabledAsync(cancellationToken).ConfigureAwait(false);
 
-        return [.. channels.Select(channel => new ChannelDescriptor
-        {
-            Id = channel.Id,
-            Name = channel.Name,
-            OrderingWeight = channel.OrderingWeight,
-            // Npgsql reads timestamptz as a UTC DateTime.
-            CreatedAt = channel.CreatedAt,
-            UpdatedAt = channel.UpdatedAt,
-            Type = channel.Type,
-            BaseUrl = channel.BaseUrl,
-            Credentials = channel.Credentials,
-            DisabledApiKeys = channel.DisabledApiKeys,
-            SupportedModels = channel.SupportedModels,
-            Settings = channel.Settings,
-            Endpoints = channel.Endpoints,
-            DefaultTestModel = channel.DefaultTestModel,
-            Tags = channel.Tags,
-            Policies = channel.Policies,
-        })];
+        return [.. channels.Select(ToDescriptor)];
     }
+
+    /// <summary>Projects a stored channel row into the candidate descriptor.</summary>
+    internal static ChannelDescriptor ToDescriptor(ChannelRecord channel) => new()
+    {
+        Id = channel.Id,
+        Name = channel.Name,
+        OrderingWeight = channel.OrderingWeight,
+        // Npgsql reads timestamptz as a UTC DateTime.
+        CreatedAt = channel.CreatedAt,
+        UpdatedAt = channel.UpdatedAt,
+        Type = channel.Type,
+        BaseUrl = channel.BaseUrl,
+        Credentials = channel.Credentials,
+        DisabledApiKeys = channel.DisabledApiKeys,
+        SupportedModels = channel.SupportedModels,
+        Settings = channel.Settings,
+        Endpoints = channel.Endpoints,
+        DefaultTestModel = channel.DefaultTestModel,
+        Tags = channel.Tags,
+        Policies = channel.Policies,
+    };
 }
