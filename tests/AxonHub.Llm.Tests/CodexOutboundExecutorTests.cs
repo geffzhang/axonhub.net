@@ -5,6 +5,7 @@ using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.OAuth;
 using AxonHub.Llm.Pipeline;
+using AxonHub.Llm.Transformer;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Llm.Transformer.OpenAI.Codex;
 using AxonHub.Llm.Transformer.OpenAI.Responses;
@@ -229,169 +230,98 @@ public sealed class CodexOutboundExecutorTests
     }
 
     [Fact]
-    public void TestCodexOutbound_ImageGenerationRequestUsesResponsesImageTool()
+    public void TestCodexOutbound_RejectsImageRequestsWithoutNativeEndpoint()
+    {
+        var outbound = CodexTestSupport.NewTestCodexOutbound();
+        var ex = Assert.Throws<TransformerException>(() => outbound.TransformRequest(new LlmRequest
+        {
+            Model = "gpt-image-2",
+            RequestType = RequestTypes.Image,
+            ApiFormat = ApiFormats.OpenAIImageGeneration,
+            Image = new ImageRequest { Prompt = "draw a tree" },
+        }));
+
+        Assert.Contains(
+            "native Images endpoint",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TestCodexImageOutbound_BuildsNativeGenerationRequest()
     {
         var accessToken = CodexTestSupport.TestAccessTokenWithAccountId();
-        var outbound = CodexTestSupport.NewTestCodexOutbound();
+        var outbound = new CodexImageOutboundTransformer(new CodexImageParams
+        {
+            TokenProvider = new StaticCodexTokenGetter
+            {
+                Creds = new OAuthCredentials { AccessToken = accessToken },
+            },
+            BaseUrl = "https://relay.example/v1",
+        });
 
         var request = outbound.TransformRequest(new LlmRequest
         {
             Model = "gpt-image-2",
             RequestType = RequestTypes.Image,
             ApiFormat = ApiFormats.OpenAIImageGeneration,
-            RawRequest = new HttpRequestData
-            {
-                Headers = new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            },
-            Image = new ImageRequest
-            {
-                Prompt = "draw a circuit board city",
-                Size = "1536x864",
-                Quality = "high",
-                OutputFormat = "webp",
-                PartialImages = 2,
-            },
+            Image = new ImageRequest { Prompt = "draw a tree" },
         });
 
-        // RequestType and ApiFormat are carried as plain strings (nullable in
-        // the port), so both sides compare as strings.
-        Assert.Equal(RequestTypes.Image, request.RequestType);
-        Assert.Equal(ApiFormats.OpenAIResponse, request.ApiFormat);
-        Assert.Equal("text/event-stream", HttpClientUtils.HeaderGet(request.Headers, "Accept"));
-        Assert.Equal(accessToken, request.Auth!.ApiKey);
-
-        var payload = DecodePayload(request);
-        Assert.Equal(CodexConstants.DefaultImageMainModel, payload.Model);
-        Assert.True(payload.Stream);
-        Assert.Single(payload.Tools!);
-
-        var tool = payload.Tools![0];
-        Assert.Equal("image_generation", tool.Type);
-        Assert.Equal("gpt-image-2", tool.Model);
-        Assert.Equal("generate", tool.Action);
-        Assert.Equal("1536x864", tool.Size);
-        Assert.Equal("high", tool.Quality);
-        Assert.Equal("webp", tool.OutputFormat);
-        Assert.Equal(2L, tool.PartialImages);
-        Assert.Equal("required", payload.ToolChoice!.Mode);
-
-        Assert.Single(payload.Input!.Items!);
-        var content = payload.Input.Items![0].Content!;
-        Assert.Single(content.Items!);
-        Assert.Equal("input_text", content.Items![0].Type);
-        Assert.Equal("draw a circuit board city", content.Items[0].Text);
-        Assert.Equal(ResponsesImageConvert.DefaultImageSystemInstruction, payload.Instructions);
-    }
-
-    [Theory]
-    [InlineData("unset", "", "gpt-6-luna")]
-    [InlineData("blank", "  ", "gpt-6-luna")]
-    [InlineData("custom", " gpt-6-sol ", "gpt-6-sol")]
-    [InlineData("image model", "gpt-image-2", "gpt-6-luna")]
-    [InlineData("image model case", " GPT-IMAGE-1 ", "gpt-6-luna")]
-    [InlineData("fast suffix preserved", "gpt-6-sol-fast", "gpt-6-sol-fast")]
-    public void TestCodexOutbound_ImageMainModel(string name, string configured, string want)
-    {
-        _ = name;
-
-        var outbound = new CodexOutboundTransformer(new CodexOutboundParams
-        {
-            ImageMainModel = configured,
-            TokenProvider = new StaticCodexTokenGetter
-            {
-                Creds = new OAuthCredentials { AccessToken = "test-token" },
-            },
-        });
-
-        foreach (var format in Formats)
-        {
-            var request = outbound.TransformRequest(new LlmRequest
-            {
-                Model = "gpt-image-2",
-                RequestType = RequestTypes.Image,
-                ApiFormat = format,
-                Image = new ImageRequest
-                {
-                    Prompt = "draw a tree",
-                    Images = [Encoding.UTF8.GetBytes("image")],
-                },
-            });
-
-            var root = CodexJson.Root(request.Body!);
-            Assert.Equal(want, CodexJson.PathString(root, "model"));
-            Assert.Equal("gpt-image-2", CodexJson.PathString(root, "tools", 0, "model"));
-            Assert.Equal(string.Empty, CodexJson.PathString(root, "service_tier"));
-        }
-
-        // The setting only changes Images-to-Responses conversion.
-        var chat = outbound.TransformRequest(new LlmRequest
-        {
-            Model = "gpt-6-astra",
-            RequestType = RequestTypes.Chat,
-            ApiFormat = ApiFormats.OpenAIResponse,
-            Messages =
-            [
-                new Message { Role = "user", Content = MessageContent.FromText("hello") },
-            ],
-        });
-
-        Assert.Equal("gpt-6-astra", CodexJson.PathString(CodexJson.Root(chat.Body!), "model"));
+        Assert.Equal("https://relay.example/v1/images/generations", request.Url);
+        Assert.Equal("application/json", HttpClientUtils.HeaderGet(request.Headers, "Content-Type"));
+        Assert.Equal(AuthTypes.Bearer, request.Auth!.Type);
+        Assert.Equal(accessToken, request.Auth.ApiKey);
+        Assert.Equal(CodexConstants.AxonHubOriginator, HttpClientUtils.HeaderGet(request.Headers, "Originator"));
+        Assert.NotEmpty(HttpClientUtils.HeaderGet(request.Headers, CodexHeaders.SessionHeaderHyphen));
+        Assert.Equal(
+            CodexTestSupport.TestChatAccountId,
+            HttpClientUtils.HeaderGet(request.Headers, "Chatgpt-Account-Id"));
+        var body = CodexJson.Root(request.Body!);
+        Assert.Equal("gpt-image-2", CodexJson.PathString(body, "model"));
+        Assert.Equal("draw a tree", CodexJson.PathString(body, "prompt"));
     }
 
     [Fact]
-    public void TestCodexOutbound_ImageEditRequestUsesResponsesImageTool()
+    public void TestCodexImageOutbound_BuildsJsonEditWithFileReferences()
     {
-        var outbound = CodexTestSupport.NewTestCodexOutbound();
+        var outbound = new CodexImageOutboundTransformer(new CodexImageParams
+        {
+            TokenProvider = new StaticCodexTokenGetter
+            {
+                Creds = new OAuthCredentials
+                {
+                    AccessToken = CodexTestSupport.TestAccessTokenWithAccountId(),
+                },
+            },
+            BaseUrl = "https://relay.example/v1",
+        });
 
         var request = outbound.TransformRequest(new LlmRequest
         {
             Model = "gpt-image-2",
             RequestType = RequestTypes.Image,
             ApiFormat = ApiFormats.OpenAIImageEdit,
-            RawRequest = new HttpRequestData
-            {
-                Headers = new Dictionary<string, List<string>>(StringComparer.Ordinal),
-                JsonBody = Encoding.UTF8.GetBytes(
-                    """
-                    {
-                    	"image": "data:image/jpeg;base64,anBlZy1kYXRh",
-                    	"mask": "data:image/png;base64,bWFzay1kYXRh"
-                    }
-                    """),
-            },
             Image = new ImageRequest
             {
-                Prompt = "replace the background with matte white",
-                Size = "1024x1024",
-                InputFidelity = "high",
-                OutputFormat = "png",
-                Images = [Encoding.UTF8.GetBytes("jpeg-data")],
-                Mask = Encoding.UTF8.GetBytes("mask-data"),
+                Prompt = "replace the background",
+                ImageReferences =
+                [
+                    new ImageReference { FileId = "file-1" },
+                    new ImageReference { ImageUrl = "https://example.org/frame.png" },
+                ],
             },
         });
 
-        Assert.Equal(RequestTypes.Image, request.RequestType);
-        Assert.Equal(ApiFormats.OpenAIResponse, request.ApiFormat);
-
-        var payload = DecodePayload(request);
-        Assert.Equal(CodexConstants.DefaultImageMainModel, payload.Model);
-        Assert.Single(payload.Tools!);
-
-        var tool = payload.Tools![0];
-        Assert.Equal("gpt-image-2", tool.Model);
-        Assert.Equal("edit", tool.Action);
-        Assert.Equal("high", tool.InputFidelity);
+        Assert.Equal("https://relay.example/v1/images/edits", request.Url);
+        Assert.Equal("application/json", HttpClientUtils.HeaderGet(request.Headers, "Content-Type"));
+        var body = CodexJson.Root(request.Body!);
+        Assert.Equal("replace the background", CodexJson.PathString(body, "prompt"));
+        Assert.Equal("file-1", CodexJson.PathString(body, "images", 0, "file_id"));
         Assert.Equal(
-            "data:image/png;base64,bWFzay1kYXRh",
-            tool.InputImageMask!["image_url"].GetString());
-
-        Assert.Single(payload.Input!.Items!);
-        var content = payload.Input.Items![0].Content!;
-        Assert.Equal(2, content.Items!.Count);
-        Assert.Equal("input_text", content.Items[0].Type);
-        Assert.Equal("input_image", content.Items[1].Type);
-        Assert.Equal("data:image/jpeg;base64,anBlZy1kYXRh", content.Items[1].ImageUrl);
-        Assert.Equal(ResponsesImageConvert.DefaultImageSystemInstruction, payload.Instructions);
+            "https://example.org/frame.png",
+            CodexJson.PathString(body, "images", 1, "image_url"));
+        Assert.False(body.TryGetProperty("mask", out _));
     }
 
     [Fact]

@@ -282,16 +282,22 @@ public sealed class ImageInboundTransformer : IInboundTransformer
         request.JsonBody = BuildMultipartJsonBody(formData.Fields, formData.Images, formData.Mask);
 
         var images = new List<byte[]>(formData.Images.Count);
+        var references = new List<ImageReference>(formData.Images.Count);
         foreach (var img in formData.Images)
         {
             images.Add(img.Data);
+            references.Add(new ImageReference { ImageUrl = MultipartFileToDataUrl(img) });
         }
 
         var imageReq = new ImageRequest
         {
             Prompt = prompt,
             Images = images,
+            ImageReferences = references,
             Mask = formData.Mask?.Data,
+            MaskReference = formData.Mask is { } maskFile
+                ? new ImageReference { ImageUrl = MultipartFileToDataUrl(maskFile) }
+                : null,
             N = ParseOptionalInt64(formData.Fields, "n"),
             Size = NullIfEmpty(FieldTrimmed(formData.Fields, "size")),
             Quality = NullIfEmpty(FieldTrimmed(formData.Fields, "quality")),
@@ -344,9 +350,9 @@ public sealed class ImageInboundTransformer : IInboundTransformer
             model = "dall-e-2";
         }
 
-        var images = ParseEditImagesField(editReq.Image, editReq.Images);
+        var (images, references) = ParseEditImageInputs(editReq.Image, editReq.Images);
 
-        if (images is null || images.Count == 0)
+        if (images.Count == 0 && references.Count == 0)
         {
             throw TransformerErrors.InvalidRequest("at least one image is required for edits");
         }
@@ -357,17 +363,33 @@ public sealed class ImageInboundTransformer : IInboundTransformer
         }
 
         byte[]? mask = null;
-        var maskDataUrl = (editReq.Mask ?? string.Empty).Trim();
-        if (maskDataUrl.Length > 0)
+        ImageReference? maskReference = null;
+        if (editReq.Mask.ValueKind != JsonValueKind.Undefined
+            && editReq.Mask.ValueKind != JsonValueKind.Null)
         {
-            mask = DecodeDataUrlToBytes(maskDataUrl);
+            var legacyMask = editReq.Mask.ValueKind == JsonValueKind.String
+                ? editReq.Mask.GetString() ?? string.Empty
+                : string.Empty;
+            if (editReq.Mask.ValueKind == JsonValueKind.String
+                && legacyMask.Trim().Length == 0)
+            {
+                // Empty legacy mask strings are omitted.
+            }
+            else
+            {
+                var (reference, data) = ParseEditImageReference(editReq.Mask);
+                maskReference = reference;
+                mask = data;
+            }
         }
 
         var imageReq = new ImageRequest
         {
             Prompt = prompt,
             Images = images,
+            ImageReferences = references,
             Mask = mask,
+            MaskReference = maskReference,
             N = editReq.N,
             Size = NullIfEmpty((editReq.Size ?? string.Empty).Trim()),
             Quality = NullIfEmpty((editReq.Quality ?? string.Empty).Trim()),
@@ -769,6 +791,156 @@ public sealed class ImageInboundTransformer : IInboundTransformer
         }
 
         return images;
+    }
+
+    /// <summary>
+    /// Port of parseEditImageInputs: data URLs in the legacy "image" field win;
+    /// otherwise "images" entries may be data URLs, HTTP URLs or file IDs.
+    /// </summary>
+    private static (List<byte[]> Images, List<ImageReference> References) ParseEditImageInputs(
+        JsonElement rawImage,
+        JsonElement rawImages)
+    {
+        var legacy = ParseGenerationImageField(rawImage);
+        if (legacy is { Count: > 0 })
+        {
+            return (legacy, []);
+        }
+
+        if (rawImages.ValueKind == JsonValueKind.Undefined)
+        {
+            return ([], []);
+        }
+
+        List<JsonElement> entries;
+        if (rawImages.ValueKind == JsonValueKind.Array)
+        {
+            entries = rawImages.EnumerateArray().ToList();
+        }
+        else if (rawImages.ValueKind == JsonValueKind.Null)
+        {
+            entries = [];
+        }
+        else
+        {
+            throw TransformerErrors.InvalidRequest("images must be an array");
+        }
+
+        if (entries.Count > MaxImageCount)
+        {
+            throw TransformerErrors.InvalidRequest("too many images");
+        }
+
+        var images = new List<byte[]>(entries.Count);
+        var references = new List<ImageReference>(entries.Count);
+        for (var i = 0; i < entries.Count; i++)
+        {
+            try
+            {
+                var (reference, data) = ParseEditImageReference(entries[i]);
+                references.Add(reference);
+                if (data is not null)
+                {
+                    images.Add(data);
+                }
+            }
+            catch (TransformerException ex)
+            {
+                throw new TransformerException(
+                    TransformerErrorKind.InvalidRequest,
+                    string.Create(CultureInfo.InvariantCulture, $"images[{i}]: {ex.Message}"));
+            }
+        }
+
+        return (images, references);
+    }
+
+    /// <summary>
+    /// Port of parseEditImageReference. Returns the reference form and decoded
+    /// bytes when the reference is a data URL.
+    /// </summary>
+    private static (ImageReference Reference, byte[]? Data) ParseEditImageReference(
+        JsonElement raw)
+    {
+        if (raw.ValueKind == JsonValueKind.String)
+        {
+            var dataUrl = raw.GetString()!.Trim();
+            return (new ImageReference { ImageUrl = dataUrl }, DecodeDataUrlToBytes(dataUrl));
+        }
+
+        if (raw.ValueKind != JsonValueKind.Object)
+        {
+            throw TransformerErrors.InvalidRequest(
+                "invalid image reference: json: cannot unmarshal value");
+        }
+
+        string? imageUrl = null;
+        string? fileId = null;
+        foreach (var property in raw.EnumerateObject())
+        {
+            switch (property.Name)
+            {
+                case "image_url":
+                    if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                    {
+                        throw TransformerErrors.InvalidRequest(
+                            "invalid image reference: json: cannot unmarshal value into Go "
+                            + "struct field ImageReference.image_url of type string");
+                    }
+
+                    imageUrl = property.Value.ValueKind == JsonValueKind.String
+                        ? property.Value.GetString()
+                        : string.Empty;
+                    break;
+                case "file_id":
+                    if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                    {
+                        throw TransformerErrors.InvalidRequest(
+                            "invalid image reference: json: cannot unmarshal value into Go "
+                            + "struct field ImageReference.file_id of type string");
+                    }
+
+                    fileId = property.Value.ValueKind == JsonValueKind.String
+                        ? property.Value.GetString()
+                        : string.Empty;
+                    break;
+                default:
+                    throw TransformerErrors.InvalidRequest(
+                        "invalid image reference: json: unknown field "
+                        + GoCast.GoQuote(property.Name));
+            }
+        }
+
+        imageUrl = (imageUrl ?? string.Empty).Trim();
+        fileId = (fileId ?? string.Empty).Trim();
+        if ((imageUrl.Length == 0) == (fileId.Length == 0))
+        {
+            throw TransformerErrors.InvalidRequest(
+                "image reference requires exactly one image_url or file_id");
+        }
+
+        var reference = fileId.Length > 0
+            ? new ImageReference { FileId = fileId }
+            : new ImageReference { ImageUrl = imageUrl };
+        if (fileId.Length > 0)
+        {
+            return (reference, null);
+        }
+
+        if (Xurl.IsDataUrl(imageUrl))
+        {
+            return (reference, DecodeDataUrlToBytes(imageUrl));
+        }
+
+        if (!Uri.TryCreate(imageUrl, UriKind.Absolute, out var uri)
+            || uri.Host.Length == 0
+            || (uri.Scheme != "http" && uri.Scheme != "https"))
+        {
+            throw TransformerErrors.InvalidRequest(
+                "image_url must be an HTTP URL or image data URL");
+        }
+
+        return (reference, null);
     }
 
     /// <summary>

@@ -24,9 +24,19 @@ public sealed class ImageRequest
     [JsonIgnore]
     public List<byte[]>? Images { get; set; }
 
+    /// <summary>Reference forms for edit images (data URL, HTTP URL or file ID).</summary>
+    [JsonPropertyName("images")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ImageReference>? ImageReferences { get; set; }
+
     /// <summary>Optional mask image data for edit requests; never serialized.</summary>
     [JsonIgnore]
     public byte[]? Mask { get; set; }
+
+    /// <summary>Reference form for the edit mask.</summary>
+    [JsonPropertyName("mask")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImageReference? MaskReference { get; set; }
 
     /// <summary>The number of images to generate.</summary>
     [JsonPropertyName("n")]
@@ -110,6 +120,18 @@ public sealed class ImageRequest
     [JsonPropertyName("prompt_optimizer")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? PromptOptimizer { get; set; }
+}
+
+/// <summary>Port of llm.ImageReference.</summary>
+public sealed class ImageReference
+{
+    [JsonPropertyName("image_url")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ImageUrl { get; set; }
+
+    [JsonPropertyName("file_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FileId { get; set; }
 }
 
 /// <summary>

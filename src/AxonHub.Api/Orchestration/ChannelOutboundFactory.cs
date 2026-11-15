@@ -454,14 +454,33 @@ public static class ChannelOutboundFactory
 
         return candidate.Type switch
         {
-            // channel_llm.go:454/465/497: codex responses, alpha search and the
-            // image tool all run through the codex outbound. Fenno shares the
-            // responses and image branches but not alpha search.
+            // channel_llm.go:454-505: codex responses and alpha search use the
+            // codex outbound; native Images endpoints use the dedicated image
+            // outbound. Fenno shares the responses and image branches but not
+            // alpha search.
+            CodexChannelType when apiFormat is ApiFormats.OpenAIImageGeneration
+                or ApiFormats.OpenAIImageEdit
+                => CreateCodexImageOutbound(
+                    candidate,
+                    request,
+                    provider,
+                    channelExecutor,
+                    grainFactory,
+                    endpointBaseUrl,
+                    endpointPath),
+            FennoChannelType when apiFormat is ApiFormats.OpenAIImageGeneration
+                or ApiFormats.OpenAIImageEdit
+                => CreateCodexImageOutbound(
+                    candidate,
+                    request,
+                    provider,
+                    channelExecutor,
+                    grainFactory,
+                    endpointBaseUrl,
+                    endpointPath),
             CodexChannelType when apiFormat is ApiFormats.OpenAIResponse
                 or ApiFormats.OpenAIResponseWebSocket
                 or ApiFormats.OpenAIAlphaSearch
-                or ApiFormats.OpenAIImageGeneration
-                or ApiFormats.OpenAIImageEdit
                 => CreateCodexOutbound(
                     candidate,
                     request,
@@ -472,8 +491,6 @@ public static class ChannelOutboundFactory
                     selectedEndpoint),
             FennoChannelType when apiFormat is ApiFormats.OpenAIResponse
                 or ApiFormats.OpenAIResponseWebSocket
-                or ApiFormats.OpenAIImageGeneration
-                or ApiFormats.OpenAIImageEdit
                 => CreateCodexOutbound(
                     candidate,
                     request,
@@ -1387,14 +1404,14 @@ public static class ChannelOutboundFactory
                 if (candidate.Type is CodexChannelType or FennoChannelType
                     && endpoint.ApiFormat is ApiFormats.OpenAIImageGeneration or ApiFormats.OpenAIImageEdit)
                 {
-                    return CreateCodexOutbound(
+                    return CreateCodexImageOutbound(
                         candidate,
                         request,
                         apiKeyProvider,
                         channelExecutor,
                         grainFactory,
-                        endpoint.ApiFormat,
-                        endpoint with { BaseUrl = baseUrl });
+                        baseUrl,
+                        path);
                 }
 
                 return new OpenAiOutboundTransformer(new OpenAiOutboundConfig
@@ -2036,6 +2053,35 @@ public static class ChannelOutboundFactory
         => OAuthCredentialsJson.ResolveChannelCredentials(candidate.Credentials);
 
     /// <summary>Port of <c>buildCodexOutbound</c> (channel_llm.go:331-425).</summary>
+    /// <summary>
+    /// channel_llm.go:487/502: native Images endpoints reuse the channel's Codex
+    /// token source but send OpenAI Images requests, not Responses image tools.
+    /// </summary>
+    private static CodexImageOutboundTransformer CreateCodexImageOutbound(
+        ChannelCandidate candidate,
+        LlmRequest request,
+        ChannelApiKeyProvider apiKeyProvider,
+        IExecutor? channelExecutor,
+        IGrainFactory? grainFactory,
+        string baseUrl,
+        string endpointPath)
+    {
+        var codex = CreateCodexOutbound(
+            candidate,
+            request,
+            apiKeyProvider,
+            channelExecutor,
+            grainFactory,
+            ApiFormats.OpenAIResponse,
+            null);
+        return new CodexImageOutboundTransformer(new CodexImageParams
+        {
+            TokenProvider = codex.TokenProvider,
+            BaseUrl = baseUrl,
+            EndpointPath = endpointPath,
+        });
+    }
+
     private static CodexOutboundTransformer CreateCodexOutbound(
         ChannelCandidate candidate,
         LlmRequest request,
@@ -2086,7 +2132,6 @@ public static class ChannelOutboundFactory
             Transport = transport,
             AlphaSearchPath = alphaSearchPath,
             EndpointPath = responsesPath,
-            ImageMainModel = candidate.DefaultTestModel,
             // Port-only: keeps the WebSocket pool scoped to the owning channel
             // like the reference's per-channel outbound cache (C072).
             ChannelId = candidate.ChannelId,

@@ -21,6 +21,9 @@ public sealed class OpenAiOutboundConfig
 
     public string EndpointPath { get; set; } = string.Empty;
 
+    /// <summary>Use an application/json body for /images/edits (Codex images).</summary>
+    public bool ImageEditJson { get; set; }
+
     public IApiKeyProvider? ApiKeyProvider { get; set; }
 
     /// <summary>

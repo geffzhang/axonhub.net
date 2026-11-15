@@ -193,7 +193,7 @@ public sealed class ImageEditJsonRequest
     public System.Text.Json.JsonElement Images { get; set; }
 
     [JsonPropertyName("mask")]
-    public string? Mask { get; set; }
+    public System.Text.Json.JsonElement Mask { get; set; }
 
     [JsonPropertyName("n")]
     public long? N { get; set; }

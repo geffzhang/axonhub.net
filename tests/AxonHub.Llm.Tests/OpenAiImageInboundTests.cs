@@ -802,7 +802,7 @@ public sealed class OpenAiImageInboundTests
     }
 
     [Fact]
-    public void ImageInboundTransformer_TransformRequest_Edit_JSON_RejectsRemoteImagesURL()
+    public void ImageInboundTransformer_TransformRequest_Edit_JSON_AcceptsRemoteImagesURL()
     {
         var inbound = ImageInboundTransformer.Edit();
 
@@ -821,12 +821,12 @@ public sealed class OpenAiImageInboundTests
                 },
             }));
 
-        var ex = Assert.Throws<TransformerException>(() => inbound.TransformRequest(httpReq));
-        Assert.Equal(TransformerErrorKind.InvalidRequest, ex.Kind);
-        Assert.Contains(
-            "images[0]: invalid request: image must be a data URL",
-            ex.Message,
-            StringComparison.Ordinal);
+        var request = inbound.TransformRequest(httpReq);
+
+        var reference = Assert.Single(request.Image!.ImageReferences!);
+        Assert.Equal("https://example.com/cat.png", reference.ImageUrl);
+        Assert.Null(reference.FileId);
+        Assert.Empty(request.Image.Images ?? []);
     }
 
     [Fact]
@@ -852,7 +852,7 @@ public sealed class OpenAiImageInboundTests
         var ex = Assert.Throws<TransformerException>(() => inbound.TransformRequest(httpReq));
         Assert.Equal(TransformerErrorKind.InvalidRequest, ex.Kind);
         Assert.Contains(
-            "images[0] must be a data URL or an object with image_url",
+            "images[0]: invalid request: invalid image reference: json: unknown field \"url\"",
             ex.Message,
             StringComparison.Ordinal);
     }

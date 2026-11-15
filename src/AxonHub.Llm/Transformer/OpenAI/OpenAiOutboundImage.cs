@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Transformer.Shared;
@@ -37,7 +38,20 @@ public sealed partial class OpenAiOutboundTransformer
                 fmtType = ApiFormats.OpenAIImageVariation;
                 break;
             case ApiFormats.OpenAIImageEdit:
-                rawReq = BuildImageEditRequest(chatReq, apiKey);
+                if (_config.ImageEditJson
+                    || (chatReq.Image?.ImageReferences is { } refs
+                        && chatReq.Image.Images is { } bytes
+                        && refs.Count > bytes.Count)
+                    || (chatReq.Image?.MaskReference is not null
+                        && chatReq.Image.Mask is not { Length: > 0 }))
+                {
+                    rawReq = BuildImageEditJsonRequest(chatReq, apiKey);
+                }
+                else
+                {
+                    rawReq = BuildImageEditRequest(chatReq, apiKey);
+                }
+
                 fmtType = ApiFormats.OpenAIImageEdit;
                 break;
             default:
@@ -166,6 +180,84 @@ public sealed partial class OpenAiOutboundTransformer
             Url = ImageUrl("/images/generations"),
             Headers = headers,
             Body = body,
+            Auth = new AuthConfig
+            {
+                Type = AuthTypes.Bearer,
+                ApiKey = apiKey,
+            },
+        };
+    }
+
+    /// <summary>Go: <c>buildImageEditJSONRequest</c> (application/json image edit).</summary>
+    internal HttpRequestData BuildImageEditJsonRequest(LlmRequest chatReq, string apiKey)
+    {
+        var img = chatReq.Image!;
+        var references = (img.ImageReferences ?? [])
+            .Select(static reference => new ImageReference
+            {
+                ImageUrl = reference.ImageUrl,
+                FileId = reference.FileId,
+            })
+            .ToList();
+        if (references.Count == 0)
+        {
+            foreach (var data in img.Images ?? [])
+            {
+                references.Add(new ImageReference
+                {
+                    ImageUrl = EncodeImageBytesToDataUrl(data),
+                });
+            }
+        }
+
+        if (references.Count == 0)
+        {
+            throw TransformerErrors.InvalidRequest(
+                "at least one image is required for editing");
+        }
+
+        var maskReference = img.MaskReference;
+        if (maskReference is null && img.Mask is { Length: > 0 } mask)
+        {
+            maskReference = new ImageReference
+            {
+                ImageUrl = EncodeImageBytesToDataUrl(mask),
+            };
+        }
+
+        if (img.PartialImages is not null
+            || !string.IsNullOrEmpty(img.ResponseFormat)
+            || !string.IsNullOrEmpty(img.Style))
+        {
+            throw TransformerErrors.InvalidRequest(
+                "partial_images, response_format and style are unsupported for JSON "
+                + "image edits");
+        }
+
+        var body = JsonSerializer.SerializeToNode(img, LlmJson.Options) as JsonObject
+            ?? new JsonObject();
+        body["model"] = chatReq.Model;
+        body["images"] = JsonSerializer.SerializeToNode(references, LlmJson.Options);
+        if (maskReference is not null)
+        {
+            body["mask"] = JsonSerializer.SerializeToNode(maskReference, LlmJson.Options);
+        }
+        else
+        {
+            body.Remove("mask");
+        }
+
+        var headers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        HttpClientUtils.HeaderSet(headers, "Content-Type", "application/json");
+        HttpClientUtils.HeaderSet(headers, "Accept", "application/json");
+
+        return new HttpRequestData
+        {
+            Method = "POST",
+            Url = ImageUrl("/images/edits"),
+            Headers = headers,
+            ContentType = "application/json",
+            Body = GoJson.Marshal(body),
             Auth = new AuthConfig
             {
                 Type = AuthTypes.Bearer,

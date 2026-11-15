@@ -2275,6 +2275,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §273（2026-11-15）Codex 出站 User-Agent 归属与客户端指纹头清理（live #2635/#2638）。C329 登记并转 resolved：Codex 出站 transformer 此前无条件复制入站客户端 UA，使通道/全局 User-Agent 透传开关失效。参照改为 transformer 拥有 UA 默认值 `codex_cli_rs/0.159.0`（与 Version 同步），开关开启时由 orchestrator 覆盖；Responses 与 alpha search 两路一致。同时从入站请求删除 `Http-Referer`、`X-Title`、`X-Platform` 与 `X-Zcode-*`、`X-Os-*` 前缀，避免后续 inbound-header merge 泄漏客户端指纹；全局 blockedHeaders 不变。新增 2 例并更新既有 UA 期望；Codex 定向 121/121，UA/PassThrough 定向 222/222，Llm 全量 3445/3445。未跑 Api 全量。台账 329 条（189 accepted / 140 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§274（2026-11-15）Codex 原生 Images 端点（live #2651）。C330 登记并转 resolved：Codex 通道的 Images 请求不再转换为 Responses `image_generation` 工具，而是由 `CodexImageOutboundTransformer` 走原生 OpenAI Images 端点，复用 Codex OAuth token、Originator、Session-Id 与账号头，并启用 JSON edit。`CodexOutboundTransformer` 与 `CodexExecutor` 对 image 请求返回 invalid_request；Responses outbound 同样拒绝 image 请求。图片编辑 JSON 支持 `image`/`images` 的 data URL、HTTP URL 与 `file_id` 引用、mask 引用、`model` 嵌入与不支持的字段校验；通道工厂把 codex/fenno 的 `image_generation`/`image_edit` 端点路由到该 outbound。新增/更新 Codex、ResponsesImage、OpenAI Image 与 Api wiring 测试；Codex 116/116，Image 246/246，Api Codex/image 69/69，Llm 全量 3437/3437。未跑 Api 全量。台账 330 条（189 accepted / 141 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

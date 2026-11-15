@@ -210,9 +210,6 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             }
         }
 
-        var originalRequestType = request.RequestType;
-        var isImageRequest = originalRequestType == RequestTypes.Image;
-
         // The reference reads these from the request context inside the
         // executor; the port captures them once per transform and carries them
         // on the wire request (difference C062).
@@ -224,8 +221,8 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             case RequestTypes.Compact:
                 return TransformCompactRequest(request, sessionId, sessionScope);
             case RequestTypes.Image:
-                request = ResponsesImageConvert.BuildImageToolRequest(request);
-                break;
+                throw TransformerErrors.InvalidRequest(
+                    "native Images endpoint is required for image requests");
             case null:
             case "":
             case RequestTypes.Chat:
@@ -420,13 +417,6 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
             SessionScope = sessionScope,
         };
 
-        // Keep the image request type on the wire request so TransformResponse
-        // selects the image response conversion.
-        if (isImageRequest)
-        {
-            httpRequest.RequestType = originalRequestType!;
-        }
-
         return httpRequest;
     }
 
@@ -469,11 +459,6 @@ public sealed class ResponsesOutboundTransformer : IOutboundTransformer, IApiKey
         if (response.Request is not null && response.Request.RequestType == RequestTypes.Compact)
         {
             return TransformCompactResponse(response);
-        }
-
-        if (response.Request is not null && response.Request.RequestType == RequestTypes.Image)
-        {
-            return TransformImageResponse(response);
         }
 
         return TransformStandardResponse(response);

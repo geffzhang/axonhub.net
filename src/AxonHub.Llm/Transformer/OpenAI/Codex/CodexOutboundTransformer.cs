@@ -32,12 +32,6 @@ public sealed class CodexOutboundParams
     public long ChannelId { get; set; }
 
     /// <summary>
-    /// The resolved channel default test model used to call the image
-    /// generation tool. Empty values and image models use the fallback.
-    /// </summary>
-    public string ImageMainModel { get; set; } = string.Empty;
-
-    /// <summary>
     /// Port-only seam for <c>shared.GetSessionID(ctx)</c> (difference C062).
     /// Return null for "no session"; an empty string is a present empty
     /// session.
@@ -92,7 +86,6 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
     private readonly long _channelId;
     private readonly string _baseUrl;
     private readonly string _alphaSearchPath;
-    private readonly string _imageMainModel;
 
     /// <summary>
     /// Whether the configured upstream is the official Codex backend
@@ -132,13 +125,6 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
             alphaSearchPath = "/alpha/search";
         }
 
-        var imageMainModel = parameters.ImageMainModel.Trim();
-        if (imageMainModel.Length == 0
-            || imageMainModel.ToLowerInvariant().StartsWith("gpt-image-", StringComparison.Ordinal))
-        {
-            imageMainModel = CodexConstants.DefaultImageMainModel;
-        }
-
         var official = IsOfficialCodexBaseUrl(baseUrl);
 
         // The underlying responses outbound requires baseURL/apiKey. Only its
@@ -166,7 +152,6 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
         _transport = parameters.Transport;
         _baseUrl = baseUrl.EndsWith("##", StringComparison.Ordinal) ? baseUrl[..^2] : baseUrl;
         _alphaSearchPath = alphaSearchPath;
-        _imageMainModel = imageMainModel;
         _official = official;
         _sessionIdProvider = parameters.SessionIdProvider;
         _auditApiKey = parameters.AuditApiKey;
@@ -320,6 +305,12 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
             return TransformAlphaSearchRequest(request);
         }
 
+        if (request.RequestType == RequestTypes.Image)
+        {
+            throw TransformerErrors.InvalidRequest(
+                "Images requests require a native Images endpoint configuration");
+        }
+
         var rawSessionId = string.Empty;
         var rawOriginator = string.Empty;
         var rawTurnMetadata = string.Empty;
@@ -374,7 +365,6 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
         // Clone the request so upstream pipeline state is not mutated (Go: reqCopy := *llmReq).
         var reqCopy = request.ShallowClone();
         var originalRequestType = reqCopy.RequestType;
-        var isImageRequest = originalRequestType == RequestTypes.Image;
 
         // Codex expects a Responses API payload with some strict rules.
         // Always enable stream except for compact requests, and disable store.
@@ -386,27 +376,18 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
 
         reqCopy.TransformerMetadata ??= new Dictionary<string, JsonElement>(StringComparer.Ordinal);
 
-        if (isImageRequest)
+        // Ask for encrypted reasoning content so the downstream can surface
+        // reasoning blocks.
+        if (!reqCopy.TransformerMetadata.ContainsKey("include"))
         {
-            reqCopy.Model = _imageMainModel;
-            reqCopy.TransformerMetadata[ResponsesImageConvert.ImageGenerationToolModelMetadataKey] =
-                ResponsesConvertUtil.ToElement(request.Model);
+            reqCopy.TransformerMetadata["include"] =
+                ResponsesConvertUtil.ToElement(EncryptedReasoningInclude);
         }
-        else
-        {
-            // Ask for encrypted reasoning content so the downstream can surface
-            // reasoning blocks.
-            if (!reqCopy.TransformerMetadata.ContainsKey("include"))
-            {
-                reqCopy.TransformerMetadata["include"] =
-                    ResponsesConvertUtil.ToElement(EncryptedReasoningInclude);
-            }
 
-            if (string.IsNullOrEmpty(reqCopy.ReasoningSummary))
-            {
-                // Enable reasoning summary for Codex CLI requests.
-                reqCopy.ReasoningSummary = "auto";
-            }
+        if (string.IsNullOrEmpty(reqCopy.ReasoningSummary))
+        {
+            // Enable reasoning summary for Codex CLI requests.
+            reqCopy.ReasoningSummary = "auto";
         }
 
         // Codex Responses rejects token limit fields, so strip them out.
@@ -431,14 +412,6 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
         var httpRequest = _responsesOutbound.TransformRequest(reqCopy);
         var headers = httpRequest.Headers ?? new Dictionary<string, List<string>>(StringComparer.Ordinal);
         httpRequest.Headers = headers;
-
-        if (isImageRequest)
-        {
-            // Keep the Responses wire format so pass-through cannot replace the
-            // converted payload or response with the incompatible Images
-            // format. RequestType alone selects the image response conversion.
-            httpRequest.RequestType = originalRequestType!;
-        }
 
         // Overwrite auth.
         httpRequest.Auth = new AuthConfig
@@ -575,20 +548,6 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
             return TransformAlphaSearchResponse(response);
         }
 
-        if (response?.Request is not null && response.Request.RequestType == RequestTypes.Image)
-        {
-            if (response.StatusCode >= 400)
-            {
-                throw new InvalidOperationException(
-                    "codex image HTTP error " + response.StatusCode + ": " + Encoding.UTF8.GetString(response.Body ?? []));
-            }
-
-            var upstream = LlmJson.Deserialize<ResponsesResponse>(response.Body ?? [])
-                ?? new ResponsesResponse();
-
-            return ResponsesImageConvert.BuildImageResponse(upstream, response.Request.TransformerMetadata);
-        }
-
         return _responsesOutbound.TransformResponse(response);
     }
 
@@ -671,6 +630,12 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
 
         public HttpResponseData Do(CancellationToken cancellationToken, HttpRequestData request)
         {
+            if (request.RequestType == RequestTypes.Image)
+            {
+                throw TransformerErrors.InvalidRequest(
+                    "Images requests require a native Images endpoint configuration");
+            }
+
             request = RequestForTransport(request);
 
             // Compact and alpha search are non-streaming endpoints; proxy them

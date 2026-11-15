@@ -46,11 +46,7 @@ public sealed class CodexChannelWiringTests
     [Theory]
     [InlineData(ChannelOutboundFactory.CodexChannelType, ApiFormats.OpenAIResponse)]
     [InlineData(ChannelOutboundFactory.CodexChannelType, ApiFormats.OpenAIAlphaSearch)]
-    [InlineData(ChannelOutboundFactory.CodexChannelType, ApiFormats.OpenAIImageGeneration)]
-    [InlineData(ChannelOutboundFactory.CodexChannelType, ApiFormats.OpenAIImageEdit)]
     [InlineData(ChannelOutboundFactory.FennoChannelType, ApiFormats.OpenAIResponse)]
-    [InlineData(ChannelOutboundFactory.FennoChannelType, ApiFormats.OpenAIImageGeneration)]
-    [InlineData(ChannelOutboundFactory.FennoChannelType, ApiFormats.OpenAIImageEdit)]
     public void CodexAndFennoChannelsUseTheCodexOutbound(string type, string apiFormat)
     {
         var transformer = Create(Candidate(type), Request(apiFormat));
@@ -59,6 +55,21 @@ public sealed class CodexChannelWiringTests
         // codex.OutboundTransformer.APIFormat().
         Assert.Equal(ApiFormats.OpenAIResponse, transformer.ApiFormat);
         Assert.True(transformer.SupportsCodexResponseHeaders());
+    }
+
+    [Theory]
+    [InlineData(ChannelOutboundFactory.CodexChannelType, ApiFormats.OpenAIImageGeneration)]
+    [InlineData(ChannelOutboundFactory.CodexChannelType, ApiFormats.OpenAIImageEdit)]
+    [InlineData(ChannelOutboundFactory.FennoChannelType, ApiFormats.OpenAIImageGeneration)]
+    [InlineData(ChannelOutboundFactory.FennoChannelType, ApiFormats.OpenAIImageEdit)]
+    public void CodexAndFennoChannelsUseTheNativeImageOutbound(string type, string apiFormat)
+    {
+        var transformer = ChannelOutboundFactory.Create(
+            Candidate(type),
+            Request(apiFormat),
+            DateTimeOffset.UnixEpoch);
+
+        Assert.IsType<CodexImageOutboundTransformer>(transformer);
     }
 
     [Fact]

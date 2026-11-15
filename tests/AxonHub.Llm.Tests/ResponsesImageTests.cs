@@ -473,168 +473,24 @@ public sealed class ResponsesImageTests
     }
 
     [Fact]
-    public void TransformRequestBuildsImageToolPayload()
+    public void TransformRequestRejectsImageRequestsWithoutNativeEndpoint()
     {
         var transformer = ResponsesOutboundTransformer.Create(
             "https://api.openai.com", "test-api-key");
 
-        var httpRequest = transformer.TransformRequest(new LlmRequest
+        var ex = Assert.Throws<TransformerException>(() => transformer.TransformRequest(new LlmRequest
         {
             Model = "gpt-image-1",
             RequestType = RequestTypes.Image,
             ApiFormat = ApiFormats.OpenAIImageGeneration,
-            Image = new ImageRequest
-            {
-                Prompt = "a cat",
-                Images = [PngMagic],
-                OutputFormat = "webp",
-                Quality = "high",
-                Size = "1024x1024",
-                Background = "opaque",
-            },
-        });
+            Image = new ImageRequest { Prompt = "a cat" },
+        }));
 
-        Assert.Equal(RequestTypes.Image, httpRequest.RequestType);
-        Assert.Equal(ApiFormats.OpenAIResponse, httpRequest.ApiFormat);
-        Assert.Equal("https://api.openai.com/v1/responses", httpRequest.Url);
-        Assert.Equal("bearer", httpRequest.Auth!.Type);
-        Assert.Equal("test-api-key", httpRequest.Auth.ApiKey);
-
-        using var doc = JsonDocument.Parse(httpRequest.Body!);
-        var root = doc.RootElement;
-        Assert.Equal("gpt-image-1", root.GetProperty("model").GetString());
-        Assert.Equal("required", root.GetProperty("tool_choice").GetString());
-        Assert.Equal(
-            ResponsesImageConvert.DefaultImageSystemInstruction,
-            root.GetProperty("instructions").GetString());
-
-        var tool = root.GetProperty("tools")[0];
-        Assert.Equal("image_generation", tool.GetProperty("type").GetString());
-        Assert.Equal("gpt-image-1", tool.GetProperty("model").GetString());
-        Assert.Equal("webp", tool.GetProperty("output_format").GetString());
-        Assert.Equal("high", tool.GetProperty("quality").GetString());
-        Assert.Equal("1024x1024", tool.GetProperty("size").GetString());
-        Assert.Equal("opaque", tool.GetProperty("background").GetString());
-        Assert.Equal("generate", tool.GetProperty("action").GetString());
+        Assert.Equal(TransformerErrorKind.InvalidRequest, ex.Kind);
         Assert.Contains(
-            "data:image/png;base64,iVBORw0KGgo=",
-            root.GetProperty("input").GetRawText(),
+            "native Images endpoint is required for image requests",
+            ex.Message,
             StringComparison.Ordinal);
-
-        Assert.NotNull(httpRequest.TransformerMetadata);
-        Assert.Equal(
-            "generate",
-            httpRequest.TransformerMetadata!["image_generation_action"].GetString());
-        Assert.Equal(
-            "webp",
-            httpRequest.TransformerMetadata["codex_image_output_format"].GetString());
-    }
-
-    [Fact]
-    public void TransformImageEditResponse()
-    {
-        var transformer = ResponsesOutboundTransformer.Create(
-            "https://api.openai.com", "test-api-key");
-
-        var httpRequest = transformer.TransformRequest(new LlmRequest
-        {
-            Model = "gpt-image-1",
-            RequestType = RequestTypes.Image,
-            ApiFormat = ApiFormats.OpenAIImageEdit,
-            Image = new ImageRequest
-            {
-                Prompt = "edit this image",
-                Images = [Encoding.UTF8.GetBytes("source-image")],
-                OutputFormat = "webp",
-                Quality = "high",
-                Size = "1024x1024",
-            },
-        });
-
-        Assert.Equal(RequestTypes.Image, httpRequest.RequestType);
-        Assert.Equal(ApiFormats.OpenAIResponse, httpRequest.ApiFormat);
-
-        var result = transformer.TransformResponse(new HttpResponseData
-        {
-            StatusCode = 200,
-            Request = httpRequest,
-            Body = Bytes(
-                """
-                {
-                  "id": "resp_image_123",
-                  "object": "response",
-                  "created_at": 1759161016,
-                  "status": "completed",
-                  "model": "gpt-image-1",
-                  "output": [
-                    {
-                      "id": "img_123",
-                      "type": "image_generation_call",
-                      "status": "completed",
-                      "result": "data:image/webp;base64,aW1hZ2UtZGF0YQ=="
-                    }
-                  ]
-                }
-                """),
-        });
-
-        Assert.Equal("image.generation", result.Object);
-        Assert.Equal(RequestTypes.Image, result.RequestType);
-        Assert.Equal("gpt-image-1", result.Model);
-        Assert.Equal(1759161016L, result.Created);
-        Assert.NotNull(result.Image);
-        Assert.Equal("webp", result.Image!.OutputFormat);
-        Assert.Equal("high", result.Image.Quality);
-        Assert.Equal("1024x1024", result.Image.Size);
-        var data = Assert.Single(result.Image.Data);
-        Assert.Equal("aW1hZ2UtZGF0YQ==", data.B64JSON);
-    }
-
-    [Fact]
-    public void TransformImageResponseReportsHttpError()
-    {
-        var transformer = ResponsesOutboundTransformer.Create(
-            "https://api.openai.com", "test-api-key");
-
-        var ex = Assert.Throws<InvalidOperationException>(() => transformer.TransformResponse(
-            new HttpResponseData
-            {
-                StatusCode = 400,
-                Request = new HttpRequestData { RequestType = RequestTypes.Image },
-                Body = Bytes("bad request"),
-            }));
-
-        Assert.Equal("HTTP error 400: bad request", ex.Message);
-    }
-
-    [Fact]
-    public void TransformImageResponseReportsDecodeErrors()
-    {
-        var transformer = ResponsesOutboundTransformer.Create(
-            "https://api.openai.com", "test-api-key");
-
-        var ex = Assert.Throws<InvalidOperationException>(() => transformer.TransformResponse(
-            new HttpResponseData
-            {
-                StatusCode = 200,
-                Request = new HttpRequestData { RequestType = RequestTypes.Image },
-                Body = [],
-            }));
-        Assert.Equal(
-            "failed to unmarshal responses api image response: unexpected end of JSON input",
-            ex.Message);
-
-        ex = Assert.Throws<InvalidOperationException>(() => transformer.TransformResponse(
-            new HttpResponseData
-            {
-                StatusCode = 200,
-                Request = new HttpRequestData { RequestType = RequestTypes.Image },
-                Body = Bytes("[]"),
-            }));
-        Assert.Equal(
-            "failed to unmarshal responses api image response: "
-            + "json: cannot unmarshal array into Go value of type responses.Response",
-            ex.Message);
     }
 
     [Fact]
