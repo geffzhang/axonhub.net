@@ -506,6 +506,38 @@ public sealed class AdminChannelEndpointsEndpointTests : IAsyncLifetime
             elementType.GetProperty("ofType").GetProperty("name").GetString());
     }
 
+    [Fact]
+    public async Task AdminRootFieldSurfaceMatchesTheReferenceAudit()
+    {
+        var data = await QueryDataAsync(
+            """
+            {
+              __schema {
+                queryType { fields { name } }
+                mutationType { fields { name } }
+              }
+            }
+            """);
+
+        var queries = data.GetProperty("__schema").GetProperty("queryType")
+            .GetProperty("fields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .ToArray();
+        var mutations = data.GetProperty("__schema").GetProperty("mutationType")
+            .GetProperty("fields").EnumerateArray()
+            .Select(static field => field.GetProperty("name").GetString()!)
+            .ToArray();
+
+        // Reference admin SDL: 86 query fields and 134 mutation fields after
+        // excluding the input-type false positive and the unimplemented nodes
+        // resolver (C269). The port exposes all of them except nodes.
+        Assert.Equal(85, queries.Length);
+        Assert.Equal(134, mutations.Length);
+        Assert.Contains("allScopes", queries);
+        Assert.Contains("node", queries);
+        Assert.DoesNotContain("nodes", queries);
+    }
+
     private static string[] FieldNames(JsonElement type)
         => type.GetProperty("inputFields").EnumerateArray()
             .Select(static field => field.GetProperty("name").GetString()!)

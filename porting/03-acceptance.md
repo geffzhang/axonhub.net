@@ -2216,9 +2216,17 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §243（2026-11-15）data storage 行/客户端缓存。C196 转 resolved：新增单例 `DataStorageCache`、`CachingDataStorageStore` 与 `CachingDataStorageBackendFactory`；GetByIdAsync/GetPrimaryAsync 行缓存 30 分钟，后端按 storage id 复用 1 分钟（过期重建，旧客户端在最后一个租约释放时 Dispose），Create/Update 清空行与后端缓存；GC 的 SkipSoftDelete 读取绕过缓存；请求链 recorder 与 DI 工厂共用缓存。定向 `DataStorageCacheTests|AdminDataStoragesEndpointTests|RequestPayloadStorageTests` 67/67；未跑 Api 全量（新增 Api 5 例）。台账 309 条（192 accepted / 117 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§244（2026-11-15）管理面 GraphQL 根字段审计。M5 公开 API 审计的 GraphQL 根字段部分：以参照 `internal/server/gql/*.graphql` 的 `type Query` / `type Mutation` 块解析根字段（按块内最小缩进取字段行），得到 Query 87 条、Mutation 134 条；其中 `hasTag` 是 `ChannelWhereInput` 之类的输入字段被同一缩进扫描误计，实际 Query 为 86 条。端口以 HotChocolate schema 内省 `__schema.queryType` / `mutationType`，得到 Query 85 条、Mutation 134 条。Query 唯一缺少的根字段是 `nodes`：参照的 EntGQL resolver 自身 panic、前端未调用，C269 已明确其保持不暴露，不属于未解释缺口；`allScopes` 由 `AdminQuery.AllScopes` 的方法名推断生成，内省可见。因此有效根字段覆盖 219/220（99.5%），Mutation 134/134，未解释缺口 0。新增 `AdminChannelEndpointsEndpointTests.AdminRootFieldSurfaceMatchesTheReferenceAudit` 一次内省查询锁定 Query 85 / Mutation 134、`allScopes` 与 `node` 存在、`nodes` 缺席。定向 1/1 通过；未跑 Api 全量（新增 Api 1 例）。台账不变（309 条，192 accepted / 117 resolved / 0 gap）。
+
 ## 公开 API 审计
 
-- 参照实现导出数：未统计（M5 收口时执行）
+- 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
+  解析出 Query 87 条、Mutation 134 条，其中 `hasTag` 是输入类型字段误计，实际 Query 为 86 条；
+  端口 `/admin/graphql` 内省为 Query 85 条、Mutation 134 条。Query 唯一缺少的是 `nodes`——参照的
+  resolver 恒 panic 且前端不调用，按 C269 有意不暴露；`allScopes` 由 `AdminQuery.AllScopes` 的方法名
+  推断生成，内省可见。有效根字段覆盖 219/220（99.5%），未解释缺口为 0，由
+  `AdminChannelEndpointsEndpointTests.AdminRootFieldSurfaceMatchesTheReferenceAudit` 锁定内省计数与
+  `nodes` 的缺席
 - 本实现公开表面：`AxonHub.Llm`（统一模型、OpenAI 双向变换、SSE 解码、HTTP 执行器、pipeline）、
   `AxonHub.Persistence`（EF Core 写侧 DbContext 与模型、Dapper 读侧仓储、幂等迁移与连接工厂）、
   `AxonHub.Grains` / `AxonHub.Grains.Abstractions`（通道池与通道指标 grain、ChannelLimiter/ChannelLimiterManager/ChannelRequestTracker/RateLimitAwareScorer）、
