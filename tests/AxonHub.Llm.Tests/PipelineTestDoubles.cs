@@ -46,9 +46,17 @@ internal sealed class MockInbound : IInboundTransformer
 /// implements Retryable and ChannelRetryable unconditionally, so the pipeline's
 /// type assertions always succeed; the C# double implements them all too.
 /// </summary>
-internal sealed class MockOutbound : IOutboundTransformer, IRetryable, IChannelRetryable
+internal sealed class MockOutbound : IOutboundTransformer, IRetryable, IChannelRetryable,
+    IResponseTimeoutProvider
 {
     public string ApiFormat => string.Empty;
+
+    public TimeSpan? StreamFirstEventTimeoutOverride { get; set; }
+
+    public TimeSpan? NonStreamTimeoutOverride { get; set; }
+
+    public (TimeSpan? StreamFirstEventTimeout, TimeSpan? NonStreamTimeout) ResponseTimeouts()
+        => (StreamFirstEventTimeoutOverride, NonStreamTimeoutOverride);
 
     public Func<LlmRequest?, HttpRequestData>? TransformRequestFn { get; set; }
 

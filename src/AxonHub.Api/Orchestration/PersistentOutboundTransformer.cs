@@ -27,7 +27,8 @@ namespace AxonHub.Api.Orchestration;
 /// two budgets and the inter-retry delay.
 /// </remarks>
 public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetryable,
-    IChannelRetryable, IChannelCustomizedExecutor, ITransportRequestFinalizer
+    IChannelRetryable, IChannelCustomizedExecutor, ITransportRequestFinalizer,
+    IResponseTimeoutProvider
 {
     private readonly ChannelCandidate[] _candidates;
     private readonly TimeProvider _timeProvider;
@@ -180,6 +181,33 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// </summary>
     public ChannelCandidate? CurrentCandidate =>
         _candidateIndex < _candidates.Length ? _candidates[_candidateIndex] : null;
+
+    /// <summary>
+    /// Port of orchestrator.PersistentOutboundTransformer.ResponseTimeouts
+    /// (outbound.go:913-940): the current channel's response timeout overrides,
+    /// or null for a timeout the channel inherits from the global retry policy.
+    /// Resolving per attempt keeps the overrides correct after a channel switch.
+    /// </summary>
+    public (TimeSpan? StreamFirstEventTimeout, TimeSpan? NonStreamTimeout) ResponseTimeouts()
+    {
+        if (CurrentCandidate is not { } candidate)
+        {
+            return (null, null);
+        }
+
+        var responseTimeout = ChannelTransformOptions.SettingsOf(candidate)?.ResponseTimeout;
+        if (responseTimeout is null || responseTimeout.Mode != "custom")
+        {
+            return (null, null);
+        }
+
+        return (
+            SecondsToDuration(responseTimeout.StreamFirstEventTimeoutSeconds),
+            SecondsToDuration(responseTimeout.NonStreamResponseTimeoutSeconds));
+    }
+
+    private static TimeSpan? SecondsToDuration(int? seconds)
+        => seconds is { } value ? TimeSpan.FromSeconds(value) : null;
 
     /// <summary>
     /// The channel key the current attempt sent upstream, when the provider

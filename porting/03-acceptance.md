@@ -2227,6 +2227,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §248（2026-11-15）Anthropic `allowed_callers` 工具字段（live #2639）。C310 登记并转 resolved：live 提交 `8cdc33a1` 为 function/custom 工具在 wire `Tool` 与统一 `llm.Function` 上增加 `allowed_callers`，入站与出站两个方向复制，缺席或空切片保持不出现（不是 `null` 也不是 `[]`），server tools（web_search）不新增字段。端口此前未建模该字段；本轮在 `Function` 与 `AnthropicTool` 上增加 `AllowedCallers`，getter 把空列表归一为 `null` 以满足 Go `omitempty`，`ConvertToolToLlm` / `ConvertToolsAnthropic` 双向复制。测试：入站 1 例、出站 1 例、缺席 nil/empty 2 例（含统一 Function JSON 省略与入站保持 null）；Anthropic 相关 Llm 回归 248/248、Llm 全量 3302/3302。未跑 Api 全量（新增 Llm 4 例）。台账 310 条（190 accepted / 120 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§249（2026-11-15）按通道的响应超时覆盖（live #2630）。C311 登记并转 resolved：`ChannelSettings.responseTimeout` 的 INHERIT / CUSTOM 两态、GraphQL 类型与写入校验此前已移植，但 `Pipeline` 始终使用全局 `retry_policy` 的两个超时。本轮在 Llm pipeline 增加 `IResponseTimeoutProvider`（`Pipeline.cs` 在每次尝试 `TransformRequest` 之后解析），`PersistentOutboundTransformer` 读取当前候选的 `responseTimeout`：仅 custom 生效、两个字段独立覆盖、nil 继承全局、显式 0 关闭对应超时；重试切换通道后按新候选重新解析。测试：`PipelineResponseTimeoutTests` 8 例（无 provider、空覆盖、单/双字段、0 关闭、Process 级 non-stream 覆盖与全局超时关闭）与 `ResponseTimeoutProviderTests` 11 例（inherit/缺失/畸形、custom 单/双字段、0 值、无候选）；Llm 全量 3310/3310、Api 定向 76/76。未跑 Api 全量（新增 Llm 8 例、Api 11 例）。台账 311 条（190 accepted / 121 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

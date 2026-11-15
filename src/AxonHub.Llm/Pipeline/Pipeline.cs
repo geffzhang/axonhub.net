@@ -202,13 +202,17 @@ public sealed partial class Pipeline
             executor = custom.CustomizeExecutor(executor);
         }
 
+        // Resolve after TransformRequest so the outbound transformer has selected
+        // the channel for this attempt and can apply per-channel overrides
+        // (pipeline.go:438-446).
+        var (streamFirstEventTimeout, nonStreamTimeout) = EffectiveResponseTimeouts();
         var effectiveWantStream = request.Stream is true;
 
         if (originalWantStream)
         {
             try
             {
-                var stream = Stream(cancellationToken, executor, httpReq, _options.StreamFirstEventTimeout);
+                var stream = Stream(cancellationToken, executor, httpReq, streamFirstEventTimeout);
                 return new PipelineResult { Stream = true, EventStream = stream };
             }
             catch (Exception ex)
@@ -219,7 +223,7 @@ public sealed partial class Pipeline
 
         if (effectiveWantStream)
         {
-            using var timeout = NonStreamTimeoutScope.Create(_options.NonStreamTimeout, cancellationToken);
+            using var timeout = NonStreamTimeoutScope.Create(nonStreamTimeout, cancellationToken);
             try
             {
                 return new PipelineResult
@@ -239,7 +243,7 @@ public sealed partial class Pipeline
             }
         }
 
-        using (var timeout = NonStreamTimeoutScope.Create(_options.NonStreamTimeout, cancellationToken))
+        using (var timeout = NonStreamTimeoutScope.Create(nonStreamTimeout, cancellationToken))
         {
             try
             {
@@ -259,6 +263,34 @@ public sealed partial class Pipeline
                 throw;
             }
         }
+    }
+
+    /// <summary>
+    /// Port of pipeline.effectiveResponseTimeouts (pipeline.go:497-520): let
+    /// the outbound transformer override the attempt's defaults.
+    /// </summary>
+    internal (TimeSpan StreamFirstEventTimeout, TimeSpan NonStreamTimeout) EffectiveResponseTimeouts()
+    {
+        var streamFirstEventTimeout = _options.StreamFirstEventTimeout;
+        var nonStreamTimeout = _options.NonStreamTimeout;
+
+        if (_outbound is not IResponseTimeoutProvider provider)
+        {
+            return (streamFirstEventTimeout, nonStreamTimeout);
+        }
+
+        var (streamOverride, nonStreamOverride) = provider.ResponseTimeouts();
+        if (streamOverride is { } stream)
+        {
+            streamFirstEventTimeout = stream;
+        }
+
+        if (nonStreamOverride is { } nonStream)
+        {
+            nonStreamTimeout = nonStream;
+        }
+
+        return (streamFirstEventTimeout, nonStreamTimeout);
     }
 
     /// <summary>Port of pipeline.notStream.</summary>
