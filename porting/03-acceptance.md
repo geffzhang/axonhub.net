@@ -2271,6 +2271,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §270（2026-11-15）第三方 Codex 目录与官方目录 gpt-image-2（live #2675 / #2651）。C158 转 resolved：codex 通道使用普通 API key 且无 codexChannel 时，ModelFetcher 进入 thirdPartyCodexCatalog——要求 HTTPS、拒绝所有重定向、用 `ApiKeyTokenProvider` 构造 Codex `/models` 请求，并以 `ParseThirdPartyModelCatalog` 解析（不过滤 visibility、不补 gpt-image-2）；官方 `ParseModelCatalog` 同时补齐 gpt-image-2 去重与缺失补充。前端 Codex 第三方凭据对话框不在后端移植范围。新增 2 例并更新官方目录期望；ModelFetcherCodexTests 12/12，全部 ModelFetcher 56/56，Llm Codex 119/119，Llm 全量 3423/3423。台账 327 条（189 accepted / 138 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§271（2026-11-15）Claude Code WebSearch 经 Responses 后端（live #2750）。C328 登记并转 resolved：Responses 的 `web_search_call` 是元数据而非客户端函数调用。本轮按 call ID 合并 `openai_responses_web_search_calls` 快照（added/done/terminal 同一次调用、稀疏字段不删除），Anthropic 侧生成 `server_tool_use` / `web_search_tool_result`：查询已知即发进度块，结果只在 final 发；失败生成 `web_search_tool_result_error`（unavailable）；不伪造 `encrypted_content`；单搜索缺 sources 时回退结构化 URL citations（多搜索不归因）；标题匹配忽略 `utm_*`；特殊 `*_tool_result` 内容按 raw JSON 保留。新增 20 例单元/集成测试；Responses/Anthropic 定向 743/743，Llm 全量 3443/3443。未跑 Api 全量。台账 328 条（189 accepted / 139 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

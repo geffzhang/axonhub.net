@@ -59,6 +59,11 @@ internal sealed class AnthropicInboundStream : IStream<StreamEvent>
     // citations_delta events immediately before the block is closed.
     private List<AnthropicTextCitation> _pendingTextCitations = [];
 
+    // Responses web_search_call metadata accumulates across chunks; emitted
+    // Anthropic progress/result blocks are deduplicated by call ID.
+    private Dictionary<string, ResponsesSearchState>? _responsesSearches;
+    private List<ResponsesSearchSource> _responsesSearchCitations = [];
+
     public AnthropicInboundStream(IStream<LlmResponse> source)
     {
         _source = source;
@@ -107,6 +112,12 @@ internal sealed class AnthropicInboundStream : IStream<StreamEvent>
                     _err = Wrap("failed to validate tool arguments at stream end", validationError);
                     return false;
                 }
+            }
+
+            if (EmitResponsesSearchBlocks(null, final: true) is { } finalSearchError)
+            {
+                _err = Wrap("failed to finalize search blocks", finalSearchError);
+                return false;
             }
 
             if (CloseOpenContentBlocks() is { } closeError)
@@ -204,6 +215,34 @@ internal sealed class AnthropicInboundStream : IStream<StreamEvent>
                 _err = Wrap("failed to enqueue message_start event", startError);
                 return false;
             }
+        }
+
+        var finalSearchSnapshot = false;
+        if (chunk.Choices.Count > 0)
+        {
+            var searchChoice = chunk.Choices[0];
+            if (searchChoice.Message is { } searchMessage)
+            {
+                _responsesSearchCitations = AnthropicResponsesWebSearch.AppendCitations(
+                    _responsesSearchCitations,
+                    searchMessage.Annotations);
+            }
+
+            if (searchChoice.Delta is { } searchDelta)
+            {
+                _responsesSearchCitations = AnthropicResponsesWebSearch.AppendCitations(
+                    _responsesSearchCitations,
+                    searchDelta.Annotations);
+            }
+
+            finalSearchSnapshot = searchChoice.FinishReason is not null;
+        }
+
+        if (EmitResponsesSearchBlocks(chunk.TransformerMetadata, finalSearchSnapshot)
+            is { } searchError)
+        {
+            _err = Wrap("failed to emit search blocks", searchError);
+            return false;
         }
 
         if (chunk.Choices.Count > 0)
@@ -310,6 +349,88 @@ internal sealed class AnthropicInboundStream : IStream<StreamEvent>
     }
 
     public void Dispose() => _source.Dispose();
+
+    /// <summary>
+    /// Port of anthropicInboundStream.emitResponsesSearchBlocks: close any
+    /// open client block, then emit each newly observed search as a complete
+    /// server_tool_use + web_search_tool_result pair.
+    /// </summary>
+    private Exception? EmitResponsesSearchBlocks(
+        Dictionary<string, JsonElement>? metadata,
+        bool final)
+    {
+        _responsesSearches ??= new Dictionary<string, ResponsesSearchState>(StringComparer.Ordinal);
+        var blocks = AnthropicResponsesWebSearch.Blocks(
+            metadata,
+            _responsesSearches,
+            final,
+            _responsesSearchCitations);
+        if (blocks.Count == 0)
+        {
+            return null;
+        }
+
+        if (CloseOpenContentBlocks() is { } closeError)
+        {
+            return closeError;
+        }
+
+        foreach (var block in blocks)
+        {
+            var input = block.Input;
+            var startBlock = block;
+            if (block.Type == "server_tool_use")
+            {
+                startBlock = new AnthropicMessageContentBlock
+                {
+                    Type = block.Type,
+                    Id = block.Id,
+                    Name = block.Name,
+                    Input = AnthropicJson.RawElement("{}"u8),
+                };
+            }
+
+            if (EnqueueEvent(new AnthropicStreamEvent
+                {
+                    Type = "content_block_start",
+                    Index = _contentIndex,
+                    ContentBlock = startBlock,
+                }) is { } startError)
+            {
+                return startError;
+            }
+
+            if (block.Type == "server_tool_use")
+            {
+                if (EnqueueEvent(new AnthropicStreamEvent
+                    {
+                        Type = "content_block_delta",
+                        Index = _contentIndex,
+                        Delta = new AnthropicStreamDelta
+                        {
+                            Type = "input_json_delta",
+                            PartialJson = input?.GetRawText() ?? "{}",
+                        },
+                    }) is { } deltaError)
+                {
+                    return deltaError;
+                }
+            }
+
+            if (EnqueueEvent(new AnthropicStreamEvent
+                {
+                    Type = "content_block_stop",
+                    Index = _contentIndex,
+                }) is { } stopError)
+            {
+                return stopError;
+            }
+
+            _contentIndex += 1;
+        }
+
+        return null;
+    }
 
     private void AppendPendingTextCitations(
         List<Annotation> annotations,

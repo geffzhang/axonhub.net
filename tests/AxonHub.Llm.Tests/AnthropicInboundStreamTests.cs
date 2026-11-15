@@ -1217,16 +1217,16 @@ public sealed class AnthropicInboundStreamTests
         List<AnthropicStreamEvent> events,
         List<AnthropicTextCitation> expected)
     {
-        var citationIndexes = new List<int>();
+        var citationIndexes = new List<(int Position, long BlockIndex)>();
         var citations = new List<AnthropicTextCitation>();
-        var stopIndex = -1;
+        var stopPositions = new Dictionary<long, int>();
 
         for (var i = 0; i < events.Count; i++)
         {
             var streamEvent = events[i];
             if (streamEvent.Type == "content_block_delta" && streamEvent.Delta is { Type: "citations_delta" })
             {
-                citationIndexes.Add(i);
+                citationIndexes.Add((i, streamEvent.Index ?? 0));
                 Assert.NotNull(streamEvent.Delta.Citation);
                 var citation = streamEvent.Delta.Citation!;
                 citations.Add(citation);
@@ -1235,18 +1235,21 @@ public sealed class AnthropicInboundStreamTests
             }
 
             if (streamEvent.Type == "content_block_stop"
-                && streamEvent.Index == 0
-                && stopIndex == -1)
+                && streamEvent.Index is { } blockIndex
+                && !stopPositions.ContainsKey(blockIndex))
             {
-                stopIndex = i;
+                stopPositions[blockIndex] = i;
             }
         }
 
         Assert.Equal(expected.Count, citationIndexes.Count);
-        Assert.NotEqual(-1, stopIndex);
-        foreach (var index in citationIndexes)
+        Assert.NotEmpty(stopPositions);
+        foreach (var (position, blockIndex) in citationIndexes)
         {
-            Assert.True(index < stopIndex);
+            Assert.True(
+                stopPositions.TryGetValue(blockIndex, out var stopPosition)
+                && position < stopPosition,
+                "citation delta must precede its own content block stop");
         }
 
         Assert.Equal(expected.Count, citations.Count);

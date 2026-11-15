@@ -882,7 +882,9 @@ public static class ResponsesOutboundConvert
     public static void AppendResponseWebSearchCallMetadata(
         Dictionary<string, JsonElement>? transformerMetadata, ResponsesItem outputItem)
     {
-        if (transformerMetadata is null || outputItem.Action?.WebSearch is not { } src)
+        if (transformerMetadata is null
+            || outputItem.Id.Length == 0
+            || outputItem.Action?.WebSearch is not { } src)
         {
             return;
         }
@@ -912,26 +914,93 @@ public static class ResponsesOutboundConvert
         };
 
         // Go stores an in-process []Item and replaces the key when the value is
-        // not that type; the port stores the JSON form, so decode, append, and
-        // re-encode.
-        List<ResponsesItem>? existing = null;
+        // not that type; the port stores the JSON form, so decode, update, and
+        // re-encode. Snapshots are immutable and merged by call ID: added, done
+        // and the terminal response can all describe the same invocation.
+        List<ResponsesItem>? previous = null;
         if (transformerMetadata.TryGetValue(ResponsesKeys.WebSearchCallsTransformerMetadataKey, out var raw)
             && raw.ValueKind == JsonValueKind.Array)
         {
             try
             {
-                existing = raw.Deserialize<List<ResponsesItem>>(LlmJson.Options);
+                previous = raw.Deserialize<List<ResponsesItem>>(LlmJson.Options);
             }
             catch (JsonException)
             {
-                existing = null;
+                previous = null;
             }
         }
 
-        existing ??= [];
-        existing.Add(call);
+        List<ResponsesItem> calls = previous is null ? [] : [.. previous];
+        for (var i = 0; i < calls.Count; i++)
+        {
+            var existing = calls[i];
+            if (existing.Id != call.Id)
+            {
+                continue;
+            }
+
+            if (call.Action?.WebSearch is null)
+            {
+                call.Action = existing.Action;
+            }
+            else if (existing.Action?.WebSearch is { } earlier)
+            {
+                var merged = call.Action.WebSearch;
+                if (string.IsNullOrEmpty(merged.Type))
+                {
+                    merged.Type = earlier.Type;
+                }
+
+                if (string.IsNullOrEmpty(merged.Query))
+                {
+                    merged.Query = earlier.Query;
+                }
+
+                if (merged.Queries is not { Count: > 0 })
+                {
+                    merged.Queries = earlier.Queries is { Count: > 0 } earlierQueries
+                        ? [.. earlierQueries]
+                        : null;
+                }
+
+                var mergedSources = earlier.Sources is { Count: > 0 }
+                    ? earlier.Sources
+                        .Select(static source => source ?? new ResponsesWebSearchSource())
+                        .ToList()
+                    : [];
+                foreach (var source in merged.Sources ?? [])
+                {
+                    var index = mergedSources.FindIndex(existingSource =>
+                        existingSource.Url == source.Url);
+                    if (index < 0)
+                    {
+                        mergedSources.Add(source);
+                    }
+                    else if (!string.IsNullOrEmpty(source.Title))
+                    {
+                        mergedSources[index] = source;
+                    }
+                }
+
+                merged.Sources = mergedSources.Count > 0 ? mergedSources : null;
+            }
+
+            if (call.Status is null
+                || existing.Status is "completed" or "failed")
+            {
+                call.Status = existing.Status;
+            }
+
+            calls[i] = call;
+            transformerMetadata[ResponsesKeys.WebSearchCallsTransformerMetadataKey] =
+                ResponsesConvertUtil.ToElement(calls);
+            return;
+        }
+
+        calls.Add(call);
         transformerMetadata[ResponsesKeys.WebSearchCallsTransformerMetadataKey] =
-            ResponsesConvertUtil.ToElement(existing);
+            ResponsesConvertUtil.ToElement(calls);
     }
 
     /// <summary>

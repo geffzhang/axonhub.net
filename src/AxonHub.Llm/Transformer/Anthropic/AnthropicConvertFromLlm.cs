@@ -24,6 +24,7 @@ public static class AnthropicConvertFromLlm
             Role = "assistant",
             Model = chatResponse.Model,
         };
+        var searchCitations = new List<ResponsesSearchSource>();
 
         if (chatResponse.Choices.Count > 0)
         {
@@ -32,6 +33,9 @@ public static class AnthropicConvertFromLlm
 
             if (message is not null)
             {
+                searchCitations = AnthropicResponsesWebSearch.AppendCitations(
+                    [],
+                    message.Annotations);
                 var contentBlocks = new List<AnthropicMessageContentBlock>();
 
                 if (!string.IsNullOrEmpty(message.ReasoningContent)
@@ -202,6 +206,16 @@ public static class AnthropicConvertFromLlm
                     ? "tool_use"
                     : "end_turn";
             }
+        }
+
+        var searchBlocks = AnthropicResponsesWebSearch.Blocks(
+            chatResponse.TransformerMetadata,
+            new Dictionary<string, ResponsesSearchState>(StringComparer.Ordinal),
+            final: true,
+            searchCitations);
+        if (searchBlocks.Count > 0)
+        {
+            response.Content = [.. searchBlocks, .. response.Content ?? []];
         }
 
         if (chatResponse.Usage is { } usage)

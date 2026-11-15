@@ -476,11 +476,13 @@ public sealed class AnthropicContentBlockJsonConverter : JsonConverter<Anthropic
         }
 
         var block = new AnthropicMessageContentBlock();
+        JsonElement? rawContent = null;
 
         while (reader.Read())
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
+                ApplyRawContent(block, rawContent, options);
                 return block;
             }
 
@@ -533,9 +535,18 @@ public sealed class AnthropicContentBlockJsonConverter : JsonConverter<Anthropic
                     break;
                 case "content":
                     // *MessageContent in Go: a JSON null leaves the pointer nil.
-                    block.Content = reader.TokenType == JsonTokenType.Null
-                        ? null
-                        : JsonSerializer.Deserialize<AnthropicMessageContent>(ref reader, options);
+                    // Defer decoding until the block type is known: special
+                    // server-tool result payloads are preserved as raw JSON.
+                    if (reader.TokenType == JsonTokenType.Null)
+                    {
+                        block.Content = null;
+                    }
+                    else
+                    {
+                        using var document = JsonDocument.ParseValue(ref reader);
+                        rawContent = document.RootElement.Clone();
+                    }
+
                     break;
                 case "is_error":
                     block.IsError = JsonSerializer.Deserialize<bool?>(ref reader, options);
@@ -731,6 +742,32 @@ public sealed class AnthropicContentBlockJsonConverter : JsonConverter<Anthropic
     {
         using var document = JsonDocument.ParseValue(ref reader);
         return document.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Go: MessageContentBlock.UnmarshalJSON. Server-tool result payloads
+    /// (including search errors) are preserved as raw JSON; ordinary message
+    /// and client-tool content keeps MessageContent validation.
+    /// </summary>
+    private static void ApplyRawContent(
+        AnthropicMessageContentBlock block,
+        JsonElement? rawContent,
+        JsonSerializerOptions options)
+    {
+        if (rawContent is null)
+        {
+            return;
+        }
+
+        block.Content = new AnthropicMessageContent();
+        if (AnthropicJson.IsSpecialToolResultBlock(block.Type))
+        {
+            block.Content.SetRaw(
+                Encoding.UTF8.GetBytes(rawContent.Value.GetRawText()));
+            return;
+        }
+
+        block.Content = rawContent.Value.Deserialize<AnthropicMessageContent>(options);
     }
 }
 
