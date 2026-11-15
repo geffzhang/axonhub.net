@@ -2243,6 +2243,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §256（2026-11-15）GCP workforce 与 impersonation 凭据。C128 真实缺口收窄：新增 `external_account_authorized_user`（STS `grant_type=refresh_token`、HTTP Basic client auth、reuse、负 `expires_in` 与缺字段文案）与 `impersonated_service_account`（嵌套 `source_credentials` 递归、IAM `generateAccessToken`、`delegates` / `lifetime`、`expireTime` RFC3339 解析、reuse）两条凭据链；`external_account`（workload federation 的 STS/AWS/Azure/file/url 源）仍显式 `NotSupportedException`，web/installed 仍不可交互。`GcpCredentialFile` 补齐 `token_url` / `revoke_url` / `delegates` / `source_credentials` / `service_account_impersonation.token_lifetime_seconds` 解码。新增 5 例（Basic auth 刷新、缺字段、负 expiry、嵌套 impersonation 请求形状、缺 source/url）；Llm 全量 3354/3354。未跑 Api 全量。台账仍 317 条（190 accepted / 127 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§257（2026-11-15）accepted 差异台账复核。逐条核对仍在标注“真实缺口”的 accepted 条目，确认五条已由后续切片闭合，仅保留已接受的实现差异：C176 的 apiKeyTokenUsageStats / CreateLLMAPIKey / GetForRead / profile 模板加载 / 用户 personal key 级联均已实现（`UpdateAPIKeyScopes` 在参照 SDL 中只有 input、无 mutation 字段）；C177 的 GetModelByModelID / ListEnabledModels 合并 / profile 过滤 / HideUnroutable 已由 §89/§213 落地；C178 的通道来源已改读 EnabledChannelsGrain 快照（§213）；C193 的 Project.usageLogs / Channel.usageLogs 已接线；C179 的真实缺口 (a)–(e) 与关联解析缓存均已由 §91–§95 / §245 关闭。五个条目就地追加复核说明，状态保持 accepted，台账仍 317 条（190 accepted / 127 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。本切片无代码与测试改动，未跑 Api 全量。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
