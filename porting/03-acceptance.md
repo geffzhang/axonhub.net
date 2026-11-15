@@ -2208,6 +2208,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §239（2026-11-15）LatencyAware 的流式/非流式延迟 EWMA。C034 转 resolved：`ChannelPerformanceRecord` 增加 FirstTokenTime/CompletionTokens 与 `MeasureLatency`（最小 10ms；流式 TPS 用总延迟减首包；无首包的流式请求落入非流式桶）；`ChannelGrain.RecordLatencyAsync` 用 alpha 0.3 维护流式首包/TPS 与非流式端到端 EWMA，快照新增五个字段；`ChannelMetricsMiddleware` 在流式首个有意义输出与最终 usage 处采集，成功后上报；`LoadBalancerScoring.LatencyScore` 按 stream 计算流式 80*(0.7*首包+0.3*TPS) 与非流式 80*端到端，无样本仍 40；`ChannelPoolGrain.SortAsync` 新增 stream 参数，orchestrator 传入请求流式意图。定向 Grains 34/34、Api 109/109；未跑 Api 全量（新增 Grains 1 例、Api 3 例待下次全量计入）。台账 308 条（194 accepted / 114 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§240（2026-11-15）Antigravity 默认传输无总超时。C119 转 resolved：`AntigravityExecutor` 的 nil 内部执行器改用 `HttpExecutor(HttpMessageHandler)` 重载，`HttpClient.Timeout = InfiniteTimeSpan`，与 Go `&http.Client{}` 的总超时 0 一致；版本抓取 5s 与 token exchange 30s 的显式传输不变。新增 `AntigravityExecutorTests.DefaultTransportHasNoTotalTimeout`；Llm 定向 32/32。台账 308 条（193 accepted / 115 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

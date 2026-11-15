@@ -83,6 +83,15 @@ public sealed class AntigravityExecutorTests
         },
     };
 
+    [Fact]
+    public void DefaultTransportHasNoTotalTimeout()
+    {
+        var executor = new AntigravityExecutor(inner: null);
+
+        var http = Assert.IsType<HttpExecutor>(executor.Inner);
+        Assert.Equal(Timeout.InfiniteTimeSpan, http.Client.Timeout);
+    }
+
     // ------------------------------------------------------------------
     // Do with endpoint fallback (reference TestExecutor_DoWithEndpointFallback)
     // ------------------------------------------------------------------

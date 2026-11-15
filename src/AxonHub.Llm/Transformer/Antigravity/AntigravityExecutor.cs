@@ -19,15 +19,18 @@ public sealed class AntigravityExecutor : IExecutor
     /// <summary>Port of NewExecutor: nil inner becomes the default HTTP transport.</summary>
     public AntigravityExecutor(IExecutor? inner)
     {
-        // Go's NewHttpClient has no total timeout (http.Client{}); the port keeps
-        // the .NET default of 100s on this default transport (registered
-        // difference). Redirects are followed by HttpExecutor with Go's loop.
-        _inner = inner ?? new HttpExecutor(new HttpClient(new SocketsHttpHandler
+        // Go's NewHttpClient constructs &http.Client{} with no total timeout
+        // (llm/httpclient/client.go:106); the handler overload of HttpExecutor
+        // uses Timeout.InfiniteTimeSpan. Redirects are followed by HttpExecutor
+        // with Go's loop.
+        _inner = inner ?? new HttpExecutor(new SocketsHttpHandler
         {
             AllowAutoRedirect = false,
-        }));
+        });
         _healthTracker = new AntigravityHealthTracker();
     }
+
+    internal IExecutor Inner => _inner;
 
     /// <summary>
     /// Port of SetModelName: sets the model name for the next request; used to

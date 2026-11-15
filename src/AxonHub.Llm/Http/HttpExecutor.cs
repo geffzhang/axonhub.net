@@ -43,6 +43,8 @@ public sealed class HttpExecutor : IExecutor
     {
     }
 
+    internal HttpClient Client => _client;
+
     /// <summary>
     /// Builds an executor over a transport with no total timeout, like Go's
     /// <c>http.Client</c> (llm/httpclient/client.go:106). The transport must not
