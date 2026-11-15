@@ -175,10 +175,11 @@ builder.Services.AddSingleton<IRequestChainRecorder, PostgresRequestChainRecorde
 
 // Usage-cost pricing: the reference preloads channel_model_prices into a
 // per-process cache; the port reads the same rows through the recorder-style
-// synchronous seam (IChannelPricingSource). The cost service is stateless, so
-// one instance serves every scoped orchestrator.
+// synchronous seam (IChannelPricingSource). The cost service is scoped so its
+// request-scoped model-library memo matches WithModelLibraryPriceMemo and is
+// shared by cost injection and usage-log creation within one request.
 builder.Services.AddSingleton<IChannelPricingSource, PostgresChannelPricingSource>();
-builder.Services.AddSingleton<IUsageCostService, UsageCostService>();
+builder.Services.AddScoped<IUsageCostService, UsageCostService>();
 
 // RPM/TPM/cooldown live in the channel grain (one owner per channel), so the
 // API middlewares write through the same authority ChannelPoolGrain scores

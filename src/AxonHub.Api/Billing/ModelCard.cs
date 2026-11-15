@@ -55,9 +55,21 @@ public static class ModelCardPricing
 
         // JSON null decodes into a nil *objects.ModelCard, which the reference
         // treats like "no priced items".
-        var card = JsonSerializer.Deserialize<ModelCard>(modelCardJson, BillingJson.Options);
-        var price = ToPrice(card);
+        var price = ToPriceFromJson(modelCardJson);
         return price is null ? null : ChannelModelPriceService.SerializePrice(price);
+    }
+
+    /// <summary>
+    /// Decodes a model card and converts it to a price for the billing
+    /// fallback. A malformed card throws, like ent failing to scan the JSON
+    /// column during the reference lookup.
+    /// </summary>
+    public static ModelPrice? ToPriceFromJson(string modelCardJson)
+    {
+        ArgumentNullException.ThrowIfNull(modelCardJson);
+
+        var card = JsonSerializer.Deserialize<ModelCard>(modelCardJson, BillingJson.Options);
+        return ToPrice(card);
     }
 
     public static ModelPrice? ToPrice(ModelCard? card)

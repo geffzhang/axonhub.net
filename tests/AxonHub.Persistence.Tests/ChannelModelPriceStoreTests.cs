@@ -196,14 +196,53 @@ public sealed class ChannelModelPriceStoreTests(PostgresFixture fixture)
                 Key = "system_inject_usage_cost",
                 Value = "true",
             });
+
+            SeedModel(context, "library-enabled", "enabled", """{"cost":{"input":1}}""");
+            SeedModel(context, "library-disabled", "disabled", """{"cost":{"input":2}}""");
+            SeedModel(context, "library-archived", "archived", """{"cost":{"input":3}}""");
+            SeedModel(
+                context,
+                "library-deleted",
+                "enabled",
+                """{"cost":{"input":4}}""",
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            await context.SaveChangesAsync();
         }
 
         var source = new PostgresChannelPricingSource(db.Factory);
 
         var price = Assert.Single(source.ListEnabledChannelPrices(channelId));
         Assert.Equal("ref-seam", price.ReferenceId);
+        Assert.True(source.IsEnabledChannel(channelId));
+        Assert.False(source.IsEnabledChannel(404_404));
         Assert.Equal("true", source.GetSystemValue("system_inject_usage_cost"));
         Assert.Null(source.GetSystemValue("system_missing"));
+
+        var enabled = source.FindModelLibraryModelCard("library-enabled");
+        Assert.True(enabled.Found);
+        Assert.False(enabled.Failed);
+        Assert.Equal(
+            1,
+            JsonNode.Parse(enabled.ModelCardJson!)!["cost"]!["input"]!.GetValue<int>());
+
+        var disabled = source.FindModelLibraryModelCard("library-disabled");
+        Assert.True(disabled.Found);
+        Assert.Equal(
+            2,
+            JsonNode.Parse(disabled.ModelCardJson!)!["cost"]!["input"]!.GetValue<int>());
+
+        foreach (var missingId in new[]
+        {
+            "library-archived",
+            "library-deleted",
+            "library-missing",
+        })
+        {
+            var missing = source.FindModelLibraryModelCard(missingId);
+            Assert.False(missing.Found);
+            Assert.False(missing.Failed);
+            Assert.Null(missing.ModelCardJson);
+        }
     }
 
     [Fact]

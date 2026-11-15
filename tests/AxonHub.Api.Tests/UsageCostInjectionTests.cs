@@ -229,6 +229,31 @@ public sealed class UsageCostInjectionTests(GrainClusterFixture fixture)
         Assert.Equal("ref-real", usage.CostPriceReferenceId);
     }
 
+    [Fact]
+    public async Task RealCostServiceFallsBackToTheModelLibrary()
+    {
+        fixture.Channels.Set(TestChannels.OpenAi(6106, "cost-library"));
+        var executor = new ScriptedExecutor
+        {
+            OnDo = (_, _, _) => TestChannels.Completion("cost-library"),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+        var pricing = new StubChannelPricingSource();
+        pricing.ModelCards["cost-library"] = """{"cost":{"input":1}}""";
+        pricing.Values[UsageCostService.InjectUsageCostKey] = "true";
+        var costService = new UsageCostService(pricing, new TestTimeProvider(Now));
+
+        var result = await NewOrchestrator(executor, recorder, costService)
+            .ProcessAsync(TestChannels.ChatRequest("cost-library"));
+
+        // One prompt token at $1/1M from the model library card.
+        Assert.Equal(0.000001, ResponseCost(result.Response!), 12);
+
+        var usage = Assert.Single(recorder.UsageLogs);
+        Assert.Equal(0.000001, usage.TotalCost!.Value, 12);
+        Assert.Equal("model_library:cost-library", usage.CostPriceReferenceId);
+    }
+
     private sealed class StubUsageCostService : IUsageCostService
     {
         public bool Enabled { get; set; }
@@ -252,8 +277,17 @@ public sealed class UsageCostInjectionTests(GrainClusterFixture fixture)
 
         public Dictionary<string, string?> Values { get; } = new(StringComparer.Ordinal);
 
+        public Dictionary<string, string> ModelCards { get; } = new(StringComparer.Ordinal);
+
         public IReadOnlyList<ChannelModelPriceRecord> ListEnabledChannelPrices(long channelId)
             => Prices.Where(price => price.ChannelId == channelId).ToList();
+
+        public bool IsEnabledChannel(long channelId) => true;
+
+        public ModelLibraryModelCardLookup FindModelLibraryModelCard(string modelId)
+            => ModelCards.TryGetValue(modelId, out var modelCard)
+                ? ModelLibraryModelCardLookup.Hit(modelCard)
+                : ModelLibraryModelCardLookup.Miss;
 
         public string? GetSystemValue(string key)
             => Values.TryGetValue(key, out var value) ? value : null;

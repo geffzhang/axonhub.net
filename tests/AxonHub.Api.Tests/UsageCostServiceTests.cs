@@ -63,6 +63,167 @@ public sealed class UsageCostServiceTests
     }
 
     [Fact]
+    public void FallsBackToTheModelLibraryPriceWithoutAChannelPrice()
+    {
+        var source = new FakeChannelPricingSource();
+        source.ModelCards["m-fallback"] = """{"cost":{"input":1,"output":2}}""";
+
+        var cost = NewService(source).Compute(1, "m-fallback", UsageTokens(100, 200));
+
+        // (100/1e6)*1 + (200/1e6)*2 = 0.0005.
+        Assert.NotNull(cost);
+        Assert.Equal(0.0005m, cost.Total);
+        Assert.Equal(2, cost.Items.Count);
+        Assert.Equal("model_library:m-fallback", cost.ReferenceId);
+    }
+
+    [Fact]
+    public void ChannelPriceWinsOverTheModelLibraryPrice()
+    {
+        var source = new FakeChannelPricingSource();
+        source.Prices.Add(PriceRow(
+            1,
+            "m-precedence",
+            """
+            {"items":[{"itemCode":"prompt_tokens","pricing":{"mode":"usage_per_unit","usagePerUnit":"1"}}]}
+            """,
+            "channel-ref"));
+        source.ModelCards["m-precedence"] = """{"cost":{"input":100}}""";
+
+        var cost = NewService(source).Compute(1, "m-precedence", UsageTokens(100, 0));
+
+        Assert.NotNull(cost);
+        Assert.Equal(0.0001m, cost.Total);
+        Assert.Equal("channel-ref", cost.ReferenceId);
+        Assert.Equal(0, source.ModelCardLookups);
+    }
+
+    [Fact]
+    public void FallbackSkipsUnpriceableLibraryEntries()
+    {
+        var source = new FakeChannelPricingSource();
+        source.ModelCards["m-no-cost"] = "{}";
+        source.ModelCards["m-null-card"] = "null";
+
+        foreach (var modelId in new[] { "m-no-cost", "m-null-card", "m-missing" })
+        {
+            Assert.Null(NewService(source).Compute(1, modelId, UsageTokens(100, 0)));
+        }
+    }
+
+    [Fact]
+    public void FallbackStripsEffortSuffixAndKeepsTheRequestedIdInTheReference()
+    {
+        var source = new FakeChannelPricingSource();
+        source.ModelCards["m-suffix"] = """{"cost":{"input":1,"output":2}}""";
+
+        var cost = NewService(source).Compute(1, "m-suffix-high", UsageTokens(100, 200));
+
+        Assert.NotNull(cost);
+        Assert.Equal(0.0005m, cost.Total);
+        Assert.Equal("model_library:m-suffix-high", cost.ReferenceId);
+        Assert.Equal(["m-suffix-high", "m-suffix"], source.LookedUpModelIds);
+    }
+
+    [Fact]
+    public void FallbackPrefersAnExactLibraryEntryBeforeTheBaseModel()
+    {
+        var source = new FakeChannelPricingSource();
+        source.ModelCards["m-exact"] = """{"cost":{"input":10}}""";
+        source.ModelCards["m-exact-high"] = """{"cost":{"input":1}}""";
+
+        var cost = NewService(source).Compute(1, "m-exact-high", UsageTokens(100, 0));
+
+        // (100 / 1e6) * 1 = 0.0001; the base price would yield 0.001.
+        Assert.NotNull(cost);
+        Assert.Equal(0.0001m, cost.Total);
+        Assert.Equal(["m-exact-high"], source.LookedUpModelIds);
+    }
+
+    [Theory]
+    [InlineData("m", new[] { "m" })]
+    [InlineData("m-high", new[] { "m-high", "m" })]
+    [InlineData("m-medium", new[] { "m-medium", "m" })]
+    [InlineData("m-low", new[] { "m-low", "m" })]
+    [InlineData("m-high-", new[] { "m-high-" })]
+    public void ModelLibraryPriceCandidatesStripOnlyCompleteSuffixes(
+        string modelId,
+        string[] expected)
+    {
+        Assert.Equal(expected, ModelLibraryPrice.Candidates(modelId));
+    }
+
+    [Fact]
+    public void ModelLibraryLookupsAreMemoizedPerServiceInstance()
+    {
+        var source = new FakeChannelPricingSource();
+        source.ModelCards["m-hit"] = """{"cost":{"input":1}}""";
+        var service = NewService(source);
+
+        var first = service.Compute(1, "m-hit", UsageTokens(100, 0));
+        Assert.Equal(0.0001m, first!.Total);
+        Assert.Equal(1, source.ModelCardLookups);
+
+        // A price change within the same request reuses the memoized result.
+        source.ModelCards["m-hit"] = """{"cost":{"input":9}}""";
+        var second = service.Compute(1, "m-hit", UsageTokens(100, 0));
+        Assert.Equal(0.0001m, second!.Total);
+        Assert.Equal(1, source.ModelCardLookups);
+
+        // A fresh request (new scoped instance) observes the new price.
+        var fresh = NewService(source).Compute(1, "m-hit", UsageTokens(100, 0));
+        Assert.Equal(0.0009m, fresh!.Total);
+        Assert.Equal(2, source.ModelCardLookups);
+    }
+
+    [Fact]
+    public void MissedModelLibraryLookupsAreMemoizedWithinTheRequest()
+    {
+        var source = new FakeChannelPricingSource();
+        var service = NewService(source);
+
+        Assert.Null(service.Compute(1, "m-absent", UsageTokens(100, 0)));
+        Assert.Equal(1, source.ModelCardLookups);
+
+        source.ModelCards["m-absent"] = """{"cost":{"input":1}}""";
+        Assert.Null(service.Compute(1, "m-absent", UsageTokens(100, 0)));
+        Assert.Equal(1, source.ModelCardLookups);
+
+        var fresh = NewService(source).Compute(1, "m-absent", UsageTokens(100, 0));
+        Assert.Equal(0.0001m, fresh!.Total);
+        Assert.Equal(2, source.ModelCardLookups);
+    }
+
+    [Fact]
+    public void FailedModelLibraryLookupsAreNotMemoized()
+    {
+        var source = new FakeChannelPricingSource();
+        source.FailingModelCards.Add("m-error");
+        source.ModelCards["m-error"] = """{"cost":{"input":1}}""";
+        var service = NewService(source);
+
+        Assert.Null(service.Compute(1, "m-error", UsageTokens(100, 0)));
+        Assert.Equal(1, source.ModelCardLookups);
+
+        // The usage-log write runs later with a healthy lookup; the failed
+        // attempt must not pin a cached miss.
+        source.FailingModelCards.Clear();
+        var retried = service.Compute(1, "m-error", UsageTokens(100, 0));
+        Assert.Equal(0.0001m, retried!.Total);
+        Assert.Equal(2, source.ModelCardLookups);
+    }
+
+    [Fact]
+    public void DisabledChannelsDoNotUseTheModelLibraryFallback()
+    {
+        var source = new FakeChannelPricingSource { ChannelEnabled = false };
+        source.ModelCards["m-disabled"] = """{"cost":{"input":1}}""";
+
+        Assert.Null(NewService(source).Compute(1, "m-disabled", UsageTokens(100, 0)));
+        Assert.Equal(0, source.ModelCardLookups);
+    }
+
+    [Fact]
     public void UnknownModelReturnsNull()
     {
         var source = new FakeChannelPricingSource();
@@ -86,10 +247,13 @@ public sealed class UsageCostServiceTests
         var source = new FakeChannelPricingSource();
         source.Prices.Add(PriceRow(1, "good-model", TwoItemPrice));
         source.Prices.Add(PriceRow(1, "bad-model", "{not json"));
+        source.ModelCards["good-model"] = """{"cost":{"input":1}}""";
 
         // preloadModelPrices drops the entire channel cache when one row fails
-        // to decode, so even the good model has no price.
+        // to decode, so even the good model has no price; the channel is not
+        // treated as "no explicit price" and the library fallback stays inert.
         Assert.Null(NewService(source).Compute(1, "good-model", UsageTokens(1, 1)));
+        Assert.Equal(0, source.ModelCardLookups);
     }
 
     [Fact]
@@ -237,8 +401,34 @@ public sealed class UsageCostServiceTests
 
         public Dictionary<string, string?> Values { get; } = new(StringComparer.Ordinal);
 
+        public Dictionary<string, string> ModelCards { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> FailingModelCards { get; } = new(StringComparer.Ordinal);
+
+        public List<string> LookedUpModelIds { get; } = [];
+
+        public bool ChannelEnabled { get; set; } = true;
+
+        public int ModelCardLookups => LookedUpModelIds.Count;
+
         public IReadOnlyList<ChannelModelPriceRecord> ListEnabledChannelPrices(long channelId)
             => Prices.Where(price => price.ChannelId == channelId).ToList();
+
+        public bool IsEnabledChannel(long channelId) => ChannelEnabled;
+
+        public ModelLibraryModelCardLookup FindModelLibraryModelCard(string modelId)
+        {
+            LookedUpModelIds.Add(modelId);
+
+            if (FailingModelCards.Contains(modelId))
+            {
+                return ModelLibraryModelCardLookup.Failure;
+            }
+
+            return ModelCards.TryGetValue(modelId, out var modelCard)
+                ? ModelLibraryModelCardLookup.Hit(modelCard)
+                : ModelLibraryModelCardLookup.Miss;
+        }
 
         public string? GetSystemValue(string key)
             => Values.TryGetValue(key, out var value) ? value : null;

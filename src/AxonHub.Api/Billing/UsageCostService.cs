@@ -43,6 +43,12 @@ public sealed class UsageCostService(IChannelPricingSource pricing, TimeProvider
     /// <summary>SystemKeyInjectUsageCost.</summary>
     public const string InjectUsageCostKey = "system_inject_usage_cost";
 
+    // One resolution per (request, model id), including misses. The reference
+    // installs this memo on the request context; here the cost service is
+    // scoped, so its instance is the request boundary.
+    private readonly object _modelLibraryMemoGate = new();
+    private Dictionary<string, ModelLibraryMemoEntry>? _modelLibraryMemo;
+
     public UsageCost? Compute(long channelId, string modelId, Usage usage)
     {
         ArgumentNullException.ThrowIfNull(usage);
@@ -54,10 +60,6 @@ public sealed class UsageCostService(IChannelPricingSource pricing, TimeProvider
         }
 
         var rows = pricing.ListEnabledChannelPrices(channelId);
-        if (rows.Count == 0)
-        {
-            return null;
-        }
 
         // preloadModelPrices builds one map per channel. A row whose JSON fails
         // to decode makes the whole preload fail, so the channel ends up with no
@@ -81,13 +83,38 @@ public sealed class UsageCostService(IChannelPricingSource pricing, TimeProvider
             prices[row.ModelId] = (price, row.ReferenceId);
         }
 
-        if (!prices.TryGetValue(modelId, out var entry))
+        if (prices.TryGetValue(modelId, out var entry))
+        {
+            var result = UsageCostCalculator.Compute(usage, entry.Price, timeProvider.GetUtcNow());
+            return new UsageCost(result.Items, result.Total, entry.ReferenceId);
+        }
+
+        // An empty price list also covers a disabled or deleted channel, which
+        // the reference rejects before its model-library fallback. Only an
+        // enabled channel without an explicit price may use the library price.
+        if (rows.Count == 0 && !pricing.IsEnabledChannel(channelId))
         {
             return null;
         }
 
-        var result = UsageCostCalculator.Compute(usage, entry.Price, timeProvider.GetUtcNow());
-        return new UsageCost(result.Items, result.Total, entry.ReferenceId);
+        // Fallback: the channel has no explicit price for this model, so bill
+        // with the model library price configured under the Models menu. This
+        // keeps cost working when auto-configuration could not snapshot the
+        // price, for example when the price was added after channel creation.
+        var libraryPrice = ResolveModelLibraryPrice(modelId);
+        if (libraryPrice is null)
+        {
+            return null;
+        }
+
+        var libraryResult = UsageCostCalculator.Compute(
+            usage,
+            libraryPrice,
+            timeProvider.GetUtcNow());
+        return new UsageCost(
+            libraryResult.Items,
+            libraryResult.Total,
+            ModelLibraryPrice.ReferenceId(modelId));
     }
 
     public bool InjectUsageCostEnabled()
@@ -95,4 +122,84 @@ public sealed class UsageCostService(IChannelPricingSource pricing, TimeProvider
             pricing.GetSystemValue(InjectUsageCostKey),
             "true",
             StringComparison.Ordinal);
+
+    /// <summary>
+    /// Port of ChannelService.resolveModelLibraryPrice: exact model id first,
+    /// then a known effort/tier suffix stripped. A lookup error is not cached,
+    /// so the usage-log write (which runs after cost injection) can retry with
+    /// a healthy context; a genuine miss is cached for the request.
+    /// </summary>
+    private ModelPrice? ResolveModelLibraryPrice(string modelId)
+    {
+        if (modelId.Length == 0)
+        {
+            return null;
+        }
+
+        lock (_modelLibraryMemoGate)
+        {
+            if (_modelLibraryMemo is not null
+                && _modelLibraryMemo.TryGetValue(modelId, out var cached))
+            {
+                return cached.Price;
+            }
+        }
+
+        var lookupFailed = false;
+        foreach (var candidate in ModelLibraryPrice.Candidates(modelId))
+        {
+            var lookup = pricing.FindModelLibraryModelCard(candidate);
+            if (lookup.Failed)
+            {
+                lookupFailed = true;
+                continue;
+            }
+
+            if (!lookup.Found || lookup.ModelCardJson is null)
+            {
+                continue;
+            }
+
+            ModelPrice? price;
+            try
+            {
+                price = ModelCardPricing.ToPriceFromJson(lookup.ModelCardJson);
+            }
+            catch (JsonException)
+            {
+                // ent decodes model_card while scanning the row, so a malformed
+                // card is a failed lookup rather than a genuine miss.
+                lookupFailed = true;
+                continue;
+            }
+
+            if (price is null)
+            {
+                continue;
+            }
+
+            lock (_modelLibraryMemoGate)
+            {
+                _modelLibraryMemo ??= new Dictionary<string, ModelLibraryMemoEntry>(
+                    StringComparer.Ordinal);
+                _modelLibraryMemo[modelId] = new ModelLibraryMemoEntry(price);
+            }
+
+            return price;
+        }
+
+        if (!lookupFailed)
+        {
+            lock (_modelLibraryMemoGate)
+            {
+                _modelLibraryMemo ??= new Dictionary<string, ModelLibraryMemoEntry>(
+                    StringComparer.Ordinal);
+                _modelLibraryMemo[modelId] = new ModelLibraryMemoEntry(null);
+            }
+        }
+
+        return null;
+    }
+
+    private readonly record struct ModelLibraryMemoEntry(ModelPrice? Price);
 }
