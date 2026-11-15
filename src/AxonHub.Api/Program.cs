@@ -1522,7 +1522,12 @@ app.MapGet("/v1/models", ModelsEndpoint.ListOpenAiModelsAsync);
 app.MapGet("/v1/models/{*model}", ModelsEndpoint.RetrieveOpenAiModelAsync);
 app.MapGet("/anthropic/v1/models", ModelsEndpoint.ListAnthropicModelsAsync);
 
-app.MapPost("/v1/chat/completions", ChatCompletionEndpoint.HandleAsync);
+// Bind the handler explicitly: Minimal APIs cannot infer the endpoint's
+// optional preReadRequest / streamWriter / nilResultIsInternalError /
+// safeguards parameters, and treating them as services/body breaks route
+// matcher construction at startup.
+app.MapPost("/v1/chat/completions", (HttpContext context, ChatCompletionOrchestrator orchestrator) =>
+    ChatCompletionEndpoint.HandleAsync(context, orchestrator));
 
 // Legacy Completions API (routes.go: openaiGroup.POST("/completions")): the
 // reference's CompletionHandlers.ChatCompletion reuses the shared chat handler

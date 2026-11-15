@@ -165,8 +165,9 @@ docker run --rm -p 8080:8080 \
   axonhub.net
 ```
 
-镜像默认只包含 API。若需要管理界面，请先构建前端并把
-`frontend/dist` 挂载到容器内的 `/app/frontend/dist`，或自行扩展镜像。
+镜像在构建阶段自动编译 `frontend/dist`，并复制到容器内的
+`/app/frontend/dist`；启动后直接访问 `http://localhost:8080/` 即可使用管理界面。
+如需替换界面，可覆盖 `Server:Static:Root` 或挂载该目录。
 
 ## 配置
 
@@ -341,7 +342,7 @@ corpus/                         差分语料
   external account 等非交互凭据（C128）。
 - **WebSocket 传输**：端口自写 TLS/SSE 不声明 ALPN，因此 WebSocket 走
   HTTP/1.1（上游 #2664）。
-- **前端**：管理面 SPA 与上游同源，但 Docker 镜像默认不包含构建产物。
+- **前端构建**：Docker 构建阶段需要访问 npm registry 下载前端依赖；运行镜像本身不依赖 Node。
 - **平台验证**：目前主要在本机 Windows 11 + PostgreSQL 17 验证；Linux
   容器冒烟与 CI 已覆盖主要路径，跨平台矩阵仍可继续扩展。
 - 部分 live 特性按切片局部跟进；未跟进项均登记在差异台账，不以“未实现”

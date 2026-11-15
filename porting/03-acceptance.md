@@ -2567,6 +2567,12 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
   `AXONHUB_E2E_LLM_TEST_SERVER_URL` 时 18/18 通过，未设置时 18/18 跳过，常规
   测试不依赖外部进程。该用例不启动 Kestrel/PostgreSQL/Orleans，宿主级链路仍由
   上述「真实宿主」与容器冒烟覆盖。
+- [x] 容器内置管理界面 — 2026-11-15：Dockerfile 新增 Node 24 前端构建阶段，
+  `pnpm install --frozen-lockfile` + `pnpm build` 后把 `frontend/dist` 复制到
+  运行镜像的 `/app/frontend/dist`。与 PostgreSQL 17 容器同网络启动后
+  `GET /health` 返回 200，`GET /` 返回 200 且 index.html 含 `<div id="root">`。
+  同轮修复 `/v1/chat/completions` 直接注册可选参数方法组导致 Minimal API
+  路由匹配器初始化失败的问题；镜像约 303 MiB，测试容器已清理。
 - [ ] 跨平台（Windows / Linux / macOS） — 目前仅在 Windows 11 验证
 - [ ] 跨传输（stdio / HTTP / 进程内） — 仅进程内 HTTP 切片
 
