@@ -2253,6 +2253,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §261（2026-11-15）无 index 的流式 tool_calls 自动编号（live #2707）。C320 登记并转 resolved：Gemini 的 OpenAI 兼容端点把每个并行 tool call 整体放在独立 chunk 且不带 index，旧实现全部解码为 0，流式输出与聚合会合并调用并拼接参数。本轮新增 `ToolCallIndexer`：显式 index 原样保留并推进 next；无 index 时新 ID/name 开启新调用，空片段或重复最近调用 ID 续接；按 choice 记录最近调用与各 index 的 ID。`OpenAiOutboundStream` 与 `OpenAiAggregator` 都应用。新增 4 例（两个无 index 调用 0/1、空片段续接、显式 5 后无 index 得 6、aggregator 参数不合并）；定向 100/100，Llm 全量 3371/3371。未跑 Api 全量（新增 Llm 4 例）。台账 320 条（190 accepted / 130 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§262（2026-11-15）Responses done 事件不再重复 tool call 标识（live #2686）。C321 登记并转 resolved：`response.function_call_arguments.done` 的 chunk 重复了 `output_item.added` 已发送的 id/type/name，OpenAI SDK 这类跨 delta 拼接字符串字段的 Chat Completions 客户端会把 call_id/name 翻倍（37 字符变 74，下一次请求超 64 字符上限）。本轮按参照拆分 `nameChanged` / `namespaceChanged`：done chunk 只带 index 与缺失参数后缀；name 仅在变化时发送；namespace 仅在 identity（name 或 namespace）变化时发送，以保证下游能拼成 `namespace__name`；不再发送 id/type。新增 live 表驱动 4 例（参数只在 done、剩余参数在 done、namespace 只在 done、name 只在 done 且保留 namespace），按 SDK 方式拼接字段后断言；Responses 相关定向 448/448，Llm 全量 3375/3375。未跑 Api 全量（新增 Llm 4 例）。台账 321 条（190 accepted / 131 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

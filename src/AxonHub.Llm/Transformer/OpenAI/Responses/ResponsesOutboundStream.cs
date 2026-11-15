@@ -428,18 +428,19 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                         return; // Intentionally skip an unknown tool call.
                     }
 
-                    var identityChanged = false;
-                    if (!string.IsNullOrEmpty(ev.Name) && ev.Name != tc.Function.Name)
+                    var nameChanged = !string.IsNullOrEmpty(ev.Name) && ev.Name != tc.Function.Name;
+                    if (nameChanged)
                     {
-                        tc.Function.Name = ev.Name;
-                        identityChanged = true;
+                        tc.Function.Name = ev.Name!;
                     }
 
-                    if (!string.IsNullOrEmpty(ev.Namespace) && ev.Namespace != tc.Function.Namespace)
+                    var namespaceChanged = !string.IsNullOrEmpty(ev.Namespace) && ev.Namespace != tc.Function.Namespace;
+                    if (namespaceChanged)
                     {
                         tc.Function.Namespace = ev.Namespace;
-                        identityChanged = true;
                     }
+
+                    var identityChanged = nameChanged || namespaceChanged;
 
                     // Some upstreams provide the complete JSON arguments only in the
                     // done event. Preserve arguments already emitted through delta
@@ -486,7 +487,25 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                         }
                     }
 
-                    var toolCallIdx = _toolCallIndex[callId];
+                    // output_item.added already sent the id and type. Chat Completions clients join string
+                    // fields across deltas, so repeat neither, and send the name only when it changed (#2648).
+                    // The namespace is replaced rather than joined downstream, and a new name needs it to
+                    // flatten to namespace__name, so send it whenever the identity changed.
+                    var delta = new ToolCall
+                    {
+                        Index = _toolCallIndex[callId],
+                        Function = new FunctionCall { Arguments = missingArgs },
+                    };
+                    if (nameChanged)
+                    {
+                        delta.Function.Name = tc.Function.Name;
+                    }
+
+                    if (identityChanged)
+                    {
+                        delta.Function.Namespace = ResponsesConvertUtil.NullIfEmpty(tc.Function.Namespace);
+                    }
+
                     resp.Choices =
                     [
                         new Choice
@@ -494,21 +513,7 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                         Index = 0,
                         Delta = new Message
                         {
-                            ToolCalls =
-                            [
-                                new ToolCall
-                                {
-                                    Id = ResponsesConvertUtil.NullIfEmpty(tc.Id),
-                                    Type = ResponsesConvertUtil.NullIfEmpty(tc.Type),
-                                    Index = toolCallIdx,
-                                    Function = new FunctionCall
-                                    {
-                                        Name = tc.Function.Name,
-                                        Namespace = tc.Function.Namespace,
-                                        Arguments = missingArgs,
-                                    },
-                                },
-                            ],
+                            ToolCalls = [delta],
                         },
                     },
                 ];

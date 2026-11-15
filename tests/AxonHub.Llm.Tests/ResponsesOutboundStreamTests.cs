@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Pipeline;
@@ -514,6 +515,88 @@ public sealed class ResponsesOutboundStreamTests
 
         ResponsesStreamTestSupport.AssertJsonEquivalent(
             """{"task":"delegate this task"}""", arguments.ToString());
+    }
+
+    // Chat Completions clients such as the OpenAI SDK join every string field of a tool call
+    // delta, so the done event must not send the id and name again (#2648).
+    public static TheoryData<
+        string, string, string, string[], string, string, string, string> DoneIdentityCases => new()
+    {
+        { "arguments only in done", "get_weather", "", [], "get_weather", "", "get_weather", "" },
+        { "remaining arguments in done", "get_weather", "", ["""{"city":"""], "get_weather", "", "get_weather", "" },
+        { "namespace only in done", "get_weather", "", [], "get_weather", "weather_tools", "get_weather", "weather_tools" },
+        { "name only in done keeps namespace", "", "collaboration", [], "spawn_agent", "collaboration", "collaboration__spawn_agent", "collaboration" },
+    };
+
+    [Theory]
+    [MemberData(nameof(DoneIdentityCases))]
+    public void DoneDoesNotRepeatToolCallIdentity(
+        string name,
+        string addedName,
+        string addedNamespace,
+        string[] deltas,
+        string doneName,
+        string doneNamespace,
+        string wantName,
+        string wantNamespace)
+    {
+        _ = name;
+        var events = new List<StreamEvent>
+        {
+            ResponsesStreamTestSupport.Event(
+                """{"type":"response.created","response":{"id":"resp_identity","object":"response","created_at":1700000000,"model":"gpt-5","status":"in_progress","output":[]}}"""),
+            ResponsesStreamTestSupport.Event(
+                $$$"""{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_identity","type":"function_call","call_id":"call_identity","name":{{{JsonSerializer.Serialize(addedName)}}},"namespace":{{{JsonSerializer.Serialize(addedNamespace)}}},"arguments":""}}"""),
+        };
+        foreach (var delta in deltas)
+        {
+            events.Add(ResponsesStreamTestSupport.Event(
+                $$$"""{"type":"response.function_call_arguments.delta","item_id":"fc_identity","output_index":0,"delta":{{{JsonSerializer.Serialize(delta)}}}}"""));
+        }
+
+        events.Add(ResponsesStreamTestSupport.Event(
+            $$$"""{"type":"response.function_call_arguments.done","item_id":"fc_identity","output_index":0,"name":{{{JsonSerializer.Serialize(doneName)}}},"namespace":{{{JsonSerializer.Serialize(doneNamespace)}}},"arguments":"{\"city\":\"Paris\"}"}"""));
+        events.Add(ResponsesStreamTestSupport.Event(
+            """{"type":"response.completed","response":{"id":"resp_identity","object":"response","created_at":1700000000,"model":"gpt-5","status":"completed","output":[]}}"""));
+
+        var (responses, err) = RunEvents(events);
+        Assert.Null(err);
+
+        // Join string fields the way Chat Completions clients do. Namespace has no Chat
+        // Completions field; the Responses inbound stream replaces it, so keep the last one.
+        var id = new StringBuilder();
+        var toolType = new StringBuilder();
+        var joinedName = new StringBuilder();
+        var @namespace = string.Empty;
+        var arguments = new StringBuilder();
+        foreach (var response in responses)
+        {
+            if (ResponsesStreamTestSupport.IsDone(response)
+                || response.Choices.Count == 0
+                || response.Choices[0].Delta is not { } delta)
+            {
+                continue;
+            }
+
+            foreach (var toolCall in delta.ToolCalls ?? [])
+            {
+                id.Append(toolCall.Id);
+                toolType.Append(toolCall.Type);
+                joinedName.Append(toolCall.Function.Name);
+                if (!string.IsNullOrEmpty(toolCall.Function.Namespace))
+                {
+                    @namespace = toolCall.Function.Namespace;
+                }
+
+                arguments.Append(toolCall.Function.Arguments);
+            }
+        }
+
+        Assert.Equal("call_identity", id.ToString());
+        Assert.Equal("function", toolType.ToString());
+        Assert.Equal(wantName, joinedName.ToString());
+        Assert.Equal(wantNamespace, @namespace);
+        ResponsesStreamTestSupport.AssertJsonEquivalent("""{"city":"Paris"}""", arguments.ToString());
     }
 
     [Fact]
