@@ -196,10 +196,26 @@ public sealed class AnthropicOutboundTransformer : IOutboundTransformer, IApiKey
 
         // Automatic caching (top-level cache_control) is forwarded untouched; the
         // breakpoint optimizer only runs for explicit per-block breakpoints.
-        if (anthropicRequest.CacheControl is null
-            && AnthropicCacheControlOptimizer.CountCacheControls(anthropicRequest) > 0)
+        // Converted requests have no native cache field, so opt into Anthropic's
+        // automatic caching instead (#2697).
+        if (anthropicRequest.CacheControl is null)
         {
-            AnthropicCacheControlOptimizer.Optimize(anthropicRequest);
+            if (AnthropicCacheControlOptimizer.CountCacheControls(anthropicRequest) > 0)
+            {
+                AnthropicCacheControlOptimizer.Optimize(anthropicRequest);
+            }
+            else if (ShouldEnableAutomaticCacheControl(request))
+            {
+                anthropicRequest.CacheControl = new AnthropicCacheControl { Type = "ephemeral" };
+            }
+        }
+
+        // Vertex and Bedrock accept cache markers only at block level (#2702).
+        if (_config.Type is AnthropicPlatformType.Vertex or AnthropicPlatformType.Bedrock
+            && !AnthropicCacheControlOptimizer.MoveTopLevelCacheControlToLastBlock(anthropicRequest))
+        {
+            throw TransformerErrors.InvalidRequest(
+                "cannot safely place top-level cache control on managed Anthropic platform");
         }
 
         string url;
@@ -611,4 +627,13 @@ public sealed class AnthropicOutboundTransformer : IOutboundTransformer, IApiKey
     }
 
     private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
+
+    /// <summary>
+    /// Go: <c>shouldEnableAutomaticCacheControl</c>. Any non-empty inbound
+    /// format other than Anthropic Messages is a converted request (#2697).
+    /// </summary>
+    private static bool ShouldEnableAutomaticCacheControl(LlmRequest? request)
+        => request is not null
+            && !string.IsNullOrEmpty(request.ApiFormat)
+            && request.ApiFormat != ApiFormats.AnthropicMessage;
 }

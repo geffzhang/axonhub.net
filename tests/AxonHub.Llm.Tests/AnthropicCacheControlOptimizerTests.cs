@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using AxonHub.Llm.Transformer.Anthropic;
 
 namespace AxonHub.Llm.Tests;
@@ -686,6 +687,115 @@ public sealed class AnthropicCacheControlOptimizerTests
         Assert.NotNull(blocks);
         Assert.Null(blocks![0].CacheControl);
         Assert.NotNull(blocks[4].CacheControl);
+    }
+
+    // ------------------------------------------------------------------
+    // Top-level marker relocation (managed platforms)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void MoveTopLevelCacheControl_PlacesMarkerOnLastCacheableBlock()
+    {
+        var request = Request(Blocks("user", Text("Hello")));
+        request.CacheControl = Ephemeral();
+
+        Assert.True(AnthropicCacheControlOptimizer.MoveTopLevelCacheControlToLastBlock(request));
+
+        Assert.Null(request.CacheControl);
+        var block = Assert.Single(request.Messages![0].Content!.MultipleContent!);
+        Assert.Equal("ephemeral", block.CacheControl!.Type);
+    }
+
+    [Fact]
+    public void MoveTopLevelOneHourCacheControl_GoesBeforeExistingShortBreakpoint()
+    {
+        var shortControl = Ephemeral();
+        var request = new AnthropicMessageRequest
+        {
+            System = new AnthropicSystemPrompt
+            {
+                MultiplePrompts =
+                [
+                    new AnthropicSystemPromptPart { Type = "text", Text = "system" },
+                ],
+            },
+            Messages =
+            [
+                Blocks("user", new AnthropicMessageContentBlock
+                {
+                    Type = "text",
+                    Text = "earlier",
+                    CacheControl = shortControl,
+                }),
+            ],
+            CacheControl = new AnthropicCacheControl { Type = "ephemeral", Ttl = "1h" },
+        };
+
+        Assert.True(AnthropicCacheControlOptimizer.MoveTopLevelCacheControlToLastBlock(request));
+
+        Assert.Null(request.CacheControl);
+        Assert.Equal("1h", request.System.MultiplePrompts![0].CacheControl!.Ttl);
+        Assert.Same(shortControl, request.Messages![0].Content!.MultipleContent![0].CacheControl);
+    }
+
+    [Fact]
+    public void MoveTopLevelOneHourCacheControl_LeavesExistingBreakpointWhenUnsafe()
+    {
+        var shortControl = Ephemeral();
+        var request = Request(Blocks("user", new AnthropicMessageContentBlock
+        {
+            Type = "text",
+            Text = "earlier",
+            CacheControl = shortControl,
+        }));
+        request.CacheControl = new AnthropicCacheControl { Type = "ephemeral", Ttl = "1h" };
+
+        Assert.False(AnthropicCacheControlOptimizer.MoveTopLevelCacheControlToLastBlock(request));
+
+        Assert.Null(request.CacheControl);
+        Assert.Same(shortControl, request.Messages![0].Content!.MultipleContent![0].CacheControl);
+    }
+
+    [Fact]
+    public void MoveTopLevelCacheControl_PreservesRawBlockFields()
+    {
+        var content = new AnthropicMessageContent
+        {
+            Raw = Encoding.UTF8.GetBytes(
+                """[{"type":"text","text":"raw","vendor_field":"keep"}]"""),
+        };
+        var request = new AnthropicMessageRequest
+        {
+            Messages = [new AnthropicMessageParam { Role = "user", Content = content }],
+            CacheControl = Ephemeral(),
+        };
+
+        Assert.True(AnthropicCacheControlOptimizer.MoveTopLevelCacheControlToLastBlock(request));
+
+        using var document = JsonDocument.Parse(content.Raw!);
+        var block = document.RootElement[0];
+        Assert.Equal("keep", block.GetProperty("vendor_field").GetString());
+        Assert.Equal("ephemeral", block.GetProperty("cache_control").GetProperty("type").GetString());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("1h")]
+    public void MoveTopLevelCacheControl_ReusesMatchingLastBreakpoint(string ttl)
+    {
+        var lastControl = new AnthropicCacheControl { Type = "ephemeral", Ttl = ttl };
+        var request = Request(Blocks("user", new AnthropicMessageContentBlock
+        {
+            Type = "text",
+            Text = "last",
+            CacheControl = lastControl,
+        }));
+        request.CacheControl = new AnthropicCacheControl { Type = "ephemeral", Ttl = ttl };
+
+        Assert.True(AnthropicCacheControlOptimizer.MoveTopLevelCacheControlToLastBlock(request));
+
+        Assert.Null(request.CacheControl);
+        Assert.Same(lastControl, request.Messages![0].Content!.MultipleContent![0].CacheControl);
     }
 
     // ------------------------------------------------------------------

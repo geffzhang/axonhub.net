@@ -48,6 +48,263 @@ public static class AnthropicCacheControlOptimizer
     }
 
     /// <summary>
+    /// Go: <c>moveTopLevelCacheControlToLastBlock</c>. Vertex and Bedrock
+    /// require block-level cache markers, so a top-level automatic marker is
+    /// relocated to the latest cacheable block. Returns false when that cannot
+    /// be done safely (capacity or one-hour ordering).
+    /// </summary>
+    public static bool MoveTopLevelCacheControlToLastBlock(AnthropicMessageRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+
+        var cacheControl = req.CacheControl;
+        req.CacheControl = null;
+        if (cacheControl is null)
+        {
+            return true;
+        }
+
+        var refs = NormalizeAndCollectCacheControlRefs(req);
+        if (refs.Count > 0)
+        {
+            var last = refs[^1].Value;
+            if (last is not null
+                && IsOneHourCacheControl(last) == IsOneHourCacheControl(cacheControl))
+            {
+                return true;
+            }
+        }
+
+        if (CountCacheControls(req) >= MaxCacheControlBreakpoints)
+        {
+            return false;
+        }
+
+        if (IsOneHourCacheControl(cacheControl))
+        {
+            for (var i = 0; i < refs.Count; i++)
+            {
+                var existing = refs[i].Value;
+                if (existing is not null && !IsOneHourCacheControl(existing))
+                {
+                    for (var j = i - 1; j >= 0; j--)
+                    {
+                        if (refs[j].Value is null)
+                        {
+                            refs[j].Value = cacheControl;
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+            }
+        }
+
+        var lastOneHour = -1;
+        for (var i = 0; i < refs.Count; i++)
+        {
+            if (IsOneHourCacheControl(refs[i].Value))
+            {
+                lastOneHour = i;
+            }
+        }
+
+        for (var i = refs.Count - 1; i > lastOneHour; i--)
+        {
+            if (refs[i].Value is null)
+            {
+                refs[i].Value = cacheControl;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsOneHourCacheControl(AnthropicCacheControl? cacheControl)
+        => cacheControl is not null && cacheControl.Ttl == "1h";
+
+    /// <summary>
+    /// Go: <c>normalizeAndCollectCacheControlRefs</c>. Normalizes string
+    /// message/system content, then collects tools, system prompts and every
+    /// cacheable message block, including raw blocks.
+    /// </summary>
+    private static List<CacheControlSlot> NormalizeAndCollectCacheControlRefs(
+        AnthropicMessageRequest req)
+    {
+        NormalizeMessageContents(req);
+
+        var refs = new List<CacheControlSlot>();
+        foreach (var tool in req.Tools ?? [])
+        {
+            refs.Add(new CacheControlSlot(
+                () => tool.CacheControl,
+                value => tool.CacheControl = value,
+                direct: true));
+        }
+
+        if (req.System is { } system)
+        {
+            if (system.MultiplePrompts is { Count: > 0 } prompts)
+            {
+                foreach (var prompt in prompts)
+                {
+                    refs.Add(new CacheControlSlot(
+                        () => prompt.CacheControl,
+                        value => prompt.CacheControl = value,
+                        direct: true));
+                }
+            }
+            else if (!string.IsNullOrEmpty(system.Prompt))
+            {
+                var text = system.Prompt;
+                system.Prompt = null;
+                system.MultiplePrompts =
+                [
+                    new AnthropicSystemPromptPart { Type = "text", Text = text },
+                ];
+                refs.Add(new CacheControlSlot(
+                    () => system.MultiplePrompts[0].CacheControl,
+                    value => system.MultiplePrompts[0].CacheControl = value,
+                    direct: true));
+            }
+        }
+
+        foreach (var message in req.Messages ?? [])
+        {
+            AppendCacheControlSlots(refs, message.Content);
+        }
+
+        return refs;
+    }
+
+    private static void AppendCacheControlSlots(
+        List<CacheControlSlot> refs,
+        AnthropicMessageContent? content)
+    {
+        if (content is null)
+        {
+            return;
+        }
+
+        if (content.Raw is { Length: > 0 })
+        {
+            AppendRawCacheControlSlots(refs, content);
+            return;
+        }
+
+        foreach (var block in content.MultipleContent ?? [])
+        {
+            if (IsCacheableMessageBlock(block))
+            {
+                refs.Add(new CacheControlSlot(
+                    () => block.CacheControl,
+                    value => block.CacheControl = value,
+                    direct: true));
+            }
+
+            if (block.Content is not null)
+            {
+                AppendCacheControlSlots(refs, block.Content);
+            }
+        }
+    }
+
+    private static void AppendRawCacheControlSlots(
+        List<CacheControlSlot> refs,
+        AnthropicMessageContent content)
+    {
+        if (content.Raw is not { Length: > 0 } raw)
+        {
+            return;
+        }
+
+        object? decoded;
+        try
+        {
+            decoded = DecodeRawContent(raw);
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        WalkRawContent(decoded, block =>
+        {
+            if (!IsCacheableRawBlock(block))
+            {
+                return false;
+            }
+
+            refs.Add(new CacheControlSlot(
+                () => RawCacheControl(
+                    block.TryGetValue("cache_control", out var value) ? value : null),
+                value =>
+                {
+                    if (value is null)
+                    {
+                        block.Remove("cache_control");
+                    }
+                    else
+                    {
+                        block["cache_control"] = value;
+                    }
+
+                    try
+                    {
+                        content.Raw = GoJson.Marshal(decoded);
+                    }
+                    catch (JsonException)
+                    {
+                        // Go ignores the marshal error here; the slot edit is lost.
+                    }
+                },
+                direct: false));
+            return false;
+        });
+    }
+
+    private static bool IsCacheableRawBlock(Dictionary<string, object?> block)
+    {
+        if (!block.TryGetValue("type", out var typeValue) || typeValue is not string type)
+        {
+            return false;
+        }
+
+        if (type is "thinking" or "redacted_thinking")
+        {
+            return false;
+        }
+
+        if (type != "text")
+        {
+            return true;
+        }
+
+        return block.TryGetValue("text", out var text)
+            && text is string textValue
+            && textValue.Length > 0;
+    }
+
+    private static AnthropicCacheControl? RawCacheControl(object? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return LlmJson.Deserialize<AnthropicCacheControl>(GoJson.Marshal(value));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Counts the cache_control breakpoints already present on messages
     /// (excluding tools and system).
     /// </summary>
@@ -703,6 +960,24 @@ public static class AnthropicCacheControlOptimizer
     /// Go's <c>**CacheControl</c>: a reference to the property so injection can
     /// replace it in place.
     /// </summary>
+    /// <summary>
+    /// Go: <c>cacheControlSlot</c>. A direct slot participates in message
+    /// anchor collection; a raw slot exists only to relocate a top-level marker.
+    /// </summary>
+    private sealed class CacheControlSlot(
+        Func<AnthropicCacheControl?> get,
+        Action<AnthropicCacheControl?> set,
+        bool direct)
+    {
+        public AnthropicCacheControl? Value
+        {
+            get => get();
+            set => set(value);
+        }
+
+        public bool Direct { get; } = direct;
+    }
+
     private sealed class CacheControlRef(Func<AnthropicCacheControl?> get, Action<AnthropicCacheControl?> set)
     {
         public AnthropicCacheControl? Value

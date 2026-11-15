@@ -2263,6 +2263,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §266（2026-11-15）结构化 Codex overload 失败可重试（live #2657）。C325 登记并转 resolved：`response.failed` 带结构化 `error.code` 且尚未提交有意义内容时，参照先发 usage chunk（若有）再以 `ResponseError` 结束；状态码取 400..599、否则 502，`SuppressStatusText` 省略状态前缀，`Cause` 指向 `ErrEmptyResponse`，Next 排空队列后报错且不再读源。`ErrEmptyResponse` 同时从 pipeline 移到 `llm` 并被 pipeline 别名复用；`GoErrors` 沿 `ResponseError.Cause` 展开，使 `retryableErrorPatterns` 能匹配结构化 code。端口此前输出 `finish_reason=error`，丢失 code/usage。本轮补齐 `_contentCommitted`、`responseHasMeaningfulContent`、结构化失败分支与错误辅助函数，并移植 11 组状态码、usage-before-error、畸形回退测试；Api 重试谓词新增 3 例。Responses/EmptyResponse/Retry 定向 94/94，ChannelRetryPredicate 19/19，Llm 全量 3403/3403。未跑 Api 全量（新增 Llm 13 例、Api 3 例）。台账 325 条（190 accepted / 135 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§267（2026-11-15）转换请求的 Anthropic 自动缓存与托管平台块级归一化（live #2697/#2702/#2703）。C326 登记并转 resolved：非同源转换请求（`APIFormat` 非空且不是 `anthropic/messages`）没有原生 cache 字段，参照为其开启顶层 `cache_control={type:ephemeral}`，显式块级断点仍走优化器；Vertex/Bedrock 只接受块级标记，需把顶层标记移到最后一个可缓存块，并处理显式断点保留、1h 顺序、四断点上限、末尾同 TTL 复用与 raw 内容字段保留，无法安全放置时返回 invalid_request。本轮在 `AnthropicCacheControlOptimizer` 增加 `MoveTopLevelCacheControlToLastBlock`、`NormalizeAndCollectCacheControlRefs`、raw/tools/system 槽位，并在 `AnthropicOutboundTransformer` 接入自动开启与托管平台归一化。新增 optimizer 5 组 + managed 平台 10 例测试；Anthropic cache/outbound 定向 74/74，Llm 全量 3419/3419。未跑 Api 全量（新增 Llm 16 例）。台账 326 条（190 accepted / 136 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
