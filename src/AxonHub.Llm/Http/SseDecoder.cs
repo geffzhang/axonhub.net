@@ -141,10 +141,19 @@ public sealed class SseDecoder : IDisposable
         {
             // Port of go-sse's MaxEventSize: bufio.Scanner splits into whole
             // events, so the limit covers the event block including the line
-            // terminators. An oversized event is reported instead of being
+            // terminators. The reference's newlineTerminatingReader synthesizes
+            // one '\n' when the body ends without one (#2692), so that byte
+            // counts too. An oversized event is reported instead of being
             // delivered, and every later Next returns false.
             var recordBytes = Encoding.UTF8.GetByteCount(_text.AsSpan(recordStart, _pos - recordStart))
                 + (recordStart == 0 ? _bomBytes : 0);
+            if (_pos >= _text.Length
+                && _text.Length > 0
+                && _text[^1] != '\n'
+                && _text[^1] != '\r')
+            {
+                recordBytes++;
+            }
 
             if (recordBytes > _maxEventBytes)
             {

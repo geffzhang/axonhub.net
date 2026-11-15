@@ -2255,6 +2255,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §262（2026-11-15）Responses done 事件不再重复 tool call 标识（live #2686）。C321 登记并转 resolved：`response.function_call_arguments.done` 的 chunk 重复了 `output_item.added` 已发送的 id/type/name，OpenAI SDK 这类跨 delta 拼接字符串字段的 Chat Completions 客户端会把 call_id/name 翻倍（37 字符变 74，下一次请求超 64 字符上限）。本轮按参照拆分 `nameChanged` / `namespaceChanged`：done chunk 只带 index 与缺失参数后缀；name 仅在变化时发送；namespace 仅在 identity（name 或 namespace）变化时发送，以保证下游能拼成 `namespace__name`；不再发送 id/type。新增 live 表驱动 4 例（参数只在 done、剩余参数在 done、namespace 只在 done、name 只在 done 且保留 namespace），按 SDK 方式拼接字段后断言；Responses 相关定向 448/448，Llm 全量 3375/3375。未跑 Api 全量（新增 Llm 4 例）。台账 321 条（190 accepted / 131 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§263（2026-11-15）EOF 处未终止的最终 SSE 行（live #2692）。C322 登记并转 resolved：synthetic.new 这类上游以没有尾随换行的 `data: [DONE]` 结束响应体，go-sse 会丢弃未终止的最终字段，终端事件随之丢失，请求在完整回答后被记为 canceled。参照用 `newlineTerminatingReader` 在 EOF 前合成缺失换行；恢复的 `[DONE]` 由既有终止分支记为 completed。端口自写解码器本就会 flush 末行，但 `HttpSseEventStream` 未计入末行字节，两个解码器也都没把合成换行计入 `MaxEventSize`。本轮在增量解码器的 EOF 末行报告 `lineBytes` 与一个合成终止符，并在 `SseDecoder` 的大小计算中为未终止末行加 1 字节；终止行、孤立 CR 与空 body 不变。新增 `HttpSseEventStreamTests` 10 例（复制 live 的 synthetic 终止/未终止 fixture 对并证明只差行终止、裸 `data: [DONE]`、截断 JSON 不伪造终端、合成换行计入上限、终止事件恰好达到上限、孤立 CR、空 body、`SseDecoder` 字符串路径）；SSE/Executor 定向 19/19，Llm 全量 3385/3385。Api 侧的持久化状态断言未单独移植，解码器现在与参照交付相同的 `[DONE]` 事件。未跑 Api 全量（新增 Llm 10 例）。台账 322 条（190 accepted / 132 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

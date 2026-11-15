@@ -214,7 +214,18 @@ public sealed class HttpSseEventStream : IStream<StreamEvent>
         {
             if (!TryReadByte(out var b))
             {
-                return bytes.Count == 0 ? null : Decode(bytes);
+                if (bytes.Count == 0)
+                {
+                    return null;
+                }
+
+                // go-sse drops an unterminated final field. The reference wraps
+                // the body in newlineTerminatingReader, which synthesizes '\n'
+                // at EOF (#2692), so the final line and that newline both count
+                // toward the event-size cap.
+                lineBytes = bytes.Count;
+                terminatorBytes = 1;
+                return Decode(bytes);
             }
 
             if (b == '\n')

@@ -3,3 +3,8 @@
 
 # gqlgen playground pages are served byte-for-byte; keep their LF endings.
 src/AxonHub.Api/Static/Playground/*.html text eol=lf
+
+# Captured upstream SSE bodies are byte-exact protocol fixtures; line-ending
+# conversion would change their meaning (the final line is intentionally
+# unterminated).
+tests/AxonHub.Llm.Tests/testdata/httpclient/*.raw -text
