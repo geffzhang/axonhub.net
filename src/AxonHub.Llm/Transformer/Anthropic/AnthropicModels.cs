@@ -244,6 +244,20 @@ public sealed class AnthropicTool
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Strict { get; set; }
 
+    private List<string>? _allowedCallers;
+
+    /// <summary>
+    /// Anthropic's <c>allowed_callers</c> on function/custom tools. The field is
+    /// omitted when unset or empty, matching Go's <c>omitempty</c>.
+    /// </summary>
+    [JsonPropertyName("allowed_callers")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? AllowedCallers
+    {
+        get => _allowedCallers is { Count: > 0 } ? _allowedCallers : null;
+        set => _allowedCallers = value;
+    }
+
     [JsonPropertyName("allowed_domains")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? AllowedDomains { get; set; }

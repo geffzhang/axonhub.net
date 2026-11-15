@@ -161,6 +161,21 @@ public sealed class AnthropicInboundTransformerTests
         Assert.Equal("approximate", request.Tools[1].WebSearch!.UserLocation!.Type);
     }
 
+    [Fact]
+    public void ConvertsAllowedCallersOnFunctionTools()
+    {
+        var request = Transform(
+            "{" + Base + "," + Messages + ",\"tools\":["
+            + "{\"name\":\"get_weather\",\"description\":\"Get the weather\","
+            + "\"input_schema\":{\"type\":\"object\",\"properties\":{}},"
+            + "\"allowed_callers\":[\"direct\"]}]}");
+
+        var tool = Assert.Single(request.Tools!);
+        Assert.Equal(ToolTypes.Function, tool.Type);
+        Assert.Equal("get_weather", tool.Function!.Name);
+        Assert.Equal(["direct"], tool.Function.AllowedCallers!);
+    }
+
     /// <summary>
     /// Accepted difference C051: Go's json.RawMessage keeps the literal
     /// "null" (so the OpenAI outbound body carries "parameters":null), while

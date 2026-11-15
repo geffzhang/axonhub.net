@@ -177,6 +177,20 @@ public sealed class Function
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Strict { get; set; }
 
+    private List<string>? _allowedCallers;
+
+    /// <summary>
+    /// Caller kinds allowed to invoke this tool. Go's <c>omitempty</c> keeps an
+    /// absent or empty slice off the wire, so the getter reports empty as null.
+    /// </summary>
+    [JsonPropertyName("allowed_callers")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? AllowedCallers
+    {
+        get => _allowedCallers is { Count: > 0 } ? _allowedCallers : null;
+        set => _allowedCallers = value;
+    }
+
     /// <summary>Go struct copy semantics for the nested Function value.</summary>
     public Function ShallowClone() => (Function)MemberwiseClone();
 }

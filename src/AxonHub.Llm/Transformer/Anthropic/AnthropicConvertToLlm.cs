@@ -531,6 +531,7 @@ public static class AnthropicConvertToLlm
                         Description = tool?.Description,
                         Parameters = tool?.InputSchema,
                         Strict = tool?.Strict,
+                        AllowedCallers = tool?.AllowedCallers,
                     },
                     CacheControl = ConvertCacheControl(tool?.CacheControl),
                 };

@@ -2225,6 +2225,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §247（2026-11-15）通道变换选项与 `between_tools` 对账。C180 转 resolved：对账确认端口已在 `PersistentOutboundTransformer` 的请求渲染前应用 `ChannelTransformOptions.Apply`（ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem）、`ApplyReasoningEffortMapping`（含 `output_config.effort` 同步）、`FilterResponseCustomToolMessagesForNonResponsesOutbound` 与 `ShouldForceStreamingForCandidate`（require 通道强制流式并补 `include_usage`）。本轮补齐唯一遗漏的 `between_tools`：Anthropic 入站在校验中接受该类型（错误文案同步扩展），`ConvertThinking` 保留 `thinking_type=between_tools` 且统一 `ReasoningEffort=none`，`output_config.effort` 只写入 metadata 不改统一 effort；出站按 metadata 原样回写 `thinking.type=between_tools`；通道 reasoning effort 映射优先映射该 native effort，且 `nativeOnly` 时保留统一 `none`。新增 Llm 2 例（入站扩展 1、出站 1）与 Api 1 例（native effort 映射）；Anthropic 相关 Llm 回归 244/244、Api 端点/编排回归 90/90、ChannelTransformOptionsTests 44/44。未跑 Api 全量（新增 Api 1 例、Llm 1 例待下次全量计入）。台账 309 条（190 accepted / 119 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§248（2026-11-15）Anthropic `allowed_callers` 工具字段（live #2639）。C310 登记并转 resolved：live 提交 `8cdc33a1` 为 function/custom 工具在 wire `Tool` 与统一 `llm.Function` 上增加 `allowed_callers`，入站与出站两个方向复制，缺席或空切片保持不出现（不是 `null` 也不是 `[]`），server tools（web_search）不新增字段。端口此前未建模该字段；本轮在 `Function` 与 `AnthropicTool` 上增加 `AllowedCallers`，getter 把空列表归一为 `null` 以满足 Go `omitempty`，`ConvertToolToLlm` / `ConvertToolsAnthropic` 双向复制。测试：入站 1 例、出站 1 例、缺席 nil/empty 2 例（含统一 Function JSON 省略与入站保持 null）；Anthropic 相关 Llm 回归 248/248、Llm 全量 3302/3302。未跑 Api 全量（新增 Llm 4 例）。台账 310 条（190 accepted / 120 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

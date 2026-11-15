@@ -385,6 +385,7 @@ public static class AnthropicOutboundRequest
                         Description = EmptyToNull(tool.Function.Description),
                         InputSchema = NormalizeInputSchema(tool.Function.Parameters),
                         Strict = tool.Function.Strict,
+                        AllowedCallers = tool.Function.AllowedCallers,
                         CacheControl = ConvertToAnthropicCacheControl(tool.CacheControl),
                     });
                     break;

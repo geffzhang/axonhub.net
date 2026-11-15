@@ -411,6 +411,73 @@ public sealed class AnthropicOutboundTransformerTests
     }
 
     [Fact]
+    public void TransformRequest_FunctionToolPreservesAllowedCallers()
+    {
+        var request = SimpleRequest("Use the tool");
+        request.Tools =
+        [
+            new Tool
+            {
+                Type = ToolTypes.Function,
+                Function = new Function
+                {
+                    Name = "get_weather",
+                    Description = "Get the weather",
+                    Parameters = Json("""{"type":"object","properties":{}}"""),
+                    AllowedCallers = ["direct"],
+                },
+            },
+        ];
+
+        var result = Direct().TransformRequest(request);
+        var tool = Body(result).GetProperty("tools")[0];
+
+        Assert.Equal(
+            ["direct"],
+            tool.GetProperty("allowed_callers").EnumerateArray()
+                .Select(static item => item.GetString()!)
+                .ToArray());
+        Assert.Contains(
+            "\"allowed_callers\":[\"direct\"]",
+            Encoding.UTF8.GetString(result.Body!),
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TransformRequest_AbsentAllowedCallersStayOffTheWire(bool empty)
+    {
+        List<string>? allowedCallers = empty ? [] : null;
+        var function = new Function
+        {
+            Name = "get_weather",
+            Parameters = Json("""{"type":"object","properties":{}}"""),
+            AllowedCallers = allowedCallers,
+        };
+        var request = SimpleRequest("Use the tool");
+        request.Tools = [new Tool { Type = ToolTypes.Function, Function = function }];
+
+        var result = Direct().TransformRequest(request);
+
+        Assert.DoesNotContain(
+            "allowed_callers",
+            Encoding.UTF8.GetString(result.Body!),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "allowed_callers",
+            JsonSerializer.Serialize(function),
+            StringComparison.Ordinal);
+
+        // An absent inbound field stays nil rather than becoming an empty list.
+        Assert.True(
+            AnthropicConvertToLlm.ConvertToolToLlm(
+                new AnthropicTool { Name = "get_weather" },
+                out var unified));
+        Assert.Null(unified.Function!.AllowedCallers);
+    }
+
+    [Fact]
     public void TransformRequest_WebSearchToolUsesNativeTypeAndBetaHeader()
     {
         var request = SimpleRequest("Search the web for latest AI news");
