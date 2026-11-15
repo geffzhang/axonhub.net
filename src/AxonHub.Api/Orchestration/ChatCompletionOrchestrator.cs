@@ -707,7 +707,8 @@ public sealed class ChatCompletionOrchestrator
                 trackSelection: true,
                 requiredCount,
                 effectivePolicy.LoadBalancerStrategy,
-                cancellationToken)
+                stream: llmRequest.Stream == true,
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         if (candidates.Length == 0)
@@ -1330,7 +1331,8 @@ public sealed class ChatCompletionOrchestrator
                     trackSelection: true,
                     requiredCount,
                     strategy,
-                    cancellationToken)
+                    stream: request.Stream == true,
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -1349,7 +1351,8 @@ public sealed class ChatCompletionOrchestrator
                     trackSelection: false,
                     fallbackCount,
                     strategy,
-                    cancellationToken)
+                    stream: request.Stream == true,
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -1362,7 +1365,8 @@ public sealed class ChatCompletionOrchestrator
                 trackSelection: true,
                 requiredCount: 1,
                 strategy,
-                cancellationToken)
+                stream: request.Stream == true,
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         return [sticky, .. fallback];

@@ -32,6 +32,11 @@ public sealed class ChannelGrain : Grain, IChannelGrain
     private long _consecutiveFailures;
     private DateTimeOffset? _lastSelectedAt;
     private DateTimeOffset? _lastFailureAt;
+    private long _streamingSampleCount;
+    private double _streamingFirstTokenLatencyEwmaMs;
+    private double _streamingTokensPerSecondEwma;
+    private long _nonStreamingSampleCount;
+    private double _nonStreamingLatencyEwmaMs;
 
     private long ChannelId => this.GetPrimaryKeyLong();
 
@@ -53,6 +58,11 @@ public sealed class ChannelGrain : Grain, IChannelGrain
             RateLimitRequests = _rateLimit.GetRequestCount(ChannelId, now),
             RateLimitTokens = _rateLimit.GetTokenCount(ChannelId, now),
             CooldownUntil = hasCooldown ? cooldownUntil : null,
+            StreamingSampleCount = _streamingSampleCount,
+            StreamingFirstTokenLatencyEwmaMs = _streamingFirstTokenLatencyEwmaMs,
+            StreamingTokensPerSecondEwma = _streamingTokensPerSecondEwma,
+            NonStreamingSampleCount = _nonStreamingSampleCount,
+            NonStreamingLatencyEwmaMs = _nonStreamingLatencyEwmaMs,
         });
     }
 
@@ -88,6 +98,43 @@ public sealed class ChannelGrain : Grain, IChannelGrain
         return Task.CompletedTask;
     }
 
+    public Task RecordLatencyAsync(ChannelLatencySample sample)
+    {
+        ArgumentNullException.ThrowIfNull(sample);
+
+        // channel_metrics.go:417-458: the first sample seeds the EWMA and later
+        // samples use alpha 0.3.
+        if (sample.Streaming)
+        {
+            _streamingFirstTokenLatencyEwmaMs = Ewma(
+                _streamingFirstTokenLatencyEwmaMs,
+                sample.FirstTokenLatencyMs,
+                _streamingSampleCount);
+            if (sample.TokensPerSecond > 0)
+            {
+                _streamingTokensPerSecondEwma = Ewma(
+                    _streamingTokensPerSecondEwma,
+                    sample.TokensPerSecond,
+                    _streamingSampleCount);
+            }
+
+            _streamingSampleCount++;
+        }
+        else
+        {
+            _nonStreamingLatencyEwmaMs = Ewma(
+                _nonStreamingLatencyEwmaMs,
+                sample.RequestLatencyMs,
+                _nonStreamingSampleCount);
+            _nonStreamingSampleCount++;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static double Ewma(double current, double sample, long count)
+        => count == 0 ? sample : (0.3 * sample) + (0.7 * current);
+
     public Task RecordFailureAsync(DateTimeOffset completedAt)
     {
         if (TryGetSlot(completedAt) is not { } slot)
@@ -117,6 +164,11 @@ public sealed class ChannelGrain : Grain, IChannelGrain
         _consecutiveFailures = 0;
         _lastSelectedAt = null;
         _lastFailureAt = null;
+        _streamingSampleCount = 0;
+        _streamingFirstTokenLatencyEwmaMs = 0;
+        _streamingTokensPerSecondEwma = 0;
+        _nonStreamingSampleCount = 0;
+        _nonStreamingLatencyEwmaMs = 0;
 
         return Task.CompletedTask;
     }

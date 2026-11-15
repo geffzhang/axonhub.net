@@ -40,6 +40,7 @@ public interface IChannelPoolGrain : IGrainWithStringKey
         bool trackSelection,
         int requiredCount,
         string loadBalancerStrategy,
+        bool stream = false,
         CancellationToken cancellationToken = default);
 }
 

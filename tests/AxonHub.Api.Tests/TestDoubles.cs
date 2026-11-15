@@ -2,6 +2,7 @@ using System.Text;
 using AxonHub.Abstractions;
 using AxonHub.Api.Orchestration;
 using AxonHub.Api.Persistence;
+using AxonHub.Grains.Abstractions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
 using AxonHub.Llm.Streams;
@@ -74,6 +75,8 @@ internal sealed class RecordingMetricsRecorder : IChannelMetricsRecorder
 
     public List<long> Failures { get; } = [];
 
+    public List<ChannelLatencySample> Latencies { get; } = [];
+
     public void RecordSelection(long channelId, DateTimeOffset selectedAt)
     {
         _ = selectedAt;
@@ -98,6 +101,14 @@ internal sealed class RecordingMetricsRecorder : IChannelMetricsRecorder
         lock (_gate)
         {
             Failures.Add(channelId);
+        }
+    }
+
+    public void RecordLatency(ChannelLatencySample sample)
+    {
+        lock (_gate)
+        {
+            Latencies.Add(sample);
         }
     }
 }

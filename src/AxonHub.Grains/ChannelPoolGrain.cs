@@ -39,6 +39,7 @@ public sealed class ChannelPoolGrain(
         bool trackSelection,
         int requiredCount,
         string loadBalancerStrategy,
+        bool stream = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(candidates);
@@ -90,7 +91,12 @@ public sealed class ChannelPoolGrain(
                 break;
             }
 
-            var sorted = await SortGroupAsync(groups[priority], strategy, now, cancellationToken);
+            var sorted = await SortGroupAsync(
+                groups[priority],
+                strategy,
+                now,
+                stream,
+                cancellationToken);
 
             if (sorted.Count <= remaining)
             {
@@ -123,6 +129,7 @@ public sealed class ChannelPoolGrain(
         List<ChannelCandidate> group,
         string strategy,
         DateTimeOffset now,
+        bool stream,
         CancellationToken cancellationToken)
     {
         if (group.Count <= 1)
@@ -143,7 +150,7 @@ public sealed class ChannelPoolGrain(
                 candidate,
                 metrics,
                 index,
-                Score(strategy, candidate, metrics, now)));
+                Score(strategy, candidate, metrics, now, stream)));
         }
 
         // Descending score. adaptive/failover/circuit-breaker fall back to
@@ -221,7 +228,8 @@ public sealed class ChannelPoolGrain(
         string strategy,
         ChannelCandidate candidate,
         ChannelMetricsSnapshot metrics,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool stream)
         => LoadBalancerScoring.StrategyScore(
             strategy,
             candidate,
@@ -229,7 +237,8 @@ public sealed class ChannelPoolGrain(
             now,
             _rateLimitAware,
             modelCircuitBreaker,
-            this.GetPrimaryKeyString());
+            this.GetPrimaryKeyString(),
+            stream);
 
     private sealed record ScoredCandidate(
         ChannelCandidate Candidate,

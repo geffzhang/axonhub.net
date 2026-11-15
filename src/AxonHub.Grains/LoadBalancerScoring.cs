@@ -50,7 +50,8 @@ public static class LoadBalancerScoring
         DateTimeOffset now,
         RateLimitAwareScorer rateLimitAware,
         ModelCircuitBreaker? modelCircuitBreaker = null,
-        string? modelId = null)
+        string? modelId = null,
+        bool stream = false)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(metrics);
@@ -81,10 +82,68 @@ public static class LoadBalancerScoring
             _ =>
                 ErrorAwareScore(metrics, now)
                 + WeightRoundRobinScore(metrics.RequestCount, candidate.OrderingWeight)
-                + LatencyNeutralScore
+                + LatencyScore(metrics, stream)
                 + rateLimitScore,
         };
     }
+
+    // lb_strategy_latency.go:11-21.
+    public const double LatencyMaxScore = 80.0;
+    public const double StreamingFirstTokenMaxLatencyMs = 3000.0;
+    public const double StreamingMinTokensPerSecond = 5.0;
+    public const double StreamingMaxTokensPerSecond = 100.0;
+    public const double NonStreamingMaxLatencyMs = 3000.0;
+    public const double StreamingFirstTokenWeight = 0.7;
+    public const double StreamingThroughputWeight = 0.3;
+
+    /// <summary>
+    /// Port of LatencyAwareStrategy.calculateScore: streaming requests weigh
+    /// first-token latency 0.7 and output throughput 0.3; non-streaming requests
+    /// use end-to-end latency. No matching samples return the neutral 40.
+    /// </summary>
+    public static double LatencyScore(ChannelMetricsSnapshot metrics, bool stream)
+    {
+        ArgumentNullException.ThrowIfNull(metrics);
+
+        if (stream)
+        {
+            if (metrics.StreamingSampleCount == 0)
+            {
+                return LatencyNeutralScore;
+            }
+
+            var firstToken = ClampNormalizedInverse(
+                metrics.StreamingFirstTokenLatencyEwmaMs,
+                StreamingFirstTokenMaxLatencyMs);
+            var throughput = 0.5;
+            if (metrics.StreamingTokensPerSecondEwma > 0)
+            {
+                throughput = ClampNormalized(
+                    metrics.StreamingTokensPerSecondEwma,
+                    StreamingMinTokensPerSecond,
+                    StreamingMaxTokensPerSecond);
+            }
+
+            return LatencyMaxScore
+                * ((StreamingFirstTokenWeight * firstToken)
+                    + (StreamingThroughputWeight * throughput));
+        }
+
+        if (metrics.NonStreamingSampleCount == 0)
+        {
+            return LatencyNeutralScore;
+        }
+
+        return LatencyMaxScore * ClampNormalizedInverse(
+            metrics.NonStreamingLatencyEwmaMs,
+            NonStreamingMaxLatencyMs);
+    }
+
+    private static double ClampNormalizedInverse(double value, double max)
+        => max <= 0 ? 0 : Math.Max(0, Math.Min(1, 1 - (value / max)));
+
+    private static double ClampNormalized(double value, double min, double max)
+        => max <= min ? 0 : Math.Max(0, Math.Min(1, (value - min) / (max - min)));
 
     /// <summary>
     /// lb_strategy_model_aware_circuit_breaker.go: the effective weight is 1.0

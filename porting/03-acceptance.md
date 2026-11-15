@@ -2206,6 +2206,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §238（2026-11-15）模型熔断 tracker 的本地跳过与单探针租约。C308 转 resolved：`ChannelMetricsMiddleware.TransformOutboundRawRequest` 在策略为 circuit-breaker 且 (channel, model) 为 open 时先 `TryBeginProbe`，失败抛 `ModelCircuitBreakerSkipException`（message 与参照一致），`OnOutboundRawError` 对该异常直接返回、不记指标/熔断失败；`PersistentOutboundTransformer.CanRetry` 对该异常返回 false，管线切换下一候选；`Record` 在成功/失败/取消时统一 `EndProbe`，失败按 `WasProbe` 传入 `RecordError` 应用 2^n 探针退避。定向 `PersistentOutboundRetryTests|ModelCircuitBreakerTrackingTests` 21/21，Grains 熔断用例 4/4；未跑 Api 全量（新增 Api 2 例待下次全量计入）。台账 308 条（195 accepted / 113 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§239（2026-11-15）LatencyAware 的流式/非流式延迟 EWMA。C034 转 resolved：`ChannelPerformanceRecord` 增加 FirstTokenTime/CompletionTokens 与 `MeasureLatency`（最小 10ms；流式 TPS 用总延迟减首包；无首包的流式请求落入非流式桶）；`ChannelGrain.RecordLatencyAsync` 用 alpha 0.3 维护流式首包/TPS 与非流式端到端 EWMA，快照新增五个字段；`ChannelMetricsMiddleware` 在流式首个有意义输出与最终 usage 处采集，成功后上报；`LoadBalancerScoring.LatencyScore` 按 stream 计算流式 80*(0.7*首包+0.3*TPS) 与非流式 80*端到端，无样本仍 40；`ChannelPoolGrain.SortAsync` 新增 stream 参数，orchestrator 传入请求流式意图。定向 Grains 34/34、Api 109/109；未跑 Api 全量（新增 Grains 1 例、Api 3 例待下次全量计入）。台账 308 条（194 accepted / 114 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

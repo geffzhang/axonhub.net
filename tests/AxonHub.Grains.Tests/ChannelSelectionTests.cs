@@ -380,6 +380,41 @@ public sealed class ChannelSelectionTests(GrainClusterFixture fixture)
         Assert.Equal(200.0, ScoreWithBreaker(breaker, candidate));
     }
 
+    [Fact]
+    public void LatencyScoreUsesTheMatchingSampleBucket()
+    {
+        // No matching samples keep the reference's neutral 40.
+        Assert.Equal(40, LoadBalancerScoring.LatencyScore(NeutralMetrics(), stream: true), 3);
+        Assert.Equal(40, LoadBalancerScoring.LatencyScore(NeutralMetrics(), stream: false), 3);
+
+        // Streaming: 80 * (0.7 * 1 + 0.3 * 0) = 56 for an instant first token
+        // with the minimum TPS.
+        var streaming = new ChannelMetricsSnapshot
+        {
+            StreamingSampleCount = 1,
+            StreamingFirstTokenLatencyEwmaMs = 0,
+            StreamingTokensPerSecondEwma = 5,
+        };
+        Assert.Equal(56, LoadBalancerScoring.LatencyScore(streaming, stream: true), 3);
+
+        // Slow first token, maximum TPS: 80 * (0 + 0.3) = 24.
+        var slowStream = new ChannelMetricsSnapshot
+        {
+            StreamingSampleCount = 1,
+            StreamingFirstTokenLatencyEwmaMs = 3000,
+            StreamingTokensPerSecondEwma = 100,
+        };
+        Assert.Equal(24, LoadBalancerScoring.LatencyScore(slowStream, stream: true), 3);
+
+        // Non-streaming: half the 3s budget scores 40.
+        var nonStreaming = new ChannelMetricsSnapshot
+        {
+            NonStreamingSampleCount = 1,
+            NonStreamingLatencyEwmaMs = 1500,
+        };
+        Assert.Equal(40, LoadBalancerScoring.LatencyScore(nonStreaming, stream: false), 3);
+    }
+
     private double ScoreWithBreaker(
         ModelCircuitBreaker breaker,
         ChannelCandidate candidate)

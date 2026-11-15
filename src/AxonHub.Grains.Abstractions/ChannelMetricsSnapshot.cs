@@ -53,6 +53,26 @@ public sealed class ChannelMetricsSnapshot
     /// </summary>
     [Id(9)]
     public DateTimeOffset? CooldownUntil { get; set; }
+
+    /// <summary>Successful streaming samples with a first-token timestamp.</summary>
+    [Id(10)]
+    public long StreamingSampleCount { get; set; }
+
+    /// <summary>EWMA of streaming first-token latency in milliseconds.</summary>
+    [Id(11)]
+    public double StreamingFirstTokenLatencyEwmaMs { get; set; }
+
+    /// <summary>EWMA of streaming output tokens per second.</summary>
+    [Id(12)]
+    public double StreamingTokensPerSecondEwma { get; set; }
+
+    /// <summary>Successful non-streaming samples.</summary>
+    [Id(13)]
+    public long NonStreamingSampleCount { get; set; }
+
+    /// <summary>EWMA of non-streaming end-to-end latency in milliseconds.</summary>
+    [Id(14)]
+    public double NonStreamingLatencyEwmaMs { get; set; }
 }
 
 /// <summary>

@@ -19,6 +19,12 @@ public interface IChannelGrain : IGrainWithIntegerKey
     /// <summary>Records a completed request; resets consecutive failures.</summary>
     Task RecordSuccessAsync(DateTimeOffset completedAt);
 
+    /// <summary>
+    /// Records one successful request's latency sample into the streaming
+    /// first-token/TPS or non-streaming end-to-end EWMA (C034).
+    /// </summary>
+    Task RecordLatencyAsync(ChannelLatencySample sample);
+
     /// <summary>Records a failed request; extends the failure cooldown.</summary>
     Task RecordFailureAsync(DateTimeOffset completedAt);
 

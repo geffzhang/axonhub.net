@@ -149,11 +149,39 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
 
         if (_state.Current is { } record)
         {
+            if (response.Usage is { } usage)
+            {
+                record.ObserveCompletionTokens(usage.CompletionTokens);
+            }
+
             record.MarkSuccess(_timeProvider.GetUtcNow());
             Record(record);
         }
 
         return response;
+    }
+
+    /// <summary>
+    /// Captures the first meaningful streamed output and the provider's final
+    /// usage for the latency EWMA (C034).
+    /// </summary>
+    private void ObserveStreamResponse(LlmResponse? response)
+    {
+        if (_state.Current is not { Stream: true } record)
+        {
+            return;
+        }
+
+        if (record.FirstTokenTime is null
+            && ResponseContent.HasMeaningfulStreamOutput(response))
+        {
+            record.ObserveFirstToken(_timeProvider.GetUtcNow());
+        }
+
+        if (response?.Usage is { } usage)
+        {
+            record.ObserveCompletionTokens(usage.CompletionTokens);
+        }
     }
 
     /// <summary>
@@ -260,6 +288,11 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
                     record.WasProbe);
             }
         }
+
+        if (record.Success && record.MeasureLatency() is { } latency)
+        {
+            _metrics.RecordLatency(latency);
+        }
     }
 
     /// <summary>
@@ -310,7 +343,16 @@ public sealed class ChannelMetricsMiddleware : DummyMiddleware
 
         public Exception? Err => stream.Err;
 
-        public bool Next() => stream.Next();
+        public bool Next()
+        {
+            if (!stream.Next())
+            {
+                return false;
+            }
+
+            owner.ObserveStreamResponse(stream.Current);
+            return true;
+        }
 
         public void Dispose()
         {

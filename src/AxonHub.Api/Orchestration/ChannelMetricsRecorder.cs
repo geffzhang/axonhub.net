@@ -16,6 +16,15 @@ public interface IChannelMetricsRecorder
     void RecordSuccess(long channelId, DateTimeOffset completedAt);
 
     void RecordFailure(long channelId, DateTimeOffset completedAt);
+
+    /// <summary>
+    /// Records one successful request's latency sample into the channel grain's
+    /// streaming/non-streaming EWMA (C034). Default is a no-op for test doubles
+    /// that only assert the counters.
+    /// </summary>
+    void RecordLatency(ChannelLatencySample sample)
+    {
+    }
 }
 
 /// <summary>
@@ -33,6 +42,9 @@ public sealed class GrainChannelMetricsRecorder(IGrainFactory grainFactory) : IC
 
     public void RecordFailure(long channelId, DateTimeOffset completedAt)
         => Record(channelId, grain => grain.RecordFailureAsync(completedAt));
+
+    public void RecordLatency(ChannelLatencySample sample)
+        => Record(sample.ChannelId, grain => grain.RecordLatencyAsync(sample));
 
     private void Record(long channelId, Func<IChannelGrain, Task> record)
     {

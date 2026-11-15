@@ -1,3 +1,5 @@
+using AxonHub.Grains.Abstractions;
+
 namespace AxonHub.Api.Orchestration;
 
 /// <summary>
@@ -41,6 +43,12 @@ public sealed class ChannelPerformanceRecord
 
     public bool Stream { get; init; }
 
+    /// <summary>First meaningful streamed output, captured by the perf stream.</summary>
+    public DateTimeOffset? FirstTokenTime { get; private set; }
+
+    /// <summary>The provider's final completion-token count, when reported.</summary>
+    public long CompletionTokens { get; private set; }
+
     public bool Success { get; private set; }
 
     public bool Canceled { get; private set; }
@@ -56,6 +64,63 @@ public sealed class ChannelPerformanceRecord
 
     /// <summary>Port of PerformanceRecord.IsValid.</summary>
     public bool IsValid => ChannelId > 0 && RequestCompleted;
+
+    public void ObserveFirstToken(DateTimeOffset at)
+        => FirstTokenTime ??= at;
+
+    public void ObserveCompletionTokens(long tokens)
+    {
+        if (tokens > 0)
+        {
+            CompletionTokens = tokens;
+        }
+    }
+
+    /// <summary>
+    /// Port of PerformanceRecord.Calculate (channel_metrics.go:694-726): the
+    /// minimum latency is 10ms; a streaming request without a first-token time
+    /// falls into the non-streaming bucket, exactly like the reference.
+    /// </summary>
+    public ChannelLatencySample? MeasureLatency()
+    {
+        if (!Success || !RequestCompleted || ChannelId <= 0)
+        {
+            return null;
+        }
+
+        var total = ClampLatency((long)(EndTime - StartTime).TotalMilliseconds);
+        var streaming = Stream && FirstTokenTime is not null;
+        if (!streaming)
+        {
+            return new ChannelLatencySample
+            {
+                ChannelId = ChannelId,
+                Streaming = false,
+                RequestLatencyMs = total,
+            };
+        }
+
+        var firstToken = ClampLatency(
+            (long)(FirstTokenTime!.Value - StartTime).TotalMilliseconds);
+        var tokensPerSecond = 0.0;
+        if (CompletionTokens > 0)
+        {
+            var effective = ClampLatency(total - firstToken);
+            tokensPerSecond = CompletionTokens / (effective / 1000.0);
+        }
+
+        return new ChannelLatencySample
+        {
+            ChannelId = ChannelId,
+            Streaming = true,
+            FirstTokenLatencyMs = firstToken,
+            RequestLatencyMs = total,
+            TokensPerSecond = tokensPerSecond,
+        };
+    }
+
+    private static long ClampLatency(long latencyMs)
+        => latencyMs < 10 ? 10 : latencyMs;
 
     /// <summary>Port of PerformanceRecord.MarkSuccess.</summary>
     public void MarkSuccess(DateTimeOffset now)
