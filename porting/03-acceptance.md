@@ -2245,6 +2245,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §257（2026-11-15）accepted 差异台账复核。逐条核对仍在标注“真实缺口”的 accepted 条目，确认五条已由后续切片闭合，仅保留已接受的实现差异：C176 的 apiKeyTokenUsageStats / CreateLLMAPIKey / GetForRead / profile 模板加载 / 用户 personal key 级联均已实现（`UpdateAPIKeyScopes` 在参照 SDL 中只有 input、无 mutation 字段）；C177 的 GetModelByModelID / ListEnabledModels 合并 / profile 过滤 / HideUnroutable 已由 §89/§213 落地；C178 的通道来源已改读 EnabledChannelsGrain 快照（§213）；C193 的 Project.usageLogs / Channel.usageLogs 已接线；C179 的真实缺口 (a)–(e) 与关联解析缓存均已由 §91–§95 / §245 关闭。五个条目就地追加复核说明，状态保持 accepted，台账仍 317 条（190 accepted / 127 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。本切片无代码与测试改动，未跑 Api 全量。
 
+§258（2026-11-15）GCP `external_account` 的 file/URL 凭据源。C128 进一步收窄：新增 `credential_source` 的 file 与 URL subject token 源（JSON / text 格式、1 MiB 上限、可选请求头）、`audience` / `subject_token_type` / `workforce_pool_user_project` 校验、默认 universe-domain STS URL、RFC 8693 token-exchange 表单、可选 Basic client auth 与 workforce `userProject` options、STS `expires_in` / `refresh_token` / 错误文案，以及可选 service-account impersonation（STS scope 固定 cloud-platform、impersonation scope 为空）。AWS `environment_id` 源与 executable 源仍显式 `NotSupportedException`，web/installed 交互式客户端仍不可用。新增 4 例（JSON 文件源、URL+header、配置校验与 AWS 拒绝、impersonation STS source）；GCP 定向 22/22，Llm 全量 3358/3358。未跑 Api 全量。台账仍 317 条（190 accepted / 127 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

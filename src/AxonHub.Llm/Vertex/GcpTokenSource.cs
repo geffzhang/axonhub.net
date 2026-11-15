@@ -497,6 +497,358 @@ internal sealed class AuthorizedUserGcpTokenSource : IGcpTokenSource
 }
 
 /// <summary>
+/// Port of externalaccount.fileCredentialSource (filecredsource.go): read a
+/// subject token from a text or JSON file, bounded to 1 MiB.
+/// </summary>
+internal sealed class ExternalAccountFileGcpTokenSource : IGcpTokenSource
+{
+    private readonly string _file;
+    private readonly GcpCredentialFormat _format;
+
+    public ExternalAccountFileGcpTokenSource(string file, GcpCredentialFormat format)
+    {
+        _file = file;
+        _format = format;
+    }
+
+    public GcpToken GetToken()
+        => throw new InvalidOperationException(
+            "external account subject token is not an access token");
+
+    public string SubjectToken()
+    {
+        byte[] bytes;
+        try
+        {
+            using var stream = File.OpenRead(_file);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[16 * 1024];
+            while (buffer.Length < (1 << 20))
+            {
+                var read = stream.Read(
+                    chunk,
+                    0,
+                    (int)Math.Min(chunk.Length, (1 << 20) - buffer.Length));
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            bytes = buffer.ToArray();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: failed to open credential file "
+                + GoCast.GoQuote(_file),
+                ex);
+        }
+
+        return ParseSubjectToken(Encoding.UTF8.GetString(bytes).Trim(), _format);
+    }
+
+    internal static string ParseSubjectToken(string body, GcpCredentialFormat format)
+    {
+        switch (format.Type)
+        {
+            case "json":
+                JsonDocument document;
+                try
+                {
+                    document = JsonDocument.Parse(body);
+                }
+                catch (JsonException ex)
+                {
+                    throw new InvalidOperationException(
+                        "oauth2/google/externalaccount: failed to unmarshal "
+                        + "subject token file: " + ex.Message,
+                        ex);
+                }
+
+                using (document)
+                {
+                    if (document.RootElement.ValueKind != JsonValueKind.Object
+                        || !document.RootElement.TryGetProperty(
+                            format.SubjectTokenFieldName,
+                            out var value))
+                    {
+                        throw new InvalidOperationException(
+                            "oauth2/google/externalaccount: provided "
+                            + "subject_token_field_name not found in credentials");
+                    }
+
+                    if (value.ValueKind != JsonValueKind.String)
+                    {
+                        throw new InvalidOperationException(
+                            "oauth2/google/externalaccount: improperly formatted subject token");
+                    }
+
+                    return value.GetString() ?? string.Empty;
+                }
+
+            case "text":
+            case "":
+                return body;
+
+            default:
+                throw new InvalidOperationException(
+                    "oauth2/google/externalaccount: invalid credential_source file format type");
+        }
+    }
+}
+
+/// <summary>
+/// Port of externalaccount.urlCredentialSource (urlcredsource.go): GET a
+/// subject token from a local URL with optional headers.
+/// </summary>
+internal sealed class ExternalAccountUrlGcpTokenSource : IGcpTokenSource
+{
+    private readonly string _url;
+    private readonly IReadOnlyDictionary<string, string>? _headers;
+    private readonly GcpCredentialFormat _format;
+    private readonly GcpTokenOptions _options;
+
+    public ExternalAccountUrlGcpTokenSource(
+        string url,
+        IReadOnlyDictionary<string, string>? headers,
+        GcpCredentialFormat format,
+        GcpTokenOptions options)
+    {
+        _url = url;
+        _headers = headers;
+        _format = format;
+        _options = options;
+    }
+
+    public GcpToken GetToken()
+        => throw new InvalidOperationException(
+            "external account subject token is not an access token");
+
+    public string SubjectToken()
+    {
+        using var client = GcpTokenHttp.CreateClient(_options.Transport);
+        using var request = new HttpRequestMessage(HttpMethod.Get, _url);
+        if (_headers is not null)
+        {
+            foreach (var (key, value) in _headers)
+            {
+                request.Headers.TryAddWithoutValidation(key, value);
+            }
+        }
+
+        using var response = client.SendAsync(request, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+        var body = response.Content?.ReadAsStringAsync().GetAwaiter().GetResult()
+            ?? string.Empty;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: status code "
+                + (int)response.StatusCode + ": " + body);
+        }
+
+        return ExternalAccountFileGcpTokenSource.ParseSubjectToken(body, _format);
+    }
+}
+
+/// <summary>
+/// Port of externalaccount.tokenSource.Token (basecredentials.go:460-505):
+/// fetch the subject token and exchange it for a GCP access token via STS.
+/// </summary>
+internal sealed class ExternalAccountGcpTokenSource : IGcpTokenSource
+{
+    private readonly ExternalAccountFileGcpTokenSource? _fileSource;
+    private readonly ExternalAccountUrlGcpTokenSource? _urlSource;
+    private readonly string _audience;
+    private readonly string _subjectTokenType;
+    private readonly string _tokenUrl;
+    private readonly IReadOnlyList<string> _scopes;
+    private readonly string _clientId;
+    private readonly string _clientSecret;
+    private readonly string _workforcePoolUserProject;
+    private readonly GcpTokenOptions _options;
+    private readonly HttpClient _client;
+
+    public ExternalAccountGcpTokenSource(
+        IGcpTokenSource source,
+        string audience,
+        string subjectTokenType,
+        string tokenUrl,
+        IReadOnlyList<string> scopes,
+        string clientId,
+        string clientSecret,
+        string workforcePoolUserProject,
+        GcpTokenOptions options)
+    {
+        _fileSource = source as ExternalAccountFileGcpTokenSource;
+        _urlSource = source as ExternalAccountUrlGcpTokenSource;
+        _audience = audience;
+        _subjectTokenType = subjectTokenType;
+        _tokenUrl = tokenUrl;
+        _scopes = scopes;
+        _clientId = clientId;
+        _clientSecret = clientSecret;
+        _workforcePoolUserProject = workforcePoolUserProject;
+        _options = options;
+        _client = GcpTokenHttp.CreateClient(options.Transport);
+    }
+
+    public GcpToken GetToken()
+    {
+        var subjectToken = _fileSource?.SubjectToken()
+            ?? _urlSource?.SubjectToken()
+            ?? throw new InvalidOperationException(
+                "oauth2/google/externalaccount: unable to parse credential source");
+
+        var form = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            ["audience"] = [_audience],
+            ["grant_type"] = ["urn:ietf:params:oauth:grant-type:token-exchange"],
+            ["requested_token_type"] = ["urn:ietf:params:oauth:token-type:access_token"],
+            ["subject_token_type"] = [_subjectTokenType],
+            ["subject_token"] = [subjectToken],
+            ["scope"] = [string.Join(" ", _scopes)],
+        };
+
+        // Do not pass workforce_pool_user_project when client authentication
+        // is used; the client ID is sufficient there.
+        if (_workforcePoolUserProject.Length > 0 && _clientId.Length == 0)
+        {
+            form["options"] = [
+                """{"userProject":""" + GoJson.MarshalToString(_workforcePoolUserProject) + "}",
+            ];
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, _tokenUrl);
+        var content = new ByteArrayContent(
+            Encoding.UTF8.GetBytes(HttpClientUtils.EncodeQuery(form)));
+        content.Headers.TryAddWithoutValidation(
+            "Content-Type",
+            "application/x-www-form-urlencoded");
+        request.Content = content;
+
+        if (_clientId.Length > 0 && _clientSecret.Length > 0)
+        {
+            request.Headers.TryAddWithoutValidation(
+                "Authorization",
+                "Basic " + Convert.ToBase64String(
+                    Encoding.UTF8.GetBytes(_clientId + ":" + _clientSecret)));
+        }
+
+        HttpResponseMessage response;
+        try
+        {
+            response = _client.SendAsync(request, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google: invalid response from Secure Token Server: " + ex.Message,
+                ex);
+        }
+
+        using (response)
+        {
+            var body = response.Content?.ReadAsStringAsync().GetAwaiter().GetResult()
+                ?? string.Empty;
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google: status code " + (int)response.StatusCode + ": " + body);
+            }
+
+            JsonDocument document;
+            try
+            {
+                document = JsonDocument.Parse(body);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google: failed to unmarshal response body from Secure Token Server: "
+                    + ex.Message,
+                    ex);
+            }
+
+            using (document)
+            {
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    throw new InvalidOperationException(
+                        "oauth2/google: failed to unmarshal response body from Secure Token Server: "
+                        + "json: cannot unmarshal " + GcpTokenHttp.KindName(root)
+                        + " into Go value of type stsexchange.Response");
+                }
+
+                var accessToken = ReadStsString(root, "access_token");
+                var tokenType = ReadStsString(root, "token_type");
+                var refreshToken = ReadStsString(root, "refresh_token");
+                var expiresIn = ReadStsInt(root, "expires_in");
+                if (expiresIn <= 0)
+                {
+                    throw new InvalidOperationException(
+                        "oauth2/google/externalaccount: got invalid expiry from security token service");
+                }
+
+                var now = _options.Clock?.Invoke() ?? DateTimeOffset.UtcNow;
+                return new GcpToken
+                {
+                    AccessToken = accessToken,
+                    TokenType = tokenType,
+                    Expiry = now.AddSeconds(expiresIn),
+                };
+            }
+        }
+    }
+
+    private static string ReadStsString(JsonElement root, string name)
+    {
+        if (!GcpTokenHttp.TryGetProperty(root, name, out var value)
+            || value.ValueKind == JsonValueKind.Null)
+        {
+            return string.Empty;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google: failed to unmarshal response body from Secure Token Server: "
+                + "json: cannot unmarshal " + GcpTokenHttp.KindName(value)
+                + " into Go struct field Response." + name + " of type string");
+        }
+
+        return value.GetString() ?? string.Empty;
+    }
+
+    private static int ReadStsInt(JsonElement root, string name)
+    {
+        if (!GcpTokenHttp.TryGetProperty(root, name, out var value)
+            || value.ValueKind == JsonValueKind.Null)
+        {
+            return 0;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var parsed))
+        {
+            return parsed;
+        }
+
+        throw new InvalidOperationException(
+            "oauth2/google: failed to unmarshal response body from Secure Token Server: "
+            + "json: cannot unmarshal " + GcpTokenHttp.KindName(value)
+            + " into Go struct field Response." + name + " of type int");
+    }
+}
+
+/// <summary>
 /// Port of google/internal/externalaccountauthorizeduser.tokenSource
 /// (externalaccountauthorizeduser.go:84-168): exchange a workforce-pool
 /// refresh token at the STS endpoint with HTTP Basic client authentication.

@@ -84,13 +84,121 @@ public sealed class GcpCredentials
                     ExternalAccountAuthorizedUserGcpTokenSource.Create(file, options),
                     options),
             "impersonated_service_account" => CreateImpersonatedTokenSource(file, options),
-            "external_account" => throw new NotSupportedException(
-                "GCP credential type " + GoCast.GoQuote(file.Type)
-                + " is not supported by the .NET port (difference C128)"),
+            "external_account" => CreateExternalAccountTokenSource(file, options),
             "" => throw new InvalidOperationException("missing 'type' field in credentials"),
             _ => throw new InvalidOperationException(
                 "unknown credential type: " + GoCast.GoQuote(file.Type)),
         };
+
+    /// <summary>
+    /// Port of the external_account branch (google.go:200-223 and
+    /// externalaccount.NewTokenSource): validate audience / subject token type /
+    /// source, build the file- or URL-sourced STS exchange, and optionally wrap
+    /// it in service-account impersonation.
+    /// </summary>
+    private static IGcpTokenSource CreateExternalAccountTokenSource(
+        GcpCredentialFile file,
+        GcpTokenOptions options)
+    {
+        if (file.Audience.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: Audience must be set");
+        }
+
+        if (file.SubjectTokenType.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: Subject token type must be set");
+        }
+
+        if (file.WorkforcePoolUserProject.Length > 0
+            && !WorkforceAudiencePattern.IsMatch(file.Audience))
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: Workforce pool user project "
+                + "should not be set for non-workforce pool credentials");
+        }
+
+        var source = file.CredentialSource
+            ?? throw new InvalidOperationException(
+                "oauth2/google/externalaccount: One of CredentialSource, "
+                + "SubjectTokenSupplier, or AwsSecurityCredentialsSupplier must be set");
+
+        if (source.EnvironmentId.StartsWith("aws", StringComparison.Ordinal)
+            && source.EnvironmentId.Length > 3)
+        {
+            throw new NotSupportedException(
+                "GCP external_account AWS credential sources are not supported "
+                + "by the .NET port (difference C128)");
+        }
+
+        if (source.Executable is not null)
+        {
+            throw new NotSupportedException(
+                "GCP external_account executable credential sources are not supported "
+                + "by the .NET port (difference C128)");
+        }
+
+        IGcpTokenSource sourceTokenSource;
+        if (source.File.Length > 0)
+        {
+            sourceTokenSource = new ExternalAccountFileGcpTokenSource(
+                source.File,
+                source.Format);
+        }
+        else if (source.Url.Length > 0)
+        {
+            sourceTokenSource = new ExternalAccountUrlGcpTokenSource(
+                source.Url,
+                source.Headers,
+                source.Format,
+                options);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: unable to parse credential source");
+        }
+
+        var tokenUrl = file.TokenUrlExternal.Length > 0
+            ? file.TokenUrlExternal
+            : "https://sts." + (file.UniverseDomain.Length > 0
+                ? file.UniverseDomain
+                : "googleapis.com") + "/v1/token";
+
+        var stsSource = new ExternalAccountGcpTokenSource(
+            sourceTokenSource,
+            file.Audience,
+            file.SubjectTokenType,
+            tokenUrl,
+            file.ServiceAccountImpersonationUrl.Length > 0
+                ? ["https://www.googleapis.com/auth/cloud-platform"]
+                : [],
+            file.ClientId,
+            file.ClientSecret,
+            file.WorkforcePoolUserProject,
+            options);
+
+        if (file.ServiceAccountImpersonationUrl.Length == 0)
+        {
+            return new ReuseGcpTokenSource(stsSource, options);
+        }
+
+        return new ReuseGcpTokenSource(
+            new ImpersonatedGcpTokenSource(
+                new ReuseGcpTokenSource(stsSource, options),
+                file.ServiceAccountImpersonationUrl,
+                null,
+                file.TokenLifetimeSeconds,
+                options),
+            options);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex WorkforceAudiencePattern =
+        new(
+            "//iam\\.googleapis\\.com/locations/[^/]+/workforcePools/",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Port of the impersonated_service_account branch (google.go:224-240):
@@ -177,6 +285,162 @@ public sealed class GcpCredentials
         }
 
         return result;
+    }
+
+    /// <summary>Port of externalaccount.CredentialSource / Format (basecredentials.go).</summary>
+    private static GcpCredentialSource? DecodeCredentialSource(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                "json: cannot unmarshal " + KindName(value)
+                + " into Go struct field credentialsFile.credential_source "
+                + "of type externalaccount.CredentialSource");
+        }
+
+        var source = new GcpCredentialSource();
+        foreach (var property in value.EnumerateObject())
+        {
+            switch (FoldAscii(property.Name))
+            {
+                case "file":
+                    source.File = ReadStringValue(property.Value, "credential_source.file");
+                    break;
+                case "url":
+                    source.Url = ReadStringValue(property.Value, "credential_source.url");
+                    break;
+                case "environment_id":
+                    source.EnvironmentId = ReadStringValue(
+                        property.Value,
+                        "credential_source.environment_id");
+                    break;
+                case "headers":
+                    source.Headers = AssignStringMap(
+                        property.Value,
+                        "credential_source.headers");
+                    break;
+                case "format":
+                    source.Format = DecodeCredentialFormat(property.Value);
+                    break;
+                case "executable":
+                    source.Executable = DecodeExecutable(property.Value);
+                    break;
+            }
+        }
+
+        return source;
+    }
+
+    private static Dictionary<string, string>? AssignStringMap(
+        JsonElement value,
+        string jsonName)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                "json: cannot unmarshal " + KindName(value)
+                + " into Go struct field " + jsonName + " of type map[string]string");
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.Null)
+            {
+                result[property.Name] = string.Empty;
+            }
+            else if (property.Value.ValueKind == JsonValueKind.String)
+            {
+                result[property.Name] = property.Value.GetString() ?? string.Empty;
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "json: cannot unmarshal " + KindName(property.Value)
+                    + " into Go struct field " + jsonName + " of type string");
+            }
+        }
+
+        return result;
+    }
+
+    private static GcpCredentialFormat DecodeCredentialFormat(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return new GcpCredentialFormat();
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                "json: cannot unmarshal " + KindName(value)
+                + " into Go struct field credential_source.format "
+                + "of type externalaccount.Format");
+        }
+
+        var format = new GcpCredentialFormat();
+        foreach (var property in value.EnumerateObject())
+        {
+            switch (FoldAscii(property.Name))
+            {
+                case "type":
+                    format.Type = ReadStringValue(property.Value, "credential_source.format.type");
+                    break;
+                case "subject_token_field_name":
+                    format.SubjectTokenFieldName = ReadStringValue(
+                        property.Value,
+                        "credential_source.format.subject_token_field_name");
+                    break;
+            }
+        }
+
+        return format;
+    }
+
+    private static GcpExecutableConfig? DecodeExecutable(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                "json: cannot unmarshal " + KindName(value)
+                + " into Go struct field credential_source.executable "
+                + "of type externalaccount.ExecutableConfig");
+        }
+
+        return new GcpExecutableConfig();
+    }
+
+    private static string ReadStringValue(JsonElement value, string jsonName)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return string.Empty;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException(
+                "json: cannot unmarshal " + KindName(value)
+                + " into Go struct field " + jsonName + " of type string");
+        }
+
+        return value.GetString() ?? string.Empty;
     }
 
     private static GcpCredentialFile? DecodeSourceCredentials(JsonElement value)
@@ -290,6 +554,21 @@ public sealed class GcpCredentials
                     break;
                 case "service_account_impersonation":
                     file.TokenLifetimeSeconds = DecodeImpersonationLifetime(property.Value);
+                    break;
+                case "subject_token_type":
+                    AssignString(
+                        ref file.SubjectTokenType,
+                        property.Value,
+                        "subject_token_type");
+                    break;
+                case "workforce_pool_user_project":
+                    AssignString(
+                        ref file.WorkforcePoolUserProject,
+                        property.Value,
+                        "workforce_pool_user_project");
+                    break;
+                case "credential_source":
+                    file.CredentialSource = DecodeCredentialSource(property.Value);
                     break;
                 case "project_id":
                     AssignString(ref file.ProjectId, property.Value, "project_id");
@@ -531,6 +810,12 @@ internal sealed class GcpCredentialFile
 
     public string RevokeUrl = string.Empty;
 
+    public string SubjectTokenType = string.Empty;
+
+    public string WorkforcePoolUserProject = string.Empty;
+
+    public GcpCredentialSource? CredentialSource;
+
     public string ServiceAccountImpersonationUrl = string.Empty;
 
     public List<string>? Delegates;
@@ -553,4 +838,33 @@ internal sealed class GcpCredentialFile
 
     public string QuotaProjectId = string.Empty;
 #pragma warning restore CA1051
+}
+
+/// <summary>Port of externalaccount.CredentialSource (basecredentials.go).</summary>
+public sealed class GcpCredentialSource
+{
+    public string File { get; set; } = string.Empty;
+
+    public string Url { get; set; } = string.Empty;
+
+    public Dictionary<string, string>? Headers { get; set; }
+
+    public string EnvironmentId { get; set; } = string.Empty;
+
+    public GcpCredentialFormat Format { get; set; } = new();
+
+    public GcpExecutableConfig? Executable { get; set; }
+}
+
+/// <summary>Port of externalaccount.Format (basecredentials.go).</summary>
+public sealed class GcpCredentialFormat
+{
+    public string Type { get; set; } = string.Empty;
+
+    public string SubjectTokenFieldName { get; set; } = string.Empty;
+}
+
+/// <summary>Port marker for externalaccount.ExecutableConfig; not supported (C128).</summary>
+public sealed class GcpExecutableConfig
+{
 }

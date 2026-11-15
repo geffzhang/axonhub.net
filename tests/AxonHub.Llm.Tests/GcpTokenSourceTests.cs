@@ -529,6 +529,213 @@ public sealed class GcpTokenSourceTests
     }
 
     // ------------------------------------------------------------------
+    // Workload identity federation: file/URL subject tokens + STS exchange
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void ExternalAccount_exchanges_a_json_file_subject_token()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(file, """{"subject":"subject-token"}""");
+            var forms = new List<string>();
+            var handler = new ScriptedHandler(request =>
+            {
+                forms.Add(BodyText(request));
+                return Text(
+                    HttpStatusCode.OK,
+                    """{"access_token":"at","token_type":"Bearer","expires_in":3600}""");
+            });
+
+            var credentials = CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/dev",
+                    ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                    ["credential_source"] = new Dictionary<string, object>
+                    {
+                        ["file"] = file,
+                        ["format"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "json",
+                            ["subject_token_field_name"] = "subject",
+                        },
+                    },
+                },
+                handler);
+
+            var token = credentials.TokenSource.GetToken();
+
+            Assert.Equal("at", token.AccessToken);
+            Assert.Equal(FixedNow.AddSeconds(3600), token.Expiry);
+            var form = ParseForm(Assert.Single(forms));
+            Assert.Equal("urn:ietf:params:oauth:grant-type:token-exchange", form["grant_type"]);
+            Assert.Equal("subject-token", form["subject_token"]);
+            Assert.Equal(
+                "urn:ietf:params:oauth:token-type:access_token",
+                form["requested_token_type"]);
+            Assert.Equal(
+                "https://sts.googleapis.com/v1/token",
+                handler.Requests[0].RequestUri!.ToString());
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public void ExternalAccount_reads_a_url_subject_token_with_headers()
+    {
+        var calls = 0;
+        string? metadata = null;
+        var handler = new ScriptedHandler(request =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                metadata = request.Headers.GetValues("Metadata").Single();
+                return Text(HttpStatusCode.OK, "subject-from-url", "text/plain");
+            }
+
+            return Text(
+                HttpStatusCode.OK,
+                """{"access_token":"at-url","token_type":"Bearer","expires_in":60}""");
+        });
+
+        var credentials = CredentialsObject(
+            new Dictionary<string, object>
+            {
+                ["type"] = "external_account",
+                ["audience"] = "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/dev",
+                ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                ["credential_source"] = new Dictionary<string, object>
+                {
+                    ["url"] = "http://metadata.example.test/token",
+                    ["headers"] = new Dictionary<string, string> { ["Metadata"] = "true" },
+                    ["format"] = new Dictionary<string, object> { ["type"] = "text" },
+                },
+            },
+            handler);
+
+        var token = credentials.TokenSource.GetToken();
+
+        Assert.Equal("at-url", token.AccessToken);
+        Assert.Equal("true", metadata);
+    }
+
+    [Fact]
+    public void ExternalAccount_validates_the_configuration()
+    {
+        var withoutAudience = Assert.Throws<InvalidOperationException>(() =>
+            CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                },
+                new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
+        Assert.Equal(
+            "oauth2/google/externalaccount: Audience must be set",
+            withoutAudience.Message);
+
+        var withoutType = Assert.Throws<InvalidOperationException>(() =>
+            CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "aud",
+                },
+                new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
+        Assert.Equal(
+            "oauth2/google/externalaccount: Subject token type must be set",
+            withoutType.Message);
+
+        var withoutSource = Assert.Throws<InvalidOperationException>(() =>
+            CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "aud",
+                    ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                },
+                new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
+        Assert.Contains("One of CredentialSource", withoutSource.Message, StringComparison.Ordinal);
+
+        var aws = Assert.Throws<NotSupportedException>(() =>
+            CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "aud",
+                    ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                    ["credential_source"] = new Dictionary<string, object>
+                    {
+                        ["environment_id"] = "aws1",
+                    },
+                },
+                new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
+        Assert.Contains("difference C128", aws.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExternalAccount_impersonation_uses_the_sts_source()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(file, "subject-token");
+            var calls = 0;
+            var stsForms = new List<string>();
+            var handler = new ScriptedHandler(request =>
+            {
+                calls++;
+                if (calls == 1)
+                {
+                    stsForms.Add(BodyText(request));
+                    return Text(
+                        HttpStatusCode.OK,
+                        """{"access_token":"sts-at","token_type":"Bearer","expires_in":3600}""");
+                }
+
+                return Text(
+                    HttpStatusCode.OK,
+                    """{"accessToken":"imp-at","expireTime":"2026-01-02T04:04:05Z"}""");
+            });
+
+            var credentials = CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/dev",
+                    ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                    ["service_account_impersonation_url"] =
+                        "https://iam.example.test/token",
+                    ["credential_source"] = new Dictionary<string, object>
+                    {
+                        ["file"] = file,
+                        ["format"] = new Dictionary<string, object> { ["type"] = "text" },
+                    },
+                },
+                handler);
+
+            var token = credentials.TokenSource.GetToken();
+
+            Assert.Equal("imp-at", token.AccessToken);
+            var stsForm = ParseForm(Assert.Single(stsForms));
+            Assert.Equal(
+                "https://www.googleapis.com/auth/cloud-platform",
+                stsForm["scope"]);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Detection and the C128 gap
     // ------------------------------------------------------------------
 
