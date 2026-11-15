@@ -62,8 +62,8 @@ public sealed class FetchModelsResult
 /// caches live on the instance. Requests for a saved channel use its
 /// settings.proxy through <see cref="ChannelProxyExecutors"/>, and the
 /// Command Code / Codex catalog clients additionally refuse HTTPS-to-HTTP
-/// redirects (§179). The live-only Vertex binding and third-party Codex
-/// catalog branches are not ported (C158).
+/// redirects (§179); the live-only Vertex binding and third-party Codex
+/// catalog branches are ported (§229, §270).
 /// </remarks>
 public sealed class ModelFetcher
 {
@@ -306,6 +306,13 @@ public sealed class ModelFetcher
             }
         }
 
+        // model_fetcher.go:474: a Codex channel with a plain (non-OAuth) key is
+        // a third-party catalog and must be fetched without the official OAuth
+        // header/catalog behavior.
+        var thirdPartyCodexCatalog = channelType == "codex"
+            && codexChannel is null
+            && !IsOAuthJson(apiKey);
+
         if (!ValidChannelTypes.Contains(channelType))
         {
             return new FetchModelsResult
@@ -347,7 +354,9 @@ public sealed class ModelFetcher
         // client that refuses HTTPS-to-HTTP redirects, so the API key is never
         // replayed over cleartext by a Command Code or Codex catalog request.
         var executor = ExecutorFor(proxyChannel);
-        if (IsCommandCodeChannelType(channelType) || codexChannel is not null)
+        if (IsCommandCodeChannelType(channelType)
+            || codexChannel is not null
+            || thirdPartyCodexCatalog)
         {
             executor = executor.WithRejectHttpsDowngrade();
         }
@@ -382,6 +391,42 @@ public sealed class ModelFetcher
                 }
 
                 parse = ParseCodexModels;
+            }
+            else if (thirdPartyCodexCatalog)
+            {
+                // model_fetcher.go:561-579: a credential-bearing catalog request
+                // refuses every redirect and requires an HTTPS base URL.
+                executor = executor.WithRejectRedirects();
+                var catalogBaseUrl = HttpModelsBaseUrl(baseUrl);
+                if (!Uri.TryCreate(catalogBaseUrl.TrimEnd('/', '#'), UriKind.Absolute, out var catalogUri)
+                    || !string.Equals(catalogUri.Scheme, "https", StringComparison.OrdinalIgnoreCase)
+                    || catalogUri.Host.Length == 0)
+                {
+                    return new FetchModelsResult
+                    {
+                        Models = [],
+                        Error = "failed to prepare Codex models request: "
+                            + "Codex catalog URL must use HTTPS",
+                    };
+                }
+
+                try
+                {
+                    request = CodexModels.ModelsRequest(
+                        effectiveToken,
+                        new ApiKeyTokenProvider(_ => apiKey),
+                        catalogBaseUrl);
+                }
+                catch (Exception ex)
+                {
+                    return new FetchModelsResult
+                    {
+                        Models = [],
+                        Error = "failed to prepare Codex models request: " + ex.Message,
+                    };
+                }
+
+                parse = ParseThirdPartyCodexModels;
             }
             else if (IsCommandCodeChannelType(channelType))
             {
@@ -888,6 +933,10 @@ public sealed class ModelFetcher
 
     private static List<ModelIdentify> ParseCodexModels(byte[] body)
         => [.. CodexModels.ParseModelCatalog(body).Select(static id => new ModelIdentify { Id = id })];
+
+    private static List<ModelIdentify> ParseThirdPartyCodexModels(byte[] body)
+        => [.. CodexModels.ParseThirdPartyModelCatalog(body)
+            .Select(static id => new ModelIdentify { Id = id })];
 
     // ------------------------------------------------------------------
     // Gemini pagination (model_fetcher.go:654-733)

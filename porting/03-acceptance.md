@@ -2269,6 +2269,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §269（2026-11-15）GCP external_account 的 AWS 与 executable 源（C128 收窄）。AWS：支持 `environment_id=aws1`、环境变量或 IMDSv2 + role/credentials/region 元数据、SigV4 签名 `GetCallerIdentity`、`url.QueryEscape(JSON)` subject token、target-resource 头与版本号校验；executable：支持 command/timeout_millis/output_file、`GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES` 准入、输出文件缓存、stdout/stderr 回退与 version/success/token_type/expiration_time 校验。`credential_source` 补齐 `region_url`、`regional_cred_verification_url`、`imdsv2_session_token_url` 与 executable 字段。仅交互式 web/installed 客户端仍显式拒绝（参照在 nil AuthorizationHandler 上会 panic）。新增 4 例（AWS env 签名、AWS metadata/IMDSv2、executable 输出文件、executable 配置与响应校验），GCP 定向 26/26，Llm 全量 3423/3423。C128 保持 accepted 并进一步收窄。未跑 Api 全量。台账仍 327 条（190 accepted / 137 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§270（2026-11-15）第三方 Codex 目录与官方目录 gpt-image-2（live #2675 / #2651）。C158 转 resolved：codex 通道使用普通 API key 且无 codexChannel 时，ModelFetcher 进入 thirdPartyCodexCatalog——要求 HTTPS、拒绝所有重定向、用 `ApiKeyTokenProvider` 构造 Codex `/models` 请求，并以 `ParseThirdPartyModelCatalog` 解析（不过滤 visibility、不补 gpt-image-2）；官方 `ParseModelCatalog` 同时补齐 gpt-image-2 去重与缺失补充。前端 Codex 第三方凭据对话框不在后端移植范围。新增 2 例并更新官方目录期望；ModelFetcherCodexTests 12/12，全部 ModelFetcher 56/56，Llm Codex 119/119，Llm 全量 3423/3423。台账 327 条（189 accepted / 138 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

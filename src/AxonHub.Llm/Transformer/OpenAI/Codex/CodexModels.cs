@@ -87,10 +87,23 @@ public static class CodexModels
     }
 
     /// <summary>
+    /// Port of <c>ParseThirdPartyModelCatalog</c>: a third-party catalog must
+    /// list its models explicitly (no visibility filter, no image supplement).
+    /// </summary>
+    public static List<string> ParseThirdPartyModelCatalog(ReadOnlySpan<byte> body)
+        => ParseModelCatalog(body, supplementImageModel: false, requireListVisibility: false);
+
+    /// <summary>
     /// Port of <c>ParseModelCatalog</c>: only picker-visible models, in upstream
     /// priority order (stable, so equal priorities keep their wire order).
     /// </summary>
     public static List<string> ParseModelCatalog(ReadOnlySpan<byte> body)
+        => ParseModelCatalog(body, supplementImageModel: true, requireListVisibility: true);
+
+    private static List<string> ParseModelCatalog(
+        ReadOnlySpan<byte> body,
+        bool supplementImageModel,
+        bool requireListVisibility)
     {
         // Go unmarshals "null"/an empty object into a zero struct without an
         // error, so both reach the "no visible models" branch.
@@ -99,10 +112,22 @@ public static class CodexModels
 
         var ordered = models.OrderBy(static model => model.Priority);
         var visible = new List<string>(models.Count);
+        var imageModelIncluded = false;
         foreach (var model in ordered)
         {
-            if (model.Visibility == "list" && model.Slug.Trim().Length > 0)
+            if ((!requireListVisibility || model.Visibility == "list")
+                && model.Slug.Trim().Length > 0)
             {
+                if (model.Slug == "gpt-image-2")
+                {
+                    if (imageModelIncluded)
+                    {
+                        continue;
+                    }
+
+                    imageModelIncluded = true;
+                }
+
                 // The slug is appended untrimmed, exactly as the reference does.
                 visible.Add(model.Slug);
             }
@@ -111,6 +136,11 @@ public static class CodexModels
         if (visible.Count == 0)
         {
             throw new InvalidOperationException("Codex catalog has no visible models");
+        }
+
+        if (supplementImageModel && !imageModelIncluded)
+        {
+            visible.Add("gpt-image-2");
         }
 
         return visible;

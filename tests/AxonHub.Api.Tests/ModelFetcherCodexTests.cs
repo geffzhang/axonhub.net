@@ -67,8 +67,70 @@ public sealed class ModelFetcherCodexTests
         }
         else
         {
-            Assert.Equal(["first-astra", "new-sol"], result.Models.Select(model => model.Id).ToArray());
+            Assert.Equal(
+                ["first-astra", "new-sol", "gpt-image-2"],
+                result.Models.Select(model => model.Id).ToArray());
         }
+    }
+
+    [Fact]
+    public async Task ThirdPartyCodexCatalogUsesPlainKeyAndHttps()
+    {
+        var calls = 0;
+        var executor = new ScriptedExecutor();
+        executor.OnDo = (_, request, _) =>
+        {
+            calls++;
+            Assert.Equal(
+                "https://relay.example/v1/models",
+                new Uri(request.Url).GetLeftPart(UriPartial.Path));
+            Assert.Equal("Bearer sk-third-party", HeaderValue(request, "Authorization"));
+            Assert.NotEmpty(HeaderValue(request, "Version"));
+            Assert.NotEmpty(HeaderValue(request, CodexHeaders.BetaFeaturesHeader));
+            return ModelFetchTestResponses.Json(
+                """{"models":[{"slug":"hidden","visibility":"hide","priority":0},{"slug":"shown","visibility":"list","priority":1},{"slug":"gpt-image-2","visibility":"hide","priority":2},{"slug":"gpt-image-2","visibility":"hide","priority":3}]}""");
+        };
+        var fetcher = new ModelFetcher(executor, new FakeChannelModelCatalogStore(), TimeProvider.System);
+
+        var result = await fetcher.FetchModelsAsync(new FetchModelsInput
+        {
+            ChannelType = "codex",
+            BaseUrl = "https://relay.example/v1",
+            ApiKey = "sk-third-party",
+        });
+
+        Assert.Null(result.Error);
+        Assert.Equal(1, calls);
+        // Third-party catalogs are explicit: no visibility filter, image model
+        // only when listed, and duplicates collapse to the first priority.
+        Assert.Equal(
+            ["hidden", "shown", "gpt-image-2"],
+            result.Models.Select(model => model.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task ThirdPartyCodexCatalogRequiresHttps()
+    {
+        var calls = 0;
+        var executor = new ScriptedExecutor();
+        executor.OnDo = (_, _, _) =>
+        {
+            calls++;
+            return ModelFetchTestResponses.Json("""{"models":[]}""");
+        };
+        var fetcher = new ModelFetcher(executor, new FakeChannelModelCatalogStore(), TimeProvider.System);
+
+        var result = await fetcher.FetchModelsAsync(new FetchModelsInput
+        {
+            ChannelType = "codex",
+            BaseUrl = "http://relay.example/v1",
+            ApiKey = "sk-third-party",
+        });
+
+        Assert.Equal(
+            "failed to prepare Codex models request: Codex catalog URL must use HTTPS",
+            result.Error);
+        Assert.Equal(0, calls);
     }
 
     [Theory]
@@ -107,9 +169,11 @@ public sealed class ModelFetcherCodexTests
 
             if (mode == "replace-api-key")
             {
-                Assert.Equal("https://relay.example/v1/models", request.Url);
+                Assert.Equal(
+                    "https://relay.example/v1/models",
+                    new Uri(request.Url).GetLeftPart(UriPartial.Path));
                 Assert.Equal("Bearer replacement-key", HeaderValue(request, "Authorization"));
-                return ModelFetchTestResponses.Json("""{"data":[{"id":"new-model"}]}""");
+                return ModelFetchTestResponses.Json("""{"models":[{"slug":"new-model"}]}""");
             }
 
             Assert.Equal("Bearer replacement-token", HeaderValue(request, "Authorization"));
@@ -147,7 +211,18 @@ public sealed class ModelFetcherCodexTests
                 Assert.Null(result.Error);
                 Assert.Equal(1, calls);
                 Assert.False(result.Fallback);
-                Assert.Equal("new-model", Assert.Single(result.Models).Id);
+                if (mode == "replace-api-key")
+                {
+                    // A third-party catalog is explicit: no image supplement.
+                    Assert.Equal("new-model", Assert.Single(result.Models).Id);
+                }
+                else
+                {
+                    Assert.Equal(
+                        ["new-model", "gpt-image-2"],
+                        result.Models.Select(model => model.Id).ToArray());
+                }
+
                 break;
         }
 
@@ -163,8 +238,11 @@ public sealed class ModelFetcherCodexTests
         executor.OnDo = (_, request, _) =>
         {
             calls++;
-            Assert.Equal("https://relay.example/v1/models", request.Url);
-            return ModelFetchTestResponses.Json("""{"data":[{"id":"relay-model"}]}""");
+            Assert.Equal(
+                "https://relay.example/v1/models",
+                new Uri(request.Url).GetLeftPart(UriPartial.Path));
+            Assert.Equal("Bearer synthetic-api-key", HeaderValue(request, "Authorization"));
+            return ModelFetchTestResponses.Json("""{"models":[{"slug":"relay-model"}]}""");
         };
         var fetcher = new ModelFetcher(executor, new FakeChannelModelCatalogStore(), TimeProvider.System);
 
