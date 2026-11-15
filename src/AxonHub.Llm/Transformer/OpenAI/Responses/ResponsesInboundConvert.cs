@@ -227,19 +227,37 @@ public static class ResponsesInboundConvert
         // If input is an array of items.
         var items = input.Items;
         var messages = new List<Message>(items?.Count ?? 0);
+
+        // Items already turned into a message. A tool output hoisted next to its
+        // assistant message must not be appended again when the scan reaches it.
+        var emitted = new bool[items?.Count ?? 0];
         var i = 0;
 
         while (items is not null && i < items.Count)
         {
+            if (emitted[i])
+            {
+                i++;
+                continue;
+            }
+
             var item = items[i];
 
             // Handle reasoning item - merge with subsequent function_call or text items.
             if (item.Type == "reasoning")
             {
                 var (msg, consumed) = ConvertReasoningWithFollowing(items, i);
+
+                for (var j = i; j < i + consumed; j++)
+                {
+                    emitted[j] = true;
+                }
+
                 if (msg is not null)
                 {
                     messages.Add(msg);
+                    messages.AddRange(
+                        CollectToolCallOutputs(items, emitted, i + consumed, msg.ToolCalls));
                 }
 
                 i += consumed;
@@ -265,10 +283,13 @@ public static class ResponsesInboundConvert
                         msg.ToolCalls.AddRange(calls);
                     }
 
+                    emitted[i] = true;
                     i++;
                 }
 
                 messages.Add(msg);
+                messages.AddRange(
+                    CollectToolCallOutputs(items, emitted, i, msg.ToolCalls));
                 continue;
             }
 
@@ -279,10 +300,77 @@ public static class ResponsesInboundConvert
                 messages.Add(regular);
             }
 
+            emitted[i] = true;
             i++;
         }
 
         return messages;
+    }
+
+    /// <summary>
+    /// Go: <c>collectToolCallOutputs</c>. Returns the tool results belonging to
+    /// <paramref name="toolCalls"/>, in input order, and marks them emitted.
+    /// Chat-compatible upstreams reject a tool message that is not adjacent to
+    /// the assistant message carrying its tool_calls, while the Responses API
+    /// lets a client place a message item between a call and its output.
+    /// Outputs belonging to a different assistant message are left where they
+    /// are.
+    /// </summary>
+    private static List<Message> CollectToolCallOutputs(
+        List<ResponsesItem> items,
+        bool[] emitted,
+        int from,
+        List<ToolCall>? toolCalls)
+    {
+        if (toolCalls is not { Count: > 0 })
+        {
+            return [];
+        }
+
+        var pending = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var toolCall in toolCalls)
+        {
+            if (!string.IsNullOrEmpty(toolCall.Id))
+            {
+                pending.Add(toolCall.Id);
+            }
+        }
+
+        if (pending.Count == 0)
+        {
+            return [];
+        }
+
+        var outputs = new List<Message>();
+        for (var j = from; j < items.Count && pending.Count > 0; j++)
+        {
+            if (emitted[j])
+            {
+                continue;
+            }
+
+            var item = items[j];
+            if (item.Type is not ("function_call_output" or "custom_tool_call_output"))
+            {
+                continue;
+            }
+
+            if (!pending.Contains(item.CallId))
+            {
+                continue;
+            }
+
+            var msg = ConvertItemToMessage(item);
+            if (msg is not null)
+            {
+                outputs.Add(msg);
+            }
+
+            emitted[j] = true;
+            pending.Remove(item.CallId);
+        }
+
+        return outputs;
     }
 
     /// <summary>

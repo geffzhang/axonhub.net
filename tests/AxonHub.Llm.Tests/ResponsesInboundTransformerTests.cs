@@ -540,6 +540,205 @@ public sealed class ResponsesInboundTransformerTests
         Assert.Equal(payload, response.Body);
     }
 
+    // Port of inbound_test.go
+    // TestConvertInputToMessages_KeepsToolOutputAdjacentAcrossAnInterveningMessage:
+    // a Responses client may place a message item between a tool call and its
+    // output, but Chat-compatible upstreams require the tool message next to the
+    // assistant message carrying its tool_calls.
+    [Fact]
+    public void KeepsToolOutputAdjacentAcrossAnInterveningMessage()
+    {
+        static List<string> Roles(List<Message> messages) =>
+            messages.Select(static message => message.Role ?? string.Empty).ToList();
+
+        static List<Message> Convert(params ResponsesItem[] items) =>
+            ResponsesInboundConvert.ConvertInputToMessages(
+                new ResponsesInput { Items = [.. items] })!;
+
+        var messages = Convert(
+            new ResponsesItem
+            {
+                Type = "function_call",
+                CallId = "call_a",
+                Name = "run_command",
+                Arguments = """{"cmd":"ls"}""",
+            },
+            new ResponsesItem
+            {
+                Role = "system",
+                Content = new ResponsesInput { Text = "Approved command prefix saved" },
+            },
+            new ResponsesItem
+            {
+                Type = "function_call_output",
+                CallId = "call_a",
+                Output = new ResponsesInput { Text = "first result" },
+            });
+
+        Assert.Equal(["assistant", "tool", "system"], Roles(messages));
+        Assert.Equal("call_a", messages[0].ToolCalls![0].Id);
+        Assert.Equal("call_a", messages[1].ToolCallId);
+        Assert.Equal("first result", messages[1].Content!.Content);
+        Assert.Equal("Approved command prefix saved", messages[2].Content!.Content);
+
+        messages = Convert(
+            new ResponsesItem
+            {
+                Type = "function_call",
+                CallId = "call_a",
+                Name = "first_tool",
+                Arguments = "{}",
+            },
+            new ResponsesItem
+            {
+                Role = "user",
+                Content = new ResponsesInput { Text = "New turn." },
+            },
+            new ResponsesItem
+            {
+                Type = "function_call_output",
+                CallId = "call_a",
+                Output = new ResponsesInput { Text = "first result" },
+            });
+
+        Assert.Equal(["assistant", "tool", "user"], Roles(messages));
+        Assert.Equal("call_a", messages[1].ToolCallId);
+        Assert.Equal("New turn.", messages[2].Content!.Content);
+
+        messages = Convert(
+            new ResponsesItem
+            {
+                Type = "custom_tool_call",
+                CallId = "call_custom",
+                Name = "custom_tool",
+                Input = "freeform",
+            },
+            new ResponsesItem
+            {
+                Role = "user",
+                Content = new ResponsesInput { Text = "Interjected." },
+            },
+            new ResponsesItem
+            {
+                Type = "custom_tool_call_output",
+                CallId = "call_custom",
+                Output = new ResponsesInput { Text = "custom result" },
+            });
+
+        Assert.Equal(["assistant", "tool", "user"], Roles(messages));
+        Assert.Equal("call_custom", messages[1].ToolCallId);
+        Assert.Equal("custom result", messages[1].Content!.Content);
+
+        messages = Convert(
+            new ResponsesItem
+            {
+                Id = "reasoning_1",
+                Type = "reasoning",
+                Summary = [new ResponsesReasoningSummary { Text = "thinking" }],
+            },
+            new ResponsesItem
+            {
+                Type = "function_call",
+                CallId = "call_a",
+                Name = "first_tool",
+                Arguments = "{}",
+            },
+            new ResponsesItem
+            {
+                Role = "system",
+                Content = new ResponsesInput { Text = "Note." },
+            },
+            new ResponsesItem
+            {
+                Type = "function_call_output",
+                CallId = "call_a",
+                Output = new ResponsesInput { Text = "first result" },
+            });
+
+        Assert.Equal(["assistant", "tool", "system"], Roles(messages));
+        Assert.Single(messages[0].ToolCalls!);
+        Assert.Equal("call_a", messages[0].ToolCalls![0].Id);
+        Assert.Equal("call_a", messages[1].ToolCallId);
+
+        messages = Convert(
+            new ResponsesItem
+            {
+                Type = "function_call",
+                CallId = "call_a",
+                Name = "first_tool",
+                Arguments = "{}",
+            },
+            new ResponsesItem
+            {
+                Type = "function_call",
+                CallId = "call_b",
+                Name = "second_tool",
+                Arguments = "{}",
+            },
+            new ResponsesItem
+            {
+                Role = "user",
+                Content = new ResponsesInput { Text = "Interjected." },
+            },
+            new ResponsesItem
+            {
+                Type = "function_call_output",
+                CallId = "call_b",
+                Output = new ResponsesInput { Text = "second result" },
+            },
+            new ResponsesItem
+            {
+                Type = "function_call_output",
+                CallId = "call_a",
+                Output = new ResponsesInput { Text = "first result" },
+            },
+            new ResponsesItem
+            {
+                Role = "user",
+                Content = new ResponsesInput { Text = "Continue." },
+            });
+
+        Assert.Equal(["assistant", "tool", "tool", "user", "user"], Roles(messages));
+        Assert.Equal(2, messages[0].ToolCalls!.Count);
+        Assert.Equal("call_b", messages[1].ToolCallId);
+        Assert.Equal("second result", messages[1].Content!.Content);
+        Assert.Equal("call_a", messages[2].ToolCallId);
+        Assert.Equal("Interjected.", messages[3].Content!.Content);
+        Assert.Equal("Continue.", messages[4].Content!.Content);
+
+        messages = Convert(
+            new ResponsesItem
+            {
+                Type = "function_call",
+                CallId = "call_a",
+                Name = "first_tool",
+                Arguments = "{}",
+            },
+            new ResponsesItem
+            {
+                Role = "user",
+                Content = new ResponsesInput { Text = "Interjected." },
+            },
+            new ResponsesItem
+            {
+                Type = "function_call",
+                CallId = "call_b",
+                Name = "second_tool",
+                Arguments = "{}",
+            },
+            new ResponsesItem
+            {
+                Type = "function_call_output",
+                CallId = "call_b",
+                Output = new ResponsesInput { Text = "second result" },
+            });
+
+        Assert.Equal(["assistant", "user", "assistant", "tool"], Roles(messages));
+        Assert.Equal("call_a", messages[0].ToolCalls![0].Id);
+        Assert.Equal("call_b", messages[2].ToolCalls![0].Id);
+        Assert.Equal("call_b", messages[3].ToolCallId);
+    }
+
     private static HttpRequestData JsonRequest(string body) => new()
     {
         Headers = new Dictionary<string, List<string>>(StringComparer.Ordinal)

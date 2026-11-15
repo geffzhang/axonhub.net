@@ -2259,6 +2259,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §264（2026-11-15）音频消息计入空响应判定（live #2634）。C323 登记并转 resolved：`hasMessageContent` 从未检查 `msg.Audio`，只返回音频的 Chat Completions 响应被判为空，pipeline 抛 `ErrEmptyResponse`、同通道重试，可能在上游已成功并计费后返回 500。参照将携带 `Data` 或 `Transcript` 的音频视为内容，空 audio 对象仍为空；检查位于 `hasMessageContent`，同时覆盖 `Message` 与流式 `Delta`。本轮在 `EmptyResponse.HasMessageContent` 中补齐该分支。新增 live 的 4 例（音频 data、仅 transcript、空 audio 对象、流式 delta 音频）；`EmptyResponseTests` 28/28，Llm 全量 3389/3389。未跑 Api 全量（新增 Llm 4 例）。台账 323 条（190 accepted / 133 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§265（2026-11-15）工具输出紧跟其 tool call（live #2633）。C324 登记并转 resolved：Responses 入站 `convertInputToMessages` 按数组顺序输出消息，客户端若在 `function_call` 与其输出之间插入 message，会得到 `assistant(tool_calls) → system/user → tool`，被 Chat 上游以 400 拒绝；reasoning 合并出的调用同样受影响。参照在发出 assistant 消息后收集属于其 `tool_calls` 的输出并立即追加，标记为已发出以免外层重复；其他调用的输出留在原位，相邻场景不变。本轮在 `ConvertInputToMessages` 增加 `emitted` 标记与 `CollectToolCallOutputs`。移植 live 的 6 个子场景测试；Responses 定向 445/445，Llm 全量 3390/3390。未跑 Api 全量（新增 Llm 1 例）。台账 324 条（190 accepted / 134 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
