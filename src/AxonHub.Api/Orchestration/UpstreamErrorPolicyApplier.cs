@@ -56,11 +56,26 @@ public sealed class UpstreamErrorPolicyApplier : IUpstreamErrorPolicyApplier
             return null;
         }
 
+        // A classified transport failure is already the client-visible 502;
+        // hidden/custom modes must not rewrite it back into a generic message
+        // (the classifier deliberately drops the upstream retry marker).
+        if (error is ResponseError { Detail.Code: UpstreamTransportErrors.StreamInterruptedCode })
+        {
+            return error;
+        }
+
+        // api.transformOrchestratorError classifies transport failures before
+        // the policy runs, so a bare classified error is not an upstream-marked
+        // pipeline error and hidden/custom modes leave it alone.
+        var transformed = UpstreamTransportErrors.IsUpstreamTransportError(error)
+            ? UpstreamTransportErrors.Classify(error)
+            : error;
+
         var policy = await _retryPolicyProvider
             .GetRetryPolicyAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return Apply(error, policy.UpstreamErrorPolicy);
+        return Apply(transformed, policy.UpstreamErrorPolicy);
     }
 
     public async Task<Exception?> ApplyToStreamErrorAsync(
