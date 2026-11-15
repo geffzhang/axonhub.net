@@ -8,6 +8,7 @@ on:
       - "tools/AxonHub.CorpusRunner/**"
       - "src/AxonHub.Llm/**"
       - "src/AxonHub.Abstractions/**"
+      - "src/AxonHub.Api/**"
       - ".github/workflows/porting-guard.yml"
   push:
     branches: [unstable]
@@ -17,6 +18,7 @@ on:
       - "tools/AxonHub.CorpusRunner/**"
       - "src/AxonHub.Llm/**"
       - "src/AxonHub.Abstractions/**"
+      - "src/AxonHub.Api/**"
       - ".github/workflows/porting-guard.yml"
   workflow_dispatch:
 
@@ -38,6 +40,17 @@ jobs:
         run: |
           python -I porting/scripts/diff_register.py render --dir porting
           git diff --exit-code -- porting/02-differences.md
+
+  routes:
+    name: HTTP route surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compare the port routes with the reference table
+        run: python -I porting/scripts/http_route_audit.py --port src/AxonHub.Api
 
   corpus:
     name: differential corpus

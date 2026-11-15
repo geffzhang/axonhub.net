@@ -2221,6 +2221,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §245（2026-11-15）模型关联解析缓存与诊断导出。C239 转 resolved：新增进程级 `ModelAssociationCache` 单例（键为 model id，条目含已解析候选、关联签名、通道数量、通道最新更新时间、模型更新时间、通道缓存版本与 cachedAt；5 分钟 TTL，六项全部一致才命中），`ModelCandidateSelector` 在快照模式下从 `IEnabledChannelCacheSnapshotProvider` 一次取得启用通道与 `Version`，请求级 `When` 过滤仍在缓存之后执行；签名按参照 `modelAssociationSignature` 的 FNV-1a 64 字段序复刻。诊断导出在模型预览之后读取同一单例，`cache.modelAssociationCache` 按 modelId 排序输出 modelId / associations / candidateCount / channelCount / 两个 RFC3339 时间 / channelCacheVersion / cachedAt，替代此前的恒 `[]`。测试：`ModelAssociationCacheTests` 7 例锁定快照读取、缓存命中复用、通道数量/更新时间/版本/签名/模型更新时间失效、TTL 过期与条件过滤共享解析；`CacheDiagnosticsTests.AssociationCacheEntriesKeepTheReferenceShape` 锁定字段序与时间格式；`ModelAssociationCacheTests|CacheDiagnosticsTests` 24/24、选择器/编排/诊断回归 144/144。未跑 Api 全量（新增 Api 8 例）。台账 309 条（191 accepted / 118 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§246（2026-11-15）HTTP 路由面审计。M5 公开 API 审计的 HTTP 路由部分：从参照 `internal/server/routes.go`、`codex_routes.go` 与 `api/oidc.go` 读出 76 条 method+path（含 `/oauth/oidc/*` 五条、`/codex/*` 七条、`/gemini/:version` 与 `/v1beta` 两组 Gemini 路由），对端口 `src/AxonHub.Api` 的 `MapGet/MapPost/MapDelete/MapGraphQL` 字面路径做静态扫描；归一化只忽略参数名并把 gin 的 `*model` / `:param` 映射为 ASP.NET 的 catch-all / 参数占位。结果 **76/76 完全一致**，missing 0、extra 0。静态兜底（`StaticHandler` / `MapFallback`）与中间件顺序不在路由表口径内，分别由静态托管用例和各端点安全用例覆盖。新增 `porting/scripts/http_route_audit.py`（仅标准库）可重跑该审计，并作为 `routes` job 接入 `porting-guard.yml`（路径过滤新增 `src/AxonHub.Api/**`）。无新增差异条目；未跑 Api 全量（本切片无新增 xUnit 用例）。台账 309 条（191 accepted / 118 resolved / 0 gap）。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
@@ -2230,6 +2232,10 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
   推断生成，内省可见。有效根字段覆盖 219/220（99.5%），未解释缺口为 0，由
   `AdminChannelEndpointsEndpointTests.AdminRootFieldSurfaceMatchesTheReferenceAudit` 锁定内省计数与
   `nodes` 的缺席
+- HTTP 路由面已审计：参照 `routes.go` / `codex_routes.go` / `api/oidc.go` 的 76 条 method+path 与端口
+  静态映射逐一比对为 **76/76**（参数名与 gin 通配符语义归一化，无 missing / extra）；静态兜底与中间件
+  顺序不在该表，分别由 `StaticHandler` 测试和各端点安全测试覆盖。审计脚本
+  `porting/scripts/http_route_audit.py` 可重跑，并已接入 `porting-guard.yml`
 - 本实现公开表面：`AxonHub.Llm`（统一模型、OpenAI 双向变换、SSE 解码、HTTP 执行器、pipeline）、
   `AxonHub.Persistence`（EF Core 写侧 DbContext 与模型、Dapper 读侧仓储、幂等迁移与连接工厂）、
   `AxonHub.Grains` / `AxonHub.Grains.Abstractions`（通道池与通道指标 grain、ChannelLimiter/ChannelLimiterManager/ChannelRequestTracker/RateLimitAwareScorer）、
