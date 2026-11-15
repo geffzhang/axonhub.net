@@ -171,7 +171,72 @@ public sealed class TypeSafeOutboundTransformer
                 "failed to unmarshal systemone response: invalid json");
         }
 
-        var rootKind = GoStructJson.RootKind(response.Body);
+        // Some deployments (e.g. Cloudflare Workers AI) wrap the SystemOne
+        // payload in their universal envelope: {"success":true,"result":{...}}.
+        // The envelope keys do not collide with SystemOne fields, so decoding
+        // the raw body directly would silently yield a zero-valued response.
+        using var envelopeDocument = JsonDocument.Parse(response.Body);
+        var envelopeRoot = envelopeDocument.RootElement;
+        if (envelopeRoot.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+        {
+            throw new InvalidOperationException(
+                "failed to unmarshal systemone response envelope: "
+                + GoStructJson.TypeMismatch(
+                    GoStructJson.RootKind(response.Body)!,
+                    "typesafe.systemOneWireEnvelope"));
+        }
+
+        JsonElement successRaw = default;
+        JsonElement resultRaw = default;
+        JsonElement errorRaw = default;
+        JsonElement errorsRaw = default;
+        JsonElement messagesRaw = default;
+        var hasSuccess = envelopeRoot.ValueKind == JsonValueKind.Object
+            && TryGetEnvelopeProperty(envelopeRoot, "success", out successRaw);
+        var hasResult = envelopeRoot.ValueKind == JsonValueKind.Object
+            && TryGetEnvelopeProperty(envelopeRoot, "result", out resultRaw);
+        var hasError = envelopeRoot.ValueKind == JsonValueKind.Object
+            && TryGetEnvelopeProperty(envelopeRoot, "error", out errorRaw);
+        var hasErrors = envelopeRoot.ValueKind == JsonValueKind.Object
+            && TryGetEnvelopeProperty(envelopeRoot, "errors", out errorsRaw);
+        var hasMessages = envelopeRoot.ValueKind == JsonValueKind.Object
+            && TryGetEnvelopeProperty(envelopeRoot, "messages", out messagesRaw);
+
+        ReadOnlyMemory<byte> wireBody = response.Body;
+        if (hasSuccess)
+        {
+            if (!TryReadEnvelopeSuccess(successRaw, out var success))
+            {
+                throw EnvelopeError(
+                    "systemone response envelope has an invalid success flag");
+            }
+
+            if (!success)
+            {
+                var message = EnvelopeErrorMessage(
+                    hasError ? errorRaw : null,
+                    hasErrors ? errorsRaw : null,
+                    hasMessages ? messagesRaw : null);
+                if (message.Length == 0)
+                {
+                    message = "upstream request failed";
+                }
+
+                throw EnvelopeError(message);
+            }
+
+            if (!hasResult || resultRaw.ValueKind == JsonValueKind.Null)
+            {
+                throw EnvelopeError(
+                    "systemone response envelope is missing result");
+            }
+
+            // Result is already part of the validated document; keep its raw
+            // text so decoding preserves the number lexemes (UseNumber).
+            wireBody = Encoding.UTF8.GetBytes(resultRaw.GetRawText());
+        }
+
+        var rootKind = GoStructJson.RootKind(wireBody.Span);
         if (rootKind is not null)
         {
             // null leaves the zero struct in place; other roots are a type error.
@@ -185,7 +250,7 @@ public sealed class TypeSafeOutboundTransformer
         SystemOneWireResponse wireResp;
         try
         {
-            wireResp = LlmJson.Deserialize<SystemOneWireResponse>(response.Body)
+            wireResp = LlmJson.Deserialize<SystemOneWireResponse>(wireBody.Span)
                 ?? new SystemOneWireResponse();
         }
         catch (JsonException ex)
@@ -196,8 +261,131 @@ public sealed class TypeSafeOutboundTransformer
                 ex);
         }
 
+        if (hasSuccess
+            && string.IsNullOrEmpty(wireResp.Model)
+            && (wireResp.Answers is null || wireResp.Answers.Count == 0))
+        {
+            throw EnvelopeError(
+                "systemone response envelope result is empty");
+        }
+
         return WireToLlm(wireResp);
     }
+
+    /// <summary>
+    /// Go's encoding/json field lookup folds ASCII case and keeps the last
+    /// duplicate key; the envelope keys are all lowercase in practice.
+    /// </summary>
+    private static bool TryGetEnvelopeProperty(
+        JsonElement root,
+        string foldedName,
+        out JsonElement value)
+    {
+        var found = false;
+        value = default;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (string.Equals(property.Name, foldedName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Port of systemOneEnvelopeSuccess: an explicit null or non-boolean value
+    /// is an envelope with an invalid flag, not a plain SystemOne response.
+    /// </summary>
+    private static bool TryReadEnvelopeSuccess(JsonElement value, out bool success)
+    {
+        success = false;
+        if (value.ValueKind == JsonValueKind.True)
+        {
+            success = true;
+            return true;
+        }
+
+        return value.ValueKind == JsonValueKind.False;
+    }
+
+    /// <summary>
+    /// Port of systemOneEnvelopeErrorMessage: string, object-with-message or
+    /// object-with-detail, and arrays joined with "; ".
+    /// </summary>
+    private static string EnvelopeErrorMessage(
+        JsonElement? error,
+        JsonElement? errors,
+        JsonElement? messages)
+    {
+        foreach (var raw in new[] { error, errors, messages })
+        {
+            if (raw is not { } value || value.ValueKind == JsonValueKind.Null)
+            {
+                continue;
+            }
+
+            var message = MessageFromValue(value);
+            if (message.Length > 0)
+            {
+                return message;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string MessageFromValue(JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.String:
+                return value.GetString() ?? string.Empty;
+            case JsonValueKind.Object:
+                if (TryGetEnvelopeProperty(value, "message", out var message)
+                    && message.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrEmpty(message.GetString()))
+                {
+                    return message.GetString()!;
+                }
+
+                if (TryGetEnvelopeProperty(value, "detail", out var detail)
+                    && detail.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrEmpty(detail.GetString()))
+                {
+                    return detail.GetString()!;
+                }
+
+                return string.Empty;
+            case JsonValueKind.Array:
+                var messages = new List<string>(value.GetArrayLength());
+                foreach (var item in value.EnumerateArray())
+                {
+                    var itemMessage = MessageFromValue(item);
+                    if (itemMessage.Length > 0)
+                    {
+                        messages.Add(itemMessage);
+                    }
+                }
+
+                return string.Join("; ", messages);
+            default:
+                return string.Empty;
+        }
+    }
+
+    private static ResponseError EnvelopeError(string message)
+        => new()
+        {
+            StatusCode = 502,
+            Detail = new ErrorDetail
+            {
+                Message = message,
+                Type = "api_error",
+            },
+        };
 
     /// <summary>Port of the response-to-unified mapping in TransformResponse.</summary>
     private static LlmResponse WireToLlm(SystemOneWireResponse wireResp)

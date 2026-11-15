@@ -2229,6 +2229,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §249（2026-11-15）按通道的响应超时覆盖（live #2630）。C311 登记并转 resolved：`ChannelSettings.responseTimeout` 的 INHERIT / CUSTOM 两态、GraphQL 类型与写入校验此前已移植，但 `Pipeline` 始终使用全局 `retry_policy` 的两个超时。本轮在 Llm pipeline 增加 `IResponseTimeoutProvider`（`Pipeline.cs` 在每次尝试 `TransformRequest` 之后解析），`PersistentOutboundTransformer` 读取当前候选的 `responseTimeout`：仅 custom 生效、两个字段独立覆盖、nil 继承全局、显式 0 关闭对应超时；重试切换通道后按新候选重新解析。测试：`PipelineResponseTimeoutTests` 8 例（无 provider、空覆盖、单/双字段、0 关闭、Process 级 non-stream 覆盖与全局超时关闭）与 `ResponseTimeoutProviderTests` 11 例（inherit/缺失/畸形、custom 单/双字段、0 值、无候选）；Llm 全量 3310/3310、Api 定向 76/76。未跑 Api 全量（新增 Llm 8 例、Api 11 例）。台账 311 条（190 accepted / 121 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§250（2026-11-15）TypeSafe SystemOne 响应 envelope 解包（live #2636）。C312 登记并转 resolved：live `c51972c6` 在解码 `systemOneWireResponse` 前探测网关信封 `{"success":true,"result":{...}}`。端口此前直接解码 raw body，Cloudflare Workers AI 这类信封会被静默解成零值响应。本轮在 `TypeSafeOutboundTransformer.TransformResponse` 前置 envelope 探测：`success` 存在即按信封处理；true 时解包 `result`，缺失/null result 或空 model/answers 返回 502 `api_error`；false 时按 error/errors/messages 的字符串、`message`/`detail` 对象或数组拼接提取文案（默认 `upstream request failed`），invalid success flag 同样 502；普通 body 与 null body 行为不变；非对象根的报错改为参照的 `systemOneWireEnvelope` 类型错误。测试新增 14 例（解包、失败文案、缺 result、六种错误形状、五种畸形信封）并更新根数组断言；TypeSafe 定向 70/70、Llm 全量 3324/3324。未跑 Api 全量。台账 312 条（190 accepted / 122 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

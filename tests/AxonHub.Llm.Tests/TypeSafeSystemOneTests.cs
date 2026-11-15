@@ -740,8 +740,8 @@ public sealed class TypeSafeSystemOneTests
                 .TransformResponse(JsonResponse("[]")));
 
         Assert.Equal(
-            "failed to unmarshal systemone response: "
-            + "json: cannot unmarshal array into Go value of type typesafe.systemOneWireResponse",
+            "failed to unmarshal systemone response envelope: "
+            + "json: cannot unmarshal array into Go value of type typesafe.systemOneWireEnvelope",
             ex.Message);
     }
 
@@ -752,6 +752,118 @@ public sealed class TypeSafeSystemOneTests
             .TransformResponse(JsonResponse("""{"model":"m","answers":null}"""));
 
         Assert.Null(llmResp.SystemOne!.Answers);
+    }
+
+    [Fact]
+    public void OutboundTransformResponse_UnwrapsTheCloudflareEnvelope()
+    {
+        var llmResp = TypeSafeOutboundTransformer.Create("https://api.typesafe.ai/v1", "k")
+            .TransformResponse(JsonResponse(
+                """
+                {
+                    "result": {
+                        "model": "clef-flash",
+                        "answers": {"approve": {"type": "noul", "noul": 0.9328}},
+                        "usage": {"input_tokens": 158, "output_tokens": 0}
+                    },
+                    "success": true,
+                    "errors": [],
+                    "messages": []
+                }
+                """));
+
+        Assert.Equal("clef-flash", llmResp.Model);
+        Assert.Equal(158L, llmResp.Usage!.PromptTokens);
+        var answer = llmResp.SystemOne!.Answers!["approve"];
+        Assert.Equal("noul", answer.Type);
+        Assert.Equal(0.9328, answer.Noul!.Value, 9);
+    }
+
+    [Fact]
+    public void OutboundTransformResponse_EnvelopeFailureCarriesTheUpstreamMessage()
+    {
+        var ex = Assert.Throws<ResponseError>(() =>
+            TypeSafeOutboundTransformer.Create("https://api.typesafe.ai/v1", "k")
+                .TransformResponse(JsonResponse(
+                    """
+                    {
+                        "result": null,
+                        "success": false,
+                        "errors": [{"code": 7000, "message": "No route for that URI"}],
+                        "messages": []
+                    }
+                    """)));
+
+        Assert.Equal(502, ex.StatusCode);
+        Assert.Equal("api_error", ex.Detail.Type);
+        Assert.Contains("No route for that URI", ex.Detail.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OutboundTransformResponse_EnvelopeMissingResult()
+    {
+        var ex = Assert.Throws<ResponseError>(() =>
+            TypeSafeOutboundTransformer.Create("https://api.typesafe.ai/v1", "k")
+                .TransformResponse(JsonResponse(
+                    """{"success": true, "errors": [], "messages": []}""")));
+
+        Assert.Equal(502, ex.StatusCode);
+        Assert.Contains("result", ex.Detail.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(
+        """{"success": false, "result": null, "error": "upstream boom"}""",
+        "upstream boom")]
+    [InlineData(
+        """{"success": false, "result": null, "error": {"code": 7000, "message": "object boom"}}""",
+        "object boom")]
+    [InlineData(
+        """{"success": false, "result": null, "error": {"detail": "detail boom"}}""",
+        "detail boom")]
+    [InlineData(
+        """{"success": false, "result": null, "errors": [{"message": "first"}, {"message": "second"}]}""",
+        "first; second")]
+    [InlineData(
+        """{"success": false, "result": null, "messages": ["msg one", "msg two"]}""",
+        "msg one; msg two")]
+    [InlineData(
+        """{"success": false, "result": null, "errors": [], "messages": []}""",
+        "upstream request failed")]
+    public void OutboundTransformResponse_EnvelopeErrorShapes(string body, string expected)
+    {
+        var ex = Assert.Throws<ResponseError>(() =>
+            TypeSafeOutboundTransformer.Create("https://api.typesafe.ai/v1", "k")
+                .TransformResponse(JsonResponse(body)));
+
+        Assert.Equal(502, ex.StatusCode);
+        Assert.Equal(expected, ex.Detail.Message);
+    }
+
+    [Theory]
+    [InlineData(
+        """{"success": null, "result": {"model": "clef-flash", "answers": {"approve": {"type": "noul", "noul": 0.9328}}}}""",
+        "systemone response envelope has an invalid success flag")]
+    [InlineData(
+        """{"success": "yes", "result": {"model": "clef-flash"}}""",
+        "systemone response envelope has an invalid success flag")]
+    [InlineData(
+        """{"success": true, "result": {"model": "", "answers": null}}""",
+        "systemone response envelope result is empty")]
+    [InlineData(
+        """{"success": true, "result": {"unexpected": true}}""",
+        "systemone response envelope result is empty")]
+    [InlineData(
+        """{"success": true, "result": null}""",
+        "systemone response envelope is missing result")]
+    public void OutboundTransformResponse_EnvelopeMalformed(string body, string expected)
+    {
+        var ex = Assert.Throws<ResponseError>(() =>
+            TypeSafeOutboundTransformer.Create("https://api.typesafe.ai/v1", "k")
+                .TransformResponse(JsonResponse(body)));
+
+        Assert.Equal(502, ex.StatusCode);
+        Assert.Equal(expected, ex.Detail.Message);
     }
 
     // --------------------------------------------------- outbound TransformError
