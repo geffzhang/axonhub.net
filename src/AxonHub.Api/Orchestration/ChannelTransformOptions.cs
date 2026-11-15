@@ -121,6 +121,28 @@ internal static class ChannelTransformOptions
         }
 
         var effort = request.ReasoningEffort;
+        var nativeOnly = false;
+
+        // With thinking.type=between_tools the Anthropic inbound keeps the
+        // unified effort at "none" (thinking is off for other protocols) and
+        // records the native effort only in TransformerMetadata, so map that
+        // value instead and leave ReasoningEffort as is.
+        if (effort == ReasoningEfforts.None
+            && request.TransformerMetadata is { } sourceMetadata)
+        {
+            var thinkingType = ReadMetaString(
+                sourceMetadata,
+                AnthropicOutboundRequest.TransformerMetadataKeyThinkingType);
+            var nativeEffort = ReadMetaString(
+                sourceMetadata,
+                AnthropicOutboundRequest.TransformerMetadataKeyOutputConfigEffort);
+            if (thinkingType == "between_tools" && nativeEffort.Length > 0)
+            {
+                effort = nativeEffort;
+                nativeOnly = true;
+            }
+        }
+
         if (string.IsNullOrEmpty(effort))
         {
             return request;
@@ -156,7 +178,10 @@ internal static class ChannelTransformOptions
             clone.TransformerMetadata = copied;
         }
 
-        clone.ReasoningEffort = mapped;
+        if (!nativeOnly)
+        {
+            clone.ReasoningEffort = mapped;
+        }
 
         return clone;
     }
@@ -240,6 +265,24 @@ internal static class ChannelTransformOptions
         }
 
         return StreamPolicySelector.SupportsAutoAggregateRequest(request);
+    }
+
+    /// <summary>
+    /// Reads a string TransformerMetadata value; non-string and absent values
+    /// are treated as empty like Go's failed type assertion.
+    /// </summary>
+    private static string ReadMetaString(
+        Dictionary<string, JsonElement>? metadata,
+        string key)
+    {
+        if (metadata is null
+            || !metadata.TryGetValue(key, out var value)
+            || value.ValueKind != JsonValueKind.String)
+        {
+            return string.Empty;
+        }
+
+        return value.GetString() ?? string.Empty;
     }
 
     /// <summary>Port of <c>replaceDeveloperRoleWithSystem</c> (transform_options.go:108-131).</summary>

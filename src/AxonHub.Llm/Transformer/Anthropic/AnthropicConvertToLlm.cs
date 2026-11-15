@@ -125,7 +125,12 @@ public static class AnthropicConvertToLlm
                 JsonSerializer.SerializeToElement(request.OutputConfig.Effort);
             // The client sent an explicit effort: pass it through verbatim
             // (including "max") while keeping the native value in metadata.
-            chatRequest.ReasoningEffort = request.OutputConfig.Effort;
+            // With between_tools the effort only tunes the Anthropic request;
+            // other protocols keep seeing "none".
+            if (request.Thinking?.Type != "between_tools")
+            {
+                chatRequest.ReasoningEffort = request.OutputConfig.Effort;
+            }
         }
 
         return chatRequest;
@@ -605,6 +610,15 @@ public static class AnthropicConvertToLlm
             case "disabled":
                 chatRequest.TransformerMetadata![AnthropicJson.KeyThinkingType] =
                     JsonSerializer.SerializeToElement("disabled");
+                chatRequest.ReasoningEffort = "none";
+                break;
+
+            case "between_tools":
+                // The only way to turn thinking off on models that reject
+                // "disabled": keep the type for Anthropic outbounds and expose
+                // "none" to the other protocols.
+                chatRequest.TransformerMetadata![AnthropicJson.KeyThinkingType] =
+                    JsonSerializer.SerializeToElement("between_tools");
                 chatRequest.ReasoningEffort = "none";
                 break;
 

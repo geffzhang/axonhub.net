@@ -25,6 +25,14 @@ public static class AnthropicOutboundRequest
     public const string TransformerMetadataKeyOutputConfigEffort =
         AnthropicJson.KeyOutputConfigEffort;
 
+    /// <summary>
+    /// Port of <c>anthropic.TransformerMetadataKeyThinkingType</c>
+    /// (tool_blocks.go): the client's native thinking type marker, used to
+    /// round-trip <c>between_tools</c> without re-deriving it.
+    /// </summary>
+    public const string TransformerMetadataKeyThinkingType =
+        AnthropicJson.KeyThinkingType;
+
     private const long DefaultAnthropicMaxTokens = 8192;
 
     private static readonly Dictionary<string, long> DefaultReasoningEffortMapping = new(StringComparer.Ordinal)
@@ -214,6 +222,9 @@ public static class AnthropicOutboundRequest
                 break;
             case "adaptive":
                 req.Thinking = new AnthropicThinking { Type = "adaptive" };
+                break;
+            case "between_tools":
+                req.Thinking = new AnthropicThinking { Type = "between_tools" };
                 break;
             case "enabled":
                 // Native budget client: round-trip budget_tokens verbatim.

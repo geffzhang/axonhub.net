@@ -107,6 +107,14 @@ public sealed class AnthropicInboundTransformerTests
         Assert.Equal("adaptive", adaptive.TransformerMetadata!["thinking_type"].GetString());
         Assert.Equal("omitted", adaptive.TransformerMetadata["thinking_display"].GetString());
         Assert.Equal("xhigh", adaptive.TransformerMetadata["output_config_effort"].GetString());
+
+        var betweenTools = Transform(
+            "{" + Base + "," + Messages + ","
+            + "\"thinking\":{\"type\":\"between_tools\"},"
+            + "\"output_config\":{\"effort\":\"max\"}}");
+        Assert.Equal("none", betweenTools.ReasoningEffort);
+        Assert.Equal("between_tools", betweenTools.TransformerMetadata!["thinking_type"].GetString());
+        Assert.Equal("max", betweenTools.TransformerMetadata["output_config_effort"].GetString());
     }
 
     [Fact]
@@ -298,7 +306,7 @@ public sealed class AnthropicInboundTransformerTests
         },
         {
             "{" + Base + "," + Messages + ",\"thinking\":{\"type\":\"weird\"}}",
-            "invalid request: thinking.type must be one of: enabled, disabled, adaptive"
+            "invalid request: thinking.type must be one of: enabled, disabled, adaptive, between_tools"
         },
         {
             "{" + Base + "," + Messages + ",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":-1}}",

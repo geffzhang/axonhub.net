@@ -155,6 +155,28 @@ public sealed class AnthropicOutboundTransformerTests
     }
 
     [Fact]
+    public void TransformRequest_BetweenToolsRoundTripsTheNativeThinkingType()
+    {
+        var request = SimpleRequest("Hello");
+        request.ReasoningEffort = "none";
+        request.TransformerMetadata = new Dictionary<string, JsonElement>
+        {
+            ["thinking_type"] = JsonSerializer.SerializeToElement("between_tools"),
+            ["output_config_effort"] = JsonSerializer.SerializeToElement("max"),
+        };
+
+        var body = Body(Direct().TransformRequest(request));
+
+        Assert.Equal(
+            "between_tools",
+            body.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.Equal(
+            "max",
+            body.GetProperty("output_config").GetProperty("effort").GetString());
+        Assert.False(body.GetProperty("thinking").TryGetProperty("budget_tokens", out _));
+    }
+
+    [Fact]
     public void TransformRequest_OllamaBearerAuth()
     {
         var transformer = new AnthropicOutboundTransformer(new AnthropicOutboundConfig

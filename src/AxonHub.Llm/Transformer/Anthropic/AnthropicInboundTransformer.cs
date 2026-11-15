@@ -130,7 +130,8 @@ public sealed class AnthropicInboundTransformer : IInboundTransformer
 
                     break;
                 case "adaptive":
-                    // output_config is optional for adaptive thinking.
+                case "between_tools":
+                    // output_config is optional for adaptive and between_tools thinking.
                     if (anthropicReq.OutputConfig is { Effort.Length: > 0 } outputConfig)
                     {
                         switch (outputConfig.Effort)
@@ -150,7 +151,7 @@ public sealed class AnthropicInboundTransformer : IInboundTransformer
                     break;
                 default:
                     throw TransformerErrors.InvalidRequest(
-                        "thinking.type must be one of: enabled, disabled, adaptive");
+                        "thinking.type must be one of: enabled, disabled, adaptive, between_tools");
             }
         }
 

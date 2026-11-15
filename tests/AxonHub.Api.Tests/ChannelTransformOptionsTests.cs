@@ -276,6 +276,33 @@ public sealed class ChannelTransformOptionsTests
     }
 
     [Fact]
+    public void BetweenToolsMapsTheNativeEffortAndKeepsTheUnifiedNone()
+    {
+        var request = ChatRequest();
+        request.ReasoningEffort = ReasoningEfforts.None;
+        request.TransformerMetadata = new Dictionary<string, JsonElement>
+        {
+            [AnthropicOutboundRequest.TransformerMetadataKeyOutputConfigEffort] =
+                JsonSerializer.SerializeToElement("max"),
+            ["thinking_type"] = JsonSerializer.SerializeToElement("between_tools"),
+        };
+
+        var result = ChannelTransformOptions.ApplyReasoningEffortMapping(request, MappingSettings());
+
+        Assert.NotSame(request, result);
+        // Other protocols keep seeing "none"; only the native Anthropic effort
+        // marker follows the channel mapping.
+        Assert.Equal(ReasoningEfforts.None, result.ReasoningEffort);
+        Assert.Equal(
+            "high",
+            result.TransformerMetadata![AnthropicOutboundRequest.TransformerMetadataKeyOutputConfigEffort].GetString());
+        Assert.Equal("between_tools", result.TransformerMetadata["thinking_type"].GetString());
+        Assert.Equal(
+            "max",
+            request.TransformerMetadata[AnthropicOutboundRequest.TransformerMetadataKeyOutputConfigEffort].GetString());
+    }
+
+    [Fact]
     public void ReasoningMappingDoesNotMutateTheOriginalMetadata()
     {
         var metadata = new Dictionary<string, JsonElement>
