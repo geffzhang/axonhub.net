@@ -18,6 +18,9 @@ public sealed class GcpTokenSourceTests
     private static readonly DateTimeOffset FixedNow =
         new(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
 
+    private static readonly string[] ImpersonationDelegates =
+        ["first@example.test", "second@example.test"];
+
     // ------------------------------------------------------------------
     // Service account: signed JWT exchanged for an access token
     // ------------------------------------------------------------------
@@ -351,6 +354,181 @@ public sealed class GcpTokenSourceTests
     }
 
     // ------------------------------------------------------------------
+    // Workforce-pool user credentials and service-account impersonation
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void ExternalAccountAuthorizedUser_refreshes_with_basic_auth()
+    {
+        var bodies = new List<string>();
+        var authorizations = new List<string>();
+        var handler = new ScriptedHandler(request =>
+        {
+            bodies.Add(BodyText(request));
+            authorizations.Add(request.Headers.GetValues("Authorization").Single());
+            return Text(
+                HttpStatusCode.OK,
+                """{"access_token":"at-1","token_type":"Bearer","expires_in":3600,"refresh_token":"rt-2"}""");
+        });
+
+        var credentials = CredentialsObject(
+            new Dictionary<string, object>
+            {
+                ["type"] = "external_account_authorized_user",
+                ["client_id"] = "cid",
+                ["client_secret"] = "secret",
+                ["refresh_token"] = "rt-1",
+                ["token_url"] = "https://sts.example.test/token",
+            },
+            handler);
+
+        var token = credentials.TokenSource.GetToken();
+
+        Assert.Equal("at-1", token.AccessToken);
+        Assert.Equal("Bearer", token.TokenType);
+        Assert.Equal(FixedNow.AddSeconds(3600), token.Expiry);
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("https://sts.example.test/token", request.RequestUri!.ToString());
+        Assert.Equal(
+            "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("cid:secret")),
+            Assert.Single(authorizations));
+        var form = ParseForm(Assert.Single(bodies));
+        Assert.Equal("refresh_token", form["grant_type"]);
+        Assert.Equal("rt-1", form["refresh_token"]);
+    }
+
+    [Fact]
+    public void ExternalAccountAuthorizedUser_validates_refresh_fields()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account_authorized_user",
+                    ["client_id"] = "cid",
+                    ["refresh_token"] = "rt",
+                    ["token_url"] = "https://sts.example.test/token",
+                },
+                new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
+
+        Assert.Equal(
+            "oauth2/google: Token should be created with fields to make it valid "
+            + "(`token` and `expiry`), or fields to allow it to refresh "
+            + "(`refresh_token`, `token_url`, `client_id`, `client_secret`).",
+            error.Message);
+    }
+
+    [Fact]
+    public void ExternalAccountAuthorizedUser_rejects_a_negative_expiry()
+    {
+        var credentials = CredentialsObject(
+            new Dictionary<string, object>
+            {
+                ["type"] = "external_account_authorized_user",
+                ["client_id"] = "cid",
+                ["client_secret"] = "secret",
+                ["refresh_token"] = "rt-1",
+                ["token_url"] = "https://sts.example.test/token",
+            },
+            new ScriptedHandler(_ => Text(
+                HttpStatusCode.OK,
+                """{"access_token":"at","expires_in":-1}""")));
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => credentials.TokenSource.GetToken());
+
+        Assert.Equal(
+            "oauth2/google: got invalid expiry from security token service",
+            error.Message);
+    }
+
+    [Fact]
+    public void ImpersonatedServiceAccount_exchanges_the_source_token()
+    {
+        var calls = 0;
+        var impersonationBodies = new List<string>();
+        var impersonationAuthorizations = new List<string>();
+        var handler = new ScriptedHandler(request =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                return Text(
+                    HttpStatusCode.OK,
+                    """{"access_token":"source-at","token_type":"Bearer","expires_in":3600}""");
+            }
+
+            impersonationBodies.Add(BodyText(request));
+            impersonationAuthorizations.Add(
+                request.Headers.GetValues("Authorization").Single());
+            return Text(
+                HttpStatusCode.OK,
+                """{"accessToken":"imp-at","expireTime":"2026-01-02T04:04:05Z"}""");
+        });
+
+        var credentials = CredentialsObject(
+            new Dictionary<string, object>
+            {
+                ["type"] = "impersonated_service_account",
+                ["service_account_impersonation_url"] = "https://iam.example.test/token",
+                ["service_account_impersonation"] = new Dictionary<string, object>
+                {
+                    ["token_lifetime_seconds"] = 1200,
+                },
+                ["delegates"] = ImpersonationDelegates,
+                ["source_credentials"] = new Dictionary<string, object>
+                {
+                    ["type"] = "authorized_user",
+                    ["client_id"] = "cid",
+                    ["client_secret"] = "secret",
+                    ["refresh_token"] = "rt-1",
+                },
+            },
+            handler);
+
+        var token = credentials.TokenSource.GetToken();
+
+        Assert.Equal("imp-at", token.AccessToken);
+        Assert.Equal("Bearer", token.TokenType);
+        Assert.Equal(
+            new DateTimeOffset(2026, 1, 2, 4, 4, 5, TimeSpan.Zero),
+            token.Expiry);
+
+        Assert.Equal(2, handler.Requests.Count);
+        var impersonation = handler.Requests[1];
+        Assert.Equal("https://iam.example.test/token", impersonation.RequestUri!.ToString());
+        Assert.Equal("Bearer source-at", Assert.Single(impersonationAuthorizations));
+
+        using var body = JsonDocument.Parse(Assert.Single(impersonationBodies));
+        Assert.Equal("1200s", body.RootElement.GetProperty("lifetime").GetString());
+        Assert.Equal(
+            ImpersonationDelegates,
+            body.RootElement.GetProperty("delegates").EnumerateArray()
+                .Select(static item => item.GetString())
+                .ToArray());
+        Assert.False(body.RootElement.TryGetProperty("scope", out _));
+    }
+
+    [Fact]
+    public void ImpersonatedServiceAccount_requires_source_credentials_and_url()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "impersonated_service_account",
+                    ["service_account_impersonation_url"] = "https://iam.example.test/token",
+                },
+                new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
+
+        Assert.Equal(
+            "missing 'source_credentials' field or "
+            + "'service_account_impersonation_url' in credentials",
+            error.Message);
+    }
+
+    // ------------------------------------------------------------------
     // Detection and the C128 gap
     // ------------------------------------------------------------------
 
@@ -377,6 +555,12 @@ public sealed class GcpTokenSourceTests
 
     private static GcpCredentials Credentials(
         Dictionary<string, string> fields,
+        HttpMessageHandler handler,
+        Func<DateTimeOffset>? clock = null)
+        => CredentialsObject(fields, handler, clock);
+
+    private static GcpCredentials CredentialsObject(
+        object fields,
         HttpMessageHandler handler,
         Func<DateTimeOffset>? clock = null)
         => GcpCredentials.FromJson(

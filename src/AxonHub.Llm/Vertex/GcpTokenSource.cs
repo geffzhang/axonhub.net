@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Transformer.Shared;
@@ -492,6 +493,410 @@ internal sealed class AuthorizedUserGcpTokenSource : IGcpTokenSource
         }
 
         return token;
+    }
+}
+
+/// <summary>
+/// Port of google/internal/externalaccountauthorizeduser.tokenSource
+/// (externalaccountauthorizeduser.go:84-168): exchange a workforce-pool
+/// refresh token at the STS endpoint with HTTP Basic client authentication.
+/// </summary>
+internal sealed class ExternalAccountAuthorizedUserGcpTokenSource : IGcpTokenSource
+{
+    private const string CannotRefreshMessage =
+        "oauth2/google: Token should be created with fields to make it valid "
+        + "(`token` and `expiry`), or fields to allow it to refresh "
+        + "(`refresh_token`, `token_url`, `client_id`, `client_secret`).";
+
+    private readonly string _clientId;
+    private readonly string _clientSecret;
+    private readonly string _tokenUrl;
+    private readonly GcpTokenOptions _options;
+    private readonly HttpClient _client;
+    private readonly object _gate = new();
+    private string _refreshToken;
+
+    private ExternalAccountAuthorizedUserGcpTokenSource(
+        GcpCredentialFile file,
+        GcpTokenOptions options)
+    {
+        _clientId = file.ClientId;
+        _clientSecret = file.ClientSecret;
+        _tokenUrl = file.TokenUrlExternal;
+        _options = options;
+        _client = GcpTokenHttp.CreateClient(options.Transport);
+        _refreshToken = file.RefreshToken;
+    }
+
+    public static ExternalAccountAuthorizedUserGcpTokenSource Create(
+        GcpCredentialFile file,
+        GcpTokenOptions options)
+    {
+        if (!CanRefresh(file))
+        {
+            throw new InvalidOperationException(CannotRefreshMessage);
+        }
+
+        return new ExternalAccountAuthorizedUserGcpTokenSource(file, options);
+    }
+
+    private static bool CanRefresh(GcpCredentialFile file)
+        => file.ClientId.Length > 0
+            && file.ClientSecret.Length > 0
+            && file.RefreshToken.Length > 0
+            && file.TokenUrlExternal.Length > 0;
+
+    public GcpToken GetToken()
+    {
+        string refreshToken;
+        lock (_gate)
+        {
+            refreshToken = _refreshToken;
+        }
+
+        var form = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            ["grant_type"] = ["refresh_token"],
+            ["refresh_token"] = [refreshToken],
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, _tokenUrl);
+        var content = new ByteArrayContent(
+            Encoding.UTF8.GetBytes(HttpClientUtils.EncodeQuery(form)));
+        content.Headers.TryAddWithoutValidation(
+            "Content-Type",
+            "application/x-www-form-urlencoded");
+        request.Content = content;
+        request.Headers.TryAddWithoutValidation(
+            "Authorization",
+            "Basic " + Convert.ToBase64String(
+                Encoding.UTF8.GetBytes(_clientId + ":" + _clientSecret)));
+
+        HttpResponseMessage response;
+        try
+        {
+            response = _client.SendAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google: invalid response from Secure Token Server: " + ex.Message,
+                ex);
+        }
+
+        using (response)
+        {
+            byte[] body;
+            try
+            {
+                body = ReadBody(response);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(ex.Message, ex);
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google: status code " + (int)response.StatusCode + ": "
+                    + Encoding.UTF8.GetString(body));
+            }
+
+            JsonDocument document;
+            try
+            {
+                document = JsonDocument.Parse(body);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google: failed to unmarshal response body from Secure Token Server: "
+                    + ex.Message,
+                    ex);
+            }
+
+            using (document)
+            {
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    throw new InvalidOperationException(
+                        "oauth2/google: failed to unmarshal response body from Secure Token Server: "
+                        + "json: cannot unmarshal " + GcpTokenHttp.KindName(root)
+                        + " into Go value of type stsexchange.Response");
+                }
+
+                var accessToken = ReadStsString(root, "access_token");
+                var newRefreshToken = ReadStsString(root, "refresh_token");
+                var expiresIn = ReadStsInt(root, "expires_in");
+
+                if (expiresIn < 0)
+                {
+                    throw new InvalidOperationException(
+                        "oauth2/google: got invalid expiry from security token service");
+                }
+
+                if (newRefreshToken.Length > 0)
+                {
+                    lock (_gate)
+                    {
+                        _refreshToken = newRefreshToken;
+                    }
+                }
+
+                var now = _options.Clock?.Invoke() ?? DateTimeOffset.UtcNow;
+                return new GcpToken
+                {
+                    AccessToken = accessToken,
+                    TokenType = "Bearer",
+                    Expiry = now.AddSeconds(expiresIn),
+                };
+            }
+        }
+    }
+
+    private static byte[] ReadBody(HttpResponseMessage response)
+    {
+        var stream = response.Content is null ? Stream.Null : response.Content.ReadAsStream();
+        using (stream)
+        {
+            using var buffer = new MemoryStream();
+            var chunk = new byte[16 * 1024];
+            while (buffer.Length < (1 << 20))
+            {
+                var read = stream.Read(
+                    chunk,
+                    0,
+                    (int)Math.Min(chunk.Length, (1 << 20) - buffer.Length));
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            return buffer.ToArray();
+        }
+    }
+
+    private static string ReadStsString(JsonElement root, string name)
+    {
+        if (!GcpTokenHttp.TryGetProperty(root, name, out var value)
+            || value.ValueKind == JsonValueKind.Null)
+        {
+            return string.Empty;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google: failed to unmarshal response body from Secure Token Server: "
+                + "json: cannot unmarshal " + GcpTokenHttp.KindName(value)
+                + " into Go struct field Response." + name + " of type string");
+        }
+
+        return value.GetString() ?? string.Empty;
+    }
+
+    private static int ReadStsInt(JsonElement root, string name)
+    {
+        if (!GcpTokenHttp.TryGetProperty(root, name, out var value)
+            || value.ValueKind == JsonValueKind.Null)
+        {
+            return 0;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var parsed))
+        {
+            return parsed;
+        }
+
+        throw new InvalidOperationException(
+            "oauth2/google: failed to unmarshal response body from Secure Token Server: "
+            + "json: cannot unmarshal " + GcpTokenHttp.KindName(value)
+            + " into Go struct field Response." + name + " of type int");
+    }
+}
+
+/// <summary>
+/// Port of google/internal/impersonate.ImpersonateTokenSource
+/// (impersonate.go:44-111): exchange a source token for a short-lived
+/// impersonated access token via the IAM credentials endpoint.
+/// </summary>
+internal sealed class ImpersonatedGcpTokenSource : IGcpTokenSource
+{
+    private readonly IGcpTokenSource _source;
+    private readonly string _url;
+    private readonly IReadOnlyList<string>? _delegates;
+    private readonly int _tokenLifetimeSeconds;
+    private readonly GcpTokenOptions _options;
+    private readonly HttpClient _client;
+
+    public ImpersonatedGcpTokenSource(
+        IGcpTokenSource source,
+        string url,
+        IReadOnlyList<string>? delegates,
+        int tokenLifetimeSeconds,
+        GcpTokenOptions options)
+    {
+        _source = source;
+        _url = url;
+        _delegates = delegates;
+        _tokenLifetimeSeconds = tokenLifetimeSeconds;
+        _options = options;
+        _client = GcpTokenHttp.CreateClient(options.Transport);
+    }
+
+    public GcpToken GetToken()
+    {
+        var sourceToken = _source.GetToken();
+        var lifetime = _tokenLifetimeSeconds > 0
+            ? _tokenLifetimeSeconds.ToString(CultureInfo.InvariantCulture) + "s"
+            : "3600s";
+
+        var body = new ImpersonationRequest
+        {
+            Delegates = _delegates is { Count: > 0 } ? [.. _delegates] : null,
+            Lifetime = lifetime,
+        };
+
+        var payload = JsonSerializer.Serialize(body);
+        using var request = new HttpRequestMessage(HttpMethod.Post, _url);
+        request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+        request.Headers.TryAddWithoutValidation(
+            "Authorization",
+            "Bearer " + sourceToken.AccessToken);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = _client.SendAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google: unable to generate access token: " + ex.Message,
+                ex);
+        }
+
+        using (response)
+        {
+            byte[] bodyBytes;
+            try
+            {
+                bodyBytes = ReadBody(response);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google: unable to read body: " + ex.Message,
+                    ex);
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google: status code " + (int)response.StatusCode + ": "
+                    + Encoding.UTF8.GetString(bodyBytes));
+            }
+
+            JsonDocument document;
+            try
+            {
+                document = JsonDocument.Parse(bodyBytes);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google: unable to parse response: " + ex.Message,
+                    ex);
+            }
+
+            using (document)
+            {
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    throw new InvalidOperationException(
+                        "oauth2/google: unable to parse response: "
+                        + "json: cannot unmarshal " + GcpTokenHttp.KindName(root)
+                        + " into Go value of type impersonate.impersonateTokenResponse");
+                }
+
+                var accessToken = ReadString(root, "accesstoken");
+                var expireTime = ReadString(root, "expiretime");
+                var expiry = GoTimeParsing.TryParseRfc3339(expireTime)
+                    ?? throw new InvalidOperationException(
+                        "oauth2/google: unable to parse expiry: parsing time "
+                        + GoCast.GoQuote(expireTime)
+                        + " as \"2006-01-02T15:04:05Z07:00\": cannot parse");
+
+                return new GcpToken
+                {
+                    AccessToken = accessToken,
+                    Expiry = expiry,
+                    TokenType = "Bearer",
+                };
+            }
+        }
+    }
+
+    private static byte[] ReadBody(HttpResponseMessage response)
+    {
+        var stream = response.Content is null ? Stream.Null : response.Content.ReadAsStream();
+        using (stream)
+        {
+            using var buffer = new MemoryStream();
+            var chunk = new byte[16 * 1024];
+            while (buffer.Length < (1 << 20))
+            {
+                var read = stream.Read(
+                    chunk,
+                    0,
+                    (int)Math.Min(chunk.Length, (1 << 20) - buffer.Length));
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            return buffer.ToArray();
+        }
+    }
+
+    private static string ReadString(JsonElement root, string name)
+    {
+        if (!GcpTokenHttp.TryGetProperty(root, name, out var value)
+            || value.ValueKind == JsonValueKind.Null)
+        {
+            return string.Empty;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google: unable to parse response: json: cannot unmarshal "
+                + GcpTokenHttp.KindName(value)
+                + " into Go struct field impersonateTokenResponse." + name
+                + " of type string");
+        }
+
+        return value.GetString() ?? string.Empty;
+    }
+
+    private sealed class ImpersonationRequest
+    {
+        [JsonPropertyName("delegates")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<string>? Delegates { get; init; }
+
+        [JsonPropertyName("lifetime")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Lifetime { get; init; }
     }
 }
 

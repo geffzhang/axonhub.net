@@ -2241,6 +2241,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §255（2026-11-15）Cloudflare Workers AI 通道类型（live #2674）。C317 登记并转 resolved：live `0d82a8e4` 在同一账号级 base URL 上提供 OpenAI 兼容 chat/embedding 面与原生 `/run/{model}` decision 面，并要求 systemone 端点仅限 typesafe/openai/cloudflare。端口此前只有 GraphQL 枚举与默认端点表。本轮新增 `CloudflareSystemOneOutboundTransformer`（`/run` 路由前缀、`@cf/{author}/{name}` → `name` selector、Cloudflare v4 envelope 成功/失败/缺失 result/空 answers 处理、错误文案、body/response pass-through 双 veto）、`ChannelOutboundFactory` 的 cloudflare OpenAI 兼容分派与 systemone 端点分派、`ChannelValidation` 的三类型白名单，以及通道测试的 pinned endpoint 优先与 embedding 输入/维度结果。测试：Llm Cloudflare 22 例、Api 接线 7 例、ChannelTest 2 例；Llm 全量 3349/3349，ChannelTest/Cloudflare/端点 60/60，create/update/endpoint 67/67。未跑 Api 全量（新增 Llm 22 例、Api 9 例）。台账 317 条（190 accepted / 127 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§256（2026-11-15）GCP workforce 与 impersonation 凭据。C128 真实缺口收窄：新增 `external_account_authorized_user`（STS `grant_type=refresh_token`、HTTP Basic client auth、reuse、负 `expires_in` 与缺字段文案）与 `impersonated_service_account`（嵌套 `source_credentials` 递归、IAM `generateAccessToken`、`delegates` / `lifetime`、`expireTime` RFC3339 解析、reuse）两条凭据链；`external_account`（workload federation 的 STS/AWS/Azure/file/url 源）仍显式 `NotSupportedException`，web/installed 仍不可交互。`GcpCredentialFile` 补齐 `token_url` / `revoke_url` / `delegates` / `source_credentials` / `service_account_impersonation.token_lifetime_seconds` 解码。新增 5 例（Basic auth 刷新、缺字段、负 expiry、嵌套 impersonation 请求形状、缺 source/url）；Llm 全量 3354/3354。未跑 Api 全量。台账仍 317 条（190 accepted / 127 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

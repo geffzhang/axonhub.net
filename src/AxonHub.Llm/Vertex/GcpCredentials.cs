@@ -58,25 +58,65 @@ public sealed class GcpCredentials
         }
 
         var file = DecodeCredentialsFile(jsonData);
-        return file.Type switch
+        return new GcpCredentials(file.ProjectId, CreateTokenSource(file, options));
+    }
+
+    /// <summary>
+    /// Port of <c>credentialsFile.tokenSource</c> (google.go:154-240): dispatch
+    /// one credential document to its token source. The type is also used
+    /// recursively for an impersonated service account's
+    /// <c>source_credentials</c>.
+    /// </summary>
+    private static IGcpTokenSource CreateTokenSource(
+        GcpCredentialFile file,
+        GcpTokenOptions options)
+        => file.Type switch
         {
             // The reference's jwt.Config.TokenSource and oauth2.Config.TokenSource
             // both wrap the refresher in a reuseTokenSource, so the access token
             // is fetched once and served until 10s before its expiry.
-            "service_account" or "gdch_service_account" => new GcpCredentials(
-                file.ProjectId,
-                new ReuseGcpTokenSource(new ServiceAccountGcpTokenSource(file, options), options)),
-            "authorized_user" => new GcpCredentials(
-                file.ProjectId,
-                new ReuseGcpTokenSource(new AuthorizedUserGcpTokenSource(file, options), options)),
-            "external_account" or "external_account_authorized_user" or "impersonated_service_account"
-                => throw new NotSupportedException(
-                    "GCP credential type " + GoCast.GoQuote(file.Type)
-                    + " is not supported by the .NET port (difference C128)"),
+            "service_account" or "gdch_service_account"
+                => new ReuseGcpTokenSource(new ServiceAccountGcpTokenSource(file, options), options),
+            "authorized_user"
+                => new ReuseGcpTokenSource(new AuthorizedUserGcpTokenSource(file, options), options),
+            "external_account_authorized_user"
+                => new ReuseGcpTokenSource(
+                    ExternalAccountAuthorizedUserGcpTokenSource.Create(file, options),
+                    options),
+            "impersonated_service_account" => CreateImpersonatedTokenSource(file, options),
+            "external_account" => throw new NotSupportedException(
+                "GCP credential type " + GoCast.GoQuote(file.Type)
+                + " is not supported by the .NET port (difference C128)"),
             "" => throw new InvalidOperationException("missing 'type' field in credentials"),
             _ => throw new InvalidOperationException(
                 "unknown credential type: " + GoCast.GoQuote(file.Type)),
         };
+
+    /// <summary>
+    /// Port of the impersonated_service_account branch (google.go:224-240):
+    /// require the impersonation URL and source credentials, recursively build
+    /// the source token source, then exchange it at the IAM credentials URL.
+    /// </summary>
+    private static IGcpTokenSource CreateImpersonatedTokenSource(
+        GcpCredentialFile file,
+        GcpTokenOptions options)
+    {
+        if (file.ServiceAccountImpersonationUrl.Length == 0
+            || file.SourceCredentials is null)
+        {
+            throw new InvalidOperationException(
+                "missing 'source_credentials' field or "
+                + "'service_account_impersonation_url' in credentials");
+        }
+
+        return new ReuseGcpTokenSource(
+            new ImpersonatedGcpTokenSource(
+                CreateTokenSource(file.SourceCredentials, options),
+                file.ServiceAccountImpersonationUrl,
+                file.Delegates,
+                file.TokenLifetimeSeconds,
+                options),
+            options);
     }
 
     /// <summary>Port of the <c>credentialsFile</c> struct decode (google.go:118-151).</summary>
@@ -88,62 +128,191 @@ public sealed class GcpCredentials
             throw new InvalidOperationException(syntax);
         }
 
-        var file = new GcpCredentialFile();
         var kind = GoStructJson.RootKind(data);
         if (kind is null)
         {
             using var document = JsonDocument.Parse(data.ToArray());
-            foreach (var property in document.RootElement.EnumerateObject())
-            {
-                switch (FoldAscii(property.Name))
-                {
-                    case "type":
-                        AssignString(ref file.Type, property.Value, "type");
-                        break;
-                    case "client_email":
-                        AssignString(ref file.ClientEmail, property.Value, "client_email");
-                        break;
-                    case "private_key_id":
-                        AssignString(ref file.PrivateKeyId, property.Value, "private_key_id");
-                        break;
-                    case "private_key":
-                        AssignString(ref file.PrivateKey, property.Value, "private_key");
-                        break;
-                    case "auth_uri":
-                        AssignString(ref file.AuthUri, property.Value, "auth_uri");
-                        break;
-                    case "token_uri":
-                        AssignString(ref file.TokenUri, property.Value, "token_uri");
-                        break;
-                    case "project_id":
-                        AssignString(ref file.ProjectId, property.Value, "project_id");
-                        break;
-                    case "universe_domain":
-                        AssignString(ref file.UniverseDomain, property.Value, "universe_domain");
-                        break;
-                    case "client_secret":
-                        AssignString(ref file.ClientSecret, property.Value, "client_secret");
-                        break;
-                    case "client_id":
-                        AssignString(ref file.ClientId, property.Value, "client_id");
-                        break;
-                    case "refresh_token":
-                        AssignString(ref file.RefreshToken, property.Value, "refresh_token");
-                        break;
-                    case "audience":
-                        AssignString(ref file.Audience, property.Value, "audience");
-                        break;
-                    case "quota_project_id":
-                        AssignString(ref file.QuotaProjectId, property.Value, "quota_project_id");
-                        break;
-                }
-            }
+            return DecodeCredentialsFileObject(document.RootElement);
         }
-        else if (kind != "null")
+
+        if (kind != "null")
         {
             // Go: json: cannot unmarshal <kind> into Go value of type google.credentialsFile.
             throw new InvalidOperationException(
                 GoStructJson.TypeMismatch(kind, "google.credentialsFile"));
+        }
+
+        var file = new GcpCredentialFile();
+
+        return file;
+    }
+
+    private static List<string>? AssignStringList(JsonElement value, string jsonName)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException(
+                "json: cannot unmarshal " + KindName(value)
+                + " into Go struct field credentialsFile." + jsonName
+                + " of type []string");
+        }
+
+        var result = new List<string>();
+        foreach (var element in value.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException(
+                    "json: cannot unmarshal " + KindName(element)
+                    + " into Go struct field credentialsFile." + jsonName
+                    + " of type string");
+            }
+
+            result.Add(element.GetString() ?? string.Empty);
+        }
+
+        return result;
+    }
+
+    private static GcpCredentialFile? DecodeSourceCredentials(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                "json: cannot unmarshal " + KindName(value)
+                + " into Go struct field credentialsFile.source_credentials "
+                + "of type google.credentialsFile");
+        }
+
+        return DecodeCredentialsFileObject(value);
+    }
+
+    private static int DecodeImpersonationLifetime(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return 0;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                "json: cannot unmarshal " + KindName(value)
+                + " into Go struct field credentialsFile.service_account_impersonation "
+                + "of type google.serviceAccountImpersonationInfo");
+        }
+
+        var lifetime = 0;
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!string.Equals(
+                    FoldAscii(property.Name),
+                    "token_lifetime_seconds",
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (property.Value.ValueKind == JsonValueKind.Null)
+            {
+                continue;
+            }
+
+            if (property.Value.ValueKind != JsonValueKind.Number
+                || !property.Value.TryGetInt32(out lifetime))
+            {
+                throw new InvalidOperationException(
+                    "json: cannot unmarshal " + KindName(property.Value)
+                    + " into Go struct field credentialsFile.service_account_impersonation."
+                    + "token_lifetime_seconds of type int");
+            }
+        }
+
+        return lifetime;
+    }
+
+    /// <summary>
+    /// Shared object decoder for the top-level document and the nested
+    /// <c>source_credentials</c> object.
+    /// </summary>
+    private static GcpCredentialFile DecodeCredentialsFileObject(JsonElement root)
+    {
+        var file = new GcpCredentialFile();
+        foreach (var property in root.EnumerateObject())
+        {
+            switch (FoldAscii(property.Name))
+            {
+                case "type":
+                    AssignString(ref file.Type, property.Value, "type");
+                    break;
+                case "client_email":
+                    AssignString(ref file.ClientEmail, property.Value, "client_email");
+                    break;
+                case "private_key_id":
+                    AssignString(ref file.PrivateKeyId, property.Value, "private_key_id");
+                    break;
+                case "private_key":
+                    AssignString(ref file.PrivateKey, property.Value, "private_key");
+                    break;
+                case "auth_uri":
+                    AssignString(ref file.AuthUri, property.Value, "auth_uri");
+                    break;
+                case "token_uri":
+                    AssignString(ref file.TokenUri, property.Value, "token_uri");
+                    break;
+                case "token_url":
+                    AssignString(ref file.TokenUrlExternal, property.Value, "token_url");
+                    break;
+                case "revoke_url":
+                    AssignString(ref file.RevokeUrl, property.Value, "revoke_url");
+                    break;
+                case "service_account_impersonation_url":
+                    AssignString(
+                        ref file.ServiceAccountImpersonationUrl,
+                        property.Value,
+                        "service_account_impersonation_url");
+                    break;
+                case "delegates":
+                    file.Delegates = AssignStringList(property.Value, "delegates");
+                    break;
+                case "source_credentials":
+                    file.SourceCredentials = DecodeSourceCredentials(property.Value);
+                    break;
+                case "service_account_impersonation":
+                    file.TokenLifetimeSeconds = DecodeImpersonationLifetime(property.Value);
+                    break;
+                case "project_id":
+                    AssignString(ref file.ProjectId, property.Value, "project_id");
+                    break;
+                case "universe_domain":
+                    AssignString(ref file.UniverseDomain, property.Value, "universe_domain");
+                    break;
+                case "client_secret":
+                    AssignString(ref file.ClientSecret, property.Value, "client_secret");
+                    break;
+                case "client_id":
+                    AssignString(ref file.ClientId, property.Value, "client_id");
+                    break;
+                case "refresh_token":
+                    AssignString(ref file.RefreshToken, property.Value, "refresh_token");
+                    break;
+                case "audience":
+                    AssignString(ref file.Audience, property.Value, "audience");
+                    break;
+                case "quota_project_id":
+                    AssignString(ref file.QuotaProjectId, property.Value, "quota_project_id");
+                    break;
+            }
         }
 
         return file;
@@ -357,6 +526,18 @@ internal sealed class GcpCredentialFile
     public string AuthUri = string.Empty;
 
     public string TokenUri = string.Empty;
+
+    public string TokenUrlExternal = string.Empty;
+
+    public string RevokeUrl = string.Empty;
+
+    public string ServiceAccountImpersonationUrl = string.Empty;
+
+    public List<string>? Delegates;
+
+    public GcpCredentialFile? SourceCredentials;
+
+    public int TokenLifetimeSeconds;
 
     public string ProjectId = string.Empty;
 
