@@ -99,7 +99,8 @@ public interface IRequestChainRecorder
 public sealed class PostgresRequestChainRecorder(
     IAxonHubDbContextFactory dbFactory,
     IDataStorageBackendFactory dataStorageBackends,
-    SystemValueCache? systemValueCache = null) : IRequestChainRecorder
+    SystemValueCache? systemValueCache = null,
+    DataStorageCache? dataStorageCache = null) : IRequestChainRecorder
 {
     public long CreateRequest(RequestRecord request)
     {
@@ -675,11 +676,17 @@ public sealed class PostgresRequestChainRecorder(
     }
 
     private RequestPayloadStorage CreatePayloadStorage(AxonHubDbContext context)
-        => new(
-            new DataStorageStore(context),
+    {
+        IDataStorageStore dataStorages = dataStorageCache is null
+            ? new DataStorageStore(context)
+            : new CachingDataStorageStore(new DataStorageStore(context), dataStorageCache);
+
+        return new(
+            dataStorages,
             new SystemSettingsAdminService(
                 systemValueCache is null
                     ? new SystemStore(context)
                     : new CachingSystemStore(new SystemStore(context), systemValueCache)),
             dataStorageBackends);
+    }
 }

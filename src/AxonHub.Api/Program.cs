@@ -851,7 +851,12 @@ builder.Services.AddScoped<PromptManagementService>();
 // node(DataStorage) and the create/update mutations under the DataStorage
 // privacy policy. The filesystem/object-store backends and the 30-minute
 // ID/primary caches are not ported (C192/C196).
-builder.Services.AddScoped<IDataStorageStore, DataStorageStore>();
+builder.Services.AddSingleton<DataStorageCache>();
+builder.Services.AddScoped<DataStorageStore>();
+builder.Services.AddScoped<IDataStorageStore>(static services =>
+    new CachingDataStorageStore(
+        services.GetRequiredService<DataStorageStore>(),
+        services.GetRequiredService<DataStorageCache>()));
 builder.Services.AddScoped<DataStoragePrivacy>();
 builder.Services.AddScoped<DataStorageManagementService>();
 
@@ -863,7 +868,11 @@ builder.Services.AddScoped<DataStorageManagementService>();
 // system-value cache invalidation is a no-op here.
 builder.Services.AddScoped<IBackupBatchSource, BackupStore>();
 builder.Services.AddScoped<IBackupRestoreStore, BackupRestoreStore>();
-builder.Services.AddSingleton<IDataStorageBackendFactory, DataStorageBackendFactory>();
+builder.Services.AddSingleton<DataStorageBackendFactory>();
+builder.Services.AddSingleton<IDataStorageBackendFactory>(static services =>
+    new CachingDataStorageBackendFactory(
+        services.GetRequiredService<DataStorageBackendFactory>(),
+        services.GetRequiredService<DataStorageCache>()));
 builder.Services.AddScoped<BackupService>();
 builder.Services.AddSingleton<IAutoBackupScheduleSource, GrainAutoBackupScheduleSource>();
 builder.Services.AddSingleton<IAutoBackupRunner, GrainAutoBackupRunner>();

@@ -2214,6 +2214,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §242（2026-11-15）cron 的可选秒/年字段与描述符。C260 转 resolved：`GcCronSchedule` 按 aptible/supercronic cronexpr 支持 5/6/7 字段（5 字段秒=0、年通配；6 字段秒在前；7 字段年 1970-2099 最后）与 `@yearly/@annually/@monthly/@weekly/@daily/@midnight/@hourly` 描述符；`NextOccurrence` 在秒级选择候选并检查 year；标准 5 字段行为不变。`L/W/#` 日期级语法仍不支持，拆到新登记的 C309（accepted）。定向 `GcCronScheduleTests|ChannelAutoDisableTests` 80/80；未跑 Api 全量。台账 309 条（193 accepted / 116 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§243（2026-11-15）data storage 行/客户端缓存。C196 转 resolved：新增单例 `DataStorageCache`、`CachingDataStorageStore` 与 `CachingDataStorageBackendFactory`；GetByIdAsync/GetPrimaryAsync 行缓存 30 分钟，后端按 storage id 复用 1 分钟（过期重建，旧客户端在最后一个租约释放时 Dispose），Create/Update 清空行与后端缓存；GC 的 SkipSoftDelete 读取绕过缓存；请求链 recorder 与 DI 工厂共用缓存。定向 `DataStorageCacheTests|AdminDataStoragesEndpointTests|RequestPayloadStorageTests` 67/67；未跑 Api 全量（新增 Api 5 例）。台账 309 条（192 accepted / 117 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）
