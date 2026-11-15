@@ -2249,6 +2249,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §259（2026-11-15）通道覆盖全局单通道重试次数（live #2660）。C318 登记并转 resolved：`ChannelSettings.maxSingleChannelRetries` 的 GraphQL/存储/0..65535 校验此前已移植，但 Pipeline 只使用全局 `retry_policy` 值。本轮新增 `IChannelSameChannelRetryLimit`、`PipelineOptions.RetriesDisabled` 与 `Pipeline.MaxSameChannelRetriesFor`；`PersistentOutboundTransformer` 返回当前候选的覆盖值；orchestrator 在全局策略关闭时设置 `RetriesDisabled`，覆盖值不能重新开启重试；流式首事件前的重试预算改读有效值。测试：Llm 5 例（无覆盖/覆盖替换/全局关闭/0 覆盖/覆盖提高）与 Api 4 例（设置解码）；Llm 全量 3363/3363，ResponseTimeout/ChatCompletionOrchestrator 36/36。未跑 Api 全量（新增 Llm 5 例、Api 4 例）。台账 318 条（190 accepted / 128 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§260（2026-11-15）无工具时丢弃 tool_choice（live #2706）。C319 登记并转 resolved：OpenAI chat 出站在 `tools` 为空时除 `parallel_tool_calls` 外同时清空 `tool_choice`；Responses 出站把 raw `tool_choice` 回放移到 raw-only tools 合并之后，依据最终 body 是否含 tools 决定保留或删除，避免上游以 400 拒绝。新增 4 例（chat 无/有 tools、Responses raw 无 tools、raw tools 合并后保留）；定向 65/65，Llm 全量 3367/3367。未跑 Api 全量（新增 Llm 4 例）。台账 319 条（190 accepted / 129 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

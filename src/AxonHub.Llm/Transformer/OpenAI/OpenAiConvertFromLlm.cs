@@ -92,7 +92,11 @@ public static class OpenAiConvertFromLlm
 
         if (tools.Count == 0)
         {
+            // Some upstreams reject parallel_tool_calls and tool_choice when no
+            // tools are sent. Omitting tool_choice is equivalent to the default
+            // "auto", so drop both (outbound_convert.go:93-101).
             req.ParallelToolCalls = null;
+            req.ToolChoice = null;
         }
 
         return req;

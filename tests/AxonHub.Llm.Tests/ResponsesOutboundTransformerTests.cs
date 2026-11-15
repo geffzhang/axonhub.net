@@ -479,6 +479,58 @@ public sealed class ResponsesOutboundTransformerTests
     }
 
     [Fact]
+    public void DropsRawToolChoiceWhenNoToolsAreSent()
+    {
+        var inboundRequest = JsonRequest(
+            """
+            {
+              "model": "gpt-4o",
+              "input": "Search the docs.",
+              "tool_choice": {
+                "type": "tool_search",
+                "tools": [{"type": "tool_search", "name": "search_docs"}]
+              }
+            }
+            """);
+
+        var llmRequest = new ResponsesInboundTransformer().TransformRequest(inboundRequest);
+        var httpRequest = ResponsesOutboundTransformer
+            .Create("https://api.openai.com", "test-api-key")
+            .TransformRequest(llmRequest);
+
+        using var body = JsonDocument.Parse(httpRequest.Body!);
+        Assert.False(body.RootElement.TryGetProperty("tool_choice", out _));
+    }
+
+    [Fact]
+    public void KeepsToolChoiceWhenRawToolsAreRestored()
+    {
+        var inboundRequest = JsonRequest(
+            """
+            {
+              "model": "gpt-4o",
+              "input": "Search the docs.",
+              "tools": [{"type": "tool_search", "name": "search_docs"}],
+              "tool_choice": {
+                "type": "tool_search",
+                "tools": [{"type": "tool_search", "name": "search_docs"}]
+              }
+            }
+            """);
+
+        var llmRequest = new ResponsesInboundTransformer().TransformRequest(inboundRequest);
+        var httpRequest = ResponsesOutboundTransformer
+            .Create("https://api.openai.com", "test-api-key")
+            .TransformRequest(llmRequest);
+
+        using var body = JsonDocument.Parse(httpRequest.Body!);
+        Assert.True(body.RootElement.TryGetProperty("tools", out var tools));
+        Assert.True(tools.GetArrayLength() > 0);
+        Assert.True(body.RootElement.TryGetProperty("tool_choice", out var choice));
+        Assert.Equal("tool_search", choice.GetProperty("type").GetString());
+    }
+
+    [Fact]
     public void ReplaysRawOnlyInputItems()
     {
         var inboundRequest = JsonRequest(

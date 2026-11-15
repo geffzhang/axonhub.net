@@ -454,7 +454,18 @@ internal static class ResponsesRequestExtensions
             obj["tools"] = JsonSerializer.SerializeToElement(tools, LlmJson.Options);
         }
 
-        if (requestExt.RawToolChoice is { } rawToolChoice && RawToolChoiceMatchesCurrentTools(rawToolChoice, payload.ToolChoice))
+        // Decide after raw-only tools are restored: a request that keeps tools
+        // must keep its tool choice, while upstreams reject tool_choice without
+        // tools (outbound request_extensions.go).
+        var hasTools = obj.TryGetValue("tools", out var finalTools)
+            && finalTools.ValueKind == JsonValueKind.Array
+            && finalTools.GetArrayLength() > 0;
+        if (!hasTools)
+        {
+            obj.Remove("tool_choice");
+        }
+        else if (requestExt.RawToolChoice is { } rawToolChoice
+                 && RawToolChoiceMatchesCurrentTools(rawToolChoice, payload.ToolChoice))
         {
             obj["tool_choice"] = CloneRaw(rawToolChoice)!.Value;
         }
