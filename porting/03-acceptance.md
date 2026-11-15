@@ -2237,6 +2237,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §253（2026-11-15）通道显式列出 429 时的同通道重试（live #2668）。C315 登记并转 resolved：参照的 `CanRetry` 原本在 429 分支直接返回 false，导致通道 `settings.retryableStatusCodes` 中的 429 被静默忽略；修复后仅未列出 429 的通道切通道，列出 429 的通道按 `maxSingleChannelRetries` 在同通道重试。端口同样在 429 秒退。本轮在 `PersistentOutboundTransformer.CanRetry` 增加 `ChannelRetriesOn429` 判断：429 且未 opt-in 时返回 false，opt-in 时继续走剩余模型与通道规则；默认行为不变。新增 1 例覆盖 opt-in 的 `HttpClientError` / `ResponseError` 与未 opt-in 的两种错误；`PersistentOutboundRetryTests` 19/19，Retry/orchestrator 回归 151/151。未跑 Api 全量（新增 Api 1 例）。台账 315 条（190 accepted / 125 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§254（2026-11-15）写入 jsonb 前剥离 NUL 转义（live #2779）。C316 登记并转 resolved：PostgreSQL jsonb 拒绝 U+0000 转义（SQLSTATE 22P05），参照在请求/执行正文与响应正文的数据库分支写入前执行 `stripJSONNul`，删除 `\\u0000` 但把 `\\\\u0000` 当作普通文本成对复制，外部存储正文保持原始字节。端口此前直接落库。本轮在 `RequestPayloadStorage` 增加 `StripJsonNul`，在 `CreateRequest` / `CreateExecution` 的数据库正文分支与 `WriteResponseBodyAsync`（覆盖 finalized、视频快照等响应路径）应用；外部存储路径不变。新增静态 7 例与列写入 1 例；`RequestPayloadStorageTests` 定向 89/89。未跑 Api 全量（新增 Api 8 例）。台账 316 条（190 accepted / 126 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

@@ -139,7 +139,7 @@ public sealed class PostgresRequestChainRecorder(
 
         request.RequestBody = useExternalStorage
             ? RequestPayloadStorage.EmptyJson
-            : requestBody;
+            : RequestPayloadStorage.StripJsonNul(requestBody);
         request.RequestHeaders = requestHeaders;
 
         if (dataStorage is not null)
@@ -411,7 +411,7 @@ public sealed class PostgresRequestChainRecorder(
 
         execution.RequestBody = useExternalStorage
             ? RequestPayloadStorage.EmptyJson
-            : requestBody;
+            : RequestPayloadStorage.StripJsonNul(requestBody);
         execution.RequestHeaders = requestHeaders;
 
         if (requestDataStorageId is > 0)

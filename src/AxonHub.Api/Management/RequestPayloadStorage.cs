@@ -240,6 +240,54 @@ public sealed class RequestPayloadStorage(
     }
 
     /// <summary>
+    /// Port of biz.stripJSONNul (request.go:86-120): PostgreSQL jsonb rejects
+    /// U+0000 escapes (SQLSTATE 22P05), so strip them before writing a body to
+    /// the column. An escaped backslash before "u0000" is plain text and is
+    /// copied as a pair; other escapes are untouched.
+    /// </summary>
+    internal static string StripJsonNul(string bodyJson)
+    {
+        ArgumentNullException.ThrowIfNull(bodyJson);
+
+        const string NulEscape = "\\u0000";
+        if (!bodyJson.Contains(NulEscape, StringComparison.Ordinal))
+        {
+            return bodyJson;
+        }
+
+        var output = new StringBuilder(bodyJson.Length);
+        for (var index = 0; index < bodyJson.Length;)
+        {
+            if (bodyJson[index] == '\\' && index + 1 < bodyJson.Length)
+            {
+                if (index + NulEscape.Length <= bodyJson.Length
+                    && string.CompareOrdinal(
+                        bodyJson,
+                        index,
+                        NulEscape,
+                        0,
+                        NulEscape.Length) == 0)
+                {
+                    index += NulEscape.Length;
+                    continue;
+                }
+
+                // Copy the escape pair as a unit so `\\u0000` is not mistaken
+                // for a NUL.
+                output.Append(bodyJson[index]);
+                output.Append(bodyJson[index + 1]);
+                index += 2;
+                continue;
+            }
+
+            output.Append(bodyJson[index]);
+            index++;
+        }
+
+        return output.ToString();
+    }
+
+    /// <summary>
     /// UpdateRequestFinalized's body branch: store in the column, or write the
     /// object and mark the row. A failed external write leaves the column
     /// untouched, exactly like the reference.
@@ -254,7 +302,7 @@ public sealed class RequestPayloadStorage(
 
         if (!ShouldUseExternalStorage(storage))
         {
-            return new ResponseBodyWrite(true, bodyJson, string.Empty);
+            return new ResponseBodyWrite(true, StripJsonNul(bodyJson), string.Empty);
         }
 
         try

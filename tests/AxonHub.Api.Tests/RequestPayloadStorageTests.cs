@@ -236,6 +236,32 @@ public sealed class RequestPayloadStorageTests
     }
 
     [Fact]
+    public async Task ResponseBodyDropsNulEscapesInTheColumn()
+    {
+        var payloads = NewStorage();
+
+        var write = await payloads.WriteResponseBodyAsync(
+            null,
+            "/k",
+            """{"a":"hello\u0000world"}""");
+
+        Assert.Equal(new ResponseBodyWrite(true, """{"a":"helloworld"}""", string.Empty), write);
+    }
+
+    [Theory]
+    [InlineData("""{"a":"hello"}""", """{"a":"hello"}""")]
+    [InlineData("""{"a":"hello\u0000world"}""", """{"a":"helloworld"}""")]
+    [InlineData("""{"a":"\u0000x\u0000","b":["\u0000"]}""", """{"a":"x","b":[""]}""")]
+    [InlineData("""{"a":"\\u0000"}""", """{"a":"\\u0000"}""")]
+    [InlineData("""{"a":"\\\u0000"}""", """{"a":"\\"}""")]
+    [InlineData("""{"a":"A\u0001"}""", """{"a":"A\u0001"}""")]
+    [InlineData("", "")]
+    public void StripJsonNulMatchesTheReference(string input, string expected)
+    {
+        Assert.Equal(expected, RequestPayloadStorage.StripJsonNul(input));
+    }
+
+    [Fact]
     public async Task ResponseBodyGoesToExternalStorageBehindTheMarker()
     {
         var storage = new DataStorageRecord { Id = 2, Type = "fs" };
