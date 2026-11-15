@@ -866,16 +866,20 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             return true;
         }
 
+        var candidate = _candidates[_candidateIndex];
+
         // 429: the upstream is rate-limiting this channel; a same-channel retry
-        // would burn the budget without a chance of success.
-        if (ChannelRetryPredicate.ExtractStatusCode(error) == 429)
+        // would burn the budget without a chance of success. A channel that
+        // lists 429 in its retryable status codes opts out and falls through to
+        // the per-channel rules (outbound.go:1040-1055).
+        if (ChannelRetryPredicate.ExtractStatusCode(error) == 429
+            && !ChannelRetriesOn429(candidate))
         {
             return false;
         }
 
         // outbound.go:807-812 — a candidate with another model left is always
         // worth a same-channel retry, before consulting the channel rules.
-        var candidate = _candidates[_candidateIndex];
         if (_modelIndex + 1 < candidate.Models.Count)
         {
             return true;
@@ -883,6 +887,14 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
 
         return ChannelRetryPredicate.IsRetryable(error, candidate.RetrySettings);
     }
+
+    /// <summary>
+    /// Port of channelRetriesOn429 (retry.go:47-61): only an explicit 429 in
+    /// the channel's retryable status codes asks for a same-channel retry on a
+    /// rate limit; every other channel keeps switching.
+    /// </summary>
+    private static bool ChannelRetriesOn429(ChannelCandidate candidate)
+        => candidate.RetrySettings.RetryableStatusCodes.Contains(429);
 
     /// <summary>Port of PrepareForRetry: count the retry attempt on the same channel.</summary>
     public Exception? TryPrepareForRetry(CancellationToken cancellationToken)

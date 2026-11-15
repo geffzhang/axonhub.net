@@ -17,7 +17,10 @@ public sealed class ChannelRetrySettings
         PropertyNameCaseInsensitive = true,
     };
 
-    /// <summary>Additional retryable status codes; 429 and 5xx are always retryable.</summary>
+    /// <summary>
+    /// Additional retryable status codes. 5xx codes retry on the same channel
+    /// by default; 429 switches channels unless it is listed here.
+    /// </summary>
     [Id(0)]
     public int[] RetryableStatusCodes { get; set; } = [];
 

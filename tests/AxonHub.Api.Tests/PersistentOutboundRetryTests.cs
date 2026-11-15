@@ -48,6 +48,33 @@ public sealed class PersistentOutboundRetryTests
     }
 
     [Fact]
+    public void AChannelThatLists429OptsIntoSameChannelRetry()
+    {
+        var candidate = CandidateWithModels(906, "m1");
+        candidate.RetrySettings = new ChannelRetrySettings
+        {
+            RetryableStatusCodes = [429],
+        };
+        var harness = new Harness(candidate);
+        harness.Transformer.TransformRequest(Request("m1"));
+
+        // The candidate has no second model, so the decision is the 429 branch.
+        Assert.True(harness.Transformer.CanRetry(
+            new HttpClientError("POST", "https://upstream.test/chat", 429, "429 Too Many Requests")));
+        Assert.True(harness.Transformer.CanRetry(
+            new ResponseError { StatusCode = 429 }));
+
+        // A channel without the opt-in still switches channels.
+        var defaultCandidate = CandidateWithModels(907, "m1");
+        var defaultHarness = new Harness(defaultCandidate);
+        defaultHarness.Transformer.TransformRequest(Request("m1"));
+        Assert.False(defaultHarness.Transformer.CanRetry(
+            new HttpClientError("POST", "https://upstream.test/chat", 429, "429 Too Many Requests")));
+        Assert.False(defaultHarness.Transformer.CanRetry(
+            new ResponseError { StatusCode = 429 }));
+    }
+
+    [Fact]
     public void CircuitBreakerSkipsNeverRetryTheSameChannel()
     {
         var harness = new Harness(CandidateWithModels(904, "m1", "m2"));

@@ -2235,6 +2235,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §252（2026-11-15）Gemini 流式 tool_calls 完成原因跨 chunk 保持（live #2713）。C314 登记并转 resolved：Gemini 可能在前一个 chunk 发送 functionCall、后一个 chunk 才发送不带 parts 的 finishReason；参照按 candidate 记录已发送 function call，后续 finishReason 仍按 tool call 语义映射（STOP→tool_calls、MAX_TOKENS→length）。端口 `StreamState` 只跟踪 toolCallIndex/responseId，后续 STOP 被映射为 stop。本轮在 `GeminiOutboundStream.StreamState` 增加 `toolCallChoices` 集合，转换后按 choice.Index 记忆并回写完成原因；新增 3 例覆盖 STOP 后到、双 candidate 独立映射与 MAX_TOKENS 保持 length。Gemini 流式定向 29/29、Llm 全量 3327/3327。未跑 Api 全量（新增 Llm 3 例）。台账 314 条（190 accepted / 124 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§253（2026-11-15）通道显式列出 429 时的同通道重试（live #2668）。C315 登记并转 resolved：参照的 `CanRetry` 原本在 429 分支直接返回 false，导致通道 `settings.retryableStatusCodes` 中的 429 被静默忽略；修复后仅未列出 429 的通道切通道，列出 429 的通道按 `maxSingleChannelRetries` 在同通道重试。端口同样在 429 秒退。本轮在 `PersistentOutboundTransformer.CanRetry` 增加 `ChannelRetriesOn429` 判断：429 且未 opt-in 时返回 false，opt-in 时继续走剩余模型与通道规则；默认行为不变。新增 1 例覆盖 opt-in 的 `HttpClientError` / `ResponseError` 与未 opt-in 的两种错误；`PersistentOutboundRetryTests` 19/19，Retry/orchestrator 回归 151/151。未跑 Api 全量（新增 Api 1 例）。台账 315 条（190 accepted / 125 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
