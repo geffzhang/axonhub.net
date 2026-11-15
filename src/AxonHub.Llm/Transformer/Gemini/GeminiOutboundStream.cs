@@ -15,6 +15,13 @@ public sealed partial class GeminiOutboundTransformer
         public int ToolCallIndex;
 
         public string ResponseId = string.Empty;
+
+        /// <summary>
+        /// Candidates that already streamed a function call. Gemini may send
+        /// finishReason in a later chunk than the functionCall parts
+        /// (outbound_stream.go:16-20).
+        /// </summary>
+        public HashSet<long> ToolCallChoices = [];
     }
 
     /// <summary>
@@ -95,6 +102,31 @@ public sealed partial class GeminiOutboundTransformer
             true,
             state.ToolCallIndex);
         state.ToolCallIndex = nextIndex;
+
+        // A later chunk may carry only the finishReason; remember which
+        // candidates already streamed a function call and keep tool_calls /
+        // length mapping consistent with the non-streaming aggregation.
+        if (llmResp is not null)
+        {
+            var candidates = resp.Candidates ?? [];
+            for (var index = 0;
+                 index < llmResp.Choices.Count && index < candidates.Count;
+                 index++)
+            {
+                var choice = llmResp.Choices[index];
+                if (choice.Delta?.ToolCalls is { Count: > 0 })
+                {
+                    state.ToolCallChoices.Add(choice.Index);
+                }
+
+                if (state.ToolCallChoices.Contains(choice.Index))
+                {
+                    choice.FinishReason = GeminiConvert.ConvertGeminiFinishReasonToLlm(
+                        candidates[index].FinishReason ?? string.Empty,
+                        hasToolCall: true);
+                }
+            }
+        }
 
         return llmResp;
     }

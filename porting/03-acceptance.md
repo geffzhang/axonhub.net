@@ -2233,6 +2233,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §251（2026-11-15）服务账号 API key 的作用域授予校验（live #2741）。C313 登记并转 resolved：live `e5c904ef` 要求 service_account key 的 create / update / rotate 只能携带创建者有权授予的作用域——project 级作用域需在 key 所属项目持有，system-only 作用域需系统级持有；update 校验 `existing + Scopes + AppendScopes` 去重后的完整集合，rotate 校验既有 scopes。端口此前已移植该提交的 DataStoragePrivacy（`read_data_storages`）与 TracePrivacy 项目过滤，但三条写入路径直接落库调用方 scopes。本轮在 `ScopeCatalog` 增加 `IsValidScope` / `IsSystemOnlyScope`，`PermissionValidator` 增加 `CanGrantApiKeyScopesForUser`，`ApiKeyManagementService` 接入 create / update / rotate 的授予校验；`ClearScopes` 不触发授予校验。测试更新/新增 4 组用例（无 scopes 可建、system-only 拒绝、invalid scope、system+project 混合、合并集校验、轮换拒绝）；该类 22/22，service-account 相邻 Api 回归 102/102。未跑 Api 全量（新增 Api 4 例）。台账 313 条（190 accepted / 123 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§252（2026-11-15）Gemini 流式 tool_calls 完成原因跨 chunk 保持（live #2713）。C314 登记并转 resolved：Gemini 可能在前一个 chunk 发送 functionCall、后一个 chunk 才发送不带 parts 的 finishReason；参照按 candidate 记录已发送 function call，后续 finishReason 仍按 tool call 语义映射（STOP→tool_calls、MAX_TOKENS→length）。端口 `StreamState` 只跟踪 toolCallIndex/responseId，后续 STOP 被映射为 stop。本轮在 `GeminiOutboundStream.StreamState` 增加 `toolCallChoices` 集合，转换后按 choice.Index 记忆并回写完成原因；新增 3 例覆盖 STOP 后到、双 candidate 独立映射与 MAX_TOKENS 保持 length。Gemini 流式定向 29/29、Llm 全量 3327/3327。未跑 Api 全量（新增 Llm 3 例）。台账 314 条（190 accepted / 124 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

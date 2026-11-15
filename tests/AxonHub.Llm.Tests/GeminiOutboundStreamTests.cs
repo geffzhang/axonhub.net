@@ -31,6 +31,47 @@ public sealed class GeminiOutboundStreamTests
 
     private static StreamEvent Chunk(GenerateContentResponse resp) => new() { Data = Marshal(resp) };
 
+    private static Dictionary<long, string> FinishReasons(params StreamEvent[] chunks)
+    {
+        var results = GoStreams.All(
+                NewTransformer().TransformStream(null, new SliceStream<StreamEvent>(chunks)),
+                out var err)
+            .Where(static response => response.Object != "[DONE]")
+            .ToList();
+        Assert.Null(err);
+
+        var reasons = new Dictionary<long, string>();
+        foreach (var response in results)
+        {
+            foreach (var choice in response.Choices)
+            {
+                if (choice.FinishReason is not null)
+                {
+                    reasons[choice.Index] = choice.FinishReason;
+                }
+            }
+        }
+
+        return reasons;
+    }
+
+    private static Content FunctionCallContent(string name) => new()
+    {
+        Role = "model",
+        Parts =
+        [
+            new Part
+            {
+                FunctionCall = new GeminiFunctionCall
+                {
+                    Id = "call-" + name,
+                    Name = name,
+                    Args = new Dictionary<string, JsonElement>(),
+                },
+            },
+        ],
+    };
+
     private static LlmResponse ConvertAggregated(byte[] data)
         => GeminiOutboundConvert.ConvertGeminiToLlmResponse(
             LlmJson.Deserialize<GenerateContentResponse>(data)!, false);
@@ -429,6 +470,83 @@ public sealed class GeminiOutboundStreamTests
         Assert.Equal("call-a", results[0].Choices[0].Delta!.ToolCalls![0].Id);
         Assert.Equal(1, results[0].Choices[0].Delta!.ToolCalls![1].Index);
         Assert.Equal("call-b", results[0].Choices[0].Delta!.ToolCalls![1].Id);
+    }
+
+    [Fact]
+    public void TransformStream_KeepsToolCallsFinishReasonWhenStopArrivesLater()
+    {
+        var reasons = FinishReasons(
+            Chunk(new GenerateContentResponse
+            {
+                ResponseId = "resp-split-finish",
+                Candidates =
+                [
+                    new Candidate
+                    {
+                        Index = 0,
+                        Content = FunctionCallContent("get_weather"),
+                    },
+                ],
+            }),
+            Chunk(new GenerateContentResponse
+            {
+                ResponseId = "resp-split-finish",
+                Candidates = [new Candidate { Index = 0, FinishReason = "STOP" }],
+            }));
+
+        Assert.Equal("tool_calls", reasons[0]);
+    }
+
+    [Fact]
+    public void TransformStream_TracksToolCallFinishReasonPerCandidate()
+    {
+        var reasons = FinishReasons(
+            Chunk(new GenerateContentResponse
+            {
+                ResponseId = "resp-split-finish",
+                Candidates =
+                [
+                    new Candidate { Index = 0, Content = FunctionCallContent("get_weather") },
+                    new Candidate
+                    {
+                        Index = 1,
+                        Content = new Content { Role = "model", Parts = [new Part { Text = "Hello" }] },
+                    },
+                ],
+            }),
+            Chunk(new GenerateContentResponse
+            {
+                ResponseId = "resp-split-finish",
+                Candidates =
+                [
+                    new Candidate { Index = 0, FinishReason = "STOP" },
+                    new Candidate { Index = 1, FinishReason = "STOP" },
+                ],
+            }));
+
+        Assert.Equal("tool_calls", reasons[0]);
+        Assert.Equal("stop", reasons[1]);
+    }
+
+    [Fact]
+    public void TransformStream_MaxTokensAfterAToolCallStaysLength()
+    {
+        var reasons = FinishReasons(
+            Chunk(new GenerateContentResponse
+            {
+                ResponseId = "resp-split-finish",
+                Candidates =
+                [
+                    new Candidate { Index = 0, Content = FunctionCallContent("get_weather") },
+                ],
+            }),
+            Chunk(new GenerateContentResponse
+            {
+                ResponseId = "resp-split-finish",
+                Candidates = [new Candidate { Index = 0, FinishReason = "MAX_TOKENS" }],
+            }));
+
+        Assert.Equal("length", reasons[0]);
     }
 
     // ------------------------------------------------------------ AggregateStreamChunks (transformer method)
