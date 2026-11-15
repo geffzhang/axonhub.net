@@ -6,8 +6,9 @@ namespace AxonHub.Api.Tests;
 /// <summary>
 /// The GC task is registered as <c>{CronExpr: gc.cron, Timezone: "UTC"}</c>
 /// (gc.go:77-84); the default <c>0 2 * * *</c> fires at 02:00 UTC. These tests
-/// pin the standard five-field grammar and the "strictly after" next-occurrence
-/// rule the reference's executor applies.
+/// pin the standard five-field grammar, the optional seconds/year fields and the
+/// predefined descriptors (supercronic cronexpr), plus the "strictly after"
+/// next-occurrence rule the reference's executor applies.
 /// </summary>
 public sealed class GcCronScheduleTests
 {
@@ -111,9 +112,76 @@ public sealed class GcCronScheduleTests
             schedule.NextOccurrence(new DateTimeOffset(2026, 11, 6, 12, 0, 0, TimeSpan.Zero)));
     }
 
+    [Fact]
+    public void SixFieldExpressionUsesTheSecondsField()
+    {
+        var schedule = new GcCronSchedule("*/15 * * * * *");
+
+        Assert.Equal(
+            new DateTimeOffset(2026, 11, 6, 10, 7, 15, TimeSpan.Zero),
+            schedule.NextOccurrence(new DateTimeOffset(2026, 11, 6, 10, 7, 1, TimeSpan.Zero)));
+        Assert.Equal(
+            new DateTimeOffset(2026, 11, 6, 10, 7, 30, TimeSpan.Zero),
+            schedule.NextOccurrence(new DateTimeOffset(2026, 11, 6, 10, 7, 15, TimeSpan.Zero)));
+    }
+
+    [Fact]
+    public void SixFieldWithoutSecondsIsAPrependedZero()
+    {
+        var schedule = new GcCronSchedule("0 0 2 * * *");
+
+        Assert.Equal(
+            new DateTimeOffset(2026, 11, 7, 2, 0, 0, TimeSpan.Zero),
+            schedule.NextOccurrence(new DateTimeOffset(2026, 11, 6, 2, 0, 0, TimeSpan.Zero)));
+    }
+
+    [Fact]
+    public void DescriptorYearlyFiresAtMidnightOnJanuaryFirst()
+    {
+        var schedule = new GcCronSchedule("@yearly");
+
+        Assert.Equal(
+            new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            schedule.NextOccurrence(new DateTimeOffset(2026, 11, 6, 12, 0, 0, TimeSpan.Zero)));
+    }
+
+    [Fact]
+    public void DescriptorHourlyFiresAtTheTopOfTheHour()
+    {
+        var schedule = new GcCronSchedule("@hourly");
+
+        Assert.Equal(
+            new DateTimeOffset(2026, 11, 6, 11, 0, 0, TimeSpan.Zero),
+            schedule.NextOccurrence(new DateTimeOffset(2026, 11, 6, 10, 7, 1, TimeSpan.Zero)));
+    }
+
+    [Fact]
+    public void YearFieldRestrictsOccurrences()
+    {
+        var schedule = new GcCronSchedule("0 0 0 1 1 * 2030");
+
+        Assert.Equal(
+            new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            schedule.NextOccurrence(new DateTimeOffset(2026, 11, 6, 0, 0, 0, TimeSpan.Zero)));
+
+        var after = new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        Assert.Throws<InvalidOperationException>(() => schedule.NextOccurrence(after));
+    }
+
     [Theory]
-    [InlineData("0 0 2 * * *", "expected 5 fields, found 6")]
-    [InlineData("0 0 * *", "expected 5 fields, found 4")]
+    [InlineData("0 0 L * *")]
+    [InlineData("0 0 15W * *")]
+    [InlineData("0 0 * * 5#2")]
+    public void LwAndHashSpecialSyntaxIsNotSupported(string expression)
+    {
+        // C309: supercronic supports L/W/# date-level rules; the port's field
+        // sets only model enumerable values.
+        Assert.Throws<InvalidOperationException>(() => new GcCronSchedule(expression));
+    }
+
+    [Theory]
+    [InlineData("0 0 2 * * * * *", "expected 5, 6, or 7 fields, found 8")]
+    [InlineData("0 0 * *", "expected 5, 6, or 7 fields, found 4")]
     [InlineData("60 * * * *", "invalid minute field \"60\": end of range (60) above maximum (59)")]
     [InlineData("*/0 * * * *", "invalid minute field \"*/0\": invalid step \"0\"")]
     [InlineData("0 24 * * *", "invalid hour field \"24\": end of range (24) above maximum (23)")]

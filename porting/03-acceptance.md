@@ -2212,6 +2212,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §241（2026-11-15）测试矩阵 CI。新增 `.github/workflows/tests.yml`：PR 与 push 到 `unstable` 时并行运行 Llm / Grains / Persistence 三个测试项目（ubuntu-latest 提供 Docker，Testcontainers 启动 `postgres:17-alpine`）；Api 全量（约 42 分钟、含 Safeguards 时序用例）在 nightly（18:00 UTC）与手动 `workflow_dispatch` 运行，避免每个 PR 都占用长任务；路径过滤 `src/**`、`tests/**`、`Directory.Build.props`、`Directory.Packages.props`、`global.json` 与工作流自身。本地已分别验证：Llm 32/32、Grains 34/34、Persistence 30/30、Api 109/109（均为定向），完整 Api 最近一次为 §227 的 7028 例；CI 首次运行结果待远端触发后记录。台账不变（308 条，193 accepted / 115 resolved / 0 gap）。
 
+§242（2026-11-15）cron 的可选秒/年字段与描述符。C260 转 resolved：`GcCronSchedule` 按 aptible/supercronic cronexpr 支持 5/6/7 字段（5 字段秒=0、年通配；6 字段秒在前；7 字段年 1970-2099 最后）与 `@yearly/@annually/@monthly/@weekly/@daily/@midnight/@hourly` 描述符；`NextOccurrence` 在秒级选择候选并检查 year；标准 5 字段行为不变。`L/W/#` 日期级语法仍不支持，拆到新登记的 C309（accepted）。定向 `GcCronScheduleTests|ChannelAutoDisableTests` 80/80；未跑 Api 全量。台账 309 条（193 accepted / 116 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 参照实现导出数：未统计（M5 收口时执行）

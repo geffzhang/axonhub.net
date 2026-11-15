@@ -31,11 +31,14 @@ public sealed class GcCronSchedule
         "sun", "mon", "tue", "wed", "thu", "fri", "sat",
     ];
 
+    private readonly bool[] _seconds;
     private readonly bool[] _minutes;
     private readonly bool[] _hours;
     private readonly bool[] _daysOfMonth;
     private readonly bool[] _months;
     private readonly bool[] _daysOfWeek;
+    private readonly bool[] _years;
+    private readonly bool _yearRestricted;
     private readonly bool _dayOfMonthRestricted;
     private readonly bool _dayOfWeekRestricted;
 
@@ -48,20 +51,34 @@ public sealed class GcCronSchedule
 
         Expression = expression;
 
-        var fields = expression.Split(
+        var mapped = MapDescriptor(expression.Trim());
+        var fields = mapped.Split(
             (char[]?)null,
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (fields.Length != 5)
+        if (fields.Length is not (5 or 6 or 7))
         {
             throw new InvalidOperationException(
-                "expected 5 fields, found " + fields.Length.ToString(CultureInfo.InvariantCulture));
+                "expected 5, 6, or 7 fields, found "
+                + fields.Length.ToString(CultureInfo.InvariantCulture));
         }
 
-        _minutes = ParseField(fields[0], 0, 59, names: null, "minute");
-        _hours = ParseField(fields[1], 0, 23, names: null, "hour");
-        _daysOfMonth = ParseField(fields[2], 1, 31, names: null, "day-of-month");
-        _months = ParseField(fields[3], 1, 12, MonthNames, "month");
-        _daysOfWeek = ParseField(fields[4], 0, 7, WeekdayNames, "day-of-week");
+        var offset = 0;
+        if (fields.Length == 5)
+        {
+            _seconds = new bool[60];
+            _seconds[0] = true;
+        }
+        else
+        {
+            _seconds = ParseField(fields[0], 0, 59, names: null, "second");
+            offset = 1;
+        }
+
+        _minutes = ParseField(fields[offset], 0, 59, names: null, "minute");
+        _hours = ParseField(fields[offset + 1], 0, 23, names: null, "hour");
+        _daysOfMonth = ParseField(fields[offset + 2], 1, 31, names: null, "day-of-month");
+        _months = ParseField(fields[offset + 3], 1, 12, MonthNames, "month");
+        _daysOfWeek = ParseField(fields[offset + 4], 0, 7, WeekdayNames, "day-of-week");
 
         // Normalise Sunday-as-7 onto 0 so the matcher only checks 0-6.
         if (_daysOfWeek[7])
@@ -69,8 +86,24 @@ public sealed class GcCronSchedule
             _daysOfWeek[0] = true;
         }
 
-        _dayOfMonthRestricted = fields[2] != "*";
-        _dayOfWeekRestricted = fields[4] != "*";
+        _dayOfMonthRestricted = fields[offset + 2] != "*";
+        _dayOfWeekRestricted = fields[offset + 4] != "*";
+
+        if (fields.Length == 7)
+        {
+            _years = ParseField(fields[6], 1970, 2099, names: null, "year");
+            _yearRestricted = fields[6] != "*";
+        }
+        else
+        {
+            _years = new bool[2100];
+            for (var year = 1970; year <= 2099; year++)
+            {
+                _years[year] = true;
+            }
+
+            _yearRestricted = false;
+        }
 
         if (!_months.Any(static m => m))
         {
@@ -81,6 +114,29 @@ public sealed class GcCronSchedule
         {
             throw new InvalidOperationException("day fields match no day");
         }
+    }
+
+    /// <summary>
+    /// supercronic's predefined expressions (cronexpr_parse.go:204-209); the
+    /// fork expands them to the seven-field form (seconds first, year last).
+    /// </summary>
+    private static string MapDescriptor(string expression)
+    {
+        if (!expression.StartsWith('@'))
+        {
+            return expression;
+        }
+
+        return expression.ToLowerInvariant() switch
+        {
+            "@yearly" or "@annually" => "0 0 0 1 1 * *",
+            "@monthly" => "0 0 0 1 * * *",
+            "@weekly" => "0 0 0 * * 0 *",
+            "@daily" or "@midnight" => "0 0 0 * * * *",
+            "@hourly" => "0 0 * * * * *",
+            _ => throw new InvalidOperationException(
+                "unsupported cron descriptor \"" + expression + "\""),
+        };
     }
 
     public string Expression { get; }
@@ -99,10 +155,13 @@ public sealed class GcCronSchedule
 
         // A four-year window covers the leap-day cases; a valid cron expression
         // always fires inside it except impossible combos (Feb 30), which the
-        // reference's scheduler also never fires (the executor would error or
-        // spin). Cap at eight years to cover a Feb 29 that lands just after a
-        // non-leap century boundary.
-        var limit = start.AddYears(8);
+        // reference's scheduler also never fires. Cap at eight years unless the
+        // expression restricts the year, in which case the year field's
+        // 1970-2099 domain is the limit.
+        var lastYear = _yearRestricted
+            ? 2099
+            : Math.Min(start.Year + 8, 2099);
+        var limit = new DateTime(lastYear, 12, 31, 23, 59, 59, DateTimeKind.Utc);
         var date = start.Date;
 
         while (date <= limit)
@@ -113,12 +172,15 @@ public sealed class GcCronSchedule
                 {
                     foreach (var minute in MatchingIndices(_minutes, 60))
                     {
-                        var candidate = new DateTime(
-                            date.Year, date.Month, date.Day,
-                            hour, minute, 0, DateTimeKind.Utc);
-                        if (candidate > start)
+                        foreach (var second in MatchingIndices(_seconds, 60))
                         {
-                            return new DateTimeOffset(candidate, TimeSpan.Zero);
+                            var candidate = new DateTime(
+                                date.Year, date.Month, date.Day,
+                                hour, minute, second, DateTimeKind.Utc);
+                            if (candidate > start)
+                            {
+                                return new DateTimeOffset(candidate, TimeSpan.Zero);
+                            }
                         }
                     }
                 }
@@ -133,7 +195,7 @@ public sealed class GcCronSchedule
 
     private bool DateMatches(DateTime date)
     {
-        if (!_months[date.Month])
+        if ((_yearRestricted && !_years[date.Year]) || !_months[date.Month])
         {
             return false;
         }
