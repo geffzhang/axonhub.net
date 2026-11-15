@@ -68,7 +68,8 @@ Responses / Embeddings 断言各自 usage 字段。
 - 发布镜像 `ghcr.io/managedcode/llm-test-server:1.0.6`（digest
   `sha256:ca9d1…2d5b`）本地容器复跑：**18/18 通过**。
 - 未启用：18/18 跳过，full Api 默认回归不受影响。
-- Api 全量（默认跳过 E2E）本轮后台复跑，结果见验收账。
+- Api 全量（默认跳过 E2E）：**7182 例（7164 通过 + 18 跳过，0 失败，
+  35m29s）**。
 
 ## CI
 
