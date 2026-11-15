@@ -75,6 +75,7 @@ if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
 }
 
 Ensure-Dirs $BaseDir
+Ensure-Dirs (Join-Path $BaseDir '.dotnet')
 
 if (Test-Path $PidFile) {
     try {
@@ -106,6 +107,7 @@ if (-not (Test-Path $ConfigFile)) {
 if (-not $env:ASPNETCORE_ENVIRONMENT) {
     $env:ASPNETCORE_ENVIRONMENT = 'Production'
 }
+$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = Join-Path $BaseDir '.dotnet'
 
 Write-Info 'Starting AxonHub.NET process...'
 try {

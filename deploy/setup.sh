@@ -70,6 +70,7 @@ Type=simple
 User=${TARGET_USER}
 WorkingDirectory=${BASE_DIR}
 Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=${BASE_DIR}/.dotnet
 EnvironmentFile=-${BASE_DIR}/axonhub.env
 ExecStart=${BINARY_PATH}
 Restart=always

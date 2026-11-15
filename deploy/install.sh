@@ -151,7 +151,7 @@ run_as_target() {
 
 ensure_directories() {
     print_info "Preparing ${BASE_DIR}..."
-    mkdir -p "$BASE_DIR/frontend"
+    mkdir -p "$BASE_DIR/frontend" "$BASE_DIR/.dotnet"
     chown -R "$TARGET_USER:$TARGET_GROUP" "$BASE_DIR"
     chmod 755 "$BASE_DIR"
 }

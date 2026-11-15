@@ -90,14 +90,14 @@ start_directly() {
         print_info "The server requires PostgreSQL; create it with deploy/install.sh."
     fi
 
-    mkdir -p "$BASE_DIR"
+    mkdir -p "$BASE_DIR/.dotnet"
     : > "$LOG_FILE"
-    chown "$TARGET_USER:$TARGET_GROUP" "$BASE_DIR" "$LOG_FILE" 2>/dev/null || true
+    chown "$TARGET_USER:$TARGET_GROUP" "$BASE_DIR" "$BASE_DIR/.dotnet" "$LOG_FILE" 2>/dev/null || true
 
     print_info "Starting AxonHub.NET (port ${port})..."
     if [[ $EUID -eq 0 ]]; then
         sudo -u "$TARGET_USER" env HOME="$TARGET_HOME" \
-            bash -c 'cd "$1" || exit 1; ASPNETCORE_ENVIRONMENT="${ASPNETCORE_ENVIRONMENT:-Production}" "$2" >> "$3" 2>&1 & echo $! > "$4"' \
+            bash -c 'cd "$1" || exit 1; ASPNETCORE_ENVIRONMENT="${ASPNETCORE_ENVIRONMENT:-Production}" DOTNET_BUNDLE_EXTRACT_BASE_DIR="$1/.dotnet" "$2" >> "$3" 2>&1 & echo $! > "$4"' \
             bash "$BASE_DIR" "$BINARY_PATH" "$LOG_FILE" "$PID_FILE"
         local pid
         pid="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -105,6 +105,7 @@ start_directly() {
         (
             cd "$BASE_DIR"
             ASPNETCORE_ENVIRONMENT="${ASPNETCORE_ENVIRONMENT:-Production}" \
+                DOTNET_BUNDLE_EXTRACT_BASE_DIR="$BASE_DIR/.dotnet" \
                 "$BINARY_PATH" >> "$LOG_FILE" 2>&1 &
             echo "$!" > "$PID_FILE"
         )

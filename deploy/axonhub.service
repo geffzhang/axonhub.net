@@ -11,6 +11,7 @@ Group=axonhub
 WorkingDirectory=/opt/axonhub
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=ASPNETCORE_HTTP_PORTS=8090
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/axonhub-dotnet
 EnvironmentFile=-/etc/axonhub/axonhub.env
 ExecStart=/opt/axonhub/axonhub
 Restart=always
