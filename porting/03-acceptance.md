@@ -2251,6 +2251,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §260（2026-11-15）无工具时丢弃 tool_choice（live #2706）。C319 登记并转 resolved：OpenAI chat 出站在 `tools` 为空时除 `parallel_tool_calls` 外同时清空 `tool_choice`；Responses 出站把 raw `tool_choice` 回放移到 raw-only tools 合并之后，依据最终 body 是否含 tools 决定保留或删除，避免上游以 400 拒绝。新增 4 例（chat 无/有 tools、Responses raw 无 tools、raw tools 合并后保留）；定向 65/65，Llm 全量 3367/3367。未跑 Api 全量（新增 Llm 4 例）。台账 319 条（190 accepted / 129 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§261（2026-11-15）无 index 的流式 tool_calls 自动编号（live #2707）。C320 登记并转 resolved：Gemini 的 OpenAI 兼容端点把每个并行 tool call 整体放在独立 chunk 且不带 index，旧实现全部解码为 0，流式输出与聚合会合并调用并拼接参数。本轮新增 `ToolCallIndexer`：显式 index 原样保留并推进 next；无 index 时新 ID/name 开启新调用，空片段或重复最近调用 ID 续接；按 choice 记录最近调用与各 index 的 ID。`OpenAiOutboundStream` 与 `OpenAiAggregator` 都应用。新增 4 例（两个无 index 调用 0/1、空片段续接、显式 5 后无 index 得 6、aggregator 参数不合并）；定向 100/100，Llm 全量 3371/3371。未跑 Api 全量（新增 Llm 4 例）。台账 320 条（190 accepted / 130 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

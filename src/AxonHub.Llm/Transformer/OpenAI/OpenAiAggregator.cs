@@ -46,6 +46,7 @@ public static class OpenAiAggregator
         var serviceTier = string.Empty;
         var choicesAggs = new Dictionary<long, ChoiceAggregator>();
         var citationsMap = new HashSet<string>(StringComparer.Ordinal);
+        var indexer = new ToolCallIndexer();
 
         foreach (var chunk in chunks)
         {
@@ -64,6 +65,8 @@ public static class OpenAiAggregator
             {
                 continue; // Skip invalid chunks.
             }
+
+            indexer.ApplyToOpenAiResponse(chunk.Data, parsed);
 
             foreach (var rawChoice in parsed.Choices ?? [])
             {

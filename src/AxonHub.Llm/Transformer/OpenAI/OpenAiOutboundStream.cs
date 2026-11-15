@@ -33,7 +33,21 @@ public sealed partial class OpenAiOutboundTransformer
             }
         }
 
-        return new Streams.MapStream<StreamEvent, LlmResponse>(stream, TransformStreamChunk);
+        var indexer = new ToolCallIndexer();
+        return new Streams.MapStream<StreamEvent, LlmResponse>(
+            stream,
+            streamEvent =>
+            {
+                var response = TransformStreamChunk(streamEvent);
+                if (response is not null
+                    && !ReferenceEquals(response, LlmResponse.DoneResponse)
+                    && streamEvent is not null)
+                {
+                    indexer.ApplyToResponse(streamEvent.Data, response);
+                }
+
+                return response;
+            });
     }
 
     /// <summary>
