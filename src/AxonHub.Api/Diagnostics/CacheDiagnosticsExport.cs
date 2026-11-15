@@ -69,6 +69,16 @@ internal static class CacheDiagnosticsExport
             targetValues.Add(new GoStringValue(DiagnosticsTargets.ToWire(target)));
         }
 
+        // The model previews above run the selector, so the shared association
+        // cache is populated by the time the reference's buildCacheDiagnostics
+        // reads it (channel_model_cache_diagnostics.go:177-186).
+        var associationEntries = candidateSelector.ReadAssociationCache();
+        var associationValues = new List<GoValue>(associationEntries.Count);
+        foreach (var entry in associationEntries)
+        {
+            associationValues.Add(BuildAssociationCacheEntry(entry));
+        }
+
         return Object(
             Member("exportedAt", new GoStringValue(exportedAt)),
             Member("targets", new GoSliceValue(targetValues)),
@@ -79,9 +89,43 @@ internal static class CacheDiagnosticsExport
                 Member(
                     "enabledChannelCache",
                     BuildEnabledChannelCacheSnapshot(enabledCache, exportedAt, timeProvider)),
-                // CandidateSelectorDiagnostics.ReadAssociationCache() has no
-                // port counterpart (C149): the list is a non-nil empty slice.
-                Member("modelAssociationCache", new GoSliceValue([])))));
+                Member("modelAssociationCache", new GoSliceValue(associationValues)))));
+    }
+
+    /// <summary>
+    /// Port of channelModelAssociationCacheEntrySnapshot
+    /// (channel_model_cache_diagnostics.go:39-48 and 190-203): Go field order,
+    /// second-precision RFC 3339 timestamps, and a nil associations slice when
+    /// the entry has none.
+    /// </summary>
+    private static GoValue BuildAssociationCacheEntry(AssociationCacheEntrySnapshot entry)
+        => Object(
+            Member("modelId", new GoStringValue(entry.ModelId)),
+            Member(
+                "associations",
+                entry.Associations.Count == 0
+                    ? GoNullValue.Instance
+                    : BuildCachedAssociations(entry.Associations)),
+            Member("candidateCount", new GoIntValue(entry.CandidateCount)),
+            Member("channelCount", new GoIntValue(entry.ChannelCount)),
+            Member(
+                "latestChannelUpdateTime",
+                new GoStringValue(GoTime.Rfc3339(entry.LatestChannelUpdateTime))),
+            Member(
+                "latestModelUpdateTime",
+                new GoStringValue(GoTime.Rfc3339(entry.LatestModelUpdateTime))),
+            Member("channelCacheVersion", new GoIntValue(entry.ChannelCacheVersion)),
+            Member("cachedAt", new GoStringValue(GoTime.Rfc3339(entry.CachedAt))));
+
+    private static GoValue BuildCachedAssociations(IReadOnlyList<ModelAssociation> associations)
+    {
+        var values = new List<GoValue>(associations.Count);
+        foreach (var association in associations)
+        {
+            values.Add(BuildAssociation(association));
+        }
+
+        return new GoSliceValue(values);
     }
 
     // ------------------------------------------------------------------

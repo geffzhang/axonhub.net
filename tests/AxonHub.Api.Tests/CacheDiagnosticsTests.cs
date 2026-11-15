@@ -1,5 +1,7 @@
 using System.Text.Json;
 using AxonHub.Api.Diagnostics;
+using AxonHub.Api.Models;
+using AxonHub.Api.Orchestration;
 using AxonHub.Grains.Abstractions;
 using AxonHub.Persistence;
 
@@ -59,6 +61,74 @@ public sealed class CacheDiagnosticsTests
         var payload = await Service.GetCacheDiagnosticsAsync(
             [DiagnosticsTargetValue.ChannelCache, DiagnosticsTargetValue.ChannelCache]);
         Assert.Single(payload.Targets);
+    }
+
+    // -- cache.modelAssociationCache -------------------------------------
+
+    [Fact]
+    public async Task AssociationCacheEntriesKeepTheReferenceShape()
+    {
+        _selector.AssociationCacheEntries.Add(new AssociationCacheEntrySnapshot(
+            "m1",
+            [
+                new ModelAssociation
+                {
+                    Type = ModelAssociation.TypeChannelModel,
+                    Priority = 3,
+                    ChannelModel = new ChannelModelAssociation(7, "upstream"),
+                },
+            ],
+            CandidateCount: 2,
+            ChannelCount: 4,
+            LatestChannelUpdateTime: new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero),
+            LatestModelUpdateTime: new DateTimeOffset(2026, 1, 3, 4, 5, 6, TimeSpan.Zero),
+            ChannelCacheVersion: 9,
+            CachedAt: new DateTimeOffset(2026, 2, 3, 4, 5, 6, TimeSpan.Zero)));
+
+        var payload = await Service.GetCacheDiagnosticsAsync(null);
+
+        using var document = JsonDocument.Parse(payload.Content);
+        var entries = document.RootElement
+            .GetProperty("cache")
+            .GetProperty("modelAssociationCache");
+        var entry = Assert.Single(entries.EnumerateArray().ToArray());
+
+        Assert.Equal(
+            new[]
+            {
+                "modelId", "associations", "candidateCount", "channelCount",
+                "latestChannelUpdateTime", "latestModelUpdateTime",
+                "channelCacheVersion", "cachedAt",
+            },
+            Names(entry));
+        Assert.Equal("m1", entry.GetProperty("modelId").GetString());
+        Assert.Equal(2, entry.GetProperty("candidateCount").GetInt32());
+        Assert.Equal(4, entry.GetProperty("channelCount").GetInt32());
+        Assert.Equal("2026-01-02T03:04:05Z", entry.GetProperty("latestChannelUpdateTime").GetString());
+        Assert.Equal("2026-01-03T04:05:06Z", entry.GetProperty("latestModelUpdateTime").GetString());
+        Assert.Equal(9, entry.GetProperty("channelCacheVersion").GetInt64());
+        Assert.Equal("2026-02-03T04:05:06Z", entry.GetProperty("cachedAt").GetString());
+
+        var association = Assert.Single(entry.GetProperty("associations").EnumerateArray().ToArray());
+        Assert.Equal(
+            new[]
+            {
+                "type", "priority", "disabled", "channelModel", "channelRegex",
+                "regex", "modelId", "channelTagsModel", "channelTagsRegex",
+            },
+            Names(association));
+        Assert.Equal("channel_model", association.GetProperty("type").GetString());
+        Assert.Equal(3, association.GetProperty("priority").GetInt32());
+        Assert.False(association.GetProperty("disabled").GetBoolean());
+        var channelModel = association.GetProperty("channelModel");
+        Assert.Equal(new[] { "channelId", "modelId" }, Names(channelModel));
+        Assert.Equal(7, channelModel.GetProperty("channelId").GetInt32());
+        Assert.Equal("upstream", channelModel.GetProperty("modelId").GetString());
+        Assert.Equal(JsonValueKind.Null, association.GetProperty("channelRegex").ValueKind);
+        Assert.Equal(JsonValueKind.Null, association.GetProperty("regex").ValueKind);
+        Assert.Equal(JsonValueKind.Null, association.GetProperty("modelId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, association.GetProperty("channelTagsModel").ValueKind);
+        Assert.Equal(JsonValueKind.Null, association.GetProperty("channelTagsRegex").ValueKind);
     }
 
     // -- database.channels -----------------------------------------------

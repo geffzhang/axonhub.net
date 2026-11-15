@@ -47,9 +47,10 @@ public interface IModelCandidateSelector
 /// <para>
 /// The reference resolves associations through a five-minute cache keyed by the
 /// model id, the channel cache version and the association signature
-/// (resolveAssociations). The port reads the channel snapshot live on every
-/// request and skips the cache (C149), which is observationally equivalent for
-/// routing because a cache miss produces the same result.
+/// (resolveAssociations). The port keeps the same cache in the shared
+/// <see cref="ModelAssociationCache"/> singleton, so scoped selector instances
+/// and the cache diagnostics export observe one process-wide map like the
+/// reference (§245).
 /// </para>
 /// <para>
 /// <b>Test bypass.</b> The reference's tests call <c>authz.WithTestBypass(ctx)</c>
@@ -64,6 +65,8 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
     private readonly IModelSettingsProvider _settings;
     private readonly IChannelStore _channels;
     private readonly IEnabledChannelProvider _enabledChannels;
+    private readonly IEnabledChannelCacheSnapshotProvider? _enabledChannelSnapshots;
+    private readonly ModelAssociationCache? _associationCache;
     private readonly TimeProvider _timeProvider;
     private readonly bool _bypassModelPrivacy;
 
@@ -73,7 +76,9 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         IChannelStore channels,
         IEnabledChannelProvider enabledChannels,
         TimeProvider timeProvider,
-        bool bypassModelPrivacy = false)
+        bool bypassModelPrivacy = false,
+        IEnabledChannelCacheSnapshotProvider? enabledChannelSnapshots = null,
+        ModelAssociationCache? associationCache = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(settings);
@@ -85,6 +90,8 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         _settings = settings;
         _channels = channels;
         _enabledChannels = enabledChannels;
+        _enabledChannelSnapshots = enabledChannelSnapshots;
+        _associationCache = associationCache;
         _timeProvider = timeProvider;
         _bypassModelPrivacy = bypassModelPrivacy;
     }
@@ -192,10 +199,35 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         }
 
         IReadOnlyList<ChannelRecord> channels;
+        long channelCacheVersion;
         try
         {
-            channels = await _channels.ListEnabledAsync(cancellationToken)
-                .ConfigureAwait(false);
+            if (_enabledChannelSnapshots is not null)
+            {
+                // One activation returns the enabled-channel contents and the
+                // cache version that belong together. The reference reads the
+                // version before GetEnabledChannels (candidates.go:255-259);
+                // the snapshot is the same pair with no interleaving at all.
+                var snapshot = await _enabledChannelSnapshots
+                    .GetSnapshotAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                channelCacheVersion = snapshot.Version;
+                var rows = new List<ChannelRecord>(snapshot.Channels.Count);
+                foreach (var channel in snapshot.Channels)
+                {
+                    rows.Add(ToRecord(channel.ToDescriptor()));
+                }
+
+                channels = rows;
+            }
+            else
+            {
+                // Manual constructions (tests) without the snapshot seam keep
+                // the live store path; production always supplies the snapshot.
+                channelCacheVersion = 0;
+                channels = await _channels.ListEnabledAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -204,7 +236,11 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
                 ex);
         }
 
-        var resolved = ResolveAssociations(associations, channels);
+        var resolved = ResolveAssociations(
+            record,
+            associations,
+            channels,
+            channelCacheVersion);
         var candidates = FilterResolvedCandidatesForRequest(request, resolved);
         if (candidates.Count == 0)
         {
@@ -231,18 +267,55 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
     }
 
     /// <summary>
-    /// Port of resolveAssociations' matching half (candidates.go:250-360) with
-    /// the association cache omitted (C149).
+    /// Port of resolveAssociations (candidates.go:250-394): resolve the
+    /// association matches into the cached intermediate form, deferring the
+    /// request-specific <c>When</c> filter to the caller. A hit requires the
+    /// same association signature, channel count, latest channel update time,
+    /// latest model update time and channel cache version, and a cachedAt
+    /// younger than five minutes.
     /// </summary>
-    private static List<ResolvedAssociationCandidate> ResolveAssociations(
+    private IReadOnlyList<ResolvedAssociationCandidate> ResolveAssociations(
+        ModelRecord model,
         IReadOnlyList<ModelAssociation> associations,
-        IReadOnlyList<ChannelRecord> channels)
+        IReadOnlyList<ChannelRecord> channels,
+        long channelCacheVersion)
     {
         if (channels.Count == 0)
         {
             return [];
         }
 
+        var signature = ModelAssociationSignature.Compute(associations);
+        var latestChannelUpdateTime = GetLatestChannelUpdateTime(channels);
+        var now = _timeProvider.GetUtcNow();
+        var key = new AssociationCacheKey(
+            signature,
+            channels.Count,
+            ModelAssociationCache.ToUtc(latestChannelUpdateTime),
+            ModelAssociationCache.ToUtc(model.UpdatedAt),
+            channelCacheVersion);
+
+        if (_associationCache is not null
+            && _associationCache.TryGet(model.ModelId, key, now, out var cached))
+        {
+            return cached;
+        }
+
+        var resolved = MatchAssociations(associations, channels);
+
+        _associationCache?.Set(model.ModelId, key, associations, resolved, now);
+        return resolved;
+    }
+
+    /// <summary>
+    /// Port of resolveAssociations' matching half (candidates.go:300-357): the
+    /// structural match against the enabled channels, retaining each
+    /// association's <c>When</c> for the post-cache request filter.
+    /// </summary>
+    private static List<ResolvedAssociationCandidate> MatchAssociations(
+        IReadOnlyList<ModelAssociation> associations,
+        IReadOnlyList<ChannelRecord> channels)
+    {
         var matches = ModelAssociationMatcher.MatchAssociations(associations, channels);
         var channelMap = new Dictionary<long, ChannelRecord>(channels.Count);
         foreach (var channel in channels)
@@ -272,21 +345,75 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
     }
 
     /// <summary>
+    /// Port of getLatestChannelUpdateTime (candidates.go:617-631). Empty
+    /// channels return Go's zero time.
+    /// </summary>
+    private static DateTime GetLatestChannelUpdateTime(IReadOnlyList<ChannelRecord> channels)
+    {
+        if (channels.Count == 0)
+        {
+            return default;
+        }
+
+        var latest = channels[0].UpdatedAt;
+        for (var index = 1; index < channels.Count; index++)
+        {
+            if (channels[index].UpdatedAt > latest)
+            {
+                latest = channels[index].UpdatedAt;
+            }
+        }
+
+        return latest;
+    }
+
+    /// <summary>
+    /// The enabled-channel snapshot carries the fields the association matcher
+    /// and candidate builder read; this restores the row shape they consume.
+    /// </summary>
+    private static ChannelRecord ToRecord(ChannelDescriptor channel) => new()
+    {
+        Id = channel.Id,
+        Name = channel.Name,
+        OrderingWeight = channel.OrderingWeight,
+        CreatedAt = channel.CreatedAt,
+        UpdatedAt = channel.UpdatedAt,
+        Type = channel.Type,
+        BaseUrl = channel.BaseUrl,
+        Status = "enabled",
+        Credentials = channel.Credentials,
+        DisabledApiKeys = channel.DisabledApiKeys,
+        SupportedModels = channel.SupportedModels,
+        Settings = channel.Settings,
+        Endpoints = channel.Endpoints,
+        DefaultTestModel = channel.DefaultTestModel,
+        Tags = channel.Tags,
+        Policies = channel.Policies,
+    };
+
+    /// <summary>
     /// Port of filterResolvedCandidatesForRequest (candidates_condition.go:19-71).
     /// </summary>
     private List<ChannelCandidate> FilterResolvedCandidatesForRequest(
         LlmRequest request,
-        List<ResolvedAssociationCandidate> resolved)
+        IReadOnlyList<ResolvedAssociationCandidate> resolved)
     {
         if (resolved.Count == 0)
         {
             return [];
         }
 
-        var hasConditionalCandidates = resolved.Exists(
-            static candidate => candidate.When is not null);
+        var hasConditionalCandidates = false;
+        foreach (var candidate in resolved)
+        {
+            if (candidate.When is not null)
+            {
+                hasConditionalCandidates = true;
+                break;
+            }
+        }
 
-        List<ResolvedAssociationCandidate> filtered;
+        IReadOnlyList<ResolvedAssociationCandidate> filtered;
         if (!hasConditionalCandidates)
         {
             filtered = resolved;
@@ -303,7 +430,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
             var requestHeaders = CandidateRequestFeatures.BuildRequestHeaderMap(request);
             var now = _timeProvider.GetUtcNow();
 
-            filtered = new List<ResolvedAssociationCandidate>(resolved.Count);
+            var matched = new List<ResolvedAssociationCandidate>(resolved.Count);
             foreach (var candidate in resolved)
             {
                 if (!MatchesAssociationWhen(
@@ -319,8 +446,10 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
                     continue;
                 }
 
-                filtered.Add(candidate);
+                matched.Add(candidate);
             }
+
+            filtered = matched;
         }
 
         var candidates = AggregateChannelModelCandidates(filtered);
@@ -365,7 +494,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
     /// earlier connection.
     /// </summary>
     private static List<ChannelCandidate> AggregateChannelModelCandidates(
-        List<ResolvedAssociationCandidate> resolved)
+        IReadOnlyList<ResolvedAssociationCandidate> resolved)
     {
         var candidates = new List<ChannelCandidate>(resolved.Count);
         var candidateIndexByKey = new Dictionary<(long ChannelId, int Priority), int>();
@@ -730,11 +859,4 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
 
     /// <summary>The reference's ent NotFoundError; the caller maps it to IsNotFound.</summary>
     private sealed class ModelNotFoundException : Exception;
-
-    /// <summary>Port of resolvedAssociationCandidate (candidates.go:50-58).</summary>
-    private sealed record ResolvedAssociationCandidate(
-        ChannelRecord Channel,
-        int Priority,
-        IReadOnlyList<ChannelModelEntry> Models,
-        ModelAssociationWhen? When);
 }

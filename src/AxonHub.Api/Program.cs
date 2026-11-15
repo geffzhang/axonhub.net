@@ -384,7 +384,10 @@ builder.Services.AddScoped<IApiKeyProfileQuotaReader>(
 
 // The orchestrator reads the retry policy through the scoped system store and
 // resolves candidates through the model-association selector
-// (orchestrator.DefaultSelector, candidates.go:110-398).
+// (orchestrator.DefaultSelector, candidates.go:110-398). The association cache
+// is process-wide like DefaultSelector.associationCache, so every scoped
+// selector and the cache diagnostics export share the same entries.
+builder.Services.AddSingleton<ModelAssociationCache>();
 builder.Services.AddScoped<IModelCandidateSelector, ModelCandidateSelector>();
 builder.Services.AddScoped<ChatCompletionOrchestrator>();
 

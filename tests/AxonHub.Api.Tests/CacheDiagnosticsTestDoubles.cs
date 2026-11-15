@@ -49,6 +49,11 @@ internal sealed class FakeDiagnosticsCandidateSelector : ICacheDiagnosticsCandid
 
     public Func<string, IReadOnlyList<ChannelCandidate>>? OnSelect { get; set; }
 
+    public List<AssociationCacheEntrySnapshot> AssociationCacheEntries { get; } = [];
+
+    public IReadOnlyList<AssociationCacheEntrySnapshot> ReadAssociationCache()
+        => AssociationCacheEntries;
+
     public Task<IReadOnlyList<ChannelCandidate>> SelectAsync(
         string model,
         CancellationToken cancellationToken = default)

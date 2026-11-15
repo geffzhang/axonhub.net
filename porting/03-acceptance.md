@@ -470,6 +470,7 @@ modelEntries / 候选预览，以及 `json.MarshalIndent` 的缩进遍历与 Go 
 逐目标重载错误链。新增 C239（accepted）：候选预览复用 owner-bypass 的模型选择器，
 `modelAssociationCache` 恒为 `[]`（关联解析缓存随 C179 未移植）；新增 C240
 （accepted）：两次时钟读取、导出时重算启用 key 计数、clearCache 重载不接收取消令牌。
+（§245 已把关联解析缓存与 `modelAssociationCache` 导出补齐，C239 转 resolved。）
 
 §157 追加 34 个用例（`AxonHub.Api.Tests` 28：`SystemInitializationServiceTests` 9、
 `AdminSystemEndpointTests` 19；`AxonHub.Persistence.Tests` 6：`DataStorageBootstrapTests`
@@ -2218,6 +2219,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §244（2026-11-15）管理面 GraphQL 根字段审计。M5 公开 API 审计的 GraphQL 根字段部分：以参照 `internal/server/gql/*.graphql` 的 `type Query` / `type Mutation` 块解析根字段（按块内最小缩进取字段行），得到 Query 87 条、Mutation 134 条；其中 `hasTag` 是 `ChannelWhereInput` 之类的输入字段被同一缩进扫描误计，实际 Query 为 86 条。端口以 HotChocolate schema 内省 `__schema.queryType` / `mutationType`，得到 Query 85 条、Mutation 134 条。Query 唯一缺少的根字段是 `nodes`：参照的 EntGQL resolver 自身 panic、前端未调用，C269 已明确其保持不暴露，不属于未解释缺口；`allScopes` 由 `AdminQuery.AllScopes` 的方法名推断生成，内省可见。因此有效根字段覆盖 219/220（99.5%），Mutation 134/134，未解释缺口 0。新增 `AdminChannelEndpointsEndpointTests.AdminRootFieldSurfaceMatchesTheReferenceAudit` 一次内省查询锁定 Query 85 / Mutation 134、`allScopes` 与 `node` 存在、`nodes` 缺席。定向 1/1 通过；未跑 Api 全量（新增 Api 1 例）。台账不变（309 条，192 accepted / 117 resolved / 0 gap）。
 
+§245（2026-11-15）模型关联解析缓存与诊断导出。C239 转 resolved：新增进程级 `ModelAssociationCache` 单例（键为 model id，条目含已解析候选、关联签名、通道数量、通道最新更新时间、模型更新时间、通道缓存版本与 cachedAt；5 分钟 TTL，六项全部一致才命中），`ModelCandidateSelector` 在快照模式下从 `IEnabledChannelCacheSnapshotProvider` 一次取得启用通道与 `Version`，请求级 `When` 过滤仍在缓存之后执行；签名按参照 `modelAssociationSignature` 的 FNV-1a 64 字段序复刻。诊断导出在模型预览之后读取同一单例，`cache.modelAssociationCache` 按 modelId 排序输出 modelId / associations / candidateCount / channelCount / 两个 RFC3339 时间 / channelCacheVersion / cachedAt，替代此前的恒 `[]`。测试：`ModelAssociationCacheTests` 7 例锁定快照读取、缓存命中复用、通道数量/更新时间/版本/签名/模型更新时间失效、TTL 过期与条件过滤共享解析；`CacheDiagnosticsTests.AssociationCacheEntriesKeepTheReferenceShape` 锁定字段序与时间格式；`ModelAssociationCacheTests|CacheDiagnosticsTests` 24/24、选择器/编排/诊断回归 144/144。未跑 Api 全量（新增 Api 8 例）。台账 309 条（191 accepted / 118 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
@@ -2543,7 +2546,7 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 | C028–C029：系统安全设置与 IP 黑名单 | C028 已解决：`systems` 表、`SecuritySettingsOrDefault` 的回退/归一化与 `/v1` 黑名单中间件按参照实现，403 信封逐字节一致；C029 已接受：系统设置无进程内缓存，每个 `/v1` 请求（有 ClientIP 时）读一次库，外部改库立即可见 | 已关闭；缓存随配置/缓存里程碑（C029） |
 | C030–C033：重试策略与上游错误策略 | C030 已解决：`retry_policy` 的读取/归一化与每请求 topK 已接入（49 例 + 3 例），禁用时 1 个候选，策略计数大于默认值时能打满候选；C031 已解决：`upstream_error_policy` 的 hidden/custom 按参照应用到非流与流式错误（含"非流传输错误不被改写"的真实不对称），34 例锁定；C032 已接受：重复键后跟 `null` 时 .NET 与 Go 解码语义不同；C033 已接受：错误体解析用 System.Text.Json 而非 gjson，截断报文与重复键的结果不同 | C030/C031 已关闭；C032/C033 仅手改库或畸形上游报文可触发 |
 | 其余 Ent 表未移植 | `data_storages` 由 §106、`invitations` 由 §110 落地；其余表依赖的功能不可用 | 随功能落地 |
-| C179：orchestrator 模型关联路由切片的已接受差异与真实缺口 | 已接受 + 真实缺口：关联解析缓存省略（实时读通道，C149）；连接内模型按 request model 排序（C177），多模型重试顺序确定；read_channels 在查询前显式判定，类型与文案一致但不产生查询副作用；通道先后沿用 C140。真实缺口：trace 粘性（TraceStickyMode / PreviousChannelProvider）、项目与 API key 激活 profile 的 SelectedChannelsSelector / ChannelTagsFilterSelector、Google / Anthropic 原生工具选择器、StreamPolicySelector 与 QuotaRoutingSelector / 配额门未接入；59 例锁定 | 已接受 + 缺口（C179） |
+| C179：orchestrator 模型关联路由切片的已接受差异与真实缺口 | 已接受 + 真实缺口：关联解析缓存由 §245 落地（C239 resolved，5 分钟 TTL、六项命中条件、共享诊断快照）；连接内模型按 request model 排序（C177），多模型重试顺序确定；read_channels 在查询前显式判定，类型与文案一致但不产生查询副作用；通道先后沿用 C140。真实缺口：trace 粘性（TraceStickyMode / PreviousChannelProvider）、项目与 API key 激活 profile 的 SelectedChannelsSelector / ChannelTagsFilterSelector、Google / Anthropic 原生工具选择器、StreamPolicySelector 与 QuotaRoutingSelector / 配额门未接入；59 例锁定 | 已接受 + 缺口（C179）；关联解析缓存已关闭（C239） |
 | C180：四个未移植的通道变换选项与流策略强制 | 真实缺口：applyTransformOptions（ForceArrayInstructions / ForceArrayInputs / ReplaceDeveloperRoleWithSystem）、applyReasoningEffortMapping（含 output_config.effort 同步）、filterResponseCustomToolMessagesForNonResponsesOutbound、shouldForceStreamingForCandidate（stream=require 时强制流式与 include_usage）仅解析 / 暴露在通道设置与 GraphQL 中，出站变换未应用；默认配置下一致 | 真实缺口（C180） |
 | C186：API key 配额时区按请求读取 | 已接受：参照 `SystemService.TimeLocation` 进程内缓存，端口每次配额检查读取 `system_general_settings`；行缺失 / 读取失败 / 畸形 JSON / 空值 / 未知时区回退 UTC 与 `Local` 映射一致，calendar 零点转换（含 DST 缺口与歧义）由测试锁定；差异仅在设置变更的生效时机与每次检查多一次主键查询 | 已接受（写入即时可见，无陈旧缓存） |
 | C187：项目提示词按请求读取数据库 | 已接受：参照 `biz.PromptService` 把每个项目的启用提示词缓存为进程内 map（初始化、每分钟刷新、进程内 CRUD 后失效），端口 `IPromptProvider` / `PromptService` 每次请求经 Dapper 读取 `prompts` 表；同一时刻的行集合与注入行为一致，差异仅在写入后的生效时机（端口立即生效，参照最多延迟一分钟）与每请求多一次查询；多实例部署下端口可见性更强 | 已接受（§99 注入 63 例锁定；若后续引入缓存需保持单一数据源并复核快照时机） |

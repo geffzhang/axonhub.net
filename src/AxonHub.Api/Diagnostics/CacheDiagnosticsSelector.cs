@@ -25,33 +25,48 @@ public interface ICacheDiagnosticsCandidateSelector
     Task<IReadOnlyList<ChannelCandidate>> SelectAsync(
         string model,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Port of <c>CandidateSelectorDiagnostics.ReadAssociationCache</c>
+    /// (diagnostics.go:29-56). The export calls this after building the model
+    /// previews, so the model views' selections populate the entries first.
+    /// </summary>
+    IReadOnlyList<AssociationCacheEntrySnapshot> ReadAssociationCache();
 }
 
 /// <inheritdoc cref="ICacheDiagnosticsCandidateSelector"/>
 public sealed class CacheDiagnosticsCandidateSelector : ICacheDiagnosticsCandidateSelector
 {
     private readonly ModelCandidateSelector _selector;
+    private readonly ModelAssociationCache _associationCache;
 
     public CacheDiagnosticsCandidateSelector(
         IModelStore models,
         IModelSettingsProvider settings,
         IChannelStore channels,
         IEnabledChannelProvider enabledChannels,
+        IEnabledChannelCacheSnapshotProvider enabledChannelSnapshots,
+        ModelAssociationCache associationCache,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(channels);
         ArgumentNullException.ThrowIfNull(enabledChannels);
+        ArgumentNullException.ThrowIfNull(enabledChannelSnapshots);
+        ArgumentNullException.ThrowIfNull(associationCache);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
+        _associationCache = associationCache;
         _selector = new ModelCandidateSelector(
             models,
             settings,
             channels,
             enabledChannels,
             timeProvider,
-            bypassModelPrivacy: true);
+            bypassModelPrivacy: true,
+            enabledChannelSnapshots: enabledChannelSnapshots,
+            associationCache: associationCache);
     }
 
     public async Task<IReadOnlyList<ChannelCandidate>> SelectAsync(
@@ -64,4 +79,7 @@ public sealed class CacheDiagnosticsCandidateSelector : ICacheDiagnosticsCandida
 
         return selection.Candidates;
     }
+
+    public IReadOnlyList<AssociationCacheEntrySnapshot> ReadAssociationCache()
+        => _associationCache.ReadAssociationCache();
 }
