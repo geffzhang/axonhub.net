@@ -40,6 +40,21 @@ docker compose down       # 保留 PostgreSQL 数据卷
 docker compose down -v    # 同时删除数据卷
 ```
 
+需要直接装在 Linux/macOS/Windows，或部署到 Kubernetes 时，使用
+[`deploy/`](../../../deploy/README.md)：
+
+```bash
+sudo ./deploy/install.sh \
+  --db-dsn "Host=127.0.0.1;Port=5432;Database=axonhub;Username=axonhub;Password=change-me"
+./deploy/start.sh
+
+helm upgrade --install axonhub deploy/helm -n axonhub --create-namespace \
+  --set postgresql.auth.password='change-me'
+```
+
+原生安装仍然需要 PostgreSQL；Kubernetes 多副本会自动启用 Orleans
+AdoNet membership 和 durable reminder。
+
 ## 2. 初始化、渠道与 API Key
 
 1. 打开管理界面，完成初始化向导；

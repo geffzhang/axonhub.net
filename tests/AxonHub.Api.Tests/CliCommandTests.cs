@@ -346,6 +346,39 @@ public sealed class CliCommandTests
         Assert.Equal(expected, error.Message);
     }
 
+    [Fact]
+    public void CliLoadsConfigYmlForDeploymentScripts()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "axonhub-cli-config-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(root, "config.yml"),
+                """
+                server:
+                  port: 8123
+                db:
+                  dialect: postgres
+                  dsn: "Host=localhost;Database=axonhub"
+                """);
+
+            var configuration = CliConfiguration.Load(root, root);
+
+            Assert.Equal("8123", configuration["Server:Port"]);
+            Assert.Equal("postgres", configuration["DB:Dialect"]);
+            Assert.Equal(
+                "Host=localhost;Database=axonhub",
+                configuration["DB:DSN"]);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static (int? Code, string Stdout, string Stderr) Run(params string[] args)
     {
         var stdout = new StringWriter();

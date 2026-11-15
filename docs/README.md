@@ -16,6 +16,7 @@ AxonHub.NET 是 [looplj/axonhub](https://github.com/looplj/axonhub) 的
 | [快速开始](zh/getting-started/quick-start.md) | Compose 启动、初始化、第一个请求 |
 | [配置](zh/getting-started/configuration.md) | `config.yml`、环境变量、数据库与端口 |
 | [Kubernetes 多副本](zh/getting-started/kubernetes.md) | Orleans AdoNet cluster、reminder 与故障转移 |
+| [部署脚本与 Helm](../deploy/README.md) | 本地安装、systemd/Nginx、Windows、Helm chart |
 | [请求处理流程](zh/getting-started/request-processing.md) | 从入站协议到上游的完整链路 |
 | [架构](zh/development/architecture.md) | .NET 项目、Orleans、EF/Dapper、Pipeline |
 | [开发指南](zh/development/development.md) | 构建、前端、运行与代码组织 |

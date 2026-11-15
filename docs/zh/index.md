@@ -10,6 +10,7 @@ AxonHub.NET 是 AxonHub 的 .NET 10 + ASP.NET Core + Orleans 移植版，
 | [快速开始](getting-started/quick-start.md) | 用 Docker Compose 或本地 SDK 启动，并发出第一个请求 |
 | [配置](getting-started/configuration.md) | `config.yml`、环境变量、数据库、端口与热重载 |
 | [Kubernetes 多副本](getting-started/kubernetes.md) | Orleans AdoNet cluster、reminder 与故障转移 |
+| [部署脚本与 Helm](../../deploy/README.md) | 本地安装、systemd/Nginx、Windows、Helm chart |
 | [请求处理流程](getting-started/request-processing.md) | 入站协议、模型选择、负载均衡、重试与响应转换 |
 
 ## 📖 使用指南

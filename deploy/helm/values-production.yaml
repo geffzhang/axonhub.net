@@ -1,0 +1,89 @@
+# Production-oriented values for the AxonHub.NET Helm chart.
+# Copy this file and fill in the registry, database secret and hostname.
+
+global:
+  imagePullSecrets: []
+  # - name: registry-credentials
+
+axonhub:
+  replicaCount: 2
+
+  image:
+    repository: ghcr.io/your-org/axonhub.net
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+  environment: Production
+
+  database:
+    # Use an external PostgreSQL with backups and HA. Create the Secret with:
+    #   kubectl create secret generic axonhub-db \
+    #     --from-literal=dsn='Host=...;Port=5432;Database=axonhub;Username=axonhub;Password=...'
+    dsn: ""
+    existingSecret: axonhub-db
+    existingSecretKey: dsn
+
+  cluster:
+    enabled: true
+    clusterId: axonhub
+    serviceId: axonhub
+    siloPort: 11111
+    gatewayPort: 0
+
+  config:
+    # Optional config.yml overrides. Environment variables win.
+    content: ""
+
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+  podAnnotations: {}
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Leave empty to use the chart's soft host anti-affinity in cluster mode.
+
+# External PostgreSQL is recommended for production. To use the bundled
+# single-primary StatefulSet instead, set enabled=true and provide the password.
+postgresql:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  hosts:
+    - host: axonhub.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: axonhub-tls
+      hosts:
+        - axonhub.yourdomain.com
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""

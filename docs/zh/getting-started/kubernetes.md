@@ -4,6 +4,38 @@
 时必须打开 Orleans 集群开关，否则每个 Pod 都是一个独立集群，`/health` 可能
 正常，但 grain 状态、限流和 reminder 会各算各的。
 
+## Helm（推荐）
+
+仓库的 [`deploy/helm`](../../../deploy/helm/README.md) 已封装 PostgreSQL、
+Ingress、HPA、PDB 和 Orleans 开关。多副本或 HPA 会自动注入
+`ORLEANS_CLUSTER_*`，无需手写 Deployment：
+
+```bash
+docker build -t ghcr.io/your-org/axonhub.net:0.1.0 .
+docker push ghcr.io/your-org/axonhub.net:0.1.0
+
+kubectl create namespace axonhub
+kubectl -n axonhub create secret generic axonhub-db \
+  --from-literal=dsn='Host=pg.example;Port=5432;Database=axonhub;Username=axonhub;Password=...'
+
+helm upgrade --install axonhub deploy/helm \
+  --namespace axonhub \
+  --set axonhub.image.repository=ghcr.io/your-org/axonhub.net \
+  --set axonhub.image.tag=0.1.0 \
+  --set axonhub.database.existingSecret=axonhub-db
+```
+
+只想快速试用内置 PostgreSQL 时：
+
+```bash
+helm upgrade --install axonhub deploy/helm \
+  --namespace axonhub --create-namespace \
+  --set postgresql.auth.password='change-me'
+```
+
+内置 PostgreSQL 是单 primary，生产环境应使用外置高可用数据库。下面的手写
+Deployment 用于理解注入的字段，或在不使用 Helm 时参考。
+
 ## 打开集群开关
 
 集群模式使用 **PostgreSQL AdoNet membership + AdoNet reminder**，所有副本

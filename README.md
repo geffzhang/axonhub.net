@@ -41,8 +41,9 @@ AxonHub 的对外 API、管理面 GraphQL、渠道/模型/追踪/计费等行为
 | 请求追踪、usage / 成本、模型库定价、备份与数据存储 | ✅ 已移植 |
 | 管理面 REST + GraphQL + 前端资源 | ✅ 已移植 |
 | 多 silo 集群（AdoNet membership + durable reminder） | ✅ opt-in，默认单 silo |
+| 部署资产（本地脚本、systemd、Nginx、Helm） | ✅ 见 [`deploy/`](deploy/) |
 | Go 参照行为对照与差异台账 | ✅ 336 条，0 个未解释缺口 |
-| 本地测试 | **11160 例**（见[测试](#测试)） |
+| 本地测试 | **11161 例**（见[测试](#测试)） |
 | 远端 CI | Llm / Grains / Persistence / 真实 provider E2E 全绿；Api 全量 nightly |
 
 ### 支持的渠道
@@ -194,6 +195,32 @@ docker run --rm -p 8080:8080 \
 `/app/frontend/dist`；启动后直接访问 `http://localhost:8080/` 即可使用管理界面。
 如需替换界面，可覆盖 `Server:Static:Root` 或挂载该目录。
 
+### 7. 原生安装与 Helm
+
+[`deploy/`](deploy/README.md) 提供与 .NET 架构对应的部署资产：
+
+- Linux/macOS/Windows 源码发布安装脚本（自包含单文件，保留
+  `config.yml`）；
+- systemd / launchd / 计划任务自启动；
+- 支持 SSE 与 Responses WebSocket 的 Nginx 反向代理；
+- Helm chart：多副本时自动启用 Orleans AdoNet membership + durable reminder。
+
+```bash
+# Linux/macOS
+sudo ./deploy/install.sh \
+  --db-dsn "Host=127.0.0.1;Port=5432;Database=axonhub;Username=axonhub;Password=change-me"
+./deploy/start.sh
+
+# Kubernetes
+helm upgrade --install axonhub deploy/helm -n axonhub --create-namespace \
+  --set axonhub.image.repository=your-registry/axonhub.net \
+  --set axonhub.image.tag=0.1.0 \
+  --set postgresql.auth.password='change-me'
+```
+
+完整说明见 [`deploy/README.md`](deploy/README.md) 和
+[`deploy/helm/README.md`](deploy/helm/README.md)。
+
 ## 配置
 
 配置来源按优先级从高到低：命令行参数 > 环境变量 > `appsettings.*.json` >
@@ -294,8 +321,8 @@ dotnet test tests/AxonHub.Api.Tests/AxonHub.Api.Tests.csproj
 | `AxonHub.Api.Tests` | 7182 | 7164 通过 + 18 条 E2E 跳过，0 失败 |
 | **合计** | **11145** | **11127 通过 / 0 失败 / 18 跳过** |
 
-上表是最后一次全量实测。此后 §281–§284 新增 15 例（Api 14、Persistence 1）
-已定向通过，未做合并全量复跑；当前套件总数为 **11160 例**。
+上表是最后一次全量实测。此后 §281–§285 新增 16 例（Api 15、Persistence 1）
+已定向通过，未做合并全量复跑；当前套件总数为 **11161 例**。
 
 ### 真实 provider E2E
 
@@ -348,6 +375,7 @@ src/
   AxonHub.Abstractions/         共享抽象
 tests/                          4 个测试项目 + 真实 provider E2E
 frontend/                       管理面 React SPA
+deploy/                         本地安装、systemd、Nginx、Helm
 tools/AxonHub.CorpusRunner/     差分语料运行器
 porting/                        三本账与守护脚本
 corpus/                         差分语料

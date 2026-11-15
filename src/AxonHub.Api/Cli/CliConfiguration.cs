@@ -1,4 +1,5 @@
 using System.Globalization;
+using AxonHub.Api.Configuration;
 using AxonHub.Api.Http;
 using AxonHub.Api.Lifecycle;
 using AxonHub.Api.Security;
@@ -17,15 +18,32 @@ public static class CliConfiguration
 {
     /// <summary>conf.Load (conf/conf.go:184-187) for commands outside the host.</summary>
     public static IConfigurationRoot Load()
+        => Load(Directory.GetCurrentDirectory(), AppContext.BaseDirectory);
+
+    /// <summary>
+    /// Loads the same sources as the host, in the same precedence order:
+    /// config.yml, appsettings, then environment variables. The explicit
+    /// directories keep CLI tests independent of the process working directory.
+    /// </summary>
+    internal static IConfigurationRoot Load(string currentDirectory, string contentRoot)
     {
+        ArgumentNullException.ThrowIfNull(currentDirectory);
+        ArgumentNullException.ThrowIfNull(contentRoot);
+
         var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
         if (string.IsNullOrEmpty(environment))
         {
             environment = "Production";
         }
 
-        return new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
+        var builder = new ConfigurationBuilder().SetBasePath(currentDirectory);
+        var configPath = YamlConfigurationFiles.Find(contentRoot, currentDirectory);
+        if (configPath is not null)
+        {
+            builder.Add(new YamlConfigurationSource { Path = configPath });
+        }
+
+        return builder
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddJsonFile(
                 "appsettings." + environment + ".json",

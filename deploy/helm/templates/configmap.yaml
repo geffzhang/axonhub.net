@@ -1,0 +1,12 @@
+{{- if .Values.axonhub.config.content }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "axonhub.fullname" . }}-config
+  labels:
+    {{- include "axonhub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: axonhub
+data:
+  config.yml: |
+{{ .Values.axonhub.config.content | indent 4 }}
+{{- end }}
