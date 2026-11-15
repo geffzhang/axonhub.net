@@ -79,3 +79,44 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - run: dotnet test tests/AxonHub.Api.Tests/AxonHub.Api.Tests.csproj -c Release
+
+  e2e-llm:
+    name: LlmTestServer E2E
+    # Real-provider wire matrix. The deterministic LlmTestServer image supplies
+    # OpenAI/Anthropic/Gemini/Responses/Groq/Ollama/DeepSeek/OpenRouter routes;
+    # the gateway, orchestrator, transformers and HttpExecutor run for real.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      llm_test_server:
+        # Pin both the release tag and its multi-arch index digest.
+        image: ghcr.io/managedcode/llm-test-server:1.0.6@sha256:ca9d1dc11bbd362969e756145b075f3269234d18f31f2d997217789edffc2d5b
+        ports:
+          - 8080:8080
+        env:
+          LlmTestServer__RequiredBearerToken: test-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Wait for LlmTestServer
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS -H 'Authorization: Bearer test-key' \
+                http://localhost:8080/admin-api/models >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "LlmTestServer did not become ready"
+          docker logs "${{ job.services.llm_test_server.id }}" || true
+          exit 1
+      - name: Run the real-provider matrix
+        env:
+          AXONHUB_E2E_LLM_TEST_SERVER_URL: http://localhost:8080
+          AXONHUB_E2E_LLM_TEST_SERVER_KEY: test-key
+        run: >-
+          dotnet test tests/AxonHub.Api.Tests/AxonHub.Api.Tests.csproj
+          -c Release
+          --filter FullyQualifiedName~LlmTestServer
