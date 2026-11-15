@@ -19,6 +19,7 @@
     <PackageReference Include="AWSSDK.S3" />
     <PackageReference Include="Microsoft.ML.Tokenizers" />
     <PackageReference Include="Microsoft.ML.Tokenizers.Data.O200kBase" />
+    <PackageReference Include="YamlDotNet" />
   </ItemGroup>
   <ItemGroup>
     <!-- Go 的 override 测试与被测代码同包（同 package 可访问未导出标识符）；

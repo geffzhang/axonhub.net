@@ -2573,6 +2573,13 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
   `GET /health` 返回 200，`GET /` 返回 200 且 index.html 含 `<div id="root">`。
   同轮修复 `/v1/chat/completions` 直接注册可选参数方法组导致 Minimal API
   路由匹配器初始化失败的问题；镜像约 303 MiB，测试容器已清理。
+- [x] docker compose 与 config.yml — 2026-11-15：新增 `docker-compose.yml`
+  （PostgreSQL 17 + 本仓库镜像）、`config.example.yml`，以及 YAML 配置源
+  （snake_case → Section:Key、列表索引、显式空列表、SIGHUP reload）。
+  `docker compose config --quiet` 通过；`docker compose up -d --build` 后
+  PostgreSQL healthy、`/health` 200、`/` 返回含 `<div id="root">` 的
+  index.html，带 Origin 的请求命中 YAML 中的 CORS 配置。测试栈已 down 并
+  删除测试卷。
 - [ ] 跨平台（Windows / Linux / macOS） — 目前仅在 Windows 11 验证
 - [ ] 跨传输（stdio / HTTP / 进程内） — 仅进程内 HTTP 切片
 

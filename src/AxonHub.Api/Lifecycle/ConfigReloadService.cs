@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
+using AxonHub.Api.Configuration;
 using AxonHub.Api.Security;
 using Microsoft.Extensions.Configuration;
 
@@ -85,13 +86,21 @@ public sealed class ConfigReloadService : IDisposable
 
     /// <summary>
     /// Finds the application configuration file the host loaded at startup.
-    /// The port uses appsettings.json (and its environment-specific sibling)
-    /// in place of the reference's config.yml search paths.
+    /// config.yml (the reference's file) wins; appsettings.json and its
+    /// environment-specific sibling are the port-native fallbacks.
     /// </summary>
     public static string? FindConfigFile(string contentRootPath, string environmentName)
     {
         ArgumentNullException.ThrowIfNull(contentRootPath);
         ArgumentNullException.ThrowIfNull(environmentName);
+
+        var yaml = YamlConfigurationFiles.Find(
+            contentRootPath,
+            Directory.GetCurrentDirectory());
+        if (yaml is not null)
+        {
+            return yaml;
+        }
 
         var candidates = new[]
         {

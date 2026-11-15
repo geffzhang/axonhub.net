@@ -1,0 +1,81 @@
+# 移植台账与验收
+
+AxonHub.NET 的验收标准是**可观察行为等价**，不是逐行翻译，也不是接口能通
+即可。所有与参照不一致的地方都必须有编号、原因、决策和测试。
+
+## 参照物
+
+| 项 | 值 |
+| --- | --- |
+| 上游 | [looplj/axonhub](https://github.com/looplj/axonhub) |
+| 锁定提交 | `b8bb3421e1fe946cfc4f0d86e8412098738f2793`（v1.0.0-beta11，2026-10-08） |
+| 冻结副本 | `E:\GitHub\axonhub-ref`（git worktree） |
+| 目标 | .NET 10 / C# 14 / ASP.NET Core / Orleans 10.x |
+| 持久化 | PostgreSQL 17；EF Core 写、Dapper 读 |
+
+部分切片在实施时跟进到 live `f272549f` 的局部变更，逐条记录在
+[`porting/00-reference.md`](../../../porting/00-reference.md)。升级基线时先
+重新 lock，再为新旧版本各录一份语料，差异进入台账。
+
+## 三本账
+
+| 账本 | 文件 | 内容 |
+| --- | --- | --- |
+| 行为基线 | [`porting/01-baseline.md`](../../../porting/01-baseline.md) | 参照测试/语料与端口测试的逐项对照 |
+| 差异台账 | [`porting/differences.jsonl`](../../../porting/differences.jsonl) / [`02-differences.md`](../../../porting/02-differences.md) | `C###` 编号的现象、原因、决策、测试 |
+| 验收账 | [`porting/03-acceptance.md`](../../../porting/03-acceptance.md) | 测试数字、公开 API、E2E、容器与风险 |
+
+当前台账：**335 条（190 accepted / 145 resolved / 0 gap）**。`accepted`
+表示已解释并接受的语言/平台差异，不是未发现的问题。
+
+## 差异类别
+
+- `C`：核心语义、协议、错误、并发、配置等行为差异；
+- `T`：终端/UI/渲染；
+- `E`：环境、进程、远程执行。
+
+每条差异至少包含：
+
+1. **现象**：和参照哪里不同；
+2. **原因**：语言/SDK/平台限制；
+3. **决策**：为什么接受或如何解决；
+4. **测试**：锁定该行为的测试或语料。
+
+## 运行守护
+
+```bash
+python -I porting/scripts/diff_register.py lint
+python -I porting/scripts/diff_register.py render
+python -I porting/scripts/http_route_audit.py --port src/AxonHub.Api
+python -I porting/scripts/reference_lock.py check \
+  --repo ../axonhub-ref --dest porting/reference-lock.json
+```
+
+`02-differences.md` 必须由 `render` 重新生成且与 JSONL 一致；CI 的
+`porting-guard` 会检查 lint、render diff、HTTP 路由、四类差分语料和参照
+锁定。
+
+## 已知边界
+
+| 边界 | 说明 |
+| --- | --- |
+| 数据库 | 仅 PostgreSQL；SQLite/MySQL/读副本未移植（C011） |
+| GCP OAuth | 交互式 web/installed OAuth 不支持（C128） |
+| WebSocket | 端口自写 TLS/SSE 不声明 ALPN，WebSocket 使用 HTTP/1.1 |
+| 日志 | 使用 ASP.NET Core 日志；参照文件轮转日志未逐项移植 |
+| 缓存 | Orleans/进程内缓存；不连接 Redis |
+| Safeguards | 设置面已移植，运行时 reviewer 未移植（C243） |
+| 配置 | `config.yml` 只覆盖实际读取的键；未移植节见配置文档 |
+| 前端 | 来自上游，Docker 构建时编译进镜像 |
+
+## 新增行为的流程
+
+1. 先跑 `reference_lock.py check`；
+2. 找到对应参照实现和测试；
+3. 在端口中实现，优先复用现有 transformer/seam；
+4. 增加契约测试、线路形状测试或语料；
+5. 更新 `01-baseline.md` 与 `03-acceptance.md`；
+6. 如有差异，登记 `C###` 并运行 `diff_register.py lint/render`；
+7. 运行相关项目测试；Api 全量按需或 nightly 运行。
+
+验收和差异数字以账本为准，不以本文档为准。

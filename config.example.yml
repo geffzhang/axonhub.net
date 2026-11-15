@@ -1,0 +1,96 @@
+# AxonHub.NET configuration example.
+#
+# docker-compose.yml mounts this file as /app/config.yml. Copy it if you want
+# to edit the defaults without changing the example:
+#
+#   cp config.example.yml config.yml
+#
+# The .NET port reads config.yml through YamlConfigurationSource. Environment
+# variables and appsettings override this file, matching the reference's
+# "environment over file" precedence. PostgreSQL is the only supported
+# database; SQLite/MySQL sections from the Go reference are intentionally
+# omitted.
+#
+# Unsupported reference sections (ignored by the .NET port):
+#   cache.*            in-process cache only; Redis is not used
+#   log.*              ASP.NET Core logging; configure Logging:* instead
+#   provider_quota.*   fixed five-minute scheduler
+#   server.safeguards  runtime reviewer not ported (see C243)
+#
+# All keys accept their reference AXONHUB_* environment spellings as well.
+
+server:
+  host: "0.0.0.0"
+  port: 8090                    # used when ASPNETCORE_HTTP_PORTS/URLS is unset
+  name: "AxonHub"
+  request_timeout: "30s"
+  llm_request_timeout: "600s"
+  max_multipart_memory: "32M"
+  trusted_proxies: []           # only these peers may supply X-Forwarded-For
+
+  sse_keep_alive:
+    enabled: false
+    interval: "15s"
+
+  trace:
+    thread_header: "AH-Thread-Id"
+    trace_header: "AH-Trace-Id"
+    extra_trace_headers: []
+    response_trace_headers: []
+    extra_trace_body_fields: []
+    claude_code_trace_enabled: true
+    codex_trace_enabled: true
+    opencode_trace_enabled: true
+
+  cors:
+    enabled: true
+    allowed_origins:
+      - "http://localhost:3000"
+      - "http://localhost:5173"
+    allowed_methods:
+      - "GET"
+      - "POST"
+      - "DELETE"
+      - "PATCH"
+      - "PUT"
+      - "OPTIONS"
+      - "HEAD"
+    allowed_headers:
+      - "Content-Type"
+      - "Authorization"
+      - "X-API-Key"
+      - "X-Goog-Api-Key"
+      - "X-Project-ID"
+      - "AH-Thread-Id"
+      - "AH-Trace-Id"
+    exposed_headers: []
+    allow_credentials: true
+    max_age: "1m"
+
+  api:
+    auth:
+      allow_no_auth: false
+      key_prefix: "ah"
+
+  ip_access_control:
+    enabled: false
+    allowed_ips: []
+    redirect_url: ""
+
+# The compose file supplies ConnectionStrings__Default. This fallback is an
+# Npgsql key-value connection string, not a postgres:// URI.
+db:
+  dialect: postgres
+  dsn: ""
+
+gc:
+  cron: "0 2 * * *"
+  vacuum_enabled: false
+  vacuum_full: false
+
+metrics:
+  enabled: false
+  exporter:
+    type: "otlphttp"
+    endpoint: "localhost:4318"
+    insecure: true

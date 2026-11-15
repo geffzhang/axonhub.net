@@ -6,6 +6,7 @@ using AxonHub.Api.Billing;
 using AxonHub.Api.Catalog;
 using AxonHub.Api.Cli;
 using AxonHub.Api.Codex;
+using AxonHub.Api.Configuration;
 using AxonHub.Api.Diagnostics;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.GraphQL;
@@ -39,6 +40,7 @@ using AxonHub.Llm.Transformer.OpenAI.Responses;
 using AxonHub.Llm.Transformer.TypeSafe;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using OpenTelemetry.Metrics;
 using Orleans.Hosting;
 
@@ -53,6 +55,51 @@ if (cliExitCode is { } exitCode)
 
 var builder = WebApplication.CreateBuilder(args);
 
+// config.yml is the reference's configuration file. It is loaded before the
+// host reads any settings; appsettings, environment variables and command-line
+// arguments are re-added afterwards so their precedence matches the reference
+// (environment over file). SIGHUP reload re-reads the YAML provider.
+// ContentRoot is the app directory under `dotnet run --project`; the process
+// working directory is usually the repository root. Accept config.yml from
+// either place so both deployment styles are unsurprising.
+var configPath = YamlConfigurationFiles.Find(
+    builder.Environment.ContentRootPath,
+    Directory.GetCurrentDirectory());
+
+if (configPath is not null)
+{
+    ((IConfigurationBuilder)builder.Configuration)
+        .Add(new YamlConfigurationSource { Path = configPath });
+    builder.Configuration
+        .AddJsonFile(
+            System.IO.Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"),
+            optional: true)
+        .AddJsonFile(
+            System.IO.Path.Combine(
+                builder.Environment.ContentRootPath,
+                "appsettings." + builder.Environment.EnvironmentName + ".json"),
+            optional: true)
+        .AddEnvironmentVariables()
+        .AddCommandLine(args);
+}
+
+// The reference's server.port is the Kestrel listen port when no ASP.NET Core
+// URL setting is present. ASPNETCORE_HTTP_PORTS/ASPNETCORE_URLS stay
+// authoritative for containers and deployments.
+if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_URLS"))
+    && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS"))
+    && int.TryParse(builder.Configuration["Server:Port"], out var configuredPort)
+    && configuredPort > 0)
+{
+    var configuredHost = builder.Configuration["Server:Host"];
+    if (string.IsNullOrWhiteSpace(configuredHost))
+    {
+        configuredHost = "0.0.0.0";
+    }
+
+    builder.WebHost.UseUrls("http://" + configuredHost + ":" + configuredPort);
+}
+
 // internal/server/server.go:50-54: gin's MaxMultipartMemory bounds the
 // in-memory multipart buffer; HotChocolate's multipart reader consumes the
 // same bound from FormOptions.MemoryBufferThreshold.
@@ -61,8 +108,26 @@ MultipartMemoryOptions.Configure(builder.Services, builder.Configuration);
 var connectionString = builder.Configuration.GetConnectionString("Default");
 if (string.IsNullOrWhiteSpace(connectionString))
 {
+    var dialect = builder.Configuration["Db:Dialect"];
+    if (!string.IsNullOrWhiteSpace(dialect)
+        && !dialect.Equals("postgres", StringComparison.OrdinalIgnoreCase)
+        && !dialect.Equals("postgresql", StringComparison.OrdinalIgnoreCase)
+        && !dialect.Equals("pg", StringComparison.OrdinalIgnoreCase)
+        && !dialect.Equals("pgx", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidOperationException(
+            "unsupported database dialect \"" + dialect
+            + "\": axonhub.net supports PostgreSQL only");
+    }
+
+    connectionString = builder.Configuration["Db:Dsn"];
+}
+
+if (string.IsNullOrWhiteSpace(connectionString))
+{
     throw new InvalidOperationException(
-        "ConnectionStrings:Default is required (PostgreSQL, same schema as the reference).");
+        "ConnectionStrings:Default or db.dsn is required "
+        + "(PostgreSQL, same schema as the reference).");
 }
 
 // Persistence: one connection factory feeds the write side (EF Core) and the

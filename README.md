@@ -8,7 +8,7 @@ AxonHub 的 .NET 10 + Orleans 行为等价移植。
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-[上游 AxonHub](https://github.com/looplj/axonhub) · [移植台账](porting/) · [验收账](porting/03-acceptance.md)
+[上游 AxonHub](https://github.com/looplj/axonhub) · [文档](docs/zh/index.md) · [移植台账](porting/) · [验收账](porting/03-acceptance.md)
 
 ---
 
@@ -154,7 +154,27 @@ pnpm build
 VITE_API_URL=http://localhost:8080 pnpm dev
 ```
 
-### 5. Docker
+### 5. Docker Compose（推荐）
+
+仓库根目录的 [`docker-compose.yml`](docker-compose.yml) 会构建 API 镜像、
+启动 PostgreSQL 17，并把 [`config.example.yml`](config.example.yml) 挂载为
+容器内的 `/app/config.yml`：
+
+```bash
+docker compose up --build
+```
+
+打开 <http://127.0.0.1:8090/> 使用管理界面。默认只绑定回环地址；
+本机以外的部署请设置 `DB_PASSWORD` 和 `AXONHUB_BIND_ADDRESS`：
+
+```bash
+DB_PASSWORD='change-me' AXONHUB_BIND_ADDRESS=0.0.0.0 docker compose up --build
+```
+
+停止并保留数据库卷：`docker compose down`；同时删除数据卷：
+`docker compose down -v`。
+
+### 6. 单镜像 Docker
 
 ```bash
 docker build -t axonhub.net .
@@ -171,21 +191,28 @@ docker run --rm -p 8080:8080 \
 
 ## 配置
 
-配置来自 ASP.NET Core 配置系统：`appsettings.json`、环境变量与命令行参数。
-参照实现的 `config.yml` 不读取；对应设置使用 `AXONHUB_*` 环境变量或
-`Server:*` / `Log:*` / `Gc:*` / `Metrics:*` 等配置节。
+配置来源按优先级从高到低：命令行参数 > 环境变量 > `appsettings.*.json` >
+`config.yml`。参照实现的 `config.yml` 可直接使用；端口通过
+`YamlConfigurationSource` 将 snake_case 键转换为端口读取的
+`Section:Key`，环境变量仍可覆盖文件。
 
 | 配置 | 说明 |
 | --- | --- |
 | `ConnectionStrings:Default` / `ConnectionStrings__Default` | **必填**，PostgreSQL 连接串 |
-| `ASPNETCORE_HTTP_PORTS` | Kestrel 监听端口；示例与容器使用 `8080` |
+| `config.yml` / `db.dsn` | 参照格式的 YAML；`db.dsn` 是连接串的回退来源 |
+| `ASPNETCORE_HTTP_PORTS` | Kestrel 监听端口；单镜像示例 `8080`，compose 使用 `8090` |
+| `Server:Port` | 未设置 ASP.NET Core URL 时的监听端口（`config.yml` 默认 8090） |
 | `Server:Static:Root` | SPA 静态目录，默认 `frontend/dist` |
 | `Server:RequestTimeout` / `Server:LlmRequestTimeout` | 请求与 LLM 请求超时 |
-| `Server:Cors:*` | CORS 开关、允许来源/方法/头 |
-| `AXONHUB_SERVER_*` / `AXONHUB_LOG_*` / `AXONHUB_GC_*` / `AXONHUB_METRICS_*` | 参照实现的兼容拼写 |
+| `Server:Cors:*` / `Server:Trace:*` / `Server:SseKeepAlive:*` | CORS、追踪头与 SSE 保活 |
+| `Gc:*` / `Metrics:*` | 垃圾回收计划与 OTel 指标 |
+| `AXONHUB_SERVER_*` / `AXONHUB_LOG_*` / `AXONHUB_GC_*` / `AXONHUB_METRICS_*` | 参照实现的兼容环境变量拼写 |
 | `ASPNETCORE_ENVIRONMENT` | `Development` / `Production`，影响 appsettings 文件名与日志 |
 
-`appsettings.json` 存在时，端口支持热重载；只使用环境变量时按启动值运行。
+[`config.example.yml`](config.example.yml) 只列出现有端口实际使用的配置节。
+参照的 `cache.*`、`log.*`、`provider_quota.*` 与 `server.safeguards` 运行时尚未
+移植，文件内有明确说明。Linux 上 `SIGHUP` 会重新读取 `config.yml` 与
+`appsettings`；仅使用环境变量时按启动值运行。
 
 ## 调用示例
 

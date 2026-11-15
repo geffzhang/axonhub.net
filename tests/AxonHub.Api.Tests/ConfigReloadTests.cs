@@ -255,6 +255,21 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public void FindConfigFilePrefersTheReferenceConfigYml()
+    {
+        var contentRoot = Path.Combine(_root, "content-yml");
+        Directory.CreateDirectory(contentRoot);
+        var yaml = Path.Combine(contentRoot, "config.yml");
+        var appsettings = Path.Combine(contentRoot, "appsettings.json");
+        File.WriteAllText(yaml, "server:\n  port: 8090\n");
+        File.WriteAllText(appsettings, "{}");
+
+        Assert.Equal(
+            Path.GetFullPath(yaml),
+            ConfigReloadService.FindConfigFile(contentRoot, "Production"));
+    }
+
+    [Fact]
     public void SendReloadSignalReportsAnInvalidPid()
     {
         if (OperatingSystem.IsWindows())
