@@ -2231,6 +2231,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §250（2026-11-15）TypeSafe SystemOne 响应 envelope 解包（live #2636）。C312 登记并转 resolved：live `c51972c6` 在解码 `systemOneWireResponse` 前探测网关信封 `{"success":true,"result":{...}}`。端口此前直接解码 raw body，Cloudflare Workers AI 这类信封会被静默解成零值响应。本轮在 `TypeSafeOutboundTransformer.TransformResponse` 前置 envelope 探测：`success` 存在即按信封处理；true 时解包 `result`，缺失/null result 或空 model/answers 返回 502 `api_error`；false 时按 error/errors/messages 的字符串、`message`/`detail` 对象或数组拼接提取文案（默认 `upstream request failed`），invalid success flag 同样 502；普通 body 与 null body 行为不变；非对象根的报错改为参照的 `systemOneWireEnvelope` 类型错误。测试新增 14 例（解包、失败文案、缺 result、六种错误形状、五种畸形信封）并更新根数组断言；TypeSafe 定向 70/70、Llm 全量 3324/3324。未跑 Api 全量。台账 312 条（190 accepted / 122 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§251（2026-11-15）服务账号 API key 的作用域授予校验（live #2741）。C313 登记并转 resolved：live `e5c904ef` 要求 service_account key 的 create / update / rotate 只能携带创建者有权授予的作用域——project 级作用域需在 key 所属项目持有，system-only 作用域需系统级持有；update 校验 `existing + Scopes + AppendScopes` 去重后的完整集合，rotate 校验既有 scopes。端口此前已移植该提交的 DataStoragePrivacy（`read_data_storages`）与 TracePrivacy 项目过滤，但三条写入路径直接落库调用方 scopes。本轮在 `ScopeCatalog` 增加 `IsValidScope` / `IsSystemOnlyScope`，`PermissionValidator` 增加 `CanGrantApiKeyScopesForUser`，`ApiKeyManagementService` 接入 create / update / rotate 的授予校验；`ClearScopes` 不触发授予校验。测试更新/新增 4 组用例（无 scopes 可建、system-only 拒绝、invalid scope、system+project 混合、合并集校验、轮换拒绝）；该类 22/22，service-account 相邻 Api 回归 102/102。未跑 Api 全量（新增 Api 4 例）。台账 313 条（190 accepted / 123 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

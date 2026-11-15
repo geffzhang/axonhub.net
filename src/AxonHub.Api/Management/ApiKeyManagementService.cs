@@ -96,6 +96,16 @@ public sealed class ApiKeyManagementService(
                 .ConfigureAwait(false);
         }
 
+        if (apiKeyType == ServiceAccountType)
+        {
+            await RequireServiceAccountScopeGrantAsync(
+                    current.Id,
+                    command.ProjectId,
+                    command.Scopes,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var generatedKey = GenerateApiKey();
 
         return await apiKeys.RunInTransactionAsync(
@@ -437,6 +447,23 @@ public sealed class ApiKeyManagementService(
                     throw new InvalidOperationException("noauth type API key cannot be updated");
                 }
 
+                if (existing.Type == ServiceAccountType)
+                {
+                    var creator = await GetCurrentUserAsync(token).ConfigureAwait(false);
+                    var (resultingScopes, changed) = ResultingServiceAccountScopes(
+                        existing,
+                        command);
+                    if (changed)
+                    {
+                        await RequireServiceAccountScopeGrantAsync(
+                                creator.Id,
+                                existing.ProjectId,
+                                resultingScopes,
+                                token)
+                            .ConfigureAwait(false);
+                    }
+                }
+
                 ManagementUser? current = null;
                 if (existing.Type == PersonalType)
                 {
@@ -715,6 +742,17 @@ public sealed class ApiKeyManagementService(
                 {
                     throw new InvalidOperationException(
                         "noauth type API key cannot be rotated");
+                }
+
+                if (existing.Type == ServiceAccountType)
+                {
+                    var user = await GetCurrentUserAsync(token).ConfigureAwait(false);
+                    await RequireServiceAccountScopeGrantAsync(
+                            user.Id,
+                            existing.ProjectId,
+                            PermissionValidator.ParseScopes(existing.Scopes),
+                            token)
+                        .ConfigureAwait(false);
                 }
 
                 if (existing.Type == PersonalType)
@@ -1014,24 +1052,8 @@ public sealed class ApiKeyManagementService(
         long projectId,
         CancellationToken cancellationToken)
     {
-        PermissionUser? loaded;
-        try
-        {
-            loaded = await permissions.GetPermissionUserAsync(userId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            throw new InvalidOperationException(
-                "failed to load API key creator permissions: " + ex.Message,
-                ex);
-        }
-
-        if (loaded is null)
-        {
-            throw new InvalidOperationException(
-                "failed to load API key creator permissions: " + PermissionValidator.UserNotFound);
-        }
+        var loaded = await LoadCreatorPermissionsAsync(userId, cancellationToken)
+            .ConfigureAwait(false);
 
         try
         {
@@ -1047,6 +1069,118 @@ public sealed class ApiKeyManagementService(
             throw new InvalidOperationException(
                 "permission denied: project API keys require project admin permissions");
         }
+    }
+
+    /// <summary>
+    /// Port of APIKeyService.requireServiceAccountScopeGrant
+    /// (biz/api_key.go:423-445): a service-account key carries caller-supplied
+    /// scopes without a project dimension, so the creator must be able to grant
+    /// each scope at the level it is declared for.
+    /// </summary>
+    private async Task RequireServiceAccountScopeGrantAsync(
+        long userId,
+        long projectId,
+        IReadOnlyList<string>? scopesToGrant,
+        CancellationToken cancellationToken)
+    {
+        if (scopesToGrant is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var loaded = await LoadCreatorPermissionsAsync(userId, cancellationToken)
+            .ConfigureAwait(false);
+
+        try
+        {
+            PermissionValidator.CanGrantApiKeyScopesForUser(
+                loaded,
+                scopesToGrant,
+                projectId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "insufficient permissions to grant the requested API key scopes: "
+                + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of resultingServiceAccountScopes (biz/api_key.go:447-472): Ent
+    /// applies SetScopes and AppendScopes in one UPDATE, so validate every scope
+    /// that could survive. Clearing never grants anything.
+    /// </summary>
+    private static (IReadOnlyList<string> Scopes, bool Changed)
+        ResultingServiceAccountScopes(
+            ApiKeyRecord existing,
+            UpdateApiKeyCommand command)
+    {
+        if (command.ClearScopes)
+        {
+            return ([], false);
+        }
+
+        var existingScopes = PermissionValidator.ParseScopes(existing.Scopes);
+        if (command.Scopes is { Count: > 0 })
+        {
+            var merged = new List<string>(existingScopes);
+            merged.AddRange(command.Scopes);
+            if (command.AppendScopes is { Count: > 0 })
+            {
+                merged.AddRange(command.AppendScopes);
+            }
+
+            return (DistinctScopes(merged), true);
+        }
+
+        if (command.AppendScopes is { Count: > 0 })
+        {
+            var merged = new List<string>(existingScopes);
+            merged.AddRange(command.AppendScopes);
+            return (DistinctScopes(merged), true);
+        }
+
+        return ([], false);
+    }
+
+    private static List<string> DistinctScopes(IEnumerable<string> scopes)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>();
+        foreach (var scope in scopes)
+        {
+            if (seen.Add(scope))
+            {
+                result.Add(scope);
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<PermissionUser> LoadCreatorPermissionsAsync(
+        long userId,
+        CancellationToken cancellationToken)
+    {
+        PermissionUser? loaded;
+        try
+        {
+            loaded = await permissions.GetPermissionUserAsync(userId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to load API key creator permissions: " + ex.Message,
+                ex);
+        }
+
+        return loaded
+            ?? throw new InvalidOperationException(
+                "failed to load API key creator permissions: "
+                + PermissionValidator.UserNotFound);
     }
 
     private async Task<ManagementUser> GetCurrentUserAsync(CancellationToken cancellationToken)

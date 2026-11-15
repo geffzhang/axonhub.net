@@ -57,6 +57,31 @@ public static class ScopeCatalog
 
         return [.. Configs.Where(scope => scope.Levels.Contains(level, StringComparer.Ordinal))];
     }
+
+    /// <summary>Port of scopes.IsValidScope (scopes.go:205-216).</summary>
+    public static bool IsValidScope(string scope)
+        => Configs.Any(config => string.Equals(config.Slug, scope, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Port of scopes.IsSystemOnlyScope (scopes.go:218-231): a scope declared
+    /// for system level but not project level. API key scopes are evaluated
+    /// without a project dimension, so these need a system-level grant.
+    /// </summary>
+    public static bool IsSystemOnlyScope(string scope)
+    {
+        foreach (var config in Configs)
+        {
+            if (!string.Equals(config.Slug, scope, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return config.Levels.Contains(ScopeLevels.System, StringComparer.Ordinal)
+                && !config.Levels.Contains(ScopeLevels.Project, StringComparer.Ordinal);
+        }
+
+        return false;
+    }
 }
 
 /// <summary>Port of scopes.Scope.</summary>

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AxonHub.Api.Scopes;
 using AxonHub.Persistence;
 
 namespace AxonHub.Api.Management;
@@ -128,6 +129,39 @@ public sealed class PermissionValidator(
                     + "' that you don't possess");
             }
         }
+    }
+
+    /// <summary>
+    /// Port of CanGrantAPIKeyScopes (permission_validator.go:134-158): a
+    /// service-account key carries scopes without a project dimension, so a
+    /// system-only scope requires a system-level grant before the regular
+    /// project-capable grant check runs.
+    /// </summary>
+    internal static void CanGrantApiKeyScopesForUser(
+        PermissionUser? currentUser,
+        IReadOnlyList<string> scopesToGrant,
+        long projectId)
+    {
+        ArgumentNullException.ThrowIfNull(scopesToGrant);
+
+        foreach (var scope in scopesToGrant)
+        {
+            if (!ScopeCatalog.IsValidScope(scope))
+            {
+                throw new InvalidOperationException("invalid scope '" + scope + "'");
+            }
+
+            if (ScopeCatalog.IsSystemOnlyScope(scope)
+                && !HasSystemScope(currentUser, scope))
+            {
+                throw new InvalidOperationException(
+                    "insufficient permissions: cannot grant system scope '"
+                    + scope
+                    + "' that you don't possess at system level");
+            }
+        }
+
+        CanGrantScopesForUser(currentUser, scopesToGrant, projectId);
     }
 
     /// <summary>Port of scopes.HasSystemScope (internal/scopes/rule.go:45-60).</summary>

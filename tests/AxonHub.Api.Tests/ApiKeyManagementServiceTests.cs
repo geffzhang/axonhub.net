@@ -73,17 +73,123 @@ public sealed class ApiKeyManagementServiceTests
             denied.Message);
         Assert.Empty(fixture.Keys.Rows);
 
+        // Service accounts skip the project-admin gate but still need a scope
+        // grant; without requested scopes the create succeeds.
         var serviceAccount = await fixture.Service.CreateAsync(new CreateApiKeyCommand
         {
             Name = "CI",
             ProjectId = 12,
             Type = "service_account",
-            Scopes = ["read_channels"],
         });
 
         Assert.Equal("service_account", serviceAccount.Type);
-        Assert.Equal("""["read_channels"]""", serviceAccount.Scopes);
+        Assert.Equal("[]", serviceAccount.Scopes);
         Assert.Equal(fixture.UserId, serviceAccount.UserId);
+
+        // read_channels is system-only and the creator holds no system scope.
+        var scopeError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.CreateAsync(new CreateApiKeyCommand
+            {
+                Name = "CI elevated",
+                ProjectId = 12,
+                Type = "service_account",
+                Scopes = ["read_channels"],
+            }));
+        Assert.Equal(
+            "insufficient permissions to grant the requested API key scopes: "
+            + "insufficient permissions: cannot grant system scope 'read_channels' "
+            + "that you don't possess at system level",
+            scopeError.Message);
+
+        var invalidScope = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.CreateAsync(new CreateApiKeyCommand
+            {
+                Name = "CI invalid",
+                ProjectId = 12,
+                Type = "service_account",
+                Scopes = ["not_a_scope"],
+            }));
+        Assert.Equal(
+            "insufficient permissions to grant the requested API key scopes: "
+            + "invalid scope 'not_a_scope'",
+            invalidScope.Message);
+    }
+
+    [Fact]
+    public async Task CreateServiceAccountGrantsScopesHeldByTheCreator()
+    {
+        var fixture = new Fixture(isOwner: false, scopes: ["read_api_keys", "write_api_keys"]);
+        fixture.Identity.ProjectId = 12;
+        var user = await fixture.Users.GetByIdAsync(fixture.UserId);
+        user!.Scopes = JsonSerializer.Serialize(new[] { "read_channels" });
+
+        var created = await fixture.Service.CreateAsync(new CreateApiKeyCommand
+        {
+            Name = "CI",
+            ProjectId = 12,
+            Type = "service_account",
+            // read_channels is system-only (held at system level above);
+            // write_api_keys is project-capable (held in project 12).
+            Scopes = ["read_channels", "write_api_keys"],
+        });
+
+        Assert.Equal("""["read_channels","write_api_keys"]""", created.Scopes);
+    }
+
+    [Fact]
+    public async Task UpdateServiceAccountValidatesTheResultingScopeSet()
+    {
+        // The creator holds project-level API-key scopes but no system scope.
+        var fixture = new Fixture(isOwner: false, scopes: ["read_api_keys", "write_api_keys"]);
+        fixture.Identity.ProjectId = 12;
+        var key = fixture.Keys.Add(item =>
+        {
+            item.Name = "CI";
+            item.Type = "service_account";
+            item.ProjectId = 12;
+            item.Scopes = """["read_channels"]""";
+        });
+
+        // Replacing all scopes still has to validate the union Ent would leave:
+        // the existing system scope survives the SetScopes/AppendScopes update.
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.UpdateAsync(new UpdateApiKeyCommand
+            {
+                Id = key.Id,
+                Scopes = ["write_requests"],
+            }));
+
+        Assert.Equal(
+            "insufficient permissions to grant the requested API key scopes: "
+            + "insufficient permissions: cannot grant system scope 'read_channels' "
+            + "that you don't possess at system level",
+            error.Message);
+        Assert.Equal("""["read_channels"]""", key.Scopes);
+    }
+
+    [Fact]
+    public async Task RotateRejectsAServiceAccountKeyWithElevatedScopes()
+    {
+        var fixture = new Fixture(isOwner: false, scopes: ["read_api_keys", "write_api_keys"]);
+        fixture.Identity.ProjectId = 12;
+        var key = fixture.Keys.Add(item =>
+        {
+            item.Key = "ah-old";
+            item.Name = "CI";
+            item.Type = "service_account";
+            item.ProjectId = 12;
+            item.Scopes = """["read_channels"]""";
+        });
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.RotateAsync(key.Id));
+
+        Assert.Equal(
+            "insufficient permissions to grant the requested API key scopes: "
+            + "insufficient permissions: cannot grant system scope 'read_channels' "
+            + "that you don't possess at system level",
+            error.Message);
+        Assert.Equal("ah-old", key.Key);
     }
 
     [Fact]
