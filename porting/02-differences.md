@@ -1,22 +1,4 @@
-# 差异登记账（第二本账）
 
-机器可读源：`differences.jsonl`。本文件由 `diff_register.py render` 生成，不要手改。
-
-## 编号体系
-
-| 前缀 | 范围 |
-|---|---|
-| `C` | 核心语义 / 通用行为 |
-| `T` | 终端 / UI / 渲染 |
-| `E` | 环境、进程、远程执行 |
-
-新前缀必须先在上一张表登记，不允许事后追加含义。
-
-## 每条差异的五要素
-
-编号、现象、原因、决策（已解决 / 已接受 / 真实缺口）、对应测试。
-
-## 登记表
 
 <!-- RENDER:START -->
 | 编号 | 标题 | 现象 | 原因 | 决策 | 测试 | 状态 |
@@ -353,4 +335,5 @@
 | `C330` | Codex 原生 Images 端点（live #2651） | live 提交 3cb7e333（#2651）：Codex 通道的 Images 请求此前被转换成 Responses 的 image_generation 工具，而 live 改为在原生的 OpenAI Images 端点转发。参照新增 Codex imageOutbound（OpenAI image transformer + OAuth token + Codex identity 头 + ImageEditJSON），Codex Responses transformer 与 executor 对 image 请求直接报 invalid_request；Responses outbound 也拒绝 image 请求。图片编辑 JSON 支持 image/images 的 data URL、HTTP URL 与 file_id 引用、mask 引用、model 嵌入与不支持的字段校验；通道工厂把 codex/fenno 的 image_generation/image_edit 端点路由到该 image outbound。端口此前仍走 Responses image 桥。 | 冻结基线 b8bb3421 早于该 live 修复；端口的 Codex/Responses image 桥与多段式 image edit 沿用了旧行为。 | 已解决：Codex/fenno 的 Images 端点使用原生 image outbound；Responses 与 Codex Responses transformer 拒绝 image 请求；image edit 支持 JSON 引用与 mask；Codex image outbound 自带 OAuth、Originator、Session-Id 与账号头。 | tests/AxonHub.Llm.Tests/CodexOutboundExecutorTests.cs（拒绝无原生端点、原生 generation 请求、JSON edit file/HTTP 引用）、ResponsesImageTests（拒绝 image 请求）、OpenAiImageInboundTests（HTTP URL 引用与非法引用文案）；tests/AxonHub.Api.Tests/CodexChannelWiringTests.cs（codex/fenno image 端点使用 CodexImageOutbound）；Codex 定向 116/116，Image 定向 246/246，Api Codex/image 定向 69/69，Llm 全量 3437/3437。 | 已解决 |
 | `C331` | 公开 API 表面审计口径：根字段集合 + 导出清单，而非逐签名 diff（M5） | M5 要求审计公开 API 表面。端点/路由与 GraphQL 根字段已做机器审计：HTTP 路由 76/76；admin GraphQL 根字段 219/220（nodes 按 C269 有意裁剪）。字段级签名未做与参照 SDL 的逐项机器 diff：Go/gqlgen 与 HotChocolate 在可空性、列表包装、输入类型命名与 resolver 方法名上存在系统性表示差异，直接比较会产生大量非行为差异；当前由各端点/字段的行为测试锁定形状。模块导出数只做清单统计，Go 包导出标识符与 C# public 类型/方法不是一一映射。 | 参照是 Go 包 + gqlgen SDL，端口是 C# 程序集 + HotChocolate；跨语言公开表面没有稳定的逐项对应键，且 M5 的验收口径允许清单级审计加行为测试。 | 已接受：公开表面按“根字段集合 + HTTP 路由 + 导出清单 + 行为测试”验收；字段级 SDL diff 不自动化，若未来需要再做显式映射表。 | AdminChannelEndpointsEndpointTests.AdminRootFieldSurfaceMatchesTheReferenceAudit（根字段计数与 nodes 缺席）、porting/scripts/http_route_audit.py（76/76）以及各端点/GraphQL 行为测试；导出清单见 §275。 | 已接受 |
 | `C332` | 非流式已分类传输错误不再被上游错误策略重写（C031 收口） | C031 的三条端点测试要求：已分类的传输失败（IOException reset → 502 upstream_error / upstream_stream_interrupted）在 hidden/custom 上游错误策略下保持原样。端口的 TransformErrorAsync 已先调用 Classify，但 ApplyAsync 仍能看到 Cause 链中的 UpstreamException，从而把分类错误重写成默认文案。§276 在 ApplyAsync 对 ResponseError.Detail.Code == upstream_stream_interrupted 直接返回，不再进入策略重写；流式路径保持既有分类 + policy 语义。 | 分类错误的 Cause 仍保留 pipeline 的 upstream marker，而 Apply 的 upstream 判定沿 Unwrap 链查找该标记；参照口径要求分类后不再按 provider 错误重写。 | 已解决：非流式路径对已分类传输错误短路返回；普通 HttpClientError/ResponseError 仍按 passthrough/hidden/custom 策略处理。 | tests/AxonHub.Api.Tests/ChatCompletionEndpointTests.cs 的 HiddenPolicyDoesNotRewriteClassifiedTransportErrors 以及 HiddenPolicy*、CustomUpstreamErrorPolicy*、UpstreamTransportError* 定向 45/45。Api 全量 7137 例（7133 通过 + 1 该既存失败 + 3 跳过）在修复前运行；修复后未再跑全量。 | 已解决 |
+| `C333` | S3 PutObject 默认不做尾部校验和，兼容阿里云 OSS 等 S3 兼容存储（live #2637） | live 提交 18cc192e（#2637，修复 #981）指出 aws-sdk-go-v2 默认 RequestChecksumCalculation=WhenSupported，PutObject 在 HTTPS 下会计算 CRC32 并把请求体包装成 aws-chunked（Content-Encoding: aws-chunked、x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER、x-amz-trailer）。阿里云 OSS 的 S3 兼容接口返回 200 但存储 0 字节；备份仍按客户端 countingReader 报告成功。参照用 WhenRequired 关闭默认校验和/响应校验。端口使用 AWSSDK.S3 4.0.20.4，同样默认 WHEN_SUPPORTED，且 PutObjectRequest.UseChunkEncoding 默认 true，会发送 STREAMING-AWS4-HMAC-SHA256-PAYLOAD 的 aws-chunked 请求体。§277 在 S3 配置上设置 RequestChecksumCalculation/ResponseChecksumValidation = WHEN_REQUIRED，并在两个 PutObject 请求上关闭 UseChunkEncoding，使 S3 兼容存储收到普通签名请求体；调用方显式 指定 ChecksumAlgorithm 时校验和仍可用。 | 两个 SDK 都把默认校验和从“仅在需要时”改成了“只要支持就加”，而 OSS 不实现 aws-chunked 尾部校验和；.NET SDK 还会默认对 PutObject 使用分块签名。参照只关闭了默认 校验和，但 Go SDK 默认本就不使用分块请求体，端口必须同时关闭 .NET 的分块编码才能得到同样普通的请求体。 | 已解决：S3 客户端配置 WHEN_REQUIRED，PutObject/WriteFromStream 均关闭 UseChunkEncoding。同时修正 WriteFromStreamAsync 在 finally 释放缓冲流后才读取 Length 的缺陷（SDK 本身也会释放 InputStream），改为上传前捕获长度。 | tests/AxonHub.Api.Tests/S3DataStorageChecksumTests.cs：PutObjectSendsAPlainSignedPayloadOverHttps 通过 HTTPS 端点捕获字节 Save 与流式备份两条路径，断言无 STREAMING- 哈希、无 aws-chunked、无 x-amz-trailer、请求体与原文一致，并断言客户端配置为 WHEN_REQUIRED。存储相关定向 189/189。 | 已解决 |
 <!-- RENDER:END -->

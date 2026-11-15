@@ -18,13 +18,43 @@ public sealed class S3DataStorageBackend : IDataStorageBackend
     private readonly string _bucket;
 
     public S3DataStorageBackend(S3StorageSettings settings)
+        : this(CreateClient(settings), settings?.BucketName ?? string.Empty)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+    }
+
+    /// <summary>
+    /// Test seam mirroring newS3ObjectStoreWithHTTPClient (objectstore_s3.go):
+    /// the production constructor builds the client from settings; tests point
+    /// a client at a recording endpoint to assert the wire shape.
+    /// </summary>
+    internal S3DataStorageBackend(IAmazonS3 client, string bucketName)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        _client = client;
+        _bucket = bucketName;
+    }
+
+    /// <summary>
+    /// Port of newS3ClientWithHTTPClient (data_storage.go): the checksum
+    /// settings below are the behavioural core; the client factory only lets
+    /// tests exercise the real signing path over an HTTPS-shaped endpoint.
+    /// </summary>
+    internal static IAmazonS3 CreateClient(
+        S3StorageSettings settings,
+        HttpClientFactory? httpClientFactory = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        _bucket = settings.BucketName;
-        _client = new AmazonS3Client(
+        var config = CreateConfig(settings);
+        if (httpClientFactory is not null)
+        {
+            config.HttpClientFactory = httpClientFactory;
+        }
+
+        return new AmazonS3Client(
             new BasicAWSCredentials(settings.AccessKey, settings.SecretKey),
-            CreateConfig(settings));
+            config);
     }
 
     public async Task WriteAsync(
@@ -43,6 +73,12 @@ public sealed class S3DataStorageBackend : IDataStorageBackend
                         BucketName = _bucket,
                         Key = normalized,
                         InputStream = stream,
+
+                        // The .NET SDK defaults to aws-chunked framing for
+                        // PutObject. OSS's S3-compatible API only accepts a
+                        // plain body, and the stream is buffered/seekable, so
+                        // the whole payload can be signed normally.
+                        UseChunkEncoding = false,
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -79,6 +115,10 @@ public sealed class S3DataStorageBackend : IDataStorageBackend
             upload = buffered;
         }
 
+        // Capture the buffered length before PutObject: the SDK disposes the
+        // request InputStream when it is done with it.
+        var bufferedLength = buffered?.Length ?? 0;
+        long bytesWritten;
         try
         {
             await _client.PutObjectAsync(
@@ -87,9 +127,15 @@ public sealed class S3DataStorageBackend : IDataStorageBackend
                         BucketName = _bucket,
                         Key = normalized,
                         InputStream = upload,
+
+                        // See WriteAsync: never wrap the backup upload in an
+                        // aws-chunked body that S3-compatible stores may drop.
+                        UseChunkEncoding = false,
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            bytesWritten = buffered is null ? counting.BytesRead : bufferedLength;
         }
         catch (OperationCanceledException)
         {
@@ -109,7 +155,7 @@ public sealed class S3DataStorageBackend : IDataStorageBackend
             }
         }
 
-        return (normalized, buffered?.Length ?? counting.BytesRead);
+        return (normalized, bytesWritten);
     }
 
     public async Task<byte[]> ReadAsync(string key, CancellationToken cancellationToken)
@@ -246,6 +292,19 @@ public sealed class S3DataStorageBackend : IDataStorageBackend
             // aws-sdk-go-v2 is configured with an adaptive retryer capped at 3
             // attempts (data_storage.go:402-427).
             MaxErrorRetry = 3,
+
+            // aws-sdk-go-v2 defaults to WhenSupported, which makes PutObject
+            // compute a CRC32 and (over HTTPS) wrap the body in an aws-chunked
+            // trailer. Aliyun OSS accepts that upload with HTTP 200 but stores
+            // zero bytes. WhenRequired keeps an explicitly requested
+            // ChecksumAlgorithm available while sending a plain signed payload
+            // that every S3-compatible store accepts (#981 / #2637).
+            RequestChecksumCalculation = RequestChecksumCalculation.WHEN_REQUIRED,
+
+            // Likewise only validate response checksums when the operation
+            // requires it, so stores that omit x-amz-checksum-* are not
+            // rejected.
+            ResponseChecksumValidation = ResponseChecksumValidation.WHEN_REQUIRED,
         };
 
         if (!string.IsNullOrEmpty(settings.Region))
