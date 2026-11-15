@@ -664,7 +664,7 @@ public sealed class GcpTokenSourceTests
                 new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
         Assert.Contains("One of CredentialSource", withoutSource.Message, StringComparison.Ordinal);
 
-        var aws = Assert.Throws<NotSupportedException>(() =>
+        var aws = Assert.Throws<InvalidOperationException>(() =>
             CredentialsObject(
                 new Dictionary<string, object>
                 {
@@ -673,11 +673,325 @@ public sealed class GcpTokenSourceTests
                     ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
                     ["credential_source"] = new Dictionary<string, object>
                     {
-                        ["environment_id"] = "aws1",
+                        ["environment_id"] = "aws2",
                     },
                 },
                 new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
-        Assert.Contains("difference C128", aws.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "oauth2/google/externalaccount: aws version '2' is not supported in the current build",
+            aws.Message);
+    }
+
+    [Fact]
+    public void ExternalAccount_aws_environment_credentials_sign_a_caller_identity_request()
+    {
+        var previous = new Dictionary<string, string?>
+        {
+            ["AWS_ACCESS_KEY_ID"] = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID"),
+            ["AWS_SECRET_ACCESS_KEY"] = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY"),
+            ["AWS_SESSION_TOKEN"] = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN"),
+            ["AWS_REGION"] = Environment.GetEnvironmentVariable("AWS_REGION"),
+            ["AWS_DEFAULT_REGION"] = Environment.GetEnvironmentVariable("AWS_DEFAULT_REGION"),
+        };
+        try
+        {
+            Environment.SetEnvironmentVariable("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
+            Environment.SetEnvironmentVariable("AWS_SECRET_ACCESS_KEY", "secret");
+            Environment.SetEnvironmentVariable("AWS_SESSION_TOKEN", null);
+            Environment.SetEnvironmentVariable("AWS_REGION", "us-east-1");
+            Environment.SetEnvironmentVariable("AWS_DEFAULT_REGION", null);
+
+            var forms = new List<string>();
+            var handler = new ScriptedHandler(request =>
+            {
+                forms.Add(BodyText(request));
+                return Text(
+                    HttpStatusCode.OK,
+                    """{"access_token":"aws-at","token_type":"Bearer","expires_in":60}""");
+            });
+            const string audience =
+                "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/aws";
+            var credentials = CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = audience,
+                    ["subject_token_type"] = "urn:ietf:params:aws:token-type:aws4_request",
+                    ["credential_source"] = new Dictionary<string, object>
+                    {
+                        ["environment_id"] = "aws1",
+                    },
+                },
+                handler);
+
+            var token = credentials.TokenSource.GetToken();
+
+            Assert.Equal("aws-at", token.AccessToken);
+            var form = ParseForm(Assert.Single(forms));
+            // url.QueryEscape wraps the signed JSON; the form layer decodes it once.
+            using var subject = JsonDocument.Parse(
+                Uri.UnescapeDataString(form["subject_token"].Replace('+', ' ')));
+            var root = subject.RootElement;
+            Assert.Equal(
+                "https://sts.us-east-1.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15",
+                root.GetProperty("url").GetString());
+            Assert.Equal("POST", root.GetProperty("method").GetString());
+            var headers = root.GetProperty("headers").EnumerateArray()
+                .ToDictionary(
+                    static header => header.GetProperty("key").GetString()!,
+                    static header => header.GetProperty("value").GetString()!,
+                    StringComparer.Ordinal);
+            Assert.Equal("sts.us-east-1.amazonaws.com", headers["Host"]);
+            Assert.Equal("20260102T030405Z", headers["X-Amz-Date"]);
+            Assert.Equal(audience, headers["X-Goog-Cloud-Target-Resource"]);
+            Assert.StartsWith(
+                "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260102/us-east-1/sts/aws4_request",
+                headers["Authorization"],
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            foreach (var (name, value) in previous)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
+        }
+    }
+
+    [Fact]
+    public void ExternalAccount_aws_metadata_reads_imdsv2_region_and_credentials()
+    {
+        var previous = new Dictionary<string, string?>
+        {
+            ["AWS_ACCESS_KEY_ID"] = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID"),
+            ["AWS_SECRET_ACCESS_KEY"] = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY"),
+            ["AWS_SESSION_TOKEN"] = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN"),
+            ["AWS_REGION"] = Environment.GetEnvironmentVariable("AWS_REGION"),
+            ["AWS_DEFAULT_REGION"] = Environment.GetEnvironmentVariable("AWS_DEFAULT_REGION"),
+        };
+        try
+        {
+            Environment.SetEnvironmentVariable("AWS_ACCESS_KEY_ID", null);
+            Environment.SetEnvironmentVariable("AWS_SECRET_ACCESS_KEY", null);
+            Environment.SetEnvironmentVariable("AWS_SESSION_TOKEN", null);
+            Environment.SetEnvironmentVariable("AWS_REGION", null);
+            Environment.SetEnvironmentVariable("AWS_DEFAULT_REGION", null);
+
+            var forms = new List<string>();
+            var handler = new ScriptedHandler(request =>
+            {
+                var uri = request.RequestUri!.ToString();
+                if (uri == "http://metadata.test/token")
+                {
+                    Assert.Equal(HttpMethod.Put, request.Method);
+                    Assert.Equal(
+                        "300",
+                        request.Headers.GetValues("X-aws-ec2-metadata-token-ttl-seconds").Single());
+                    return Text(HttpStatusCode.OK, "imds-token");
+                }
+
+                if (uri == "http://metadata.test/region")
+                {
+                    return Text(HttpStatusCode.OK, "us-west-2b");
+                }
+
+                if (uri == "http://metadata.test/credentials")
+                {
+                    return Text(HttpStatusCode.OK, "role-name");
+                }
+
+                if (uri == "http://metadata.test/credentials/role-name")
+                {
+                    return Text(
+                        HttpStatusCode.OK,
+                        """{"AccessKeyID":"AKIDMETA","SecretAccessKey":"metasecret","Token":"metatoken"}""");
+                }
+
+                forms.Add(BodyText(request));
+                return Text(
+                    HttpStatusCode.OK,
+                    """{"access_token":"meta-at","token_type":"Bearer","expires_in":60}""");
+            });
+            var credentials = CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "aud",
+                    ["subject_token_type"] = "urn:ietf:params:aws:token-type:aws4_request",
+                    ["credential_source"] = new Dictionary<string, object>
+                    {
+                        ["environment_id"] = "aws1",
+                        ["url"] = "http://metadata.test/credentials",
+                        ["region_url"] = "http://metadata.test/region",
+                        ["imdsv2_session_token_url"] = "http://metadata.test/token",
+                    },
+                },
+                handler);
+
+            var token = credentials.TokenSource.GetToken();
+
+            Assert.Equal("meta-at", token.AccessToken);
+            var form = ParseForm(Assert.Single(forms));
+            using var subject = JsonDocument.Parse(
+                Uri.UnescapeDataString(form["subject_token"].Replace('+', ' ')));
+            var root = subject.RootElement;
+            Assert.Equal(
+                "https://sts.us-west-2.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15",
+                root.GetProperty("url").GetString());
+            var headers = root.GetProperty("headers").EnumerateArray()
+                .ToDictionary(
+                    static header => header.GetProperty("key").GetString()!,
+                    static header => header.GetProperty("value").GetString()!,
+                    StringComparer.Ordinal);
+            Assert.Equal("metatoken", headers["X-Amz-Security-Token"]);
+            Assert.StartsWith(
+                "AWS4-HMAC-SHA256 Credential=AKIDMETA/20260102/us-west-2/sts/aws4_request",
+                headers["Authorization"],
+                StringComparison.Ordinal);
+
+            // The IMDSv2 token header travels on every metadata request.
+            foreach (var request in handler.Requests
+                         .Where(static request => request.RequestUri!.Host == "metadata.test")
+                         .Skip(1))
+            {
+                Assert.Equal(
+                    "imds-token",
+                    request.Headers.GetValues("X-aws-ec2-metadata-token").Single());
+            }
+        }
+        finally
+        {
+            foreach (var (name, value) in previous)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
+        }
+    }
+
+    [Fact]
+    public void ExternalAccount_executable_reads_a_cached_output_file()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(
+                file,
+                """{"version":1,"success":true,"token_type":"urn:ietf:params:oauth:token-type:jwt","id_token":"id-token","expiration_time":"""
+                + FixedNow.AddMinutes(5).ToUnixTimeSeconds()
+                + "}");
+            var forms = new List<string>();
+            var handler = new ScriptedHandler(request =>
+            {
+                forms.Add(BodyText(request));
+                return Text(
+                    HttpStatusCode.OK,
+                    """{"access_token":"exec-at","token_type":"Bearer","expires_in":60}""");
+            });
+            var credentials = CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "aud",
+                    ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                    ["credential_source"] = new Dictionary<string, object>
+                    {
+                        ["executable"] = new Dictionary<string, object>
+                        {
+                            ["command"] = "ignored",
+                            ["timeout_millis"] = 5000,
+                            ["output_file"] = file,
+                        },
+                    },
+                },
+                handler);
+
+            var token = credentials.TokenSource.GetToken();
+
+            Assert.Equal("exec-at", token.AccessToken);
+            var form = ParseForm(Assert.Single(forms));
+            Assert.Equal("id-token", form["subject_token"]);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public void ExternalAccount_executable_validates_configuration_and_responses()
+    {
+        var missingCommand = Assert.Throws<InvalidOperationException>(() =>
+            CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "aud",
+                    ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                    ["credential_source"] = new Dictionary<string, object>
+                    {
+                        ["executable"] = new Dictionary<string, object>(),
+                    },
+                },
+                new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
+        Assert.Contains("missing `command` field", missingCommand.Message, StringComparison.Ordinal);
+
+        var badTimeout = Assert.Throws<InvalidOperationException>(() =>
+            CredentialsObject(
+                new Dictionary<string, object>
+                {
+                    ["type"] = "external_account",
+                    ["audience"] = "aud",
+                    ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+                    ["credential_source"] = new Dictionary<string, object>
+                    {
+                        ["executable"] = new Dictionary<string, object>
+                        {
+                            ["command"] = "ignored",
+                            ["timeout_millis"] = 4999,
+                        },
+                    },
+                },
+                new ScriptedHandler(_ => Text(HttpStatusCode.OK, "{}"))));
+        Assert.Contains("`timeout_millis`", badTimeout.Message, StringComparison.Ordinal);
+
+        var now = FixedNow.ToUnixTimeSeconds();
+        var missingVersion = Assert.Throws<InvalidOperationException>(() =>
+            ExternalAccountExecutableGcpTokenSource.ParseSubjectToken(
+                Encoding.UTF8.GetBytes("""{"success":true}"""),
+                "response",
+                string.Empty,
+                now));
+        Assert.Contains("missing `version` field", missingVersion.Message, StringComparison.Ordinal);
+
+        var malformedFailure = Assert.Throws<GcpNonCacheableException>(() =>
+            ExternalAccountExecutableGcpTokenSource.ParseSubjectToken(
+                Encoding.UTF8.GetBytes(
+                    """{"version":1,"success":false}"""),
+                "response",
+                string.Empty,
+                now));
+        Assert.Contains("must include `error` and `message`", malformedFailure.Message, StringComparison.Ordinal);
+
+        var expired = Assert.Throws<GcpNonCacheableException>(() =>
+            ExternalAccountExecutableGcpTokenSource.ParseSubjectToken(
+                Encoding.UTF8.GetBytes(
+                    """{"version":1,"success":true,"token_type":"urn:ietf:params:oauth:token-type:jwt","id_token":"t","expiration_time":"""
+                    + (now - 1)
+                    + "}"),
+                "response",
+                string.Empty,
+                now));
+        Assert.Contains("executable is expired", expired.Message, StringComparison.Ordinal);
+
+        var token = ExternalAccountExecutableGcpTokenSource.ParseSubjectToken(
+            Encoding.UTF8.GetBytes(
+                """{"version":1,"success":true,"token_type":"urn:ietf:params:oauth:token-type:saml2","saml_response":"<assertion/>","expiration_time":"""
+                + (now + 60)
+                + "}"),
+            "response",
+            string.Empty,
+            now);
+        Assert.Equal("<assertion/>", token);
     }
 
     [Fact]

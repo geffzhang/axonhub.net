@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using AxonHub.Llm.Json;
@@ -12,10 +13,10 @@ namespace AxonHub.Llm.Vertex;
 /// <remarks>
 /// <para>
 /// The reference delegates to the full google.golang.org/api auth stack. The
-/// port covers the credential types the AxonHub UI stores (service account and
-/// <c>gcloud auth application-default login</c> user credentials); workload
-/// identity federation, impersonated service accounts and interactive client
-/// configurations are rejected at construction (difference C128).
+/// port covers service accounts, gcloud user credentials, workload identity
+/// federation (file / URL / AWS / executable subject tokens), external-account
+/// authorized users and impersonated service accounts; interactive web/installed
+/// client configurations are rejected at construction (difference C128).
 /// </para>
 /// <para>
 /// Decoding follows Go's <c>encoding/json</c>: case-insensitive field names,
@@ -125,23 +126,34 @@ public sealed class GcpCredentials
                 "oauth2/google/externalaccount: One of CredentialSource, "
                 + "SubjectTokenSupplier, or AwsSecurityCredentialsSupplier must be set");
 
-        if (source.EnvironmentId.StartsWith("aws", StringComparison.Ordinal)
-            && source.EnvironmentId.Length > 3)
+        IExternalSubjectTokenSource sourceTokenSource;
+        if (source.EnvironmentId.Length > 3
+            && source.EnvironmentId.StartsWith("aws", StringComparison.Ordinal))
         {
-            throw new NotSupportedException(
-                "GCP external_account AWS credential sources are not supported "
-                + "by the .NET port (difference C128)");
-        }
+            if (!int.TryParse(
+                    source.EnvironmentId[3..],
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var awsVersion))
+            {
+                // Go's Atoi failure falls through to the generic source error.
+                throw new InvalidOperationException(
+                    "oauth2/google/externalaccount: unable to parse credential source");
+            }
 
-        if (source.Executable is not null)
-        {
-            throw new NotSupportedException(
-                "GCP external_account executable credential sources are not supported "
-                + "by the .NET port (difference C128)");
-        }
+            if (awsVersion != 1)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google/externalaccount: aws version '" + awsVersion
+                    + "' is not supported in the current build");
+            }
 
-        IGcpTokenSource sourceTokenSource;
-        if (source.File.Length > 0)
+            sourceTokenSource = new ExternalAccountAwsGcpTokenSource(
+                source,
+                file.Audience,
+                options);
+        }
+        else if (source.File.Length > 0)
         {
             sourceTokenSource = new ExternalAccountFileGcpTokenSource(
                 source.File,
@@ -153,6 +165,15 @@ public sealed class GcpCredentials
                 source.Url,
                 source.Headers,
                 source.Format,
+                options);
+        }
+        else if (source.Executable is not null)
+        {
+            sourceTokenSource = ExternalAccountExecutableGcpTokenSource.Create(
+                source.Executable,
+                file.Audience,
+                file.SubjectTokenType,
+                file.ServiceAccountImpersonationUrl,
                 options);
         }
         else
@@ -319,6 +340,21 @@ public sealed class GcpCredentials
                         property.Value,
                         "credential_source.environment_id");
                     break;
+                case "region_url":
+                    source.RegionUrl = ReadStringValue(
+                        property.Value,
+                        "credential_source.region_url");
+                    break;
+                case "regional_cred_verification_url":
+                    source.RegionalCredVerificationUrl = ReadStringValue(
+                        property.Value,
+                        "credential_source.regional_cred_verification_url");
+                    break;
+                case "imdsv2_session_token_url":
+                    source.Imdsv2SessionTokenUrl = ReadStringValue(
+                        property.Value,
+                        "credential_source.imdsv2_session_token_url");
+                    break;
                 case "headers":
                     source.Headers = AssignStringMap(
                         property.Value,
@@ -423,7 +459,44 @@ public sealed class GcpCredentials
                 + "of type externalaccount.ExecutableConfig");
         }
 
-        return new GcpExecutableConfig();
+        var executable = new GcpExecutableConfig();
+        foreach (var property in value.EnumerateObject())
+        {
+            switch (FoldAscii(property.Name))
+            {
+                case "command":
+                    executable.Command = ReadStringValue(
+                        property.Value,
+                        "credential_source.executable.command");
+                    break;
+                case "timeout_millis":
+                    if (property.Value.ValueKind == JsonValueKind.Null)
+                    {
+                        executable.TimeoutMillis = null;
+                    }
+                    else if (property.Value.ValueKind == JsonValueKind.Number
+                             && property.Value.TryGetInt32(out var timeout))
+                    {
+                        executable.TimeoutMillis = timeout;
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException(
+                            "json: cannot unmarshal " + KindName(property.Value)
+                            + " into Go struct field credential_source.executable.timeout_millis "
+                            + "of type int");
+                    }
+
+                    break;
+                case "output_file":
+                    executable.OutputFile = ReadStringValue(
+                        property.Value,
+                        "credential_source.executable.output_file");
+                    break;
+            }
+        }
+
+        return executable;
     }
 
     private static string ReadStringValue(JsonElement value, string jsonName)
@@ -851,6 +924,12 @@ public sealed class GcpCredentialSource
 
     public string EnvironmentId { get; set; } = string.Empty;
 
+    public string RegionUrl { get; set; } = string.Empty;
+
+    public string RegionalCredVerificationUrl { get; set; } = string.Empty;
+
+    public string Imdsv2SessionTokenUrl { get; set; } = string.Empty;
+
     public GcpCredentialFormat Format { get; set; } = new();
 
     public GcpExecutableConfig? Executable { get; set; }
@@ -864,7 +943,12 @@ public sealed class GcpCredentialFormat
     public string SubjectTokenFieldName { get; set; } = string.Empty;
 }
 
-/// <summary>Port marker for externalaccount.ExecutableConfig; not supported (C128).</summary>
+/// <summary>Port of externalaccount.ExecutableConfig.</summary>
 public sealed class GcpExecutableConfig
 {
+    public string Command { get; set; } = string.Empty;
+
+    public int? TimeoutMillis { get; set; }
+
+    public string OutputFile { get; set; } = string.Empty;
 }

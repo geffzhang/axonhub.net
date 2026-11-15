@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Json;
 using AxonHub.Llm.Transformer.Shared;
@@ -26,6 +28,12 @@ public sealed class GcpTokenOptions
 public interface IGcpTokenSource
 {
     GcpToken GetToken();
+}
+
+/// <summary>Port of <c>externalaccount.baseCredentialSource</c>.</summary>
+internal interface IExternalSubjectTokenSource
+{
+    string SubjectToken();
 }
 
 /// <summary>Port of <c>oauth2.Token</c> (token.go:35-79).</summary>
@@ -500,7 +508,7 @@ internal sealed class AuthorizedUserGcpTokenSource : IGcpTokenSource
 /// Port of externalaccount.fileCredentialSource (filecredsource.go): read a
 /// subject token from a text or JSON file, bounded to 1 MiB.
 /// </summary>
-internal sealed class ExternalAccountFileGcpTokenSource : IGcpTokenSource
+internal sealed class ExternalAccountFileGcpTokenSource : IGcpTokenSource, IExternalSubjectTokenSource
 {
     private readonly string _file;
     private readonly GcpCredentialFormat _format;
@@ -604,7 +612,7 @@ internal sealed class ExternalAccountFileGcpTokenSource : IGcpTokenSource
 /// Port of externalaccount.urlCredentialSource (urlcredsource.go): GET a
 /// subject token from a local URL with optional headers.
 /// </summary>
-internal sealed class ExternalAccountUrlGcpTokenSource : IGcpTokenSource
+internal sealed class ExternalAccountUrlGcpTokenSource : IGcpTokenSource, IExternalSubjectTokenSource
 {
     private readonly string _url;
     private readonly IReadOnlyDictionary<string, string>? _headers;
@@ -662,8 +670,7 @@ internal sealed class ExternalAccountUrlGcpTokenSource : IGcpTokenSource
 /// </summary>
 internal sealed class ExternalAccountGcpTokenSource : IGcpTokenSource
 {
-    private readonly ExternalAccountFileGcpTokenSource? _fileSource;
-    private readonly ExternalAccountUrlGcpTokenSource? _urlSource;
+    private readonly IExternalSubjectTokenSource _subjectTokenSource;
     private readonly string _audience;
     private readonly string _subjectTokenType;
     private readonly string _tokenUrl;
@@ -675,7 +682,7 @@ internal sealed class ExternalAccountGcpTokenSource : IGcpTokenSource
     private readonly HttpClient _client;
 
     public ExternalAccountGcpTokenSource(
-        IGcpTokenSource source,
+        IExternalSubjectTokenSource source,
         string audience,
         string subjectTokenType,
         string tokenUrl,
@@ -685,8 +692,7 @@ internal sealed class ExternalAccountGcpTokenSource : IGcpTokenSource
         string workforcePoolUserProject,
         GcpTokenOptions options)
     {
-        _fileSource = source as ExternalAccountFileGcpTokenSource;
-        _urlSource = source as ExternalAccountUrlGcpTokenSource;
+        _subjectTokenSource = source;
         _audience = audience;
         _subjectTokenType = subjectTokenType;
         _tokenUrl = tokenUrl;
@@ -700,10 +706,7 @@ internal sealed class ExternalAccountGcpTokenSource : IGcpTokenSource
 
     public GcpToken GetToken()
     {
-        var subjectToken = _fileSource?.SubjectToken()
-            ?? _urlSource?.SubjectToken()
-            ?? throw new InvalidOperationException(
-                "oauth2/google/externalaccount: unable to parse credential source");
+        var subjectToken = _subjectTokenSource.SubjectToken();
 
         var form = new Dictionary<string, List<string>>(StringComparer.Ordinal)
         {
@@ -1783,3 +1786,850 @@ internal readonly record struct TokenHttpResult(
     string StatusLine,
     string ContentType,
     byte[] Body);
+
+/// <summary>
+/// Port of externalaccount.awsCredentialSource (aws.go): read AWS security
+/// credentials and region from the environment or IMDS, sign an STS
+/// GetCallerIdentity request with SigV4, and return the serialized signed
+/// request as the subject token.
+/// </summary>
+internal sealed class ExternalAccountAwsGcpTokenSource : IGcpTokenSource, IExternalSubjectTokenSource
+{
+    private const string DefaultRegionalCredentialVerificationUrl =
+        "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15";
+    private const string AwsAlgorithm = "AWS4-HMAC-SHA256";
+    private const string AwsRequestType = "aws4_request";
+
+    private static readonly JsonSerializerOptions CredentialJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
+    private readonly GcpCredentialSource _source;
+    private readonly string _audience;
+    private readonly GcpTokenOptions _options;
+
+    public ExternalAccountAwsGcpTokenSource(
+        GcpCredentialSource source,
+        string audience,
+        GcpTokenOptions options)
+    {
+        _source = source;
+        _audience = audience;
+        _options = options;
+    }
+
+    public GcpToken GetToken()
+        => throw new InvalidOperationException(
+            "external account subject token is not an access token");
+
+    public string SubjectToken()
+    {
+        var regionalVerificationUrl = _source.RegionalCredVerificationUrl.Length > 0
+            ? _source.RegionalCredVerificationUrl
+            : DefaultRegionalCredentialVerificationUrl;
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (ShouldUseMetadataServer())
+        {
+            var sessionToken = GetAwsSessionToken();
+            if (sessionToken.Length > 0)
+            {
+                headers["X-aws-ec2-metadata-token"] = sessionToken;
+            }
+        }
+
+        var credentials = GetSecurityCredentials(headers);
+        var region = GetRegion(headers);
+        var signed = SignRequest(regionalVerificationUrl, region, credentials);
+
+        var awsRequest = new AwsRequest
+        {
+            Url = signed.Url,
+            Method = "POST",
+            Headers = signed.Headers
+                .Select(static header => new AwsRequestHeader
+                {
+                    Key = header.Key,
+                    Value = header.Value,
+                })
+                .OrderBy(static header => header.Key, StringComparer.Ordinal)
+                .ThenBy(static header => header.Value, StringComparer.Ordinal)
+                .ToList(),
+        };
+        var json = GoJson.MarshalToString(awsRequest);
+        return HttpClientUtils.QueryEscape(json);
+    }
+
+    private bool ShouldUseMetadataServer()
+        => !CanRetrieveRegionFromEnvironment()
+            || !CanRetrieveSecurityCredentialsFromEnvironment();
+
+    private static bool CanRetrieveRegionFromEnvironment()
+        => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AWS_REGION"))
+            || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AWS_DEFAULT_REGION"));
+
+    private static bool CanRetrieveSecurityCredentialsFromEnvironment()
+        => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID"))
+            && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY"));
+
+    private AwsSecurityCredentials GetSecurityCredentials(
+        IReadOnlyDictionary<string, string> headers)
+    {
+        if (CanRetrieveSecurityCredentialsFromEnvironment())
+        {
+            return new AwsSecurityCredentials
+            {
+                AccessKeyId = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID") ?? string.Empty,
+                SecretAccessKey = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY")
+                    ?? string.Empty,
+                SessionToken = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN")
+                    ?? string.Empty,
+            };
+        }
+
+        var roleName = GetMetadataRoleName(headers);
+        var credentials = GetMetadataSecurityCredentials(roleName, headers);
+        if (credentials.AccessKeyId.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: missing AccessKeyId credential");
+        }
+
+        if (credentials.SecretAccessKey.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: missing SecretAccessKey credential");
+        }
+
+        return credentials;
+    }
+
+    private string GetMetadataRoleName(IReadOnlyDictionary<string, string> headers)
+    {
+        if (_source.Url.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: unable to determine the AWS metadata server "
+                + "security credentials endpoint");
+        }
+
+        var body = DoMetadataRequest(
+            HttpMethod.Get,
+            _source.Url,
+            headers,
+            "AWS role name");
+        return body;
+    }
+
+    private AwsSecurityCredentials GetMetadataSecurityCredentials(
+        string roleName,
+        IReadOnlyDictionary<string, string> headers)
+    {
+        var body = DoMetadataRequest(
+            HttpMethod.Get,
+            _source.Url.TrimEnd('/') + "/" + roleName,
+            headers,
+            "AWS security credentials");
+        try
+        {
+            return JsonSerializer.Deserialize<AwsSecurityCredentials>(
+                    body,
+                    CredentialJsonOptions)
+                ?? new AwsSecurityCredentials();
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: unable to retrieve AWS security credentials - "
+                + body,
+                ex);
+        }
+    }
+
+    private string GetRegion(IReadOnlyDictionary<string, string> headers)
+    {
+        var region = Environment.GetEnvironmentVariable("AWS_REGION");
+        if (!string.IsNullOrEmpty(region))
+        {
+            return region;
+        }
+
+        var defaultRegion = Environment.GetEnvironmentVariable("AWS_DEFAULT_REGION");
+        if (!string.IsNullOrEmpty(defaultRegion))
+        {
+            return defaultRegion;
+        }
+
+        if (_source.RegionUrl.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: unable to determine AWS region");
+        }
+
+        var body = DoMetadataRequest(
+            HttpMethod.Get,
+            _source.RegionUrl,
+            headers,
+            "AWS region");
+        return body.Length > 1 ? body[..^1] : body;
+    }
+
+    private string GetAwsSessionToken()
+    {
+        if (_source.Imdsv2SessionTokenUrl.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        using var client = GcpTokenHttp.CreateClient(_options.Transport);
+        using var request = new HttpRequestMessage(HttpMethod.Put, _source.Imdsv2SessionTokenUrl);
+        request.Headers.TryAddWithoutValidation("X-aws-ec2-metadata-token-ttl-seconds", "300");
+        using var response = client.SendAsync(request, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+        var body = response.Content?.ReadAsStringAsync().GetAwaiter().GetResult()
+            ?? string.Empty;
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: unable to retrieve AWS session token - " + body);
+        }
+
+        return body;
+    }
+
+    private string DoMetadataRequest(
+        HttpMethod method,
+        string url,
+        IReadOnlyDictionary<string, string> headers,
+        string resourceLabel)
+    {
+        using var client = GcpTokenHttp.CreateClient(_options.Transport);
+        using var request = new HttpRequestMessage(method, url);
+        foreach (var (key, value) in headers)
+        {
+            request.Headers.TryAddWithoutValidation(key, value);
+        }
+
+        using var response = client.SendAsync(request, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+        var body = response.Content?.ReadAsStringAsync().GetAwaiter().GetResult()
+            ?? string.Empty;
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: unable to retrieve " + resourceLabel
+                + " - " + body);
+        }
+
+        return body;
+    }
+
+    private SignedAwsRequest SignRequest(
+        string regionalVerificationUrl,
+        string region,
+        AwsSecurityCredentials credentials)
+    {
+        var url = regionalVerificationUrl.Replace("{region}", region, StringComparison.Ordinal);
+        var uri = new Uri(url, UriKind.Absolute);
+        var timestamp = (_options.Clock?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var headers = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Host"] = [uri.Authority],
+        };
+
+        if (credentials.SessionToken.Length > 0)
+        {
+            headers["X-Amz-Security-Token"] = [credentials.SessionToken];
+        }
+
+        headers["X-Amz-Date"] = [timestamp.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)];
+        if (!string.IsNullOrEmpty(_audience))
+        {
+            headers["X-Goog-Cloud-Target-Resource"] = [_audience];
+        }
+
+        var (canonicalHeaderColumns, canonicalHeaderData) = CanonicalHeaders(headers);
+        var canonicalRequest = string.Join(
+            "\n",
+            "POST",
+            CanonicalPath(uri),
+            CanonicalQuery(uri),
+            canonicalHeaderData,
+            canonicalHeaderColumns,
+            Sha256Hex(Array.Empty<byte>()));
+
+        var dateStamp = timestamp.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var serviceName = uri.Host.Split('.')[0];
+        var credentialScope = dateStamp + "/" + region + "/" + serviceName + "/"
+            + AwsRequestType;
+        var stringToSign = string.Join(
+            "\n",
+            AwsAlgorithm,
+            timestamp.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture),
+            credentialScope,
+            Sha256Hex(Encoding.UTF8.GetBytes(canonicalRequest)));
+
+        var signingKey = Encoding.UTF8.GetBytes("AWS4" + credentials.SecretAccessKey);
+        foreach (var input in new[] { dateStamp, region, serviceName, AwsRequestType, stringToSign })
+        {
+            signingKey = HmacSha256(signingKey, Encoding.UTF8.GetBytes(input));
+        }
+
+        headers["Authorization"] = [
+            AwsAlgorithm + " Credential=" + credentials.AccessKeyId + "/" + credentialScope
+            + ", SignedHeaders=" + canonicalHeaderColumns
+            + ", Signature=" + Convert.ToHexStringLower(signingKey),
+        ];
+
+        return new SignedAwsRequest
+        {
+            Url = url,
+            Headers = headers
+                .SelectMany(static pair => pair.Value.Select(
+                    value => new KeyValuePair<string, string>(CanonicalHeaderKey(pair.Key), value)))
+                .ToList(),
+        };
+    }
+
+    private static string CanonicalPath(Uri uri)
+    {
+        var path = uri.GetComponents(UriComponents.Path, UriFormat.UriEscaped);
+        if (path.Length == 0)
+        {
+            return "/";
+        }
+
+        if (!path.StartsWith('/'))
+        {
+            path = "/" + path;
+        }
+
+        var segments = new List<string>();
+        foreach (var segment in path.Split('/'))
+        {
+            if (segment.Length == 0 || segment == ".")
+            {
+                continue;
+            }
+
+            if (segment == "..")
+            {
+                if (segments.Count > 0)
+                {
+                    segments.RemoveAt(segments.Count - 1);
+                }
+
+                continue;
+            }
+
+            segments.Add(segment);
+        }
+
+        return "/" + string.Join("/", segments);
+    }
+
+    private static string CanonicalQuery(Uri uri)
+    {
+        var query = HttpClientUtils.ParseQuery(uri.Query.TrimStart('?'));
+        foreach (var values in query.Values)
+        {
+            values.Sort(StringComparer.Ordinal);
+        }
+
+        return HttpClientUtils.EncodeQuery(query);
+    }
+
+    private static (string Columns, string Data) CanonicalHeaders(
+        IReadOnlyDictionary<string, List<string>> headers)
+    {
+        var lower = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var (key, values) in headers)
+        {
+            var name = key.ToLowerInvariant();
+            if (!lower.TryGetValue(name, out var existing))
+            {
+                lower[name] = [.. values];
+            }
+            else
+            {
+                existing.AddRange(values);
+            }
+        }
+
+        var names = lower.Keys.OrderBy(static key => key, StringComparer.Ordinal).ToList();
+        var data = new StringBuilder();
+        foreach (var name in names)
+        {
+            data.Append(name).Append(':').Append(string.Join(",", lower[name])).Append('\n');
+        }
+
+        return (string.Join(";", names), data.ToString());
+    }
+
+    private static string CanonicalHeaderKey(string key)
+    {
+        var parts = key.Split('-');
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (parts[i].Length > 0)
+            {
+                parts[i] = char.ToUpperInvariant(parts[i][0]) + parts[i][1..].ToLowerInvariant();
+            }
+        }
+
+        return string.Join('-', parts);
+    }
+
+    private static string Sha256Hex(byte[] data)
+        => Convert.ToHexStringLower(SHA256.HashData(data));
+
+    private static byte[] HmacSha256(byte[] key, byte[] data)
+        => HMACSHA256.HashData(key, data);
+
+    private sealed class AwsSecurityCredentials
+    {
+        [JsonPropertyName("AccessKeyID")]
+        public string AccessKeyId { get; set; } = string.Empty;
+
+        [JsonPropertyName("SecretAccessKey")]
+        public string SecretAccessKey { get; set; } = string.Empty;
+
+        [JsonPropertyName("Token")]
+        public string SessionToken { get; set; } = string.Empty;
+    }
+
+    private sealed class AwsRequest
+    {
+        [JsonPropertyName("url")]
+        public string Url { get; set; } = string.Empty;
+
+        [JsonPropertyName("method")]
+        public string Method { get; set; } = string.Empty;
+
+        [JsonPropertyName("headers")]
+        public List<AwsRequestHeader>? Headers { get; set; }
+    }
+
+    private sealed class AwsRequestHeader
+    {
+        [JsonPropertyName("key")]
+        public string Key { get; set; } = string.Empty;
+
+        [JsonPropertyName("value")]
+        public string Value { get; set; } = string.Empty;
+    }
+
+    private sealed class SignedAwsRequest
+    {
+        public string Url { get; init; } = string.Empty;
+
+        public List<KeyValuePair<string, string>> Headers { get; init; } = [];
+    }
+}
+
+/// <summary>
+/// Port of externalaccount.executableCredentialSource: read a subject token
+/// from an optional output file or by running the configured command.
+/// </summary>
+internal sealed class ExternalAccountExecutableGcpTokenSource
+    : IGcpTokenSource, IExternalSubjectTokenSource
+{
+    private const int ExecutableSupportedMaxVersion = 1;
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan TimeoutMinimum = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TimeoutMaximum = TimeSpan.FromSeconds(120);
+    private static readonly Regex ServiceAccountImpersonationPattern = new(
+        "https://iamcredentials\\..+/v1/projects/-/serviceAccounts/(.*@.*):generateAccessToken",
+        RegexOptions.CultureInvariant);
+
+    private readonly string _command;
+    private readonly TimeSpan _timeout;
+    private readonly string _outputFile;
+    private readonly string _audience;
+    private readonly string _subjectTokenType;
+    private readonly string _serviceAccountImpersonationUrl;
+    private readonly GcpTokenOptions _options;
+
+    private ExternalAccountExecutableGcpTokenSource(
+        string command,
+        TimeSpan timeout,
+        string outputFile,
+        string audience,
+        string subjectTokenType,
+        string serviceAccountImpersonationUrl,
+        GcpTokenOptions options)
+    {
+        _command = command;
+        _timeout = timeout;
+        _outputFile = outputFile;
+        _audience = audience;
+        _subjectTokenType = subjectTokenType;
+        _serviceAccountImpersonationUrl = serviceAccountImpersonationUrl;
+        _options = options;
+    }
+
+    public static ExternalAccountExecutableGcpTokenSource Create(
+        GcpExecutableConfig config,
+        string audience,
+        string subjectTokenType,
+        string serviceAccountImpersonationUrl,
+        GcpTokenOptions options)
+    {
+        if (string.IsNullOrEmpty(config.Command))
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: missing `command` field — executable "
+                + "command must be provided");
+        }
+
+        var timeout = DefaultTimeout;
+        if (config.TimeoutMillis is { } millis)
+        {
+            timeout = TimeSpan.FromMilliseconds(millis);
+            if (timeout < TimeoutMinimum || timeout > TimeoutMaximum)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google/externalaccount: invalid `timeout_millis` field — "
+                    + "executable timeout must be between 5 and 120 seconds");
+            }
+        }
+
+        return new ExternalAccountExecutableGcpTokenSource(
+            config.Command,
+            timeout,
+            config.OutputFile,
+            audience,
+            subjectTokenType,
+            serviceAccountImpersonationUrl,
+            options);
+    }
+
+    public GcpToken GetToken()
+        => throw new InvalidOperationException(
+            "external account subject token is not an access token");
+
+    public string SubjectToken()
+    {
+        if (_outputFile.Length > 0)
+        {
+            var (token, error) = GetTokenFromOutputFile();
+            if (token.Length > 0 || error is not null)
+            {
+                if (error is not null)
+                {
+                    throw error;
+                }
+
+                return token;
+            }
+        }
+
+        return GetTokenFromExecutableCommand();
+    }
+
+    private (string Token, Exception? Error) GetTokenFromOutputFile()
+    {
+        if (_outputFile.Length == 0)
+        {
+            return (string.Empty, null);
+        }
+
+        byte[] data;
+        try
+        {
+            using var stream = File.OpenRead(_outputFile);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[16 * 1024];
+            while (buffer.Length < (1 << 20))
+            {
+                var read = stream.Read(
+                    chunk,
+                    0,
+                    (int)Math.Min(chunk.Length, (1 << 20) - buffer.Length));
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            data = buffer.ToArray();
+        }
+        catch (Exception)
+        {
+            return (string.Empty, null);
+        }
+
+        if (data.Length == 0)
+        {
+            return (string.Empty, null);
+        }
+
+        try
+        {
+            return (ParseSubjectToken(data, "output file"), null);
+        }
+        catch (GcpNonCacheableException)
+        {
+            return (string.Empty, null);
+        }
+        catch (Exception ex)
+        {
+            return (string.Empty, ex);
+        }
+    }
+
+    private string GetTokenFromExecutableCommand()
+    {
+        if (Environment.GetEnvironmentVariable("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES")
+            != "1")
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: executables need to be explicitly allowed "
+                + "(set GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES to '1') to run");
+        }
+
+        var parts = _command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: missing `command` field — executable "
+                + "command must be provided");
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = parts[0],
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var part in parts.Skip(1))
+        {
+            startInfo.ArgumentList.Add(part);
+        }
+
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            startInfo.Environment[entry.Key?.ToString() ?? string.Empty] =
+                entry.Value?.ToString() ?? string.Empty;
+        }
+
+        startInfo.Environment["GOOGLE_EXTERNAL_ACCOUNT_AUDIENCE"] = _audience;
+        startInfo.Environment["GOOGLE_EXTERNAL_ACCOUNT_TOKEN_TYPE"] = _subjectTokenType;
+        startInfo.Environment["GOOGLE_EXTERNAL_ACCOUNT_INTERACTIVE"] = "0";
+        if (_serviceAccountImpersonationUrl.Length > 0)
+        {
+            var match = ServiceAccountImpersonationPattern.Match(_serviceAccountImpersonationUrl);
+            if (match.Success)
+            {
+                startInfo.Environment["GOOGLE_EXTERNAL_ACCOUNT_IMPERSONATED_EMAIL"] =
+                    match.Groups[1].Value;
+            }
+        }
+
+        if (_outputFile.Length > 0)
+        {
+            startInfo.Environment["GOOGLE_EXTERNAL_ACCOUNT_OUTPUT_FILE"] = _outputFile;
+        }
+
+        using var process = new Process { StartInfo = startInfo };
+        try
+        {
+            if (!process.Start())
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google/externalaccount: executable command failed: process did not start");
+            }
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            if (ex is InvalidOperationException && ex.Message.StartsWith(
+                    "oauth2/google/externalaccount:",
+                    StringComparison.Ordinal))
+            {
+                throw;
+            }
+
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: executable command failed: " + ex.Message,
+                ex);
+        }
+
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit((int)_timeout.TotalMilliseconds))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (Exception)
+            {
+                // The caller sees the timeout; cleanup failures are ignored.
+            }
+
+            throw new TimeoutException("context deadline exceeded");
+        }
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: executable command failed with exit code "
+                + process.ExitCode);
+        }
+
+        var output = stdout.Trim();
+        if (output.Length == 0)
+        {
+            output = stderr.Trim();
+        }
+
+        return ParseSubjectToken(Encoding.UTF8.GetBytes(output), "response");
+    }
+
+    private string ParseSubjectToken(byte[] response, string source)
+        => ParseSubjectToken(
+            response,
+            source,
+            _outputFile,
+            (_options.Clock?.Invoke() ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds());
+
+    internal static string ParseSubjectToken(
+        byte[] response,
+        string source,
+        string outputFile,
+        long now)
+    {
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(response);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: unable to parse " + source
+                + "\nResponse: " + Encoding.UTF8.GetString(response));
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google/externalaccount: unable to parse " + source
+                    + "\nResponse: " + Encoding.UTF8.GetString(response));
+            }
+
+            var version = ReadInt(root, "version");
+            if (version == 0)
+            {
+                throw MissingField(source, "version");
+            }
+
+            if (!root.TryGetProperty("success", out var successValue)
+                || successValue.ValueKind == JsonValueKind.Null)
+            {
+                throw MissingField(source, "success");
+            }
+
+            if (successValue.ValueKind != JsonValueKind.True
+                && successValue.ValueKind != JsonValueKind.False)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google/externalaccount: unable to parse " + source
+                    + "\nResponse: " + Encoding.UTF8.GetString(response));
+            }
+
+            if (successValue.ValueKind == JsonValueKind.False)
+            {
+                var code = ReadString(root, "code");
+                var message = ReadString(root, "message");
+                if (code.Length == 0 || message.Length == 0)
+                {
+                    throw new GcpNonCacheableException(
+                        "oauth2/google/externalaccount: response must include `error` and "
+                        + "`message` fields when unsuccessful");
+                }
+
+                throw new GcpNonCacheableException(
+                    "oauth2/google/externalaccount: response contains unsuccessful response: ("
+                    + code + ") " + message);
+            }
+
+            if (version > ExecutableSupportedMaxVersion || version < 0)
+            {
+                throw new InvalidOperationException(
+                    "oauth2/google/externalaccount: " + source
+                    + " contains unsupported version: " + version);
+            }
+
+            var expirationTime = ReadLong(root, "expiration_time");
+            if (expirationTime == 0 && outputFile.Length > 0)
+            {
+                throw MissingField(source, "expiration_time");
+            }
+
+            var tokenType = ReadString(root, "token_type");
+            if (tokenType.Length == 0)
+            {
+                throw MissingField(source, "token_type");
+            }
+
+            if (expirationTime != 0 && expirationTime < now)
+            {
+                throw new GcpNonCacheableException(
+                    "oauth2/google/externalaccount: the token returned by the executable is expired");
+            }
+
+            if (tokenType is "urn:ietf:params:oauth:token-type:jwt"
+                or "urn:ietf:params:oauth:token-type:id_token")
+            {
+                var idToken = ReadString(root, "id_token");
+                return idToken.Length > 0 ? idToken : throw MissingField(source, "id_token");
+            }
+
+            if (tokenType == "urn:ietf:params:oauth:token-type:saml2")
+            {
+                var saml = ReadString(root, "saml_response");
+                return saml.Length > 0 ? saml : throw MissingField(source, "saml_response");
+            }
+
+            throw new InvalidOperationException(
+                "oauth2/google/externalaccount: " + source + " contains unsupported token type");
+        }
+    }
+
+    private static InvalidOperationException MissingField(string source, string field)
+        => new("oauth2/google/externalaccount: " + source + " missing `" + field + "` field");
+
+    private static string ReadString(JsonElement root, string name)
+        => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+
+    private static int ReadInt(JsonElement root, string name)
+        => root.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt32(out var number)
+                ? number
+                : 0;
+
+    private static long ReadLong(JsonElement root, string name)
+        => root.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt64(out var number)
+                ? number
+                : 0;
+}
+
+/// <summary>Go: <c>nonCacheableError</c>; an output-file parse may retry fresh.</summary>
+internal sealed class GcpNonCacheableException(string message) : Exception(message);
+
