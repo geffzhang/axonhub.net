@@ -35,6 +35,10 @@ public sealed partial class CodexOutboundTransformer
 
         var rawHeaders = llmRequest.RawRequest?.Headers;
 
+        // Keep client attribution headers off the wire: the later inbound
+        // header merge would otherwise forward them upstream.
+        CodexHeaders.ScrubClientFingerprintHeaders(rawHeaders);
+
         var sessionId = CodexHeaders.GetSessionIdFromHeaders(rawHeaders);
         if (sessionId.Length == 0)
         {
@@ -65,11 +69,7 @@ public sealed partial class CodexOutboundTransformer
             "Originator",
             rawOriginator.Length > 0 ? rawOriginator : CodexConstants.AxonHubOriginator);
 
-        var rawUserAgent = HttpClientUtils.HeaderGet(rawHeaders, "User-Agent");
-        if (rawUserAgent.Length > 0)
-        {
-            HttpClientUtils.HeaderSet(headers, "User-Agent", rawUserAgent);
-        }
+        HttpClientUtils.HeaderSet(headers, "User-Agent", CodexConstants.DefaultUserAgent);
 
         if (HttpClientUtils.HeaderGet(headers, CodexHeaders.SessionHeaderHyphen).Length == 0)
         {

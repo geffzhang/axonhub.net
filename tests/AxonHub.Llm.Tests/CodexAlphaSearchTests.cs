@@ -130,6 +130,45 @@ public sealed class CodexAlphaSearchTests
         Assert.Equal(2, outbound.SelectedApiKeyIndex);
     }
 
+    [Fact]
+    public void AlphaSearchDoesNotForwardInboundUserAgentOrFingerprintHeaders()
+    {
+        const string clientUserAgent = "ZCode/3.14.4 (darwin arm64)";
+        var headers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        HttpClientUtils.HeaderSet(headers, "User-Agent", clientUserAgent);
+        HttpClientUtils.HeaderSet(headers, "Http-Referer", "https://client.example");
+        HttpClientUtils.HeaderSet(headers, "X-Zcode-Trace", "client-trace");
+        HttpClientUtils.HeaderSet(headers, "X-Os-Name", "darwin");
+        HttpClientUtils.HeaderSet(headers, "X-Title", "client-title");
+        HttpClientUtils.HeaderSet(headers, "X-Platform", "client-platform");
+
+        var outbound = NewAlphaSearchTestTransformer();
+        var request = outbound.TransformRequest(new LlmRequest
+        {
+            Model = "mapped-model",
+            RequestType = RequestTypes.AlphaSearch,
+            ApiFormat = ApiFormats.OpenAIAlphaSearch,
+            RawRequest = new HttpRequestData { Headers = headers },
+            AlphaSearch = new AlphaSearchRequest
+            {
+                Body = Encoding.UTF8.GetBytes(
+                    """{"model":"client-model","commands":{"search_query":[]}}"""),
+            },
+        });
+
+        Assert.Equal(
+            CodexConstants.DefaultUserAgent,
+            HttpClientUtils.HeaderGet(request.Headers, "User-Agent"));
+        Assert.NotEqual(
+            clientUserAgent,
+            HttpClientUtils.HeaderGet(request.Headers, "User-Agent"));
+        Assert.Equal(string.Empty, HttpClientUtils.HeaderGet(headers, "Http-Referer"));
+        Assert.Equal(string.Empty, HttpClientUtils.HeaderGet(headers, "X-Zcode-Trace"));
+        Assert.Equal(string.Empty, HttpClientUtils.HeaderGet(headers, "X-Os-Name"));
+        Assert.Equal(string.Empty, HttpClientUtils.HeaderGet(headers, "X-Title"));
+        Assert.Equal(string.Empty, HttpClientUtils.HeaderGet(headers, "X-Platform"));
+    }
+
     private static CodexOutboundTransformer NewAlphaSearchTestTransformer(
         Func<string?>? sessionId = null)
         => new(new CodexOutboundParams

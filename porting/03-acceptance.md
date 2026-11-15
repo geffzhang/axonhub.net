@@ -2273,6 +2273,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §271（2026-11-15）Claude Code WebSearch 经 Responses 后端（live #2750）。C328 登记并转 resolved：Responses 的 `web_search_call` 是元数据而非客户端函数调用。本轮按 call ID 合并 `openai_responses_web_search_calls` 快照（added/done/terminal 同一次调用、稀疏字段不删除），Anthropic 侧生成 `server_tool_use` / `web_search_tool_result`：查询已知即发进度块，结果只在 final 发；失败生成 `web_search_tool_result_error`（unavailable）；不伪造 `encrypted_content`；单搜索缺 sources 时回退结构化 URL citations（多搜索不归因）；标题匹配忽略 `utm_*`；特殊 `*_tool_result` 内容按 raw JSON 保留。新增 20 例单元/集成测试；Responses/Anthropic 定向 743/743，Llm 全量 3443/3443。未跑 Api 全量。台账 328 条（189 accepted / 139 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§273（2026-11-15）Codex 出站 User-Agent 归属与客户端指纹头清理（live #2635/#2638）。C329 登记并转 resolved：Codex 出站 transformer 此前无条件复制入站客户端 UA，使通道/全局 User-Agent 透传开关失效。参照改为 transformer 拥有 UA 默认值 `codex_cli_rs/0.159.0`（与 Version 同步），开关开启时由 orchestrator 覆盖；Responses 与 alpha search 两路一致。同时从入站请求删除 `Http-Referer`、`X-Title`、`X-Platform` 与 `X-Zcode-*`、`X-Os-*` 前缀，避免后续 inbound-header merge 泄漏客户端指纹；全局 blockedHeaders 不变。新增 2 例并更新既有 UA 期望；Codex 定向 121/121，UA/PassThrough 定向 222/222，Llm 全量 3445/3445。未跑 Api 全量。台账 329 条（189 accepted / 140 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

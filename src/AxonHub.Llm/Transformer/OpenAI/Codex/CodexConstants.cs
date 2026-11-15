@@ -21,6 +21,13 @@ public static class CodexConstants
     public const string DefaultVersion = "0.159.0";
 
     /// <summary>
+    /// Go: <c>codexDefaultUserAgent</c>. The transformer owns the outbound UA;
+    /// client-UA forwarding belongs solely to the orchestrator pass-through
+    /// middleware and overwrites this value when the switch is enabled.
+    /// </summary>
+    public const string DefaultUserAgent = "codex_cli_rs/" + DefaultVersion;
+
+    /// <summary>
     /// Go: <c>fabricatedBetaFeatures</c> — mirrors the X-Codex-Beta-Features
     /// value the current Codex CLI sends, used when a non-Codex inbound client
     /// omits the header.

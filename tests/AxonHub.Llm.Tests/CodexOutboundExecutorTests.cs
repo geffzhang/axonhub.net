@@ -62,7 +62,7 @@ public sealed class CodexOutboundExecutorTests
         Assert.Equal("text/event-stream", handler.LastHeader("Accept"));
         Assert.Equal("application/json", handler.LastHeader("Content-Type"));
         Assert.Equal(CodexConstants.AxonHubOriginator, handler.LastHeader("Originator"));
-        Assert.Equal("axonhub/1.0", handler.LastHeader("User-Agent"));
+        Assert.Equal(CodexConstants.DefaultUserAgent, handler.LastHeader("User-Agent"));
         Assert.Equal(CodexTestSupport.TestChatAccountId, handler.LastHeader("Chatgpt-Account-Id"));
         Assert.Equal("Bearer " + accessToken, handler.LastHeader("Authorization"));
         Assert.Equal("ts-1", handler.LastHeader(CodexHeaders.TurnStateHeader));
@@ -219,10 +219,10 @@ public sealed class CodexOutboundExecutorTests
         using var stream = executor.DoStream(CancellationToken.None, request);
 
         Assert.Equal(CodexTestSupport.LegacyCodexOriginator(), handler.LastHeader("Originator"));
-        Assert.Equal(CodexTestSupport.LegacyCodexUserAgent(), handler.LastHeader("User-Agent"));
-
-        var userAgent = handler.LastHeader("User-Agent").ToLowerInvariant();
-        Assert.Contains(CodexTestSupport.LegacyCodexOriginator(), userAgent, StringComparison.Ordinal);
+        // Only Originator is an inbound identity override; the transformer
+        // owns User-Agent and never copies the client's.
+        Assert.Equal(CodexConstants.DefaultUserAgent, handler.LastHeader("User-Agent"));
+        Assert.NotEqual(CodexTestSupport.LegacyCodexUserAgent(), handler.LastHeader("User-Agent"));
 
         Assert.Equal(CodexTestSupport.TestChatAccountId, handler.LastHeader("Chatgpt-Account-Id"));
         Assert.Equal("Bearer " + accessToken, handler.LastHeader("Authorization"));

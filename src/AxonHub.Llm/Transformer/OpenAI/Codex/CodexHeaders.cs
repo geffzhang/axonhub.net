@@ -51,6 +51,49 @@ public static class CodexHeaders
         ResponsesLiteHeader,
     ];
 
+    /// <summary>Go: <c>clientFingerprintHeaders</c>.</summary>
+    private static readonly string[] ClientFingerprintHeaders =
+    [
+        "Http-Referer",
+        "X-Title",
+        "X-Platform",
+    ];
+
+    /// <summary>Go: <c>clientFingerprintHeaderPrefixes</c>.</summary>
+    private static readonly string[] ClientFingerprintHeaderPrefixes =
+    [
+        "X-Zcode-",
+        "X-Os-",
+    ];
+
+    /// <summary>
+    /// Go: <c>ScrubClientFingerprintHeaders</c>. Deletes client attribution
+    /// headers from the inbound request before the later inbound-header merge
+    /// can forward them to the Codex upstream.
+    /// </summary>
+    public static void ScrubClientFingerprintHeaders(
+        Dictionary<string, List<string>>? headers)
+    {
+        if (headers is null)
+        {
+            return;
+        }
+
+        foreach (var name in ClientFingerprintHeaders)
+        {
+            HttpClientUtils.HeaderDel(headers, name);
+        }
+
+        foreach (var name in headers.Keys.ToList())
+        {
+            if (ClientFingerprintHeaderPrefixes.Any(prefix =>
+                    name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            {
+                headers.Remove(name);
+            }
+        }
+    }
+
     /// <summary>Port of <c>ExtractSessionIDFromTurnMetadata</c>.</summary>
     public static string ExtractSessionIdFromTurnMetadata(string? raw)
     {

@@ -30,7 +30,9 @@ public sealed class CodexSimulatorTests
         Assert.Equal(
             CodexConstants.AxonHubOriginator,
             HttpClientUtils.HeaderGet(finalRequest.Headers, "Originator"));
-        Assert.Equal("axonhub/1.0", HttpClientUtils.HeaderGet(finalRequest.Headers, "User-Agent"));
+        Assert.Equal(
+            CodexConstants.DefaultUserAgent,
+            HttpClientUtils.HeaderGet(finalRequest.Headers, "User-Agent"));
         Assert.Equal(
             "provided-session",
             HttpClientUtils.HeaderGet(finalRequest.Headers, CodexHeaders.SessionHeaderHyphen));
@@ -58,12 +60,14 @@ public sealed class CodexSimulatorTests
         Assert.Equal(
             CodexTestSupport.LegacyCodexOriginator(),
             HttpClientUtils.HeaderGet(finalRequest.Headers, "Originator"));
+        // The transformer owns the UA; client UA forwarding belongs to the
+        // orchestrator pass-through switch.
         Assert.Equal(
+            CodexConstants.DefaultUserAgent,
+            HttpClientUtils.HeaderGet(finalRequest.Headers, "User-Agent"));
+        Assert.NotEqual(
             CodexTestSupport.LegacyCodexUserAgent(),
             HttpClientUtils.HeaderGet(finalRequest.Headers, "User-Agent"));
-
-        var userAgent = HttpClientUtils.HeaderGet(finalRequest.Headers, "User-Agent").ToLowerInvariant();
-        Assert.Contains(CodexTestSupport.LegacyCodexOriginator(), userAgent, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -264,6 +268,36 @@ public sealed class CodexSimulatorTests
     }
 
     /// <summary>Port of <c>newCodexSimulator</c>.</summary>
+    [Fact]
+    public void TestCodexOutbound_ScrubsClientFingerprintHeaders()
+    {
+        var sim = NewSimulator();
+        var request = CodexTestSupport.NewChatCompletionRequest(
+            ("User-Agent", "ZCode/3.14.4 (darwin arm64)"),
+            ("Http-Referer", "https://client.example"),
+            ("X-Zcode-Trace", "client-trace"),
+            ("X-Os-Name", "darwin"),
+            ("X-Title", "client-title"),
+            ("X-Platform", "client-platform"));
+
+        var finalRequest = Simulate(sim, request);
+
+        Assert.Equal(
+            CodexConstants.DefaultUserAgent,
+            HttpClientUtils.HeaderGet(finalRequest.Headers, "User-Agent"));
+        foreach (var name in new[]
+                 {
+                     "Http-Referer",
+                     "X-Zcode-Trace",
+                     "X-Os-Name",
+                     "X-Title",
+                     "X-Platform",
+                 })
+        {
+            Assert.Equal(string.Empty, HttpClientUtils.HeaderGet(finalRequest.Headers, name));
+        }
+    }
+
     private static CodexOutboundTransformer NewSimulator(Func<string?>? sessionId = null)
         => CodexTestSupport.NewTestCodexOutbound(sessionId);
 

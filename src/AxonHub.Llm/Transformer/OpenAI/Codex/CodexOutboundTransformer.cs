@@ -322,7 +322,6 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
 
         var rawSessionId = string.Empty;
         var rawOriginator = string.Empty;
-        var rawUserAgent = string.Empty;
         var rawTurnMetadata = string.Empty;
 
         Dictionary<string, List<string>>? rawHeaders = null;
@@ -339,8 +338,11 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
             // Remove the underscore variant so it cannot leak upstream via
             // MergeInboundRequest.
             HttpClientUtils.HeaderDel(rawHeaders, CodexHeaders.SessionHeader);
+            // The ChatGPT Codex backend does not consume client attribution
+            // headers, so drop them before the inbound-header merge can
+            // forward the client's fingerprint.
+            CodexHeaders.ScrubClientFingerprintHeaders(rawHeaders);
             rawOriginator = HttpClientUtils.HeaderGet(rawHeaders, "Originator");
-            rawUserAgent = HttpClientUtils.HeaderGet(rawHeaders, "User-Agent");
             rawTurnMetadata = HttpClientUtils.HeaderGet(rawHeaders, CodexHeaders.TurnMetadataHeader);
 
             // Responses Lite selects a private Codex protocol mode. It is not
@@ -451,17 +453,16 @@ public sealed partial class CodexOutboundTransformer : IOutboundTransformer, IAp
             "Accept",
             request.RequestType == RequestTypes.Compact ? "application/json" : "text/event-stream");
 
+        // The transformer owns the outbound User-Agent. Client-UA forwarding is
+        // owned solely by the orchestrator pass-through middleware, which runs
+        // later and overwrites this default when the switch is enabled.
         HttpClientUtils.HeaderDel(headers, "User-Agent");
+        HttpClientUtils.HeaderSet(headers, "User-Agent", CodexConstants.DefaultUserAgent);
 
         HttpClientUtils.HeaderSet(
             headers,
             "Originator",
             rawOriginator.Length > 0 ? rawOriginator : CodexConstants.AxonHubOriginator);
-
-        if (rawUserAgent.Length > 0)
-        {
-            HttpClientUtils.HeaderSet(headers, "User-Agent", rawUserAgent);
-        }
 
         foreach (var header in CodexHeaders.PassthroughHeaders)
         {
