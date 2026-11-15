@@ -32,6 +32,22 @@
 `LlmTestServer` E2E，需要本地 LlmTestServer 或 CI 的 `e2e-llm` job。Persistence 全量 **431/431，3m25s**（2026-11-15）；Llm **3437/3437**、
 Grains **95/95** 仍为最近记录。
 
+### §281–§284 增量
+
+§281–§284 后未做全量合并复跑（2026-11-15，用户明确要求不跑全量）。当前
+用例总数为 **11160**（Api 7196、Persistence 432、Llm 3437、Grains 95）；
+新增 15 例均已定向通过：YamlConfigurationTests 4、ConfigReload 1、
+OrleansClusterOptions 9、OrleansSchema 1。上表与合计仍是最后一次全量实测
+（11145），未把定向用例混入全量通过数。
+
+多 silo 验收（§284，2026-11-15）：PostgreSQL 17 + 两个 API 进程（HTTP
+8091/8092；silo 11111/11112；gateway 30000/30001）打开
+`OrleansCluster:Enabled=true` 后，`orleansmembershiptable` 出现两行
+status=3；`orleansreminderstable` 有 6 行。强杀 silo-a 后其 membership
+变为 status=6（dead），silo-b `/health` 仍为 200。options 与 schema
+定向测试 10/10。默认 `orleans_cluster.enabled: false` 的 Compose/单 silo
+路径未改变；本轮未重建镜像复测，此前默认栈的 health/UI 均为 200。
+
 命令：`dotnet test AxonHub.slnx`（2026-11-06，Windows 11 / .NET SDK 10.0.401；
 Antigravity Llm 层切片（§55）与通道接线（§56）、OpenaiResponses 通道接线（§57）、Commandcode 通道接线（§58）、别名通道类型接线（§59）、xai_subscription 通道与订阅 Llm 子包（§60）、anthropic_gcp 通道与 Vertex 执行器（§61）、静态托管与 SPA fallback（§62）、管理面 system-settings（§63）、管理面 users / roles（§64）、管理面 channels 读取（§65）、管理面 channels 生命周期写入（§66）、管理面 channels createChannel（§67）与 updateChannel（§68）、批量写入（§69）、端点保存（§70）、API key 记账（§71）、端点自动检测（§72）、定价写入（§73）、通道自动定价（§74）、通道重复 / 批量创建 / 批量导入（§75）、通道测试（§76）、模型同步（§77）、通道覆盖模板（§78）、自助身份（§79）、管理面登录（§80）、管理面 GraphQL 鉴权（§81）、OIDC 提供方配置 / providers 列表（§82）、OIDC 登录流程（§83）、权限校验（§84）与项目成员（§85）与项目管理（§86）、API key 管理（§87）、模型管理（§88）、公开模型列表（§89）、模型关联路由（§90）、trace/thread 通道粘性路由（§91）、配额路由闸门（§95）、通道变换选项（§96）、API key profile 模型映射（§97）、orchestrator 入站中间件（§98）、项目提示词注入（§99）、项目提示词管理面（§100）、追踪 / 线程管理面（§101）、请求管理面（§102）、用量日志管理面（§103）、analytics 页（§104）与 dashboard 首页（§105）、数据存储管理面（§106）、备份 / 恢复与自动备份管理面（§107）落地后复跑，全绿；§108 的数据存储后端与自动备份调度随后落地。该次运行记录保留为历史，表中数字已由下方最近一次全量覆盖）。
 

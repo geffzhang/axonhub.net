@@ -88,6 +88,21 @@ gc:
   vacuum_enabled: false
   vacuum_full: false
 
+# Optional Orleans cluster mode. The default single instance uses localhost
+# clustering and in-memory reminders. Set enabled=true for multiple replicas
+# (Kubernetes StatefulSet/Deployment, multiple VMs): membership and reminders
+# use the PostgreSQL database above, so replicas must share it.
+orleans_cluster:
+  enabled: false
+  provider: adonet
+  connection_string: ""       # empty uses db/ConnectionStrings:Default
+  cluster_id: "axonhub"         # must be identical on every silo
+  service_id: "axonhub"         # must be identical on every silo
+  silo_name: ""                 # default HOSTNAME (Kubernetes pod name)
+  advertised_ip: ""             # default POD_IP in Kubernetes
+  silo_port: 11111              # pod-to-pod Orleans port
+  gateway_port: 30000           # 0 disables the external gateway
+
 metrics:
   enabled: false
   exporter:

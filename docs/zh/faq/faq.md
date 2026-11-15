@@ -36,12 +36,13 @@ check-then-act 竞态。
 ### 2. 状态与调用位置解耦
 
 grain 调用方只持有接口，不关心实例在哪个 silo。默认部署是 API 进程内的
-单 silo，不需要额外服务；如果以后需要多 silo，选路、限流和令牌状态的
-寻址与放置由 Orleans 负责，而不是由业务代码自己拼分布式锁。
+单 silo，不需要额外服务；需要多 silo 时，选路、限流和令牌状态的寻址与放置
+由 Orleans 负责，而不是由业务代码自己拼分布式锁。
 
-> 当前仓库默认是单 silo，使用内存 reminder 服务；多 silo、持久化 reminder
-> 和集群 membership 还没有作为部署形态启用。这里说的是架构能力，不是
-> 当前部署已经横向扩展。
+> 默认部署是单 silo（localhost clustering + 内存 reminder）。设置
+> `OrleansCluster:Enabled=true` 后切换为 PostgreSQL AdoNet membership
+> 和 durable reminder，支持 Kubernetes 多副本；见
+> [Kubernetes 多副本](../getting-started/kubernetes.md)。
 
 ### 3. 定时任务和生命周期统一
 
@@ -71,7 +72,9 @@ EF Core/Dapper、HotChocolate 和标准 .NET 诊断工具。
 - **跨 grain 调用有序列化和调度成本**，所以 request/response body、流式事件
   等高频数据不进出 grain。
 - **分布式一致性不是免费的**：多 silo 需要 clustering、reminder 存储和
-  故障转移策略；当前单 silo 没有这些问题，但也没有获得横向扩展能力。
+  故障转移策略。端口提供 `OrleansCluster:Enabled` 开关和 PostgreSQL
+  AdoNet 实现，但热点 grain、网络分区和数据库仍是运维面；默认单 silo
+  没有这些问题，也没有横向扩展能力。
 - **调试方式不同**：grain 的激活/停用、消息排队和重试需要看 Orleans 日志，
   不能只按普通方法调用理解。
 

@@ -42,6 +42,7 @@ using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using OpenTelemetry.Metrics;
+using Orleans.Configuration;
 using Orleans.Hosting;
 
 // cmd/axonhub/main.go:33-52: argv commands run before the host is built.
@@ -1066,15 +1067,53 @@ builder.Services.AddAxonHubGraphQL();
 // named HotChocolate schema.
 builder.Services.AddAxonHubOpenApiGraphQL();
 
+var orleansCluster = OrleansClusterOptions.FromConfiguration(
+    builder.Configuration,
+    connectionString);
+
 builder.Host.UseOrleans(silo =>
 {
-    silo.UseLocalhostClustering();
-    silo.AddMemoryGrainStorage("Default");
+    if (orleansCluster.Enabled)
+    {
+        // Multi-silo mode: membership and reminders live in the same
+        // PostgreSQL database. AdoNet membership makes dead silos visible to
+        // the cluster and lets grain placement fail over to a surviving silo;
+        // durable reminders survive the loss of the silo that armed them.
+        silo.Configure<ClusterOptions>(options =>
+        {
+            options.ClusterId = orleansCluster.ClusterId;
+            options.ServiceId = orleansCluster.ServiceId;
+        });
+        silo.Configure<SiloOptions>(options =>
+            options.SiloName = orleansCluster.SiloName);
+        silo.Configure<EndpointOptions>(options =>
+        {
+            options.AdvertisedIPAddress = orleansCluster.AdvertisedAddress!;
+            options.SiloPort = orleansCluster.SiloPort;
+            options.GatewayPort = orleansCluster.GatewayPort;
+        });
+        silo.UseAdoNetClustering(options =>
+        {
+            options.Invariant = "Npgsql";
+            options.ConnectionString = orleansCluster.ConnectionString;
+        });
+        silo.UseAdoNetReminderService(options =>
+        {
+            options.Invariant = "Npgsql";
+            options.ConnectionString = orleansCluster.ConnectionString;
+        });
+    }
+    else
+    {
+        silo.UseLocalhostClustering();
 
-    // The reminder-driven management tasks need a reminder table; the in-memory
-    // one keeps the reference's per-process cron state (a stop loses pending
-    // occurrences and nothing is backfilled).
-    silo.UseInMemoryReminderService();
+        // The reminder-driven management tasks need a reminder table; the
+        // in-memory one keeps the reference's per-process cron state (a stop
+        // loses pending occurrences and nothing is backfilled).
+        silo.UseInMemoryReminderService();
+    }
+
+    silo.AddMemoryGrainStorage("Default");
 });
 
 // server.pid_file (conf/conf.go:243, main.go:70-100): write the PID before
@@ -1123,6 +1162,13 @@ _ = app.Services.GetRequiredService<MeterProvider>();
 await using (var connection = await app.Services.GetRequiredService<PostgresConnectionFactory>().OpenAsync())
 {
     await DatabaseMigrator.EnsureCreatedAsync(connection);
+
+    if (orleansCluster.Enabled)
+    {
+        // The Orleans silo starts later (as a hosted service); its membership
+        // and reminder tables must exist before the first join.
+        await OrleansSchema.EnsureCreatedAsync(connection);
+    }
 
     // datamigrate.Migrator.Run skips every version-tracked migration until
     // the system is initialized (datamigrate/migrator.go). A fresh database

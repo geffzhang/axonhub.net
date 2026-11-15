@@ -14,6 +14,9 @@
     <PackageReference Include="Microsoft.Orleans.Server" />
     <!-- UseInMemoryReminderService (§149): reminder storage is not part of Server. -->
     <PackageReference Include="Microsoft.Orleans.Reminders" />
+    <!-- Opt-in multi-silo cluster: shared PostgreSQL membership + reminders. -->
+    <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AdoNet" />
     <PackageReference Include="ZstdSharp.Port" />
     <PackageReference Include="BCrypt.Net-Next" />
     <PackageReference Include="AWSSDK.S3" />

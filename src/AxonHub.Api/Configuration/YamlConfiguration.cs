@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using YamlDotNet.RepresentationModel;
+using Path = System.IO.Path;
 
 namespace AxonHub.Api.Configuration;
 

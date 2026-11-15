@@ -38,6 +38,15 @@ public sealed class YamlConfigurationTests
               dsn: "Host=postgres;Database=axonhub"
             gc:
               cron: "0 2 * * *"
+            orleans_cluster:
+              enabled: true
+              provider: adonet
+              cluster_id: "axonhub-test"
+              service_id: "axonhub-api"
+              silo_name: "silo-0"
+              advertised_ip: "127.0.0.1"
+              silo_port: 11112
+              gateway_port: 0
             """);
 
         Assert.Equal("0.0.0.0", values["Server:Host"]);
@@ -56,6 +65,14 @@ public sealed class YamlConfigurationTests
         Assert.Equal("postgres", values["Db:Dialect"]);
         Assert.Equal("Host=postgres;Database=axonhub", values["Db:Dsn"]);
         Assert.Equal("0 2 * * *", values["Gc:Cron"]);
+        Assert.Equal("true", values["OrleansCluster:Enabled"]);
+        Assert.Equal("adonet", values["OrleansCluster:Provider"]);
+        Assert.Equal("axonhub-test", values["OrleansCluster:ClusterId"]);
+        Assert.Equal("axonhub-api", values["OrleansCluster:ServiceId"]);
+        Assert.Equal("silo-0", values["OrleansCluster:SiloName"]);
+        Assert.Equal("127.0.0.1", values["OrleansCluster:AdvertisedIP"]);
+        Assert.Equal("11112", values["OrleansCluster:SiloPort"]);
+        Assert.Equal("0", values["OrleansCluster:GatewayPort"]);
     }
 
     [Fact]

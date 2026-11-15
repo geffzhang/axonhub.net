@@ -14,6 +14,9 @@
     <PackageVersion Include="Microsoft.Orleans.Server" Version="10.4.1" />
     <PackageVersion Include="Microsoft.Orleans.Client" Version="10.4.1" />
     <PackageVersion Include="Microsoft.Orleans.Reminders" Version="10.4.1" />
+    <!-- 可选多 silo：AdoNet membership + reminders 使用 PostgreSQL -->
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.4.1" />
+    <PackageVersion Include="Microsoft.Orleans.Reminders.AdoNet" Version="10.4.1" />
     <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="10.4.1" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.4.1" />
     <!-- 持久化：CQRS 分工——写侧 EF Core，读侧 Dapper；PostgreSQL（本地参考 E:\GitHub\Dapper @ 2.1.89） -->

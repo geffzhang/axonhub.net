@@ -72,6 +72,30 @@ export ConnectionStrings__Default="Host=localhost;Port=5432;Database=axonhub;Use
 `db.dsn` 使用 Npgsql key-value 连接串，不是 `postgres://` URI。SQLite/MySQL
 未移植；`db.dialect` 为其他值会在启动时明确失败。
 
+## Orleans 单 silo 与多 silo
+
+默认 `orleans_cluster.enabled: false`：API 进程内 single silo，localhost
+clustering，内存 reminder，适合单实例和本地开发。
+
+多副本（Kubernetes/VM）必须打开：
+
+```yaml
+orleans_cluster:
+  enabled: true
+  provider: adonet
+  connection_string: ""       # 空 = ConnectionStrings:Default
+  cluster_id: "axonhub"
+  service_id: "axonhub"
+  silo_name: ""                 # 默认 HOSTNAME
+  advertised_ip: ""             # Kubernetes 用 POD_IP
+  silo_port: 11111
+  gateway_port: 0
+```
+
+集群成员表与 reminder 表在启动时自动创建，所有副本共享同一 PostgreSQL。每个 Pod
+的 `advertised_ip` 必须是 Pod IP，不是 Service IP。完整部署与故障转移说明见
+[Kubernetes 多副本](kubernetes.md)。
+
 ## 监听与静态资源
 
 | 配置 | 说明 |
