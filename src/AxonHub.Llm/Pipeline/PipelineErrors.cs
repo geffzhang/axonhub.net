@@ -6,8 +6,12 @@ namespace AxonHub.Llm.Pipeline;
 /// </summary>
 public static class PipelineErrors
 {
-    /// <summary>The response contains no meaningful content.</summary>
-    public static readonly Exception EmptyResponse = new PipelineSentinelException("empty response detected");
+    /// <summary>
+    /// The response contains no meaningful content. Go aliases this sentinel to
+    /// <c>llm.ErrEmptyResponse</c> (#2657), so structured stream failures can
+    /// carry it as their cause.
+    /// </summary>
+    public static readonly Exception EmptyResponse = LlmErrors.EmptyResponse;
 
     /// <summary>A streaming response did not produce the first event in time.</summary>
     public static readonly Exception StreamFirstEventTimeout = new PipelineSentinelException("stream first event timeout");

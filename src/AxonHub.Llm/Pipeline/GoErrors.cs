@@ -15,7 +15,7 @@ public static class GoErrors
             return err is null;
         }
 
-        for (var current = err; current is not null; current = current.InnerException)
+        for (var current = err; current is not null; current = Unwrap(current))
         {
             if (ReferenceEquals(current, target))
             {
@@ -54,7 +54,7 @@ public static class GoErrors
     public static T? As<T>(Exception? err)
         where T : Exception
     {
-        for (var current = err; current is not null; current = current.InnerException)
+        for (var current = err; current is not null; current = Unwrap(current))
         {
             if (current is T match)
             {
@@ -64,6 +64,15 @@ public static class GoErrors
 
         return null;
     }
+
+    /// <summary>
+    /// Go's <c>ResponseError.Unwrap</c> exposes <c>Cause</c>; other errors
+    /// unwrap through <see cref="Exception.InnerException"/>.
+    /// </summary>
+    private static Exception? Unwrap(Exception error)
+        => error is ResponseError { CauseException: { } cause }
+            ? cause
+            : error.InnerException;
 }
 
 /// <summary>Carrier for <see cref="GoErrors.Wrap"/>: a message prefix over an inner error.</summary>

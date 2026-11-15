@@ -383,6 +383,14 @@ public sealed class ResponseError : Exception
     [JsonIgnore]
     public Exception? CauseException { get; set; }
 
+    /// <summary>
+    /// Go: <c>SuppressStatusText</c>. A structured stream failure carries an
+    /// error detail instead of an HTTP status line, so its text must not start
+    /// with "Request failed: ...". (#2657)
+    /// </summary>
+    [JsonIgnore]
+    public bool SuppressStatusText { get; set; }
+
     public ResponseError()
     {
     }
@@ -399,7 +407,7 @@ public sealed class ResponseError : Exception
     public override string ToString()
     {
         var sb = new StringBuilder();
-        if (StatusCode != 0)
+        if (StatusCode != 0 && !SuppressStatusText)
         {
             sb.Append("Request failed: ").Append(Http.GoHttpStatus.Text(StatusCode)).Append(", ");
         }

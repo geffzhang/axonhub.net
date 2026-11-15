@@ -31,6 +31,7 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
     // provider [DONE] marker is valid only after this becomes true.
     private bool _responseCompleted;
     private bool _doneEmitted;
+    private bool _contentCommitted;
 
     // Response metadata.
     private string _responseId = string.Empty;
@@ -77,6 +78,14 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
             _eventQueue = [];
             _queueIndex = 0;
 
+            // A transform failure may have queued its usage chunk first; once
+            // that queue drains, the error stays terminal and the source is not
+            // advanced again (#2657).
+            if (_err is not null)
+            {
+                return false;
+            }
+
             // The terminal event contains the final outcome and any usage. Once
             // its queued chunks are drained, finish without reading a later
             // transport error.
@@ -111,7 +120,9 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
             catch (Exception ex)
             {
                 _err = ex;
-                return false;
+                // Hand the caller any chunk queued before the failure (the usage
+                // of a structured response.failed) before stopping.
+                continue;
             }
         }
     }
@@ -843,6 +854,31 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
                     return;
                 }
 
+                // A structured failure before any meaningful output is retryable:
+                // surface the error code (with its usage, when present) instead
+                // of a finish_reason terminal, so the retry predicate can match
+                // the channel's configured patterns (#2657).
+                if (!_contentCommitted
+                    && ev.Response?.Error is { Code.Length: > 0 })
+                {
+                    if (ev.Response.Usage is { } failedUsage)
+                    {
+                        _usage = failedUsage.ToUsage();
+                        Enqueue(new LlmResponse
+                        {
+                            Object = "chat.completion.chunk",
+                            Id = _responseId,
+                            Model = _responseModel,
+                            Created = _created,
+                            PreviousResponseId = _previousResponseId,
+                            Choices = [],
+                            Usage = _usage,
+                        });
+                    }
+
+                    throw ResponseFailedError(ev);
+                }
+
                 _responseCompleted = true;
                 resp.Choices =
                 [
@@ -1190,8 +1226,79 @@ internal sealed class ResponsesOutboundStream : IStream<LlmResponse>
 
     private void Enqueue(LlmResponse resp)
     {
+        if (ResponseHasMeaningfulContent(resp))
+        {
+            _contentCommitted = true;
+        }
+
         _eventQueue.Add(resp);
     }
+
+    /// <summary>
+    /// Go: <c>responseHasMeaningfulContent</c>. A structured
+    /// <c>response.failed</c> may only be retried while nothing meaningful has
+    /// been committed to the caller (#2657).
+    /// </summary>
+    private static bool ResponseHasMeaningfulContent(LlmResponse? resp)
+    {
+        if (resp is null)
+        {
+            return false;
+        }
+
+        foreach (var choice in resp.Choices)
+        {
+            if (choice?.Delta is not { } message)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(message.Content?.Content)
+                || message.Content?.MultipleContent is { Count: > 0 }
+                || message.ToolCalls is { Count: > 0 }
+                || !string.IsNullOrEmpty(message.Refusal)
+                || !string.IsNullOrEmpty(message.ReasoningContent)
+                || !string.IsNullOrEmpty(message.Reasoning)
+                || !string.IsNullOrEmpty(message.ReasoningSignature))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Go: <c>responseFailedError</c>. Carries the provider's structured error
+    /// detail, suppresses the synthetic status text, and keeps the empty
+    /// response sentinel reachable for retry classification (#2657).
+    /// </summary>
+    private static ResponseError ResponseFailedError(ResponsesStreamEvent streamEvent)
+    {
+        var detail = new ErrorDetail();
+        if (streamEvent.Response?.Error is { } error)
+        {
+            detail = new ErrorDetail
+            {
+                Code = error.Code,
+                Message = error.Message,
+                Type = error.Type ?? string.Empty,
+                Param = error.Param,
+            };
+        }
+
+        return new ResponseError
+        {
+            StatusCode = FailedResponseStatus(streamEvent.Status),
+            Detail = detail,
+            SuppressStatusText = true,
+            CauseException = LlmErrors.EmptyResponse,
+        };
+    }
+
+    /// <summary>Go: <c>failedResponseStatus</c>.</summary>
+    private static int FailedResponseStatus(int status)
+        => status is >= 400 and < 600 ? status : 502;
 
     public LlmResponse? Current
     {

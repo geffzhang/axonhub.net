@@ -1180,6 +1180,110 @@ public sealed class ResponsesOutboundStreamTests
             map.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
                 .Select(static pair => pair.Key + "=" + pair.Value));
 
+    public static TheoryData<string, int> ResponseFailedStatuses => new()
+    {
+        { "null", 502 },
+        { "0", 502 },
+        { "200", 502 },
+        { "399", 502 },
+        { "600", 502 },
+        { "-1", 502 },
+        { "\"failed\"", 502 },
+        { "400", 400 },
+        { "429", 429 },
+        { "500", 500 },
+        { "599", 599 },
+    };
+
+    // Port of TestResponsesOutboundStreamResponseFailedStatus.
+    [Theory]
+    [MemberData(nameof(ResponseFailedStatuses))]
+    public void StructuredResponseFailedCarriesStatusAndEmptyResponseCause(string status, int want)
+    {
+        var data = $$$$"""{"type":"response.failed","status":{{{{status}}}},"response":{"error":{"type":"server_error","code":"server_is_overloaded","message":"server overloaded"}}}""";
+        using var stream = new ResponsesOutboundStream(
+            new SliceStream<StreamEvent>([ResponsesStreamTestSupport.Event(data)]));
+
+        var chunks = GoStreams.All(stream, out var err);
+
+        Assert.Empty(chunks);
+        var responseError = GoErrors.As<ResponseError>(err);
+        Assert.NotNull(responseError);
+        Assert.Equal(want, responseError.StatusCode);
+        Assert.True(GoErrors.Is(err, PipelineErrors.EmptyResponse));
+        Assert.Equal(
+            "error: server overloaded, code: server_is_overloaded, type: server_error",
+            responseError.ToString());
+    }
+
+    // Port of TestResponsesOutboundStreamResponseFailedUsageBeforeError.
+    [Fact]
+    public void StructuredResponseFailedEmitsUsageBeforeTheErrorAndStopsReading()
+    {
+        var source = new CountingEventStream(
+        [
+            ResponsesStreamTestSupport.Event(
+                """{"type":"response.failed","response":{"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":1}},"error":{"type":"server_error","code":"server_is_overloaded","message":"server overloaded"}}}"""),
+            ResponsesStreamTestSupport.Event(
+                """{"type":"response.output_text.delta","delta":"late content"}"""),
+        ]);
+        using var stream = new ResponsesOutboundStream(source);
+
+        Assert.True(stream.Next(), "usage must be available before stream termination");
+        var chunk = stream.Current!;
+        Assert.Empty(chunk.Choices);
+        Assert.NotNull(chunk.Usage);
+        Assert.Equal(10L, chunk.Usage!.PromptTokens);
+        Assert.Equal(2L, chunk.Usage.CompletionTokens);
+        Assert.Equal(12L, chunk.Usage.TotalTokens);
+        Assert.Equal(3L, chunk.Usage.PromptTokensDetails!.CachedTokens);
+        Assert.Equal(1L, chunk.Usage.CompletionTokensDetails!.ReasoningTokens);
+
+        Assert.False(stream.Next());
+        Assert.True(GoErrors.Is(stream.Err, PipelineErrors.EmptyResponse));
+        Assert.False(stream.Next(), "the failure must remain terminal after usage drains");
+        Assert.True(source.Index == 1, "do not consume events after the failure");
+    }
+
+    // Port of TestResponsesOutboundStreamResponseFailedMalformed: a failure
+    // without a structured code keeps the finish_reason terminal.
+    [Fact]
+    public void MalformedResponseFailedKeepsFinishReasonTerminal()
+    {
+        var (responses, err) = Run(
+            ResponsesStreamTestSupport.Event("""{"type":"response.failed","response":{}}"""));
+
+        Assert.Null(err);
+        Assert.NotEmpty(responses);
+        Assert.Contains(
+            responses,
+            static r => r.Choices.Count > 0 && r.Choices[0].FinishReason == "error");
+    }
+
+    private sealed class CountingEventStream(StreamEvent[] items) : IStream<StreamEvent>
+    {
+        public int Index { get; private set; }
+
+        public StreamEvent? Current { get; private set; }
+
+        public Exception? Err => null;
+
+        public bool Next()
+        {
+            if (Index >= items.Length)
+            {
+                return false;
+            }
+
+            Current = items[Index++];
+            return true;
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
     private static (List<LlmResponse> Responses, Exception? Err) Run(params StreamEvent[] events)
         => RunEvents(events);
 

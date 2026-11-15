@@ -68,6 +68,35 @@ public sealed class ChannelRetryPredicateTests
             false
         },
         {
+            "structured code matches configured pattern",
+            new ResponseError
+            {
+                Detail = new ErrorDetail { Code = "server_is_overloaded" },
+            },
+            ChannelRetrySettings.Parse(
+                """{"retryableErrorPatterns":[{"pattern":"server_is_overloaded"}]}"""),
+            true
+        },
+        {
+            "unrelated structured code does not match",
+            new ResponseError
+            {
+                Detail = new ErrorDetail { Code = "invalid_api_key" },
+            },
+            ChannelRetrySettings.Parse(
+                """{"retryableErrorPatterns":[{"pattern":"server_is_overloaded"}]}"""),
+            false
+        },
+        {
+            "structured code without patterns is not retryable",
+            new ResponseError
+            {
+                Detail = new ErrorDetail { Code = "server_is_overloaded" },
+            },
+            new ChannelRetrySettings(),
+            false
+        },
+        {
             "response error renders detail text like Go",
             new ResponseError
             {
