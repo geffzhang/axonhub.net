@@ -889,6 +889,51 @@ public sealed class ChannelTestServiceTests(GrainClusterFixture fixture)
     }
 
     [Fact]
+    public void ChannelTestApiFormatUsesAPinnedEmbeddingEndpoint()
+    {
+        var channel = Descriptor(
+            endpoints:
+                """[{"api_format":"openai/chat_completions"},{"api_format":"openai/embeddings"}]""",
+            settings:
+                """{"modelProtocols":[{"model":"bge-m3","apiFormats":["openai/embeddings"]}]}""");
+
+        Assert.Equal(
+            ApiFormats.OpenAIEmbedding,
+            ChannelTestService.ChannelTestApiFormat(channel, "bge-m3"));
+    }
+
+    [Fact]
+    public void ChannelTestResponseMessageDescribesEmbeddingVectors()
+    {
+        Assert.Equal(
+            "Embedding OK: 3 dimensions",
+            ChannelTestService.ChannelTestResponseMessage(
+                Encoding.UTF8.GetBytes(
+                    """{"data":[{"object":"embedding","embedding":[0.1,0.2,0.3],"index":0}]}"""),
+                ApiFormats.OpenAIEmbedding));
+
+        Assert.Equal(
+            "Embedding OK: base64 encoded vector",
+            ChannelTestService.ChannelTestResponseMessage(
+                Encoding.UTF8.GetBytes(
+                    """{"data":[{"object":"embedding","embedding":"AAAA","index":0}]}"""),
+                ApiFormats.OpenAIEmbedding));
+
+        var missing = Assert.Throws<InvalidOperationException>(() =>
+            ChannelTestService.ChannelTestResponseMessage(
+                Encoding.UTF8.GetBytes("""{"data":[]}"""),
+                ApiFormats.OpenAIEmbedding));
+        Assert.Equal("No embedding in response", missing.Message);
+
+        var empty = Assert.Throws<InvalidOperationException>(() =>
+            ChannelTestService.ChannelTestResponseMessage(
+                Encoding.UTF8.GetBytes(
+                    """{"data":[{"object":"embedding","embedding":[],"index":0}]}"""),
+                ApiFormats.OpenAIEmbedding));
+        Assert.Equal("Empty embedding vector in response", empty.Message);
+    }
+
+    [Fact]
     public void ParseDecisionsTestResponseRequiresAnswers()
     {
         const string body = """{"model":"gpt-6-luna","answers":[{"name":"answer","probability":1}]}""";

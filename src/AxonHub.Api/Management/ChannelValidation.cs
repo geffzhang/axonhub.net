@@ -1015,10 +1015,11 @@ public static class ChannelValidation
 
         foreach (var endpoint in list)
         {
-            if (endpoint.ApiFormat == ApiFormats.TypeSafeSystemOne && channelType != "typesafe")
+            if (endpoint.ApiFormat == ApiFormats.TypeSafeSystemOne
+                && channelType is not ("typesafe" or "openai" or "cloudflare"))
             {
                 return "api_format " + GoCast.GoQuote(endpoint.ApiFormat)
-                    + " is only supported by TypeSafe channel types";
+                    + " is only supported by TypeSafe, OpenAI and Cloudflare channel types";
             }
         }
 

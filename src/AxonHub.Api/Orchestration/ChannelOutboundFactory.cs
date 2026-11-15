@@ -12,6 +12,7 @@ using AxonHub.Llm.Transformer.Anthropic.ClaudeCode;
 using AxonHub.Llm.Transformer.Bailian;
 using AxonHub.Llm.Transformer.Cerebras;
 using AxonHub.Llm.Transformer.Cline;
+using AxonHub.Llm.Transformer.Cloudflare;
 using AxonHub.Llm.Transformer.DeepSeek;
 using AxonHub.Llm.Transformer.Doubao;
 using AxonHub.Llm.Transformer.Fireworks;
@@ -200,6 +201,9 @@ public static class ChannelOutboundFactory
     public const string EvolinkChannelType = "evolink";
 
     public const string GroqChannelType = "groq";
+
+    /// <summary>Cloudflare Workers AI: OpenAI-compatible surface plus native /run.</summary>
+    public const string CloudflareChannelType = "cloudflare";
 
     // channel_llm.go:898, 885, 990, 1016, 1056: Anthropic-format aliases
     // (qiniu/aihubmix/evolink share the plain direct platform).
@@ -638,7 +642,7 @@ public static class ChannelOutboundFactory
             AtlascloudChannelType or VercelChannelType or DeepinfraChannelType
                 or QiniuChannelType or PpioChannelType or SiliconflowChannelType
                 or AihubmixChannelType or BurncloudChannelType or GithubChannelType
-                or EvolinkChannelType or GroqChannelType
+                or EvolinkChannelType or GroqChannelType or CloudflareChannelType
                 => OpenAiOutboundTransformer.Create(
                     candidate.BaseUrl ?? string.Empty,
                     provider,
@@ -1073,7 +1077,7 @@ public static class ChannelOutboundFactory
                 or LongcatChannelType or MinimaxChannelType or ModelscopeChannelType
                 or BailianChannelType or GithubCopilotChannelType or CerebrasChannelType
                 or NanogptChannelType or OpenCodeGoChannelType or CommandcodeChannelType
-                or XaiChannelType
+                or XaiChannelType or CloudflareChannelType
                 => ApiFormats.OpenAIChatCompletion,
             OpenaiResponsesChannelType or ZenmuxResponsesChannelType or CodexChannelType
                 or FennoChannelType or BailianResponsesChannelType
@@ -1456,6 +1460,18 @@ public static class ChannelOutboundFactory
                     ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
                 });
             case ApiFormats.TypeSafeSystemOne:
+                if (candidate.Type == CloudflareChannelType)
+                {
+                    return new CloudflareSystemOneOutboundTransformer(
+                        new CloudflareSystemOneConfig
+                        {
+                            BaseUrl = baseUrl,
+                            ApiKeyProvider = apiKeyProvider,
+                            EndpointPath = path,
+                            ChannelApiKeyIndex = apiKeyProvider.KeyIndex,
+                        });
+                }
+
                 return TypeSafeOutboundTransformer.Create(
                     baseUrl,
                     apiKeyProvider,

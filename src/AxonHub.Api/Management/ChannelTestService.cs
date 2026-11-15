@@ -642,6 +642,39 @@ public sealed class ChannelTestService(
         string apiFormat,
         CancellationToken cancellationToken)
     {
+        if (apiFormat == ApiFormats.OpenAIEmbedding)
+        {
+            if (useStream)
+            {
+                throw new InvalidOperationException("embeddings do not support streaming");
+            }
+
+            // Protect role-scoped prompts before they are combined into the
+            // single embedding input, mirroring the System One branch.
+            var testRequest = BuildChannelTestRequest(
+                model,
+                useStream: false,
+                systemPrompt,
+                userPrompt,
+                responsesWebSocket: false,
+                ApiFormats.OpenAIChatCompletion);
+            var protectedRequest = await ProtectPromptsAsync(testRequest, cancellationToken)
+                .ConfigureAwait(false);
+
+            var body = GoJson.Marshal(new OpenAiEmbeddingRequest
+            {
+                Model = model,
+                Input = new EmbeddingInput
+                {
+                    String = ContentText(protectedRequest.Messages[0])
+                        + "\n\n"
+                        + ContentText(protectedRequest.Messages[1]),
+                },
+            });
+
+            return (new EmbeddingInboundTransformer(), body);
+        }
+
         if (apiFormat == ApiFormats.TypeSafeSystemOne)
         {
             if (useStream)
@@ -810,8 +843,10 @@ public sealed class ChannelTestService(
         var filtered = ChannelEndpointSelection.FilterEndpointsByApiFormats(endpoints, forced);
         if (filtered is { Count: > 0 })
         {
-            // The reference narrows to the first matching endpoint only.
-            endpoints = [filtered[0]];
+            // A model pinned by modelProtocols is tested with its endpoint
+            // (tester.go:142-148): a pinned embedding or System One model would
+            // otherwise be tested as chat and always fail.
+            return filtered[0].ApiFormat;
         }
 
         foreach (var endpoint in endpoints)
@@ -845,9 +880,12 @@ public sealed class ChannelTestService(
 
     /// <summary>Port of channelTestInbound (tester.go:153-158).</summary>
     private static IInboundTransformer ChannelTestInbound(string apiFormat)
-        => apiFormat == ApiFormats.OpenAIDecisions
-            ? new DecisionsInboundTransformer()
-            : new OpenAiInboundTransformer();
+        => apiFormat switch
+        {
+            ApiFormats.OpenAIDecisions => new DecisionsInboundTransformer(),
+            ApiFormats.OpenAIEmbedding => new EmbeddingInboundTransformer(),
+            _ => new OpenAiInboundTransformer(),
+        };
 
     /// <summary>Port of usesResponsesWebSocket (tester.go:189-221).</summary>
     internal static bool UsesResponsesWebSocket(ChannelDescriptor channel)
@@ -919,6 +957,37 @@ public sealed class ChannelTestService(
     /// <summary>Port of channelTestResponseMessage (tester.go:234-260).</summary>
     internal static string? ChannelTestResponseMessage(byte[] body, string apiFormat)
     {
+        if (apiFormat == ApiFormats.OpenAIEmbedding)
+        {
+            OpenAiEmbeddingResponse? response;
+            try
+            {
+                response = LlmJson.Deserialize<OpenAiEmbeddingResponse>(body);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(ex.Message, ex);
+            }
+
+            if (response?.Data is not { Count: > 0 })
+            {
+                throw new InvalidOperationException("No embedding in response");
+            }
+
+            var embedding = response.Data[0].Embedding;
+            if (embedding.Values is { Count: > 0 } values)
+            {
+                return "Embedding OK: " + values.Count + " dimensions";
+            }
+
+            if (embedding.Base64.Length > 0)
+            {
+                return "Embedding OK: base64 encoded vector";
+            }
+
+            throw new InvalidOperationException("Empty embedding vector in response");
+        }
+
         if (apiFormat == ApiFormats.TypeSafeSystemOne)
         {
             SystemOneResponse? response;
