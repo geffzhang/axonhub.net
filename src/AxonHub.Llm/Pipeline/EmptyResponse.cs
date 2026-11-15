@@ -50,6 +50,17 @@ public static class ResponseContent
             return true;
         }
 
+        // An audio-only assistant message carries no text, tool call or reasoning, so
+        // without this it looks empty and triggers a retry of a response the upstream
+        // already produced and billed. Only audio that actually carries bytes or a
+        // transcript counts; a present-but-empty audio object stays empty, matching the
+        // speech guards above (#2634).
+        if (msg.Audio is { } audio
+            && (!string.IsNullOrEmpty(audio.Data) || !string.IsNullOrEmpty(audio.Transcript)))
+        {
+            return true;
+        }
+
         return false;
     }
 

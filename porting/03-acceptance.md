@@ -2257,6 +2257,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §263（2026-11-15）EOF 处未终止的最终 SSE 行（live #2692）。C322 登记并转 resolved：synthetic.new 这类上游以没有尾随换行的 `data: [DONE]` 结束响应体，go-sse 会丢弃未终止的最终字段，终端事件随之丢失，请求在完整回答后被记为 canceled。参照用 `newlineTerminatingReader` 在 EOF 前合成缺失换行；恢复的 `[DONE]` 由既有终止分支记为 completed。端口自写解码器本就会 flush 末行，但 `HttpSseEventStream` 未计入末行字节，两个解码器也都没把合成换行计入 `MaxEventSize`。本轮在增量解码器的 EOF 末行报告 `lineBytes` 与一个合成终止符，并在 `SseDecoder` 的大小计算中为未终止末行加 1 字节；终止行、孤立 CR 与空 body 不变。新增 `HttpSseEventStreamTests` 10 例（复制 live 的 synthetic 终止/未终止 fixture 对并证明只差行终止、裸 `data: [DONE]`、截断 JSON 不伪造终端、合成换行计入上限、终止事件恰好达到上限、孤立 CR、空 body、`SseDecoder` 字符串路径）；SSE/Executor 定向 19/19，Llm 全量 3385/3385。Api 侧的持久化状态断言未单独移植，解码器现在与参照交付相同的 `[DONE]` 事件。未跑 Api 全量（新增 Llm 10 例）。台账 322 条（190 accepted / 132 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§264（2026-11-15）音频消息计入空响应判定（live #2634）。C323 登记并转 resolved：`hasMessageContent` 从未检查 `msg.Audio`，只返回音频的 Chat Completions 响应被判为空，pipeline 抛 `ErrEmptyResponse`、同通道重试，可能在上游已成功并计费后返回 500。参照将携带 `Data` 或 `Transcript` 的音频视为内容，空 audio 对象仍为空；检查位于 `hasMessageContent`，同时覆盖 `Message` 与流式 `Delta`。本轮在 `EmptyResponse.HasMessageContent` 中补齐该分支。新增 live 的 4 例（音频 data、仅 transcript、空 audio 对象、流式 delta 音频）；`EmptyResponseTests` 28/28，Llm 全量 3389/3389。未跑 Api 全量（新增 Llm 4 例）。台账 323 条（190 accepted / 133 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

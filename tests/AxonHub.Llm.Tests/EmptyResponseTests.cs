@@ -210,6 +210,79 @@ public sealed class EmptyResponseTests
         }));
     }
 
+    // Port of TestHasResponseContent/message audio data.
+    [Fact]
+    public void HasResponseContent_MessageAudioData()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Choices =
+            [
+                new Choice
+                {
+                    Message = new Message
+                    {
+                        Audio = new OutputAudio { Id = "audio_1", Data = "UklGRiQAAABX" },
+                    },
+                },
+            ],
+        }));
+    }
+
+    // Port of TestHasResponseContent/message audio transcript only.
+    [Fact]
+    public void HasResponseContent_MessageAudioTranscriptOnly()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Choices =
+            [
+                new Choice
+                {
+                    Message = new Message
+                    {
+                        Audio = new OutputAudio { Transcript = "spoken answer" },
+                    },
+                },
+            ],
+        }));
+    }
+
+    // Port of TestHasResponseContent/empty message audio object.
+    [Fact]
+    public void HasResponseContent_EmptyMessageAudioObject()
+    {
+        Assert.False(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Choices =
+            [
+                new Choice
+                {
+                    Message = new Message { Audio = new OutputAudio() },
+                },
+            ],
+        }));
+    }
+
+    // Port of TestHasResponseContent/streamed delta audio.
+    [Fact]
+    public void HasResponseContent_StreamedDeltaAudio()
+    {
+        Assert.True(ResponseContent.HasResponseContent(new LlmResponse
+        {
+            Choices =
+            [
+                new Choice
+                {
+                    Delta = new Message
+                    {
+                        Audio = new OutputAudio { Data = "UklGRiQAAABX" },
+                    },
+                },
+            ],
+        }));
+    }
+
     // Port of empty_response.go audio branches (speech, transcription, stream events).
     [Fact]
     public void HasResponseContent_SpeechAudio()
