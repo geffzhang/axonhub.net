@@ -719,7 +719,6 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
     {
         const string model = "resilience-repeated-trace-sticky";
         const string traceHeader = "resilience-sticky-trace";
-        const long persistedTraceId = 88001;
         await ConfigureAsync(
             model,
             new { content = "First request." },
@@ -728,6 +727,7 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         var primary = PrimaryChannel(model);
         var fallback = FallbackChannel(model);
         var previousChannels = new PreviousChannelCache(TimeProvider.System);
+        var traceStore = new FixedTraceStore();
 
         var first = await SendSelectedAsync(
             RequestBody(model),
@@ -738,12 +738,14 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
                 Candidate(fallback, priority: 1)),
             previousChannels: previousChannels,
             traceHeader: traceHeader,
-            persistedTraceId: persistedTraceId);
+            traceStore: traceStore);
 
         Assert.Equal(StatusCodes.Status200OK, first.Response.StatusCode);
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 200));
         Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
-        Assert.Equal(PrimaryChannelId, previousChannels.GetPreviousChannelId(persistedTraceId));
+        Assert.Equal(
+            PrimaryChannelId,
+            previousChannels.GetPreviousChannelId(traceStore.GetTrace(traceHeader).Id));
 
         var second = await SendSelectedAsync(
             RequestBody(model),
@@ -754,7 +756,7 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
                 Candidate(primary, priority: 1)),
             previousChannels: previousChannels,
             traceHeader: traceHeader,
-            persistedTraceId: persistedTraceId);
+            traceStore: traceStore);
 
         Assert.Equal(StatusCodes.Status200OK, second.Response.StatusCode);
         Assert.Equal(2, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 200));
@@ -765,14 +767,14 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
     public async Task DifferentTraceIdUsesNormalCandidateOrder()
     {
         const string model = "resilience-distinct-trace-order";
-        const long seededTraceId = 88002;
-        const long requestTraceId = 88003;
         await ConfigureAsync(model, new { content = "Normal candidate order was used." });
 
         var primary = PrimaryChannel(model);
         var fallback = FallbackChannel(model);
         var previousChannels = new PreviousChannelCache(TimeProvider.System);
-        previousChannels.Remember(seededTraceId, threadId: null, FallbackChannelId);
+        var traceStore = new FixedTraceStore();
+        var seededTrace = await traceStore.GetOrCreateAsync(1, "seeded-trace", threadId: null);
+        previousChannels.Remember(seededTrace.Id, threadId: null, FallbackChannelId);
 
         var context = await SendSelectedAsync(
             RequestBody(model),
@@ -783,13 +785,17 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
                 Candidate(fallback, priority: 1)),
             previousChannels: previousChannels,
             traceHeader: "unseeded-trace",
-            persistedTraceId: requestTraceId);
+            traceStore: traceStore);
 
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 200));
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
         Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
-        Assert.Equal(FallbackChannelId, previousChannels.GetPreviousChannelId(seededTraceId));
+        Assert.Equal(FallbackChannelId, previousChannels.GetPreviousChannelId(seededTrace.Id));
+        Assert.NotEqual(seededTrace.Id, traceStore.GetTrace("unseeded-trace").Id);
+        Assert.Equal(
+            PrimaryChannelId,
+            previousChannels.GetPreviousChannelId(traceStore.GetTrace("unseeded-trace").Id));
     }
 
     private async Task<DefaultHttpContext> SendAsync(
@@ -844,7 +850,7 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         bool anthropic = false,
         IPreviousChannelProvider? previousChannels = null,
         string? traceHeader = null,
-        long? persistedTraceId = null,
+        FixedTraceStore? traceStore = null,
         TimeSpan? requestDeadline = null)
     {
         fixture.Channels.Set(channels);
@@ -873,10 +879,11 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
 
         var path = anthropic ? "/v1/messages" : ChatPath;
         var context = NewContext(body, path);
-        if (persistedTraceId is { } traceId)
+        if (traceHeader is not null)
         {
             context.Items[RequestIdentity.HttpContextItemKey] =
-                new RequestIdentity(1, null) { TraceId = traceId };
+                new RequestIdentity(1, null);
+            traceStore ??= new FixedTraceStore();
         }
 
         RequestDelegate endpoint = requestContext =>
@@ -884,6 +891,9 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             if (traceHeader is not null)
             {
                 Assert.Equal(traceHeader, TraceContext.GetTraceId(requestContext));
+                Assert.Equal(
+                    traceStore!.GetTrace(traceHeader).Id,
+                    RequestIdentity.FromHttpContext(requestContext).TraceId);
             }
 
             return ChatCompletionEndpoint.HandleAsync(requestContext, orchestrator);
@@ -892,7 +902,10 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         if (traceHeader is not null)
         {
             context.Request.Headers[TracingOptions.DefaultTraceHeader] = traceHeader;
-            var tracing = new RequestTracingMiddleware(endpoint, TracingOptions.Default);
+            var persistedTracing = new TraceMiddleware(endpoint, TracingOptions.Default);
+            RequestDelegate persistTrace = requestContext =>
+                persistedTracing.InvokeAsync(requestContext, traceStore!);
+            var tracing = new RequestTracingMiddleware(persistTrace, TracingOptions.Default);
             endpoint = tracing.InvokeAsync;
         }
 
@@ -1192,6 +1205,39 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             RequestIdentity identity,
             CancellationToken cancellationToken = default)
             => Task.FromResult(new CandidateSelection(candidates, RoutingPolicy: null));
+    }
+
+    private sealed class FixedTraceStore : ITraceStore
+    {
+        private readonly Dictionary<string, TraceRecord> _traces = new(StringComparer.Ordinal);
+
+        public Task<TraceRecord> GetOrCreateAsync(
+            long projectId,
+            string traceId,
+            long? threadId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_traces.TryGetValue(traceId, out var trace))
+            {
+                var now = DateTime.UtcNow;
+                trace = new TraceRecord
+                {
+                    Id = 88000 + _traces.Count + 1,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    TraceId = traceId,
+                    Status = "active",
+                    ProjectId = projectId,
+                    ThreadId = threadId,
+                };
+                _traces.Add(traceId, trace);
+            }
+
+            return Task.FromResult(trace);
+        }
+
+        public TraceRecord GetTrace(string traceId) => _traces[traceId];
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
