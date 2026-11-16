@@ -36,7 +36,7 @@ public sealed class OAuthTokenProviderAutoRefreshTests
     }
 
     [Fact]
-    public void StopCancelsSchedule()
+    public async Task StopCancelsSchedule()
     {
         var refreshCalls = 0;
         var executor = new OAuthTestExecutor
@@ -58,6 +58,7 @@ public sealed class OAuthTokenProviderAutoRefreshTests
         };
 
         var onRefreshedCalls = 0;
+        var refreshedTwice = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new TokenProvider(new TokenProviderParams
         {
             HttpClient = executor,
@@ -71,7 +72,8 @@ public sealed class OAuthTokenProviderAutoRefreshTests
             },
             OnRefreshed = (_, _) =>
             {
-                Interlocked.Increment(ref onRefreshedCalls);
+                if (Interlocked.Increment(ref onRefreshedCalls) >= 2)
+                    refreshedTwice.TrySetResult();
                 return null;
             },
         });
@@ -84,26 +86,23 @@ public sealed class OAuthTokenProviderAutoRefreshTests
                 RefreshBefore = TimeSpan.FromMilliseconds(950),
             });
 
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
-
-        while (Volatile.Read(ref onRefreshedCalls) < 2)
+        try
         {
-            Assert.True(
-                DateTimeOffset.UtcNow < deadline,
-                "auto refresh did not trigger enough times: onRefreshed="
-                    + Volatile.Read(ref onRefreshedCalls)
-                    + ", refreshCalls=" + Volatile.Read(ref refreshCalls));
-            Thread.Sleep(10);
+            await refreshedTwice.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            provider.StopAutoRefresh();
+
+            var stoppedRefreshed = Volatile.Read(ref onRefreshedCalls);
+            var stoppedRefreshCalls = Volatile.Read(ref refreshCalls);
+
+            await Task.Delay(200);
+
+            Assert.Equal(stoppedRefreshed, Volatile.Read(ref onRefreshedCalls));
+            Assert.Equal(stoppedRefreshCalls, Volatile.Read(ref refreshCalls));
         }
-
-        provider.StopAutoRefresh();
-
-        var stoppedRefreshed = Volatile.Read(ref onRefreshedCalls);
-        var stoppedRefreshCalls = Volatile.Read(ref refreshCalls);
-
-        Thread.Sleep(200);
-
-        Assert.Equal(stoppedRefreshed, Volatile.Read(ref onRefreshedCalls));
-        Assert.Equal(stoppedRefreshCalls, Volatile.Read(ref refreshCalls));
+        finally
+        {
+            provider.StopAutoRefresh();
+        }
     }
 }
