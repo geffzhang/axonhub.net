@@ -43,7 +43,7 @@ AxonHub 的对外 API、管理面 GraphQL、渠道/模型/追踪/计费等行为
 | 多 silo 集群（AdoNet membership + durable reminder） | ✅ opt-in，默认单 silo |
 | 部署资产（本地脚本、systemd、Nginx、Helm） | ✅ 见 [`deploy/`](deploy/) |
 | Go 参照行为对照与差异台账 | ✅ 337 条，0 个未解释缺口 |
-| 本地测试 | **11161 例**（见[测试](#测试)） |
+| 测试 | Llm / Grains / Persistence / Api 与 opt-in 真实 provider E2E（见[测试](#测试)） |
 | 远端 CI | Llm / Grains / Persistence / 真实 provider E2E 全绿；Api 全量 nightly |
 
 ### 支持的渠道
@@ -307,29 +307,21 @@ dotnet test tests/AxonHub.Grains.Tests/AxonHub.Grains.Tests.csproj
 # 持久化（需要 Docker / Testcontainers）
 dotnet test tests/AxonHub.Persistence.Tests/AxonHub.Persistence.Tests.csproj
 
-# Api 全量（约 35–45 分钟，不含真实 provider E2E）
+# Api 全量（约 35–45 分钟；真实 provider E2E 由环境变量 opt-in）
 dotnet test tests/AxonHub.Api.Tests/AxonHub.Api.Tests.csproj
 ```
 
-最近一次本地结果：
-
-| 测试项目 | 数量 | 结果 |
-| --- | ---: | --- |
-| `AxonHub.Llm.Tests` | 3437 | 3437/3437 |
-| `AxonHub.Grains.Tests` | 95 | 95/95 |
-| `AxonHub.Persistence.Tests` | 431 | 431/431 |
-| `AxonHub.Api.Tests` | 7182 | 7164 通过 + 18 条 E2E 跳过，0 失败 |
-| **合计** | **11145** | **11127 通过 / 0 失败 / 18 跳过** |
-
-上表是最后一次全量实测。此后 §281–§285 新增 16 例（Api 15、Persistence 1）
-已定向通过，未做合并全量复跑；当前套件总数为 **11161 例**。
+测试数量会随代码变动；请以本地测试输出和
+[`tests.yml`](.github/workflows/tests.yml) 的最新运行结果为准。
 
 ### 真实 provider E2E
 
 矩阵测试通过真实 `HttpExecutor` 访问本地
 [LlmTestServer](https://github.com/managedcode/LlmTestServer)，覆盖
 OpenAI、Anthropic、Gemini、Responses、Groq、Ollama、DeepSeek、OpenRouter
-上游，以及流式、Embeddings、Images、工具调用和 429 换通道重试。
+上游，以及流式、Embeddings、Images、工具调用和网关韧性场景：重试预算、
+渠道回退、认证/配额/内容过滤错误分类、请求 deadline、断流处理、熔断、
+自动禁用、trace 粘性选路和最终尝试的 usage 归属。
 
 ```bash
 docker run --rm -d --name llm-test-server \
@@ -343,8 +335,19 @@ AXONHUB_E2E_LLM_TEST_SERVER_KEY=test-key \
   --filter FullyQualifiedName~LlmTestServer
 ```
 
-未设置 `AXONHUB_E2E_LLM_TEST_SERVER_URL` 时，这 18 条测试自动跳过。
-CI 中的 `e2e-llm` job 使用固定 digest 的同一镜像运行它们。
+未设置 `AXONHUB_E2E_LLM_TEST_SERVER_URL` 时，真实 provider E2E 自动跳过；
+设置后可用上面的过滤器运行。CI 中的 `e2e-llm` job 使用固定 digest 的同一镜像。
+
+### 重试与流式响应
+
+可恢复的上游错误可在配置的重试预算内切换到其他候选渠道。上游认证/权限错误
+（401/403）、`invalid_api_key`、`permission_denied`、余额/配额不足及
+`content_filter` 错误不会通过切换渠道重试；所有候选失败后返回最后一次上游错误。
+成功回退时，usage 和成本归属最终成功的渠道。
+
+流式响应已经发送正文帧后若上游中断，不会把另一个渠道的内容拼接到已发送的
+响应中，而是报告流错误。上游即使已发送全部正文，若没有正常的终止标记，仍视为
+不完整流。
 
 ## CI
 

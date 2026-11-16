@@ -116,11 +116,11 @@ appsettings > `config.yml`。详见[配置](../getting-started/configuration.md)
 `/app/frontend/dist`，无需运行时挂载。替换界面可覆盖
 `Server:Static:Root`。
 
-## 为什么 Api 测试里有 18 条跳过？
+## 为什么真实 provider E2E 默认跳过？
 
-那是真实 provider E2E。默认没有设置 `AXONHUB_E2E_LLM_TEST_SERVER_URL` 时
-自动跳过；设置后使用本地或 CI 的 LlmTestServer 运行。见
-[测试](../development/testing.md)。
+这类测试需要独立的 LlmTestServer。默认没有设置
+`AXONHUB_E2E_LLM_TEST_SERVER_URL` 时会自动跳过；配置 URL 和测试 Key 后，
+可按[测试指南](../development/testing.md)中的命令运行。
 
 ## 支持哪些上游？
 
@@ -130,6 +130,22 @@ ModelScope、OpenRouter、Cerebras、Groq、Fireworks、xAI、OpenCode、Cline�
 NanoGPT、ZenMux、Codex、Claude Code、GitHub Copilot、Antigravity、
 Command Code、Jina、TypeSafe 等。完整分派见
 `src/AxonHub.Api/Orchestration/ChannelOutboundFactory.cs`。
+
+## 上游报错时会自动切换到其他渠道吗？
+
+瞬时错误（例如可重试的 429）可在配置的重试预算内尝试其他候选渠道；重试次数
+不会超过配置上限。认证/权限错误（HTTP 401/403 或 `invalid_api_key`、
+`permission_denied`）、`insufficient_quota`、`insufficient_balance` 和
+`content_filter` 属于终止错误，不会通过换渠道重试。所有候选渠道都失败时，
+返回最后一次上游错误。
+
+成功回退时，usage 和成本记录归属最终成功的渠道，而不是之前失败的渠道。
+
+## 流式响应中途断开会切换渠道并接着输出吗？
+
+不会在已经发送正文帧后把备用渠道的内容拼到同一个流里，以免组合出不一致的
+回复。此时会报告流错误；如果上游没有发送正常终止标记，即使正文看起来已经完整，
+也会作为不完整流处理。尚未开始输出时的错误仍按上游错误类型和重试预算处理。
 
 ## 与 Go 版行为完全一样吗？
 

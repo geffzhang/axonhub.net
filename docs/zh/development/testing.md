@@ -5,15 +5,15 @@
 
 ## 测试项目
 
-| 项目 | 覆盖 | 数量（最近记录） |
-| --- | --- | ---: |
-| `AxonHub.Llm.Tests` | transformer、pipeline、SSE、错误与超时 | 3437 |
-| `AxonHub.Grains.Tests` | 选路、限流、令牌、调度 | 95 |
-| `AxonHub.Persistence.Tests` | EF/Dapper、schema、事务、并发 | 431 |
-| `AxonHub.Api.Tests` | 端点、管理面、鉴权、编排、E2E | 7182+ |
+| 项目 | 覆盖 |
+| --- | --- |
+| `AxonHub.Llm.Tests` | transformer、pipeline、SSE、错误与超时 |
+| `AxonHub.Grains.Tests` | 选路、限流、令牌、调度 |
+| `AxonHub.Persistence.Tests` | EF/Dapper、schema、事务、并发 |
+| `AxonHub.Api.Tests` | 端点、管理面、鉴权、编排、E2E |
 
-Api 全量里包含 18 条 opt-in 的真实 provider E2E；默认没有启动
-LlmTestServer 时它们会跳过。
+测试数量随代码变化，请以测试运行输出为准。真实 provider E2E 为 opt-in；
+默认没有启动 LlmTestServer 时相关用例会跳过。
 
 ## 常用命令
 
@@ -39,7 +39,8 @@ dotnet test tests/AxonHub.Api.Tests/AxonHub.Api.Tests.csproj \
 
 矩阵覆盖 OpenAI Chat/Responses、Anthropic Messages、Gemini、Groq、Ollama、
 DeepSeek、OpenRouter 上游，以及非流式/流式、Embeddings、Images、工具调用和
-429 换通道重试。
+429 换渠道。韧性用例还验证重试预算及最后错误、认证/配额/内容过滤错误不回退、
+deadline、流中断与终止标记、熔断、自动禁用、trace 粘性选路和最终 usage 归属。
 
 ```bash
 docker run --rm -d --name llm-test-server \
@@ -53,7 +54,7 @@ AXONHUB_E2E_LLM_TEST_SERVER_KEY=test-key \
   --filter FullyQualifiedName~LlmTestServer
 ```
 
-未设置 URL 时 18 条测试自动跳过，常规 CI 不依赖外部进程。CI 的 `e2e-llm`
+未设置 URL 时真实 provider E2E 自动跳过，常规 CI 不依赖外部进程。CI 的 `e2e-llm`
 job 使用固定 digest 的同一镜像运行它们。
 
 ## 差分语料
