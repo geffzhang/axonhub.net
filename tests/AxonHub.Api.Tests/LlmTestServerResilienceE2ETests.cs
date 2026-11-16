@@ -3,8 +3,10 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using AxonHub.Abstractions;
+using AxonHub.Api.Auth;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Endpoints;
+using AxonHub.Api.Http;
 using AxonHub.Api.Management;
 using AxonHub.Api.Orchestration;
 using AxonHub.Grains;
@@ -12,6 +14,7 @@ using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
+using AxonHub.Llm.Transformer.Anthropic;
 using AxonHub.Llm.Transformer.OpenAI;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
@@ -475,6 +478,222 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             secondBackoff.NextProbeAt);
     }
 
+    [LlmTestServerFact]
+    public async Task NativeToolRequestKeepsCompatibleFallbackOnly()
+    {
+        const string model = "claude-sonnet-5-5";
+        await ConfigureAsync(model, new { content = "Compatible channel handled the request." });
+
+        var incompatible = NewChannel(
+            PrimaryChannelId,
+            model,
+            "openai",
+            ServerUrl + "/openai/v1",
+            orderingWeight: 100);
+        var compatible = NewChannel(
+            FallbackChannelId,
+            model,
+            "anthropic",
+            ServerUrl + "/anthropic",
+            orderingWeight: 10);
+        var context = await SendSelectedAsync(
+            AnthropicNativeToolRequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [incompatible, compatible],
+            new FixedCandidateSelector(
+                Candidate(incompatible, priority: 0),
+                Candidate(compatible, priority: 1, apiFormat: ApiFormats.AnthropicMessage)),
+            anthropic: true);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Contains("Compatible channel handled the request.", ResponseBody(context), StringComparison.Ordinal);
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("anthropic", 200));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("anthropic"));
+    }
+
+    [LlmTestServerFact]
+    public async Task NoCompatibleNativeToolChannelPreservesExistingCandidateFallback()
+    {
+        const string model = "claude-sonnet-5-5";
+        await ConfigureAsync(
+            model,
+            ProviderError(StatusCodes.Status503ServiceUnavailable, "service_unavailable", "first candidate failed"),
+            new { content = "Original candidate fallback remains available." });
+
+        var first = NewChannel(
+            PrimaryChannelId,
+            model,
+            "openai",
+            ServerUrl + "/openai/v1",
+            orderingWeight: 100);
+        var second = NewChannel(
+            FallbackChannelId,
+            model,
+            "openai",
+            ServerUrl + "/groq/openai/v1",
+            orderingWeight: 10);
+        var context = await SendSelectedAsync(
+            AnthropicNativeToolRequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [first, second],
+            new FixedCandidateSelector(
+                Candidate(first, priority: 0),
+                Candidate(second, priority: 1)),
+            anthropic: true);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Contains("Original candidate fallback remains available.", ResponseBody(context), StringComparison.Ordinal);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 503));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq", 200));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+    }
+
+    [LlmTestServerFact]
+    public async Task TimedOutPrimaryFallsBackWithinDeadline()
+    {
+        const string model = "resilience-timeout-primary-fallback";
+        const string primaryModel = "resilience-timeout-primary-slow";
+        const string fallbackModel = "resilience-timeout-fallback-fast";
+        await ConfigureChannelsAsync(
+            model,
+            primaryModel,
+            fallbackModel,
+            new { content = "Primary response arrived too late.", delayMilliseconds = 1800 },
+            new { content = "Fallback completed within the overall deadline." });
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var context = await SendSelectedAsync(
+            RequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 1, nonStreamResponseTimeoutSeconds: 1),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0, actualModel: primaryModel),
+                Candidate(fallback, priority: 1, actualModel: fallbackModel)),
+            requestDeadline: TimeSpan.FromSeconds(6));
+        started.Stop();
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Contains("Fallback completed within the overall deadline.", ResponseBody(context), StringComparison.Ordinal);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq", 200));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(7), $"Fallback exceeded its deadline budget: {started.Elapsed}.");
+    }
+
+    [LlmTestServerFact]
+    public async Task ExpiredOverallDeadlinePreventsNextAttempt()
+    {
+        const string model = "resilience-overall-deadline-expired";
+        const string primaryModel = "resilience-deadline-primary-slow";
+        const string fallbackModel = "resilience-deadline-fallback-fast";
+        await ConfigureChannelsAsync(
+            model,
+            primaryModel,
+            fallbackModel,
+            new { content = "Primary response arrived after the request deadline.", delayMilliseconds = 1800 },
+            new { content = "Fallback must not be requested after the deadline." });
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var context = await SendSelectedAsync(
+            RequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 1, nonStreamResponseTimeoutSeconds: 5),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0, actualModel: primaryModel),
+                Candidate(fallback, priority: 1, actualModel: fallbackModel)),
+            requestDeadline: TimeSpan.FromMilliseconds(300));
+        started.Stop();
+
+        Assert.NotEqual(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(5), $"Expired request exceeded its deadline budget: {started.Elapsed}.");
+    }
+
+    [LlmTestServerFact]
+    public async Task RepeatedTraceIdSticksToPreviouslySelectedChannel()
+    {
+        const string model = "resilience-repeated-trace-sticky";
+        const string traceHeader = "resilience-sticky-trace";
+        const long persistedTraceId = 88001;
+        await ConfigureAsync(
+            model,
+            new { content = "First request." },
+            new { content = "Second request." });
+
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var previousChannels = new PreviousChannelCache(TimeProvider.System);
+
+        var first = await SendSelectedAsync(
+            RequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0),
+                Candidate(fallback, priority: 1)),
+            previousChannels: previousChannels,
+            traceHeader: traceHeader,
+            persistedTraceId: persistedTraceId);
+
+        Assert.Equal(StatusCodes.Status200OK, first.Response.StatusCode);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 200));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+        Assert.Equal(PrimaryChannelId, previousChannels.GetPreviousChannelId(persistedTraceId));
+
+        var second = await SendSelectedAsync(
+            RequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [fallback, primary],
+            new FixedCandidateSelector(
+                Candidate(fallback, priority: 0),
+                Candidate(primary, priority: 1)),
+            previousChannels: previousChannels,
+            traceHeader: traceHeader,
+            persistedTraceId: persistedTraceId);
+
+        Assert.Equal(StatusCodes.Status200OK, second.Response.StatusCode);
+        Assert.Equal(2, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 200));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+    }
+
+    [LlmTestServerFact]
+    public async Task DifferentTraceIdUsesNormalCandidateOrder()
+    {
+        const string model = "resilience-distinct-trace-order";
+        const long seededTraceId = 88002;
+        const long requestTraceId = 88003;
+        await ConfigureAsync(model, new { content = "Normal candidate order was used." });
+
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var previousChannels = new PreviousChannelCache(TimeProvider.System);
+        previousChannels.Remember(seededTraceId, threadId: null, FallbackChannelId);
+
+        var context = await SendSelectedAsync(
+            RequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0),
+                Candidate(fallback, priority: 1)),
+            previousChannels: previousChannels,
+            traceHeader: "unseeded-trace",
+            persistedTraceId: requestTraceId);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 200));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+        Assert.Equal(FallbackChannelId, previousChannels.GetPreviousChannelId(seededTraceId));
+    }
+
     private async Task<DefaultHttpContext> SendAsync(
         string body,
         RetryPolicy policy,
@@ -519,6 +738,133 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         return context;
     }
 
+    private async Task<DefaultHttpContext> SendSelectedAsync(
+        string body,
+        RetryPolicy policy,
+        ChannelDescriptor[] channels,
+        IModelCandidateSelector selector,
+        bool anthropic = false,
+        IPreviousChannelProvider? previousChannels = null,
+        string? traceHeader = null,
+        long? persistedTraceId = null,
+        TimeSpan? requestDeadline = null)
+    {
+        fixture.Channels.Set(channels);
+
+        using var http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        var orchestrator = new ChatCompletionOrchestrator(
+            fixture.Cluster.GrainFactory,
+            new OpenAiInboundTransformer(),
+            new HttpExecutor(http),
+            new RecordingMetricsRecorder(),
+            new StaticRetryPolicyProvider(policy),
+            selector,
+            TimeProvider.System,
+            _recorder,
+            rateLimitTracker: fixture.RateLimitTracker,
+            channelLimiterManager: fixture.ChannelLimiterManager,
+            usageCostService: _usageCostService,
+            previousChannels: previousChannels);
+        if (anthropic)
+        {
+            orchestrator = orchestrator.WithInbound(new AnthropicInboundTransformer());
+        }
+
+        var path = anthropic ? "/v1/messages" : ChatPath;
+        var context = NewContext(body, path);
+        if (persistedTraceId is { } traceId)
+        {
+            context.Items[RequestIdentity.HttpContextItemKey] =
+                new RequestIdentity(1, null) { TraceId = traceId };
+        }
+
+        RequestDelegate endpoint = requestContext =>
+        {
+            if (traceHeader is not null)
+            {
+                Assert.Equal(traceHeader, TraceContext.GetTraceId(requestContext));
+            }
+
+            return ChatCompletionEndpoint.HandleAsync(requestContext, orchestrator);
+        };
+
+        if (traceHeader is not null)
+        {
+            context.Request.Headers[TracingOptions.DefaultTraceHeader] = traceHeader;
+            var tracing = new RequestTracingMiddleware(endpoint, TracingOptions.Default);
+            endpoint = tracing.InvokeAsync;
+        }
+
+        if (requestDeadline is { } timeout)
+        {
+            var deadline = new RequestTimeoutMiddleware(endpoint, timeout, TimeProvider.System);
+            endpoint = deadline.InvokeAsync;
+        }
+
+        await endpoint(context);
+        return context;
+    }
+
+    private static ChannelCandidate Candidate(
+        ChannelDescriptor channel,
+        int priority,
+        string? actualModel = null,
+        string? apiFormat = null)
+        => new()
+        {
+            ChannelId = channel.Id,
+            ChannelName = channel.Name,
+            ActualModel = actualModel ?? channel.SupportedModels.Trim('[', ']', '"'),
+            Type = channel.Type,
+            BaseUrl = channel.BaseUrl,
+            Credentials = channel.Credentials,
+            ApiFormat = apiFormat ?? ApiFormats.OpenAIChatCompletion,
+            OrderingWeight = channel.OrderingWeight,
+            Priority = priority,
+        };
+
+    private static string AnthropicNativeToolRequestBody(string model)
+        => "{\"model\":\"" + model + "\",\"max_tokens\":32,"
+            + "\"messages\":[{\"role\":\"user\",\"content\":\"search the web\"}],"
+            + "\"tools\":[{\"type\":\"web_search_20250305\",\"name\":\"web_search\"}]}";
+
+    private static async Task ConfigureChannelsAsync(
+        string requestedModel,
+        string primaryModel,
+        string fallbackModel,
+        object primaryResponse,
+        object fallbackResponse)
+    {
+        await LlmTestServerE2ETests.AdminClient.ConfigureAsync(new
+        {
+            requiredBearerToken = ApiKey,
+            models = new[]
+            {
+                new { id = requestedModel, kind = "chat" },
+                new { id = primaryModel, kind = "chat" },
+                new { id = fallbackModel, kind = "chat" },
+            },
+            chatScenarios = new[]
+            {
+                new
+                {
+                    id = "resilience-" + primaryModel,
+                    modelId = primaryModel,
+                    responses = new[] { primaryResponse },
+                },
+                new
+                {
+                    id = "resilience-" + fallbackModel,
+                    modelId = fallbackModel,
+                    responses = new[] { fallbackResponse },
+                },
+            },
+        });
+    }
+
     private static RetryPolicy CreateCircuitBreakerRetryPolicy()
         => new()
         {
@@ -529,7 +875,10 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             LoadBalancerStrategy = LoadBalancerStrategies.CircuitBreaker,
         };
 
-    private static RetryPolicy CreateRetryPolicy(int maxChannelRetries, int maxSingleChannelRetries = 0)
+    private static RetryPolicy CreateRetryPolicy(
+        int maxChannelRetries,
+        int maxSingleChannelRetries = 0,
+        int nonStreamResponseTimeoutSeconds = 0)
         => new()
         {
             Enabled = true,
@@ -537,6 +886,7 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             MaxSingleChannelRetries = maxSingleChannelRetries,
             RetryDelayMs = 0,
             LoadBalancerStrategy = RetryPolicy.FailoverStrategy,
+            NonStreamResponseTimeoutSeconds = nonStreamResponseTimeoutSeconds,
         };
 
     private static string AutoDisablePolicies(int threshold)
@@ -625,13 +975,13 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         => "{\"model\":\"" + model + "\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]"
             + (stream ? ",\"stream\":true}" : "}");
 
-    private static DefaultHttpContext NewContext(string body)
+    private static DefaultHttpContext NewContext(string body, string path = ChatPath)
     {
         var context = new DefaultHttpContext();
         context.Request.Method = "POST";
         context.Request.Scheme = "http";
         context.Request.Host = new HostString("gateway.test");
-        context.Request.Path = ChatPath;
+        context.Request.Path = path;
         context.Request.ContentType = "application/json";
         context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
         context.Response.Body = new MemoryStream();
@@ -667,6 +1017,16 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         }
 
         public bool InjectUsageCostEnabled() => true;
+    }
+
+    private sealed class FixedCandidateSelector(params ChannelCandidate[] candidates)
+        : IModelCandidateSelector
+    {
+        public Task<CandidateSelection> SelectAsync(
+            LlmRequest request,
+            RequestIdentity identity,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new CandidateSelection(candidates, RoutingPolicy: null));
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
