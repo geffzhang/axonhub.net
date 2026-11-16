@@ -9,7 +9,7 @@ axonhub:
   replicaCount: 2
 
   image:
-    repository: ghcr.io/your-org/axonhub.net
+    repository: ghcr.io/geffzhang/axonhub.net
     tag: "0.1.0"
     pullPolicy: IfNotPresent
 

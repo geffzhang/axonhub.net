@@ -155,11 +155,15 @@ Windows 和 Linux 的 `upgrade` 默认要求源码工作树干净，然后
 
 ## Helm / Kubernetes
 
-### 1. 构建并推送镜像
+### 1. GHCR 镜像
+
+GitHub Actions 在默认分支 `main` 更新时发布 `main` 标签；推送 `v1.2.3`
+这类版本标签时发布 `1.2.3`、`1.2` 和 `latest`。PR 只构建验证，不推送。
+首次发布的 GHCR 包默认是私有的；如需匿名拉取，请在包的 **Package settings**
+中将可见性改为 **Public**。
 
 ```bash
-docker build -t ghcr.io/your-org/axonhub.net:0.1.0 .
-docker push ghcr.io/your-org/axonhub.net:0.1.0
+docker pull ghcr.io/geffzhang/axonhub.net:latest
 ```
 
 ### 2. 安装
@@ -173,7 +177,7 @@ kubectl -n axonhub create secret generic axonhub-db \
 
 helm upgrade --install axonhub deploy/helm \
   --namespace axonhub \
-  --set axonhub.image.repository=ghcr.io/your-org/axonhub.net \
+  --set axonhub.image.repository=ghcr.io/geffzhang/axonhub.net \
   --set axonhub.image.tag=0.1.0 \
   --set axonhub.database.existingSecret=axonhub-db
 ```

@@ -15,8 +15,8 @@ axonhub:
   replicaCount: 1
 
   image:
-    # Build with `docker build -t axonhub.net:latest .` and push to your registry.
-    repository: axonhub.net
+    # Published to GHCR by .github/workflows/publish-container.yml.
+    repository: ghcr.io/geffzhang/axonhub.net
     pullPolicy: IfNotPresent
     # Defaults to .Chart.AppVersion when empty.
     tag: ""
