@@ -1,8 +1,5 @@
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using AxonHub.Abstractions;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.Orchestration;
@@ -37,11 +34,6 @@ public sealed class LlmTestServerProviderMatrixTests(GrainClusterFixture fixture
     private const string ResponsesPath = "/v1/responses";
     private const string EmbeddingsPath = "/v1/embeddings";
     private const string ImagesPath = "/v1/images/generations";
-
-    private static readonly JsonSerializerOptions ConfigurationJson = new()
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 
     private static string ServerUrl => LlmTestServerE2ETests.ServerUrl;
     private static string ApiKey => LlmTestServerE2ETests.ApiKey;
@@ -571,17 +563,7 @@ public sealed class LlmTestServerProviderMatrixTests(GrainClusterFixture fixture
             }
         }
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-        using var response = await http.PostAsJsonAsync(
-            ServerUrl + "/admin-api/configure",
-            configuration,
-            ConfigurationJson);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.True(
-            response.IsSuccessStatusCode,
-            "LlmTestServer configure failed: " + (int)response.StatusCode + " " + body);
-        Assert.Contains("configured", body, StringComparison.Ordinal);
+        await LlmTestServerE2ETests.AdminClient.ConfigureAsync(configuration);
     }
 
     private static string OpenAiDeltas(string sse)
