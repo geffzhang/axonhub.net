@@ -26,7 +26,11 @@ namespace AxonHub.Api.Tests;
 /// </code>
 /// then set <c>AXONHUB_E2E_LLM_TEST_SERVER_URL=http://localhost:8080</c>
 /// (and optionally <c>AXONHUB_E2E_LLM_TEST_SERVER_KEY</c>, default
-/// <c>test-key</c>) before <c>dotnet test</c>.
+/// <c>test-key</c>, a fake credential used only by the local fixture) before
+/// running the resilience suite:
+/// <code>
+/// dotnet test tests\AxonHub.Api.Tests\AxonHub.Api.Tests.csproj --filter "FullyQualifiedName~LlmTestServerResilienceE2ETests"
+/// </code>
 /// </remarks>
 [Collection(OrleansCollection.Name)]
 public sealed class LlmTestServerE2ETests(GrainClusterFixture fixture)
