@@ -1,9 +1,14 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using AxonHub.Abstractions;
 using AxonHub.Api.Billing;
 using AxonHub.Api.Endpoints;
+using AxonHub.Api.Management;
 using AxonHub.Api.Orchestration;
+using AxonHub.Grains;
+using AxonHub.Grains.Abstractions;
 using AxonHub.Llm;
 using AxonHub.Llm.Http;
 using AxonHub.Llm.Pipeline;
@@ -212,12 +217,284 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
     }
 
+    [LlmTestServerFact]
+    public async Task AutoDisableThresholdMinusOneKeepsChannelEnabled()
+    {
+        const string model = "resilience-auto-disable-minus-one";
+        const int threshold = 2;
+        await ConfigureAsync(
+            model,
+            ProviderError(StatusCodes.Status503ServiceUnavailable, "service_unavailable", "temporary outage"));
+
+        var primary = PrimaryChannel(model) with { Policies = AutoDisablePolicies(threshold) };
+        var autoDisable = new AutoDisableHarness(fixture.Channels);
+        var queue = new CapturingAutoDisableQueue(autoDisable.Service);
+        var context = await SendCoreAsync(
+            RequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 0),
+            [primary, FallbackChannel(model)],
+            autoDisableQueue: queue);
+        var evaluated = await queue.WaitForNextEvaluationAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        Assert.Equal(PrimaryChannelId, evaluated.ChannelId);
+        Assert.Empty(autoDisable.Credentials.DisableCalls);
+        Assert.Contains(
+            PrimaryChannelId,
+            (await fixture.Channels.ListEnabledAsync()).Select(channel => channel.Id));
+    }
+
+    [LlmTestServerFact]
+    public async Task AutoDisableAtThresholdSkipsAOnNextRequest()
+    {
+        const string model = "resilience-auto-disable-at-threshold";
+        const int threshold = 2;
+        await ConfigureAsync(
+            model,
+            ProviderError(StatusCodes.Status503ServiceUnavailable, "service_unavailable", "first outage"),
+            ProviderError(StatusCodes.Status503ServiceUnavailable, "service_unavailable", "second outage"),
+            new { content = "Fallback remains available." });
+
+        var primary = PrimaryChannel(model) with { Policies = AutoDisablePolicies(threshold) };
+        var fallback = FallbackChannel(model);
+        var autoDisable = new AutoDisableHarness(fixture.Channels);
+        var queue = new CapturingAutoDisableQueue(autoDisable.Service);
+
+        for (var failure = 0; failure < threshold; failure++)
+        {
+            var context = await SendCoreAsync(
+                RequestBody(model),
+                CreateRetryPolicy(maxChannelRetries: 0),
+                [primary, fallback],
+                autoDisableQueue: queue);
+
+            Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+            await queue.WaitForNextEvaluationAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        var disableCall = Assert.Single(autoDisable.Credentials.DisableCalls);
+        Assert.Equal(PrimaryChannelId, disableCall.ChannelId);
+        Assert.Equal(ApiKey, disableCall.Key);
+        Assert.DoesNotContain(
+            PrimaryChannelId,
+            (await fixture.Channels.ListEnabledAsync()).Select(channel => channel.Id));
+
+        var fallbackContext = await SendCoreAsync(
+            RequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 0),
+            [],
+            setEnabledChannels: false,
+            autoDisableQueue: queue);
+        await queue.WaitForNextEvaluationAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(StatusCodes.Status200OK, fallbackContext.Response.StatusCode);
+        Assert.Equal(
+            new[] { PrimaryChannelId, PrimaryChannelId, FallbackChannelId },
+            _recorder.RequestChannels);
+        Assert.Equal(2, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 503));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq", 200));
+    }
+
+    [LlmTestServerFact]
+    public async Task ThreeFailuresEnterHalfOpen()
+    {
+        const string model = "resilience-circuit-half-open";
+        await ConfigureAsync(
+            model,
+            RepeatedProviderErrors(ModelCircuitBreaker.HalfOpenThreshold));
+
+        var clock = NewManualTimeProvider();
+        var breaker = new ModelCircuitBreaker(clock);
+        for (var failure = 0; failure < ModelCircuitBreaker.HalfOpenThreshold; failure++)
+        {
+            var context = await SendCoreAsync(
+                RequestBody(model),
+                CreateCircuitBreakerRetryPolicy(),
+                [PrimaryChannel(model)],
+                modelCircuitBreaker: breaker,
+                timeProvider: clock);
+
+            Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        }
+
+        var stats = breaker.GetStats(PrimaryChannelId, model);
+        Assert.Equal(ModelCircuitBreakerState.HalfOpen, stats.State);
+        Assert.Equal(ModelCircuitBreaker.HalfOpenThreshold, stats.ConsecutiveFailures);
+    }
+
+    [LlmTestServerFact]
+    public async Task FifthFailureOpensCircuit()
+    {
+        const string model = "resilience-circuit-open";
+        await ConfigureAsync(
+            model,
+            RepeatedProviderErrors(ModelCircuitBreaker.OpenThreshold));
+
+        var clock = NewManualTimeProvider();
+        var breaker = new ModelCircuitBreaker(clock);
+        for (var failure = 0; failure < ModelCircuitBreaker.OpenThreshold; failure++)
+        {
+            var context = await SendCoreAsync(
+                RequestBody(model),
+                CreateCircuitBreakerRetryPolicy(),
+                [PrimaryChannel(model)],
+                modelCircuitBreaker: breaker,
+                timeProvider: clock);
+
+            Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        }
+
+        var stats = breaker.GetStats(PrimaryChannelId, model);
+        Assert.Equal(ModelCircuitBreakerState.Open, stats.State);
+        Assert.Equal(ModelCircuitBreaker.OpenThreshold, stats.ConsecutiveFailures);
+        Assert.Equal(clock.GetUtcNow() + ModelCircuitBreaker.ProbeInterval, stats.NextProbeAt);
+    }
+
+    [LlmTestServerFact]
+    public async Task SuccessfulHalfOpenProbeClosesCircuit()
+    {
+        const string model = "resilience-circuit-successful-probe";
+        await ConfigureAsync(
+            model,
+            RepeatedProviderErrors(ModelCircuitBreaker.OpenThreshold)
+                .Append(new { content = "Probe recovered." })
+                .Cast<object>()
+                .ToArray());
+
+        var clock = NewManualTimeProvider();
+        var breaker = new ModelCircuitBreaker(clock);
+        for (var failure = 0; failure < ModelCircuitBreaker.OpenThreshold; failure++)
+        {
+            await SendCoreAsync(
+                RequestBody(model),
+                CreateCircuitBreakerRetryPolicy(),
+                [PrimaryChannel(model)],
+                modelCircuitBreaker: breaker,
+                timeProvider: clock);
+        }
+
+        var nextProbeAt = breaker.GetStats(PrimaryChannelId, model).NextProbeAt;
+        var blockedRequest = await SendCoreAsync(
+            RequestBody(model),
+            CreateCircuitBreakerRetryPolicy(),
+            [],
+            setEnabledChannels: false,
+            modelCircuitBreaker: breaker,
+            timeProvider: clock);
+
+        Assert.Equal(
+            ModelCircuitBreaker.OpenThreshold,
+            await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 503));
+        Assert.True(blockedRequest.Response.StatusCode >= StatusCodes.Status400BadRequest);
+        Assert.Equal(nextProbeAt, breaker.GetStats(PrimaryChannelId, model).NextProbeAt);
+
+        clock.Advance(nextProbeAt - clock.GetUtcNow() + TimeSpan.FromSeconds(1));
+        var probe = await SendCoreAsync(
+            RequestBody(model),
+            CreateCircuitBreakerRetryPolicy(),
+            [],
+            setEnabledChannels: false,
+            modelCircuitBreaker: breaker,
+            timeProvider: clock);
+
+        Assert.Equal(StatusCodes.Status200OK, probe.Response.StatusCode);
+        Assert.Equal(
+            ModelCircuitBreakerState.Closed,
+            breaker.GetStats(PrimaryChannelId, model).State);
+        Assert.Equal(0, breaker.GetStats(PrimaryChannelId, model).ConsecutiveFailures);
+        Assert.Equal(default, breaker.GetStats(PrimaryChannelId, model).NextProbeAt);
+        Assert.False(breaker.GetStats(PrimaryChannelId, model).ProbingInProgress);
+    }
+
+    [LlmTestServerFact]
+    public async Task FailedHalfOpenProbeUsesBackoff()
+    {
+        const string model = "resilience-circuit-failed-probe";
+        await ConfigureAsync(
+            model,
+            RepeatedProviderErrors(ModelCircuitBreaker.OpenThreshold + 2));
+
+        var clock = NewManualTimeProvider();
+        var breaker = new ModelCircuitBreaker(clock);
+        for (var failure = 0; failure < ModelCircuitBreaker.OpenThreshold; failure++)
+        {
+            await SendCoreAsync(
+                RequestBody(model),
+                CreateCircuitBreakerRetryPolicy(),
+                [PrimaryChannel(model)],
+                modelCircuitBreaker: breaker,
+                timeProvider: clock);
+        }
+
+        clock.Advance(
+            breaker.GetStats(PrimaryChannelId, model).NextProbeAt - clock.GetUtcNow()
+                + TimeSpan.FromSeconds(1));
+        var firstProbe = await SendCoreAsync(
+            RequestBody(model),
+            CreateCircuitBreakerRetryPolicy(),
+            [],
+            setEnabledChannels: false,
+            modelCircuitBreaker: breaker,
+            timeProvider: clock);
+        var firstBackoff = breaker.GetStats(PrimaryChannelId, model);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, firstProbe.Response.StatusCode);
+        Assert.Equal(ModelCircuitBreakerState.Open, firstBackoff.State);
+        Assert.Equal(1, firstBackoff.ProbeAttempts);
+        Assert.Equal(clock.GetUtcNow() + ModelCircuitBreaker.ProbeInterval, firstBackoff.NextProbeAt);
+
+        var requestsBeforeBlockedProbe =
+            await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 503);
+        await SendCoreAsync(
+            RequestBody(model),
+            CreateCircuitBreakerRetryPolicy(),
+            [],
+            setEnabledChannels: false,
+            modelCircuitBreaker: breaker,
+            timeProvider: clock);
+        Assert.Equal(
+            requestsBeforeBlockedProbe,
+            await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 503));
+
+        clock.Advance(
+            firstBackoff.NextProbeAt - clock.GetUtcNow() + TimeSpan.FromSeconds(1));
+        var secondProbe = await SendCoreAsync(
+            RequestBody(model),
+            CreateCircuitBreakerRetryPolicy(),
+            [],
+            setEnabledChannels: false,
+            modelCircuitBreaker: breaker,
+            timeProvider: clock);
+        var secondBackoff = breaker.GetStats(PrimaryChannelId, model);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, secondProbe.Response.StatusCode);
+        Assert.Equal(ModelCircuitBreakerState.Open, secondBackoff.State);
+        Assert.Equal(2, secondBackoff.ProbeAttempts);
+        Assert.Equal(
+            clock.GetUtcNow() + ModelCircuitBreaker.ProbeInterval + ModelCircuitBreaker.ProbeInterval,
+            secondBackoff.NextProbeAt);
+    }
+
     private async Task<DefaultHttpContext> SendAsync(
         string body,
         RetryPolicy policy,
         params ChannelDescriptor[] channels)
+        => await SendCoreAsync(body, policy, channels);
+
+    private async Task<DefaultHttpContext> SendCoreAsync(
+        string body,
+        RetryPolicy policy,
+        ChannelDescriptor[] channels,
+        bool setEnabledChannels = true,
+        IChannelAutoDisableEvaluationQueue? autoDisableQueue = null,
+        ModelCircuitBreaker? modelCircuitBreaker = null,
+        TimeProvider? timeProvider = null)
     {
-        fixture.Channels.Set(channels);
+        if (setEnabledChannels)
+        {
+            fixture.Channels.Set(channels);
+        }
+
         using var http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
         {
             Timeout = Timeout.InfiniteTimeSpan,
@@ -230,15 +507,27 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             new RecordingMetricsRecorder(),
             new StaticRetryPolicyProvider(policy),
             fixture.CandidateSelector,
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             _recorder,
             rateLimitTracker: fixture.RateLimitTracker,
             channelLimiterManager: fixture.ChannelLimiterManager,
-            usageCostService: _usageCostService);
+            usageCostService: _usageCostService,
+            autoDisableQueue: autoDisableQueue,
+            modelCircuitBreaker: modelCircuitBreaker);
 
         await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
         return context;
     }
+
+    private static RetryPolicy CreateCircuitBreakerRetryPolicy()
+        => new()
+        {
+            Enabled = true,
+            MaxChannelRetries = 0,
+            MaxSingleChannelRetries = 0,
+            RetryDelayMs = 0,
+            LoadBalancerStrategy = LoadBalancerStrategies.CircuitBreaker,
+        };
 
     private static RetryPolicy CreateRetryPolicy(int maxChannelRetries, int maxSingleChannelRetries = 0)
         => new()
@@ -249,6 +538,32 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             RetryDelayMs = 0,
             LoadBalancerStrategy = RetryPolicy.FailoverStrategy,
         };
+
+    private static string AutoDisablePolicies(int threshold)
+        => JsonSerializer.Serialize(new
+        {
+            apiKeyAutoDisableMode = "custom",
+            apiKeyAutoDisableRules = new[]
+            {
+                new
+                {
+                    statusCodes = new[] { StatusCodes.Status503ServiceUnavailable },
+                    times = threshold,
+                    action = RetryPolicy.AutoDisableActionPermanent,
+                },
+            },
+        });
+
+    private static object[] RepeatedProviderErrors(int count)
+        => Enumerable
+            .Repeat(ProviderError(
+                StatusCodes.Status503ServiceUnavailable,
+                "service_unavailable",
+                "temporary outage"), count)
+            .ToArray();
+
+    private static ManualTimeProvider NewManualTimeProvider()
+        => new(new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero));
 
     private static ChannelDescriptor PrimaryChannel(string model)
         => NewChannel(PrimaryChannelId, model, "openai", ServerUrl + "/openai/v1", orderingWeight: 100);
@@ -352,6 +667,90 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         }
 
         public bool InjectUsageCostEnabled() => true;
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private sealed class AutoDisableHarness
+    {
+        public FakeChannelCredentialMutations Credentials { get; } = new();
+
+        public ChannelAutoDisableService Service { get; }
+
+        public AutoDisableHarness(FakeEnabledChannelProvider enabled)
+        {
+            Service = new ChannelAutoDisableService(
+                enabled,
+                new FakeGcSettingsService(),
+                new FilteringCredentialMutations(enabled, Credentials),
+                new FakeChannelWriteStore(),
+                new AutoDisableCounters(),
+                new RecordingEnabledChannelsRefresher(),
+                new FakeWebhookSink(),
+                TimeProvider.System);
+        }
+    }
+
+    private sealed class FilteringCredentialMutations(
+        FakeEnabledChannelProvider enabled,
+        FakeChannelCredentialMutations mutations) : IChannelCredentialMutations
+    {
+        public async Task DisableApiKeyAsync(
+            long channelId,
+            string key,
+            int errorCode,
+            string reason,
+            DateTime? expiresAt = null,
+            CancellationToken cancellationToken = default)
+        {
+            await mutations.DisableApiKeyAsync(
+                channelId,
+                key,
+                errorCode,
+                reason,
+                expiresAt,
+                cancellationToken);
+
+            var remaining = (await enabled.ListEnabledAsync(cancellationToken))
+                .Where(channel => channel.Id != channelId)
+                .ToArray();
+            enabled.Set(remaining);
+        }
+
+        public Task<DeleteDisabledApiKeysResult> DeleteDisabledApiKeysAsync(
+            long channelId,
+            IReadOnlyList<string> keys,
+            CancellationToken cancellationToken = default)
+            => mutations.DeleteDisabledApiKeysAsync(channelId, keys, cancellationToken);
+    }
+
+    private sealed class CapturingAutoDisableQueue(ChannelAutoDisableService service)
+        : IChannelAutoDisableEvaluationQueue
+    {
+        private readonly Channel<(ChannelPerformanceRecord Record, Task Evaluation)> _evaluations =
+            Channel.CreateUnbounded<(ChannelPerformanceRecord, Task)>();
+
+        public ConcurrentQueue<ChannelPerformanceRecord> Records { get; } = new();
+
+        public void Enqueue(ChannelPerformanceRecord performance)
+        {
+            Records.Enqueue(performance);
+            _evaluations.Writer.TryWrite((performance, service.EvaluateAsync(performance)));
+        }
+
+        public async Task<ChannelPerformanceRecord> WaitForNextEvaluationAsync()
+        {
+            var (record, evaluation) = await _evaluations.Reader.ReadAsync();
+            await evaluation;
+            return record;
+        }
     }
 }
 
