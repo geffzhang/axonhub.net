@@ -26,8 +26,11 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
 {
     private const long PrimaryChannelId = 9981;
     private const long FallbackChannelId = 9982;
+    private const long TertiaryChannelId = 9983;
     private const string ChatPath = "/v1/chat/completions";
+    private const int LlmTestServerDelayThenContinueMode = 2;
     private const int LlmTestServerEarlyCleanEndMode = 1;
+    private const int LlmTestServerAbortConnectionMode = 3;
 
     private static string ServerUrl => LlmTestServerE2ETests.ServerUrl;
 
@@ -108,6 +111,60 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq", 429));
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+    }
+
+    [LlmTestServerFact]
+    public async Task ThreeChannelFailureReturnsLastUpstreamError()
+    {
+        const string model = "resilience-three-channel-terminal";
+        const string primaryModel = "resilience-three-channel-terminal-primary";
+        const string fallbackModel = "resilience-three-channel-terminal-fallback";
+        const string tertiaryModel = "resilience-three-channel-terminal-tertiary";
+        await ConfigureThreeChannelsAsync(
+            model,
+            primaryModel,
+            fallbackModel,
+            tertiaryModel,
+            ProviderError(StatusCodes.Status503ServiceUnavailable, "channel_a_failure", "A failed"),
+            ProviderError(StatusCodes.Status503ServiceUnavailable, "channel_b_failure", "B failed"),
+            ProviderError(StatusCodes.Status503ServiceUnavailable, "channel_c_failure", "C final failure"));
+
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var tertiary = NewChannel(
+            TertiaryChannelId,
+            model,
+            "openai",
+            ServerUrl + "/openai/v1",
+            orderingWeight: 1);
+        var context = await SendSelectedAsync(
+            RequestBody(model),
+            CreateRetryPolicy(maxChannelRetries: 2),
+            [primary, fallback, tertiary],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0, actualModel: primaryModel),
+                Candidate(fallback, priority: 1, actualModel: fallbackModel),
+                Candidate(tertiary, priority: 2, actualModel: tertiaryModel)));
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        var body = ResponseBody(context);
+        Assert.Contains("channel_c_failure", body, StringComparison.Ordinal);
+        Assert.Contains("C final failure", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("channel_a_failure", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("channel_b_failure", body, StringComparison.Ordinal);
+        Assert.Equal(
+            new[] { PrimaryChannelId, FallbackChannelId, TertiaryChannelId },
+            _recorder.RequestChannels);
+        Assert.Equal(2, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", StatusCodes.Status503ServiceUnavailable));
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq", StatusCodes.Status503ServiceUnavailable));
+
+        using var requests = await LlmTestServerE2ETests.AdminClient.GetRequestsAsync("provider=openai");
+        var openAiModels = requests.RootElement
+            .EnumerateArray()
+            .Select(request => request.GetProperty("modelId").GetString())
+            .ToArray();
+        Assert.Contains(primaryModel, openAiModels);
+        Assert.Contains(tertiaryModel, openAiModels);
     }
 
     [LlmTestServerFact]
@@ -219,6 +276,171 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 400));
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
         Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+    }
+
+    [LlmTestServerFact]
+    public async Task DelayThenContinueCompletesWithinRequestDeadline()
+    {
+        const string model = "resilience-delay-continue";
+        const string primaryModel = "resilience-delay-continue-primary";
+        const string fallbackModel = "resilience-delay-continue-fallback";
+        const string prefix = "A visible prefix.";
+        const string remainder = " A-only remainder.";
+        await ConfigureChannelsAsync(
+            model,
+            primaryModel,
+            fallbackModel,
+            new
+            {
+                content = prefix + remainder,
+                streamChunks = new[] { prefix, remainder },
+                streamDelivery = new
+                {
+                    mode = LlmTestServerDelayThenContinueMode,
+                    afterContentFrames = 1,
+                    delayMilliseconds = 500,
+                },
+            },
+            new { content = "B fallback marker." });
+
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var context = await SendSelectedAsync(
+            RequestBody(model, stream: true),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0, actualModel: primaryModel),
+                Candidate(fallback, priority: 1, actualModel: fallbackModel)),
+            requestDeadline: TimeSpan.FromSeconds(10));
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        var stream = InspectOpenAiStream(ResponseBody(context));
+        Assert.Equal(prefix + remainder, stream.Text);
+        Assert.True(stream.HasFinishReason);
+        Assert.True(stream.HasDoneMarker);
+        Assert.False(stream.HasErrorEvent);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+
+        using var requests = await LlmTestServerE2ETests.AdminClient.GetRequestsAsync("provider=openai");
+        var request = Assert.Single(requests.RootElement.EnumerateArray());
+        Assert.Equal(primaryModel, request.GetProperty("modelId").GetString());
+        Assert.Equal(
+            LlmTestServerDelayThenContinueMode,
+            request.GetProperty("streamDelivery").GetProperty("mode").GetInt32());
+        Assert.True(request.GetProperty("streamDeliveryApplied").GetBoolean());
+        Assert.Equal(2, request.GetProperty("emittedContentFrames").GetInt32());
+    }
+
+    [LlmTestServerFact]
+    public async Task DelayThenContinueCrossingRequestDeadlineEndsAsTimeout()
+    {
+        const string model = "resilience-delay-deadline";
+        const string primaryModel = "resilience-delay-deadline-primary";
+        const string fallbackModel = "resilience-delay-deadline-fallback";
+        const string prefix = "A visible prefix.";
+        const string remainder = " A-only remainder.";
+        await ConfigureChannelsAsync(
+            model,
+            primaryModel,
+            fallbackModel,
+            new
+            {
+                content = prefix + remainder,
+                streamChunks = new[] { prefix, remainder },
+                streamDelivery = new
+                {
+                    mode = LlmTestServerDelayThenContinueMode,
+                    afterContentFrames = 1,
+                    delayMilliseconds = 5000,
+                },
+            },
+            new { content = "B fallback marker." });
+
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var context = await SendSelectedAsync(
+            RequestBody(model, stream: true),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0, actualModel: primaryModel),
+                Candidate(fallback, priority: 1, actualModel: fallbackModel)),
+            requestDeadline: TimeSpan.FromSeconds(2));
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        var stream = InspectOpenAiStream(ResponseBody(context));
+        Assert.Equal(prefix, stream.Text);
+        Assert.False(stream.HasFinishReason);
+        Assert.False(stream.HasDoneMarker);
+        Assert.True(stream.HasErrorEvent);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+
+        using var requests = await LlmTestServerE2ETests.AdminClient.GetRequestsAsync("provider=openai");
+        var request = Assert.Single(requests.RootElement.EnumerateArray());
+        Assert.Equal(primaryModel, request.GetProperty("modelId").GetString());
+        Assert.Equal(
+            LlmTestServerDelayThenContinueMode,
+            request.GetProperty("streamDelivery").GetProperty("mode").GetInt32());
+        Assert.True(request.GetProperty("streamDeliveryApplied").GetBoolean());
+        Assert.Equal(1, request.GetProperty("emittedContentFrames").GetInt32());
+    }
+
+    [LlmTestServerFact]
+    public async Task AbortConnectionAfterFirstFrameClassifiesTransportFailure()
+    {
+        const string model = "resilience-abort-connection";
+        const string primaryModel = "resilience-abort-connection-primary";
+        const string fallbackModel = "resilience-abort-connection-fallback";
+        const string prefix = "A visible prefix.";
+        const string remainder = " A-only remainder.";
+        await ConfigureChannelsAsync(
+            model,
+            primaryModel,
+            fallbackModel,
+            new
+            {
+                content = prefix + remainder,
+                streamChunks = new[] { prefix, remainder },
+                streamDelivery = new
+                {
+                    mode = LlmTestServerAbortConnectionMode,
+                    afterContentFrames = 1,
+                },
+            },
+            new { content = "B fallback marker." });
+
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var context = await SendSelectedAsync(
+            RequestBody(model, stream: true),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0, actualModel: primaryModel),
+                Candidate(fallback, priority: 1, actualModel: fallbackModel)));
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        var stream = InspectOpenAiStream(ResponseBody(context));
+        Assert.Equal(prefix, stream.Text);
+        Assert.True(stream.HasErrorEvent);
+        Assert.Equal(UpstreamTransportErrors.StreamInterruptedCode, stream.ErrorCode);
+        Assert.False(stream.HasDoneMarker);
+        Assert.False(stream.HasFinishReason);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+
+        using var requests = await LlmTestServerE2ETests.AdminClient.GetRequestsAsync("provider=openai");
+        var request = Assert.Single(requests.RootElement.EnumerateArray());
+        Assert.Equal(primaryModel, request.GetProperty("modelId").GetString());
+        Assert.Equal(
+            LlmTestServerAbortConnectionMode,
+            request.GetProperty("streamDelivery").GetProperty("mode").GetInt32());
+        Assert.True(request.GetProperty("streamDeliveryApplied").GetBoolean());
+        Assert.Equal(1, request.GetProperty("emittedContentFrames").GetInt32());
+        Assert.Equal(JsonValueKind.Null, request.GetProperty("terminalMarkerObserved").ValueKind);
     }
 
     [LlmTestServerFact]
@@ -995,6 +1217,50 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         });
     }
 
+    private static async Task ConfigureThreeChannelsAsync(
+        string requestedModel,
+        string primaryModel,
+        string fallbackModel,
+        string tertiaryModel,
+        object primaryResponse,
+        object fallbackResponse,
+        object tertiaryResponse)
+    {
+        await LlmTestServerE2ETests.AdminClient.ResetAsync();
+        await LlmTestServerE2ETests.AdminClient.ConfigureAsync(new
+        {
+            requiredBearerToken = ApiKey,
+            models = new[]
+            {
+                new { id = requestedModel, kind = "chat" },
+                new { id = primaryModel, kind = "chat" },
+                new { id = fallbackModel, kind = "chat" },
+                new { id = tertiaryModel, kind = "chat" },
+            },
+            chatScenarios = new[]
+            {
+                new
+                {
+                    id = "resilience-" + primaryModel,
+                    modelId = primaryModel,
+                    responses = new[] { primaryResponse },
+                },
+                new
+                {
+                    id = "resilience-" + fallbackModel,
+                    modelId = fallbackModel,
+                    responses = new[] { fallbackResponse },
+                },
+                new
+                {
+                    id = "resilience-" + tertiaryModel,
+                    modelId = tertiaryModel,
+                    responses = new[] { tertiaryResponse },
+                },
+            },
+        });
+    }
+
     private static RetryPolicy CreateCircuitBreakerRetryPolicy()
         => new()
         {
@@ -1127,6 +1393,7 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         var hasDoneMarker = false;
         var hasFinishReason = false;
         var hasErrorEvent = false;
+        string? errorCode = null;
         var eventType = string.Empty;
 
         foreach (var raw in sse.Split('\n'))
@@ -1163,6 +1430,13 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             }
 
             using var chunk = JsonDocument.Parse(payload);
+            if (chunk.RootElement.TryGetProperty("error", out var error)
+                && error.TryGetProperty("code", out var code)
+                && code.ValueKind == JsonValueKind.String)
+            {
+                errorCode = code.GetString();
+            }
+
             if (!chunk.RootElement.TryGetProperty("choices", out var choices))
             {
                 continue;
@@ -1185,7 +1459,7 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             }
         }
 
-        return new OpenAiStreamEvidence(text.ToString(), hasDoneMarker, hasFinishReason, hasErrorEvent);
+        return new OpenAiStreamEvidence(text.ToString(), hasDoneMarker, hasFinishReason, hasErrorEvent, errorCode);
     }
 
     private static void AssertPublicError(DefaultHttpContext context, int expectedStatus, string expectedCode)
@@ -1290,7 +1564,8 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         string Text,
         bool HasDoneMarker,
         bool HasFinishReason,
-        bool HasErrorEvent);
+        bool HasErrorEvent,
+        string? ErrorCode);
 
     private sealed class AutoDisableHarness
     {
