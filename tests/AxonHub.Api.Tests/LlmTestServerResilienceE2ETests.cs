@@ -27,6 +27,7 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
     private const long PrimaryChannelId = 9981;
     private const long FallbackChannelId = 9982;
     private const string ChatPath = "/v1/chat/completions";
+    private const int LlmTestServerEarlyCleanEndMode = 1;
 
     private static string ServerUrl => LlmTestServerE2ETests.ServerUrl;
 
@@ -218,6 +219,103 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai", 400));
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
         Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+    }
+
+    [LlmTestServerFact]
+    public async Task EarlyCleanEndAfterFirstFrameDoesNotSpliceFallback()
+    {
+        const string model = "resilience-early-clean-end-prefix";
+        const string primaryModel = "resilience-early-clean-end-prefix-primary";
+        const string fallbackModel = "resilience-early-clean-end-prefix-fallback";
+        const string prefix = "A visible prefix.";
+        const string remainder = " A-only remainder.";
+        const string fallbackText = "B fallback marker.";
+        await ConfigureChannelsAsync(
+            model,
+            primaryModel,
+            fallbackModel,
+            new
+            {
+                content = prefix + remainder,
+                streamChunks = new[] { prefix, remainder },
+                streamDelivery = new { mode = LlmTestServerEarlyCleanEndMode, afterContentFrames = 1 },
+            },
+            new { content = fallbackText });
+
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var context = await SendSelectedAsync(
+            RequestBody(model, stream: true),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0, actualModel: primaryModel),
+                Candidate(fallback, priority: 1, actualModel: fallbackModel)));
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        var stream = InspectOpenAiStream(ResponseBody(context));
+        Assert.Equal(prefix, stream.Text);
+        Assert.False(stream.HasDoneMarker);
+        Assert.False(stream.HasFinishReason);
+        Assert.True(stream.HasErrorEvent);
+        Assert.DoesNotContain(fallbackText, stream.Text, StringComparison.Ordinal);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+
+        using var requests = await LlmTestServerE2ETests.AdminClient.GetRequestsAsync("provider=openai");
+        var request = Assert.Single(requests.RootElement.EnumerateArray());
+        Assert.Equal(primaryModel, request.GetProperty("modelId").GetString());
+        Assert.Equal(LlmTestServerEarlyCleanEndMode, request.GetProperty("streamDelivery").GetProperty("mode").GetInt32());
+        Assert.True(request.GetProperty("streamDeliveryApplied").GetBoolean());
+        Assert.Equal(1, request.GetProperty("emittedContentFrames").GetInt32());
+        Assert.Equal(JsonValueKind.Null, request.GetProperty("terminalMarkerObserved").ValueKind);
+    }
+
+    [LlmTestServerFact]
+    public async Task EarlyCleanEndAfterAllContentStillFailsTerminalCheck()
+    {
+        const string model = "resilience-early-clean-end-all-content";
+        const string primaryModel = "resilience-early-clean-end-all-content-primary";
+        const string fallbackModel = "resilience-early-clean-end-all-content-fallback";
+        const string content = "All text arrived before the stream ended.";
+        await ConfigureChannelsAsync(
+            model,
+            primaryModel,
+            fallbackModel,
+            new
+            {
+                content,
+                streamChunks = new[] { content },
+                streamDelivery = new { mode = LlmTestServerEarlyCleanEndMode, afterContentFrames = 1 },
+            },
+            new { content = "B fallback marker." });
+
+        var primary = PrimaryChannel(model);
+        var fallback = FallbackChannel(model);
+        var context = await SendSelectedAsync(
+            RequestBody(model, stream: true),
+            CreateRetryPolicy(maxChannelRetries: 1),
+            [primary, fallback],
+            new FixedCandidateSelector(
+                Candidate(primary, priority: 0, actualModel: primaryModel),
+                Candidate(fallback, priority: 1, actualModel: fallbackModel)));
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        var stream = InspectOpenAiStream(ResponseBody(context));
+        Assert.Equal(content, stream.Text);
+        Assert.False(stream.HasDoneMarker);
+        Assert.False(stream.HasFinishReason);
+        Assert.True(stream.HasErrorEvent);
+        Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
+        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+
+        using var requests = await LlmTestServerE2ETests.AdminClient.GetRequestsAsync("provider=openai");
+        var request = Assert.Single(requests.RootElement.EnumerateArray());
+        Assert.Equal(primaryModel, request.GetProperty("modelId").GetString());
+        Assert.Equal(LlmTestServerEarlyCleanEndMode, request.GetProperty("streamDelivery").GetProperty("mode").GetInt32());
+        Assert.True(request.GetProperty("streamDeliveryApplied").GetBoolean());
+        Assert.Equal(1, request.GetProperty("emittedContentFrames").GetInt32());
+        Assert.Equal(JsonValueKind.Null, request.GetProperty("terminalMarkerObserved").ValueKind);
     }
 
     [LlmTestServerFact]
@@ -991,6 +1089,73 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
     private static string ResponseBody(DefaultHttpContext context)
         => Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
 
+    private static OpenAiStreamEvidence InspectOpenAiStream(string sse)
+    {
+        var text = new StringBuilder();
+        var hasDoneMarker = false;
+        var hasFinishReason = false;
+        var hasErrorEvent = false;
+        var eventType = string.Empty;
+
+        foreach (var raw in sse.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Length == 0)
+            {
+                eventType = string.Empty;
+                continue;
+            }
+
+            if (line.StartsWith("event:", StringComparison.Ordinal))
+            {
+                eventType = line["event:".Length..].Trim();
+                hasErrorEvent |= eventType == "error";
+                continue;
+            }
+
+            if (!line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var payload = line["data:".Length..].Trim();
+            if (payload == "[DONE]")
+            {
+                hasDoneMarker = true;
+                continue;
+            }
+
+            if (payload.Length == 0)
+            {
+                continue;
+            }
+
+            using var chunk = JsonDocument.Parse(payload);
+            if (!chunk.RootElement.TryGetProperty("choices", out var choices))
+            {
+                continue;
+            }
+
+            foreach (var choice in choices.EnumerateArray())
+            {
+                if (choice.TryGetProperty("delta", out var delta)
+                    && delta.TryGetProperty("content", out var content)
+                    && content.ValueKind == JsonValueKind.String)
+                {
+                    text.Append(content.GetString());
+                }
+
+                if (choice.TryGetProperty("finish_reason", out var finishReason)
+                    && finishReason.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+                {
+                    hasFinishReason = true;
+                }
+            }
+        }
+
+        return new OpenAiStreamEvidence(text.ToString(), hasDoneMarker, hasFinishReason, hasErrorEvent);
+    }
+
     private static void AssertPublicError(DefaultHttpContext context, int expectedStatus, string expectedCode)
     {
         Assert.True(
@@ -1037,6 +1202,12 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
 
         public void Advance(TimeSpan by) => _now += by;
     }
+
+    private sealed record OpenAiStreamEvidence(
+        string Text,
+        bool HasDoneMarker,
+        bool HasFinishReason,
+        bool HasErrorEvent);
 
     private sealed class AutoDisableHarness
     {
