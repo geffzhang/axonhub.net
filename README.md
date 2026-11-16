@@ -182,6 +182,43 @@ PostgreSQL 的 AdoNet membership + reminder；见
 
 ### 6. 单镜像 Docker
 
+镜像由 [发布工作流](.github/workflows/publish-container.yml) 使用
+`ghcr.io/geffzhang/axonhub.net` 构建和推送。触发规则和标签含义如下：
+
+| Git 推送 | 发布的镜像标签 | 用途 |
+| --- | --- | --- |
+| 推送到默认分支 `main` | `main`、`sha-<短提交号>` | `main` 跟随默认分支；SHA 标签用于定位某次提交构建 |
+| 推送 `v1.2.3` 这类版本标签 | `1.2.3`、`1.2`、`sha-<短提交号>`、`latest` | 精确版本、同一 minor 系列的滚动别名，以及最新发布别名 |
+| Pull Request | 不发布镜像 | 只构建验证，避免 PR 使用发布权限或覆盖镜像标签 |
+
+例如推送 Git 标签 `v1.2.3` 后，可使用：
+
+```bash
+docker pull ghcr.io/geffzhang/axonhub.net:1.2.3
+docker pull ghcr.io/geffzhang/axonhub.net:1.2
+docker pull ghcr.io/geffzhang/axonhub.net:latest
+docker pull ghcr.io/geffzhang/axonhub.net:sha-abc1234 # 替换为工作流实际生成的短提交号
+```
+
+版本标签中的 `v` 只用于 Git 标签；镜像标签会去掉它。`1.2.3` 指向该版本，
+`1.2` 会随之后的 `v1.2.x` 版本更新，`latest` 则只在版本标签发布时更新，
+不会因 `main` 分支提交而改变。工作流没有创建单独的 `1` 主版本标签。
+同一次构建发布的这些标签指向同一镜像内容。
+
+触发筛选器是 `v*`，即 Git 标签只要以 `v` 开头就会启动发布；`latest` 也按这个
+前缀条件更新。因此建议只推送稳定版本格式 `v主版本.次版本.修订号`（例如
+`v1.2.3`）；`v1.2.3-rc.1` 等预发布标签也会更新 `latest`，不应在希望 `latest`
+始终代表稳定版时使用。
+
+GHCR 首次发布的包默认是私有的。首次推送后，请在仓库 **Packages** 中打开该包的
+**Package settings**，将可见性改为 **Public**，之后即可匿名拉取。
+
+```bash
+docker pull ghcr.io/geffzhang/axonhub.net:latest
+```
+
+也可以从源码本地构建：
+
 ```bash
 docker build -t axonhub.net .
 
@@ -213,7 +250,7 @@ sudo ./deploy/install.sh \
 
 # Kubernetes
 helm upgrade --install axonhub deploy/helm -n axonhub --create-namespace \
-  --set axonhub.image.repository=your-registry/axonhub.net \
+  --set axonhub.image.repository=ghcr.io/geffzhang/axonhub.net \
   --set axonhub.image.tag=0.1.0 \
   --set postgresql.auth.password='change-me'
 ```

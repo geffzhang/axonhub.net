@@ -41,6 +41,9 @@ RUN dotnet publish src/AxonHub.Api/AxonHub.Api.csproj \
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
+LABEL org.opencontainers.image.source="https://github.com/geffzhang/axonhub.net" \
+      org.opencontainers.image.description="AxonHub.NET AI gateway" \
+      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /app ./
 
 # Program.cs serves Server:Static:Root (default frontend/dist) relative to the
