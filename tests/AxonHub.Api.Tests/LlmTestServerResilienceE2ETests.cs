@@ -608,6 +608,8 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("anthropic", 200));
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("anthropic"));
+        Assert.Equal(new[] { FallbackChannelId }, _recorder.RequestChannels);
+        AssertSuccessfulUsageAttributedTo(FallbackChannelId, model);
     }
 
     [LlmTestServerFact]
@@ -654,11 +656,12 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         const string model = "resilience-timeout-primary-fallback";
         const string primaryModel = "resilience-timeout-primary-slow";
         const string fallbackModel = "resilience-timeout-fallback-fast";
+        const int configuredPrimaryDelayMilliseconds = 1800;
         await ConfigureChannelsAsync(
             model,
             primaryModel,
             fallbackModel,
-            new { content = "Primary response arrived too late.", delayMilliseconds = 1800 },
+            new { content = "Primary response arrived too late.", delayMilliseconds = configuredPrimaryDelayMilliseconds },
             new { content = "Fallback completed within the overall deadline." });
 
         var started = System.Diagnostics.Stopwatch.StartNew();
@@ -680,6 +683,22 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq", 200));
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
         Assert.True(started.Elapsed < TimeSpan.FromSeconds(7), $"Fallback exceeded its deadline budget: {started.Elapsed}.");
+        Assert.Equal(new[] { PrimaryChannelId, FallbackChannelId }, _recorder.RequestChannels);
+        AssertSuccessfulUsageAttributedTo(FallbackChannelId, fallbackModel);
+
+        using var requestJournal = await LlmTestServerE2ETests.AdminClient.GetRequestsAsync(
+            "model=" + Uri.EscapeDataString(primaryModel));
+        var primaryAttempt = Assert.Single(requestJournal.RootElement.EnumerateArray().ToArray());
+        Assert.Equal(primaryModel, primaryAttempt.GetProperty("modelId").GetString());
+        var primaryDurationMilliseconds = primaryAttempt.GetProperty("durationMilliseconds").GetDouble();
+        Assert.True(
+            primaryDurationMilliseconds >= 500,
+            $"Expected the journal to show the primary's configured {configuredPrimaryDelayMilliseconds} ms delay, "
+                + $"but its attempt lasted only {primaryDurationMilliseconds} ms.");
+        Assert.Contains(
+            "TaskCanceledException",
+            primaryAttempt.GetProperty("transportError").GetString(),
+            StringComparison.Ordinal);
     }
 
     [LlmTestServerFact]
@@ -1183,6 +1202,24 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
             [new CostItem { ItemCode = PriceItemCodes.PromptTokens, Quantity = 1, Subtotal = 0.00006m }],
             0.00006m,
             "retry-final");
+
+    private void AssertSuccessfulUsageAttributedTo(long channelId, string model)
+    {
+        var usage = Assert.Single(_recorder.UsageLogs);
+        Assert.Equal(channelId, usage.ChannelId);
+        Assert.Equal(model, usage.ModelId);
+        Assert.Equal(0.00006, usage.TotalCost!.Value, 12);
+        Assert.Equal("retry-final", usage.CostPriceReferenceId);
+        Assert.NotEmpty(_usageCostService.Computed);
+        Assert.All(
+            _usageCostService.Computed,
+            cost =>
+            {
+                Assert.Equal(channelId, cost.ChannelId);
+                Assert.Equal(model, cost.ModelId);
+                Assert.Equal(usage.PromptTokens, cost.Usage.PromptTokens);
+            });
+    }
 
     private sealed class FixedUsageCostService : IUsageCostService
     {
