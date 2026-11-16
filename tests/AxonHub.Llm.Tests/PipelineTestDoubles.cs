@@ -73,6 +73,8 @@ internal sealed class MockOutbound : IOutboundTransformer, IRetryable, IChannelR
 
     public Func<Exception, bool>? CanRetryFn { get; set; }
 
+    public Func<Exception, bool>? CanSwitchChannelFn { get; set; }
+
     public Func<CancellationToken, Exception?>? PrepareForRetryFn { get; set; }
 
     public Func<bool>? HasMoreChannelsFn { get; set; }
@@ -103,6 +105,8 @@ internal sealed class MockOutbound : IOutboundTransformer, IRetryable, IChannelR
     }
 
     public bool HasMoreChannels() => HasMoreChannelsFn?.Invoke() ?? false;
+
+    public bool CanSwitchChannel(Exception error) => CanSwitchChannelFn?.Invoke(error) ?? true;
 
     public Exception? TryNextChannel(CancellationToken cancellationToken) => NextChannelFn?.Invoke(cancellationToken);
 

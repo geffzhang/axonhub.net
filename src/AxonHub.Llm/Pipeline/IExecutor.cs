@@ -28,6 +28,12 @@ public interface IRetryable
     /// <summary>True if there are more channels to switch to. Only called while the attempt count allows it.</summary>
     bool HasMoreChannels();
 
+    /// <summary>
+    /// True when this failure is eligible for a channel switch. Existing
+    /// retryable transformers keep the historical behavior by default.
+    /// </summary>
+    bool CanSwitchChannel(Exception error) => true;
+
     /// <summary>Switches to the next channel. Returns null on success, the failure otherwise.</summary>
     Exception? TryNextChannel(CancellationToken cancellationToken);
 }

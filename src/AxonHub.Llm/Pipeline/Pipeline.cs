@@ -120,7 +120,9 @@ public sealed partial class Pipeline
             // 2. If same-channel retry is impossible or exhausted, try channel switching.
             if (!canRetry && _outbound is IRetryable retryable)
             {
-                if (channelSwitches < _options.MaxChannelRetries && retryable.HasMoreChannels())
+                if (channelSwitches < _options.MaxChannelRetries
+                    && retryable.HasMoreChannels()
+                    && retryable.CanSwitchChannel(lastErr!))
                 {
                     var switchErr = retryable.TryNextChannel(cancellationToken);
                     if (switchErr is null)

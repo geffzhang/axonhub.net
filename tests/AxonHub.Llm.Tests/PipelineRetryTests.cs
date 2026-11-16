@@ -101,6 +101,45 @@ public sealed class PipelineRetryTests
         Assert.Equal(1, switchCalls);
     }
 
+    [Fact]
+    public void ChannelSwitchPolicyCanStopRetryingTerminalFailure()
+    {
+        var failure = new InvalidOperationException("terminal provider failure");
+        var execCalls = 0;
+        var switchCalls = 0;
+        var executor = new MockExecutor
+        {
+            DoFn = (_, _) =>
+            {
+                execCalls++;
+                throw failure;
+            },
+        };
+        var outbound = new MockOutbound
+        {
+            CanRetryFn = _ => false,
+            CanSwitchChannelFn = _ => false,
+            HasMoreChannelsFn = () => true,
+            NextChannelFn = _ =>
+            {
+                switchCalls++;
+                return null;
+            },
+        };
+        var pipeline = new PipelineType(
+            executor,
+            new MockInbound(),
+            outbound,
+            new PipelineOptions { MaxChannelRetries = 1 });
+
+        var thrown = Assert.ThrowsAny<Exception>(
+            () => pipeline.Process(new HttpRequestData(), CancellationToken.None));
+
+        Assert.True(GoErrors.Is(thrown, failure));
+        Assert.Equal(1, execCalls);
+        Assert.Equal(0, switchCalls);
+    }
+
     // Port of TestPipeline_Process_RetryLogic/MixedRetrySuccess.
     [Fact]
     public void MixedRetrySuccess()
