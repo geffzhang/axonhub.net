@@ -1,0 +1,6 @@
+{
+  "case": "root-array",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"failed to unmarshal chat completion response: json: cannot unmarshal array into Go value of type openai.Response\"\n}\n",
+  "stderr": ""
+}

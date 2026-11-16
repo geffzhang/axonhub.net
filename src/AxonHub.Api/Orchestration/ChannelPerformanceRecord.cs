@@ -1,0 +1,212 @@
+using AxonHub.Grains.Abstractions;
+
+namespace AxonHub.Api.Orchestration;
+
+/// <summary>
+/// Port of biz.PerformanceRecord (internal/server/biz/channel_metrics.go) reduced
+/// to the fields the channel grain's counters depend on.
+/// </summary>
+/// <remarks>
+/// The reference creates one record per outbound attempt and lets three places
+/// mark it: the performance middleware (non-stream success and raw errors), the
+/// outbound persistent stream (terminal-event classification) and the
+/// aggregated-completion branch. Marking is not guarded here — the reference's
+/// Mark* methods overwrite — except for <see cref="MarkStreamTerminal"/>, which
+/// is the port of markPerformanceTerminal's <c>RequestCompleted</c> guard.
+/// </remarks>
+public sealed class ChannelPerformanceRecord
+{
+    public required long ChannelId { get; init; }
+
+    /// <summary>
+    /// The client's requested model (the reference's GetRequestedModel), used
+    /// as the (channel, model) key of the model circuit breaker (C036).
+    /// </summary>
+    public string ModelId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// True when this attempt claimed the open model circuit's single probe
+    /// lease (model_circuit_breaker.go:TryBeginProbe).
+    /// </summary>
+    public bool WasProbe { get; init; }
+
+    public required DateTimeOffset StartTime { get; init; }
+
+    /// <summary>
+    /// Port of PerformanceRecord.APIKey: the key this attempt authenticated
+    /// with (the <c>contexts.GetChannelAPIKey</c> value in the reference), or
+    /// <see cref="AxonHub.Abstractions.ChannelCredentials.OAuthCredentialRef"/>
+    /// for an OAuth channel, so the round_robin_success report can match the key
+    /// the cursor is using.
+    /// </summary>
+    public string ApiKey { get; init; } = string.Empty;
+
+    public bool Stream { get; init; }
+
+    /// <summary>First meaningful streamed output, captured by the perf stream.</summary>
+    public DateTimeOffset? FirstTokenTime { get; private set; }
+
+    /// <summary>The provider's final completion-token count, when reported.</summary>
+    public long CompletionTokens { get; private set; }
+
+    public bool Success { get; private set; }
+
+    public bool Canceled { get; private set; }
+
+    public bool RequestCompleted { get; private set; }
+
+    public int ResponseStatusCode { get; private set; }
+
+    public string ErrorMessage { get; private set; } = string.Empty;
+
+    /// <summary>Port of PerformanceRecord.EndTime: when the outcome was marked.</summary>
+    public DateTimeOffset EndTime { get; private set; }
+
+    /// <summary>Port of PerformanceRecord.IsValid.</summary>
+    public bool IsValid => ChannelId > 0 && RequestCompleted;
+
+    public void ObserveFirstToken(DateTimeOffset at)
+        => FirstTokenTime ??= at;
+
+    public void ObserveCompletionTokens(long tokens)
+    {
+        if (tokens > 0)
+        {
+            CompletionTokens = tokens;
+        }
+    }
+
+    /// <summary>
+    /// Port of PerformanceRecord.Calculate (channel_metrics.go:694-726): the
+    /// minimum latency is 10ms; a streaming request without a first-token time
+    /// falls into the non-streaming bucket, exactly like the reference.
+    /// </summary>
+    public ChannelLatencySample? MeasureLatency()
+    {
+        if (!Success || !RequestCompleted || ChannelId <= 0)
+        {
+            return null;
+        }
+
+        var total = ClampLatency((long)(EndTime - StartTime).TotalMilliseconds);
+        var streaming = Stream && FirstTokenTime is not null;
+        if (!streaming)
+        {
+            return new ChannelLatencySample
+            {
+                ChannelId = ChannelId,
+                Streaming = false,
+                RequestLatencyMs = total,
+            };
+        }
+
+        var firstToken = ClampLatency(
+            (long)(FirstTokenTime!.Value - StartTime).TotalMilliseconds);
+        var tokensPerSecond = 0.0;
+        if (CompletionTokens > 0)
+        {
+            var effective = ClampLatency(total - firstToken);
+            tokensPerSecond = CompletionTokens / (effective / 1000.0);
+        }
+
+        return new ChannelLatencySample
+        {
+            ChannelId = ChannelId,
+            Streaming = true,
+            FirstTokenLatencyMs = firstToken,
+            RequestLatencyMs = total,
+            TokensPerSecond = tokensPerSecond,
+        };
+    }
+
+    private static long ClampLatency(long latencyMs)
+        => latencyMs < 10 ? 10 : latencyMs;
+
+    /// <summary>Port of PerformanceRecord.MarkSuccess.</summary>
+    public void MarkSuccess(DateTimeOffset now)
+    {
+        Success = true;
+        RequestCompleted = true;
+        EndTime = now;
+    }
+
+    /// <summary>Port of PerformanceRecord.MarkFailedWithMessage.</summary>
+    public void MarkFailed(int errorCode, string errorMessage, DateTimeOffset now)
+    {
+        Success = false;
+        ResponseStatusCode = errorCode;
+        ErrorMessage = errorMessage;
+        RequestCompleted = true;
+        EndTime = now;
+    }
+
+    /// <summary>Port of PerformanceRecord.MarkCanceled.</summary>
+    public void MarkCanceled(DateTimeOffset now)
+    {
+        Success = false;
+        Canceled = true;
+        RequestCompleted = true;
+        EndTime = now;
+    }
+
+    /// <summary>
+    /// Port of OutboundPersistentStream.markPerformanceTerminal: a stream's
+    /// classified terminal state decides success, cancellation or failure.
+    /// Token limits and content filtering (incomplete) end a response without a
+    /// channel fault, so they count as success; a terminal-less stream decides
+    /// nothing here.
+    /// </summary>
+    public void MarkStreamTerminal(StreamTerminalState state, string message, DateTimeOffset now)
+    {
+        if (RequestCompleted)
+        {
+            return;
+        }
+
+        switch (state)
+        {
+            case StreamTerminalState.Completed:
+            case StreamTerminalState.Incomplete:
+                MarkSuccess(now);
+                break;
+            case StreamTerminalState.Canceled:
+                MarkCanceled(now);
+                break;
+            case StreamTerminalState.Failed:
+                MarkFailed(500, message, now);
+                break;
+            case StreamTerminalState.None:
+                break;
+        }
+    }
+}
+
+/// <summary>
+/// The performance record currently owned by one request attempt. The reference
+/// keeps it on PersistenceState.Perf and every middleware shares the pointer.
+/// </summary>
+public sealed class ChannelPerformanceState
+{
+    public ChannelPerformanceRecord? Current { get; set; }
+
+    /// <summary>
+    /// The reporting sink, bound by the performance middleware. The reference
+    /// reaches the same sink through <c>PersistenceState.ChannelService</c>.
+    /// </summary>
+    public Action<ChannelPerformanceRecord?>? OnCompleted { get; set; }
+
+    /// <summary>
+    /// Port of enqueueCompletedPerformance (outbound.go:241-249): report the
+    /// record only once it carries a final outcome. The aggregated-completion
+    /// branch calls this because the performance stream has already closed by
+    /// the time finalization runs, and closing an unmarked record reports
+    /// nothing.
+    /// </summary>
+    public void ReportCompleted()
+    {
+        if (Current is { IsValid: true } record && OnCompleted is { } onCompleted)
+        {
+            onCompleted(record);
+        }
+    }
+}

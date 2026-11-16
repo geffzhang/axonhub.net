@@ -7,5 +7,8 @@
     <ProjectReference Include="..\AxonHub.Grains.Abstractions\AxonHub.Grains.Abstractions.csproj" />
     <ProjectReference Include="..\AxonHub.Llm\AxonHub.Llm.csproj" />
     <PackageReference Include="Microsoft.Orleans.Server" />
+    <!-- The backup / GC grains are reminder-driven (§149); IRemindable and
+         RegisterOrUpdateReminder live in this package, not in Server. -->
+    <PackageReference Include="Microsoft.Orleans.Reminders" />
   </ItemGroup>
 </Project>

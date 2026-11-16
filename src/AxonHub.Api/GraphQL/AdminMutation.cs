@@ -1,0 +1,3222 @@
+using HotChocolate;
+using HotChocolate.Types;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using AxonHub.Api.Catalog;
+using AxonHub.Api.Diagnostics;
+using AxonHub.Api.Management;
+using AxonHub.Api.Models;
+using AxonHub.Api.Orchestration;
+using AxonHub.Api.Security;
+using AxonHub.Api.Settings;
+using AxonHub.Llm.Http;
+using AxonHub.Llm.Pipeline;
+using AxonHub.Persistence;
+
+namespace AxonHub.Api.GraphQL;
+
+/// <summary>
+/// Port of the system-settings mutations of mutationResolver
+/// (internal/server/gql/system.resolvers.go:60-67, 80-100, 212-236).
+/// </summary>
+public sealed class AdminMutation
+{
+    private static readonly Action<ILogger, Exception?> LogGcCleanupFailed =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(0, "ManualGcCleanupFailed"),
+            "Manual GC cleanup failed");
+
+    /// <summary>Port of mutationResolver.UpdateRetryPolicy.</summary>
+    [GraphQLName("updateRetryPolicy")]
+    public async Task<bool> UpdateRetryPolicyAsync(
+        UpdateRetryPolicyInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetRetryPolicyAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to update retry policy: %w", err)
+            throw new InvalidOperationException(
+                "failed to update retry policy: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UpdateSystemModelSettings.</summary>
+    [GraphQLName("updateSystemModelSettings")]
+    public async Task<bool> UpdateSystemModelSettingsAsync(
+        UpdateSystemModelSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        var modelSettings = SystemSettingsMapping.ToDomain(input);
+
+        // Older clients may update the toggles without sending developer
+        // rules; preserve the stored list unless the caller sends one.
+        if (input.DeveloperSettings is null)
+        {
+            ModelSettings current;
+            try
+            {
+                current = await settings.GetModelSettingsAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to get current system model settings: " + ex.Message,
+                    ex);
+            }
+
+            modelSettings = modelSettings with { DeveloperSettings = current.DeveloperSettings };
+        }
+
+        try
+        {
+            await settings.SetModelSettingsAsync(modelSettings, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update system model settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UpdateSecuritySettings.</summary>
+    [GraphQLName("updateSecuritySettings")]
+    public async Task<bool> UpdateSecuritySettingsAsync(
+        UpdateSecuritySettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        SecuritySettings current;
+        try
+        {
+            current = await settings.GetSecuritySettingsAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to read current security settings: " + ex.Message,
+                ex);
+        }
+
+        var updated = current with
+        {
+            BlockedIps = input.BlockedIps?.ToList() ?? current.BlockedIps,
+            ShowRequestLogIpBanIcon =
+                input.ShowRequestLogIpBanIcon ?? current.ShowRequestLogIpBanIcon,
+        };
+
+        try
+        {
+            await settings.SetSecuritySettingsAsync(updated, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update security settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UpdateStoragePolicy (system.resolvers.go:84-92).</summary>
+    [GraphQLName("updateStoragePolicy")]
+    public async Task<bool> UpdateStoragePolicyAsync(
+        UpdateStoragePolicyInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetStoragePolicyAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to update storage policy: %w", err)
+            throw new InvalidOperationException(
+                "failed to update storage policy: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateBrandSettings (system.resolvers.go:24-47):
+    /// each provided field is written in order and each failure carries its own
+    /// prefix.
+    /// </summary>
+    [GraphQLName("updateBrandSettings")]
+    public async Task<bool> UpdateBrandSettingsAsync(
+        UpdateBrandSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        if (input.BrandName is not null)
+        {
+            try
+            {
+                await settings.SetBrandNameAsync(input.BrandName, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to update brand name setting: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (input.BrandLogo is not null)
+        {
+            try
+            {
+                await settings.SetBrandLogoAsync(input.BrandLogo, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to update brand logo setting: " + ex.Message,
+                    ex);
+            }
+        }
+
+        if (input.Title is not null)
+        {
+            try
+            {
+                await settings.SetTitleAsync(input.Title, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "failed to update title setting: " + ex.Message,
+                    ex);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateSystemChannelSettings
+    /// (system.resolvers.go:143-150).
+    /// </summary>
+    [GraphQLName("updateSystemChannelSettings")]
+    public async Task<bool> UpdateSystemChannelSettingsAsync(
+        UpdateSystemChannelSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.UpdateChannelSettingsAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update channel setting: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateSystemGeneralSettings
+    /// (system.resolvers.go:152-162): a successful write re-arms the auto-backup
+    /// schedule (<c>backupService.Reschedule(ctx, scheduler)</c>).
+    /// </summary>
+    [GraphQLName("updateSystemGeneralSettings")]
+    public async Task<bool> UpdateSystemGeneralSettingsAsync(
+        UpdateSystemGeneralSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        [Service] IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetGeneralSettingsAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update general settings: " + ex.Message,
+                ex);
+        }
+
+        // Hosts without the backup grain leave the signal unregistered, like
+        // the reference's nil scheduler.
+        var rescheduleSignal = services.GetService<IAutoBackupRescheduleSignal>();
+        if (rescheduleSignal is not null)
+        {
+            await rescheduleSignal.RescheduleAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateUserAgentPassThroughSettings
+    /// (system.resolvers.go:308-316).
+    /// </summary>
+    [GraphQLName("updateUserAgentPassThroughSettings")]
+    public async Task<bool> UpdateUserAgentPassThroughSettingsAsync(
+        UpdateUserAgentPassThroughSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetUserAgentPassThroughAsync(input.Enabled, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update user-agent pass-through settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdatePassThroughSettings
+    /// (system.resolvers.go:318-326).
+    /// </summary>
+    [GraphQLName("updatePassThroughSettings")]
+    public async Task<bool> UpdatePassThroughSettingsAsync(
+        UpdatePassThroughSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetPassThroughAsync(input.Enabled, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update pass-through settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateUsageCostInjectionSettings
+    /// (system.resolvers.go:328-336).
+    /// </summary>
+    [GraphQLName("updateUsageCostInjectionSettings")]
+    public async Task<bool> UpdateUsageCostInjectionSettingsAsync(
+        UpdateUsageCostInjectionSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetInjectUsageCostEnabledAsync(input.Enabled, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update usage cost injection settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateVideoStorageSettings
+    /// (system.resolvers.go:165-173): a successful write re-arms the video
+    /// storage scan task (<c>videoWorker.Reschedule(ctx, scheduler)</c>).
+    /// </summary>
+    [GraphQLName("updateVideoStorageSettings")]
+    public async Task<bool> UpdateVideoStorageSettingsAsync(
+        UpdateVideoStorageSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        [Service] IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetVideoStorageSettingsAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update video storage settings: " + ex.Message,
+                ex);
+        }
+
+        // The scan worker is not ported yet (gap); hosts leave the signal
+        // unregistered, like the reference's nil scheduler.
+        var rescheduleSignal = services.GetService<IVideoStorageRescheduleSignal>();
+        if (rescheduleSignal is not null)
+        {
+            await rescheduleSignal.RescheduleAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.SaveProxyPreset (system.resolvers.go:288-296).
+    /// </summary>
+    [GraphQLName("saveProxyPreset")]
+    public async Task<bool> SaveProxyPresetAsync(
+        SaveProxyPresetInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SaveProxyPresetAsync(
+                    SystemSettingsMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to save proxy preset: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteProxyPreset (system.resolvers.go:298-306).
+    /// </summary>
+    [GraphQLName("deleteProxyPreset")]
+    public async Task<bool> DeleteProxyPresetAsync(
+        string url,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.DeleteProxyPresetAsync(url, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to delete proxy preset: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateWebhookNotifierConfig
+    /// (system.resolvers.go:69-77).
+    /// </summary>
+    [GraphQLName("updateWebhookNotifierConfig")]
+    public async Task<bool> UpdateWebhookNotifierConfigAsync(
+        WebhookNotifierConfigInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await settings.SetWebhookNotifierConfigAsync(
+                    WebhookNotifierMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to update webhook notifier config: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CompleteOnboarding
+    /// (system.resolvers.go:112-120); the input carries only a dummy field.
+    /// </summary>
+    [GraphQLName("completeOnboarding")]
+    public async Task<bool> CompleteOnboardingAsync(
+        CompleteOnboardingInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        _ = input;
+
+        try
+        {
+            await settings.CompleteOnboardingAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to complete onboarding: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CompleteSystemModelSettingOnboarding
+    /// (system.resolvers.go:122-130).
+    /// </summary>
+    [GraphQLName("completeSystemModelSettingOnboarding")]
+    public async Task<bool> CompleteSystemModelSettingOnboardingAsync(
+        CompleteSystemModelSettingOnboardingInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        _ = input;
+
+        try
+        {
+            await settings.CompleteSystemModelSettingOnboardingAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to complete system model setting onboarding: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CompleteAutoDisableChannelOnboarding
+    /// (system.resolvers.go:132-140).
+    /// </summary>
+    [GraphQLName("completeAutoDisableChannelOnboarding")]
+    public async Task<bool> CompleteAutoDisableChannelOnboardingAsync(
+        CompleteAutoDisableChannelOnboardingInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        _ = input;
+
+        try
+        {
+            await settings.CompleteAutoDisableChannelOnboardingAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to complete auto disable channel onboarding: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateDefaultDataStorage
+    /// (system.resolvers.go:103-110). The gid type is ignored, like UpdateDataStorage.
+    /// </summary>
+    [GraphQLName("updateDefaultDataStorage")]
+    public async Task<bool> UpdateDefaultDataStorageAsync(
+        UpdateDefaultDataStorageInput input,
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        // gqlgen coerces input.DataStorageID before the resolver runs, so a
+        // malformed gid is not wrapped with the mutation prefix.
+        var id = GidValue.Parse(input.DataStorageId).Id;
+
+        try
+        {
+            await settings.SetDefaultDataStorageIdAsync(id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to update default data storage: %w", err)
+            throw new InvalidOperationException(
+                "failed to update default data storage: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateQuotaRoutingSettings
+    /// (system.resolvers.go:211-227). The reference guards with
+    /// <c>authz.HasScope(write_settings)</c> and starts from the lenient
+    /// OrDefault read, so an absent mode keeps the current/default one.
+    /// </summary>
+    [GraphQLName("updateQuotaRoutingSettings")]
+    public async Task<bool> UpdateQuotaRoutingSettingsAsync(
+        UpdateQuotaRoutingSettingsInput input,
+        [Service] IQuotaRoutingSettingsProvider currentSettings,
+        [Service] SystemQuotaRoutingSettingsService settings,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasScopeAsync(
+                AuthorizationScope.WriteSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write_settings scope");
+        }
+
+        var updated = await currentSettings
+            .GetQuotaRoutingSettingsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (input.DefaultMode is { } mode)
+        {
+            updated = updated with { DefaultMode = SystemSettingsMapping.ToDomain(mode) };
+        }
+
+        try
+        {
+            await settings.SetAsync(updated, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to update quota routing settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateCatalogSettings
+    /// (system.resolvers.go:339-363). The reference starts from the lenient
+    /// CatalogSettingsOrDefault read, patches the supplied fields, stores the
+    /// result and then invalidates the live catalog and re-arms the scheduler
+    /// when the catalog service is present. The guard is
+    /// <c>scopes.UserHasScope</c>, so API keys never qualify.
+    /// </summary>
+    [GraphQLName("updateCatalogSettings")]
+    public async Task<bool> UpdateCatalogSettingsAsync(
+        UpdateCatalogSettingsInput input,
+        [Service] ISystemSettingsAdminService settings,
+        [Service] IServiceProvider services,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.WriteSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write_settings scope");
+        }
+
+        var updated = await settings
+            .GetCatalogSettingsOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (input.UpstreamUrl is { } upstreamUrl)
+        {
+            updated = updated with { UpstreamUrl = upstreamUrl };
+        }
+
+        if (input.RefreshSeconds is { } refreshSeconds)
+        {
+            updated = updated with { RefreshSeconds = refreshSeconds };
+        }
+
+        try
+        {
+            await settings.SetCatalogSettingsAsync(updated, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to update catalog settings: %w", err)
+            throw new InvalidOperationException(
+                "failed to update catalog settings: " + ex.Message,
+                ex);
+        }
+
+        var catalogService = services.GetService<ICatalogService>();
+        if (catalogService is not null)
+        {
+            catalogService.Invalidate();
+
+            var rescheduleSignal = services.GetService<ICatalogRescheduleSignal>();
+            if (rescheduleSignal is not null)
+            {
+                await rescheduleSignal.RescheduleAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.RefreshProvidersCatalog
+    /// (system.resolvers.go:366-381): a forced upstream fetch that propagates
+    /// the fetch error under the mutation prefix.
+    /// </summary>
+    [GraphQLName("refreshProvidersCatalog")]
+    public async Task<ProvidersCatalogType> RefreshProvidersCatalogAsync(
+        [Service] IServiceProvider services,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.WriteSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write_settings scope");
+        }
+
+        var catalogService = services.GetService<ICatalogService>();
+        if (catalogService is null)
+        {
+            throw new InvalidOperationException("catalog service is not configured");
+        }
+
+        CatalogSnapshot snapshot;
+        try
+        {
+            snapshot = await catalogService.RefreshAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to refresh providers catalog: " + ex.Message,
+                ex);
+        }
+
+        return CatalogMapping.ToGraphQL(snapshot);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateProviderQuotaCollectionSettings
+    /// (system.resolvers.go:229-244). The reference resolver has no scope
+    /// check; a nil providers slice is passed as an empty slice.
+    /// </summary>
+    [GraphQLName("updateProviderQuotaCollectionSettings")]
+    public async Task<bool> UpdateProviderQuotaCollectionSettingsAsync(
+        UpdateProviderQuotaCollectionSettingsInput input,
+        [Service] IProviderQuotaCollectionSettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        var providers = new List<ProviderQuotaCollectionProviderDraft>(
+            input.Providers?.Count ?? 0);
+        if (input.Providers is not null)
+        {
+            foreach (var provider in input.Providers)
+            {
+                providers.Add(new ProviderQuotaCollectionProviderDraft
+                {
+                    Provider = provider.Provider,
+                    Enabled = provider.Enabled,
+                });
+            }
+        }
+
+        try
+        {
+            await settings
+                .UpdateAsync(input.Enabled, providers, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to update provider quota collection settings: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateClaudeCodeSafeguardsSettings
+    /// (system.resolvers.go:445-450). The resolver has no scope check of its
+    /// own: the service requires write_settings and raises the reference's
+    /// VALIDATION_FAILED coded errors.
+    /// </summary>
+    [GraphQLName("updateClaudeCodeSafeguardsSettings")]
+    public async Task<bool> UpdateClaudeCodeSafeguardsSettingsAsync(
+        UpdateClaudeCodeSafeguardsInput input,
+        [Service] IClaudeCodeSafeguardsSettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        await settings.UpdateAsync(
+                ClaudeCodeSafeguardsMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ResetClaudeCodeSafeguardsSettings
+    /// (system.resolvers.go:451-455): a write_settings-guarded upsert of the
+    /// literal "null" value.
+    /// </summary>
+    [GraphQLName("resetClaudeCodeSafeguardsSettings")]
+    public async Task<bool> ResetClaudeCodeSafeguardsSettingsAsync(
+        [Service] IClaudeCodeSafeguardsSettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        await settings.ResetAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateCodexCompatibilitySettings
+    /// (system.resolvers.go:26-31). The resolver has no scope check of its own:
+    /// the service requires write_settings (and read_channels for a channel id)
+    /// and raises the reference's VALIDATION_FAILED coded errors.
+    /// </summary>
+    [GraphQLName("updateCodexCompatibilitySettings")]
+    public async Task<bool> UpdateCodexCompatibilitySettingsAsync(
+        UpdateCodexCompatibilitySettingsInput input,
+        [Service] ICodexCompatibilitySettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        await settings.UpdateAsync(
+                CodexCompatibilityMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TestCodexCatalog
+    /// (system.resolvers.go:34-56): write_settings then read_channels, a
+    /// Channel.Get precheck as a plain error, then the catalog fetch whose
+    /// failures are folded into the result instead of failing the field.
+    /// </summary>
+    [GraphQLName("testCodexCatalog")]
+    public async Task<CodexCatalogTestResultType> TestCodexCatalogAsync(
+        [GraphQLName("channelID")] int channelID,
+        [Service] IChannelStore channels,
+        [Service] ICodexCatalogService catalog,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        await scope.RequireScopeAsync(AuthorizationScope.WriteSettings, cancellationToken)
+            .ConfigureAwait(false);
+        await scope.RequireScopeAsync(AuthorizationScope.ReadChannels, cancellationToken)
+            .ConfigureAwait(false);
+
+        ChannelRecord? entity;
+        try
+        {
+            entity = await channels.GetByIdAsync(channelID, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // ent's Channel.Get error, including not-found, is the same plain
+            // error the resolver returns.
+            entity = null;
+        }
+
+        if (entity is null)
+        {
+            throw new InvalidOperationException(
+                "catalog channel is unavailable or inaccessible");
+        }
+
+        try
+        {
+            var result = await catalog
+                .FetchAsync(channelID, string.Empty, cancellationToken)
+                .ConfigureAwait(false);
+            return new CodexCatalogTestResultType
+            {
+                Success = true,
+                ModelCount = result.Count,
+            };
+        }
+        catch (CodexCatalogException ex)
+        {
+            return new CodexCatalogTestResultType
+            {
+                Success = false,
+                ModelCount = 0,
+                Error = ex.Message,
+                UpstreamStatus = ex.UpstreamStatus != 0 ? ex.UpstreamStatus : null,
+            };
+        }
+        catch (Exception)
+        {
+            // errors.As fails: the generic message, still nil error.
+            return new CodexCatalogTestResultType
+            {
+                Success = false,
+                ModelCount = 0,
+                Error = "Codex catalog request failed",
+            };
+        }
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CheckProviderQuotas (system.resolvers.go:273-282):
+    /// the forced check runs under the service mutex and completes before the
+    /// mutation returns.
+    /// </summary>
+    [GraphQLName("checkProviderQuotas")]
+    public async Task<bool> CheckProviderQuotasAsync(
+        [Service] ProviderQuotaService? quotaService,
+        CancellationToken cancellationToken)
+    {
+        if (quotaService is null)
+        {
+            throw new InvalidOperationException("provider quota service is not available");
+        }
+
+        await quotaService.ManualCheckAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ResetChannelQuotaNow
+    /// (system.resolvers.go:284-299). Unlike the routing-settings mutation this
+    /// guard is <c>scopes.UserHasScope</c>, which never admits API keys.
+    /// </summary>
+    [GraphQLName("resetChannelQuotaNow")]
+    public async Task<bool> ResetChannelQuotaNowAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        [Service] ProviderQuotaService? quotaService,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.WriteChannels,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write:channels scope");
+        }
+
+        if (quotaService is null)
+        {
+            throw new InvalidOperationException("provider quota service is not available");
+        }
+
+        try
+        {
+            await quotaService
+                .ResetChannelQuotaNowAsync(GidValue.Parse(channelID).Id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to reset channel quota: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TriggerGcCleanup (system.resolvers.go:301-321).
+    /// The reference checks write:settings, launches a goroutine with a
+    /// detached system-bypass context and returns true immediately; the port
+    /// resolves the worker from a fresh DI scope so the detached run never
+    /// touches the disposed request scope.
+    /// </summary>
+    [GraphQLName("triggerGcCleanup")]
+    public async Task<bool> TriggerGcCleanupAsync(
+        TriggerGcCleanupInput input,
+        [Service] IServiceScopeFactory scopeFactory,
+        [Service] AuthorizationScope scope,
+        [Service] ILogger<AdminMutation> logger,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.WriteSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires write:settings scope");
+        }
+
+        var request = SystemSettingsMapping.ToDomain(input);
+
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    await using var cleanupScope = scopeFactory.CreateAsyncScope();
+                    var cleanup = cleanupScope.ServiceProvider
+                        .GetRequiredService<IGcCleanupService>();
+                    await cleanup.RunCleanupNowAsync(request, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // The reference recovers the goroutine panic and prints it.
+                    LogGcCleanupFailed(logger, ex);
+                }
+            },
+            CancellationToken.None);
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.CreateUser (axonhub.resolvers.go:526-528).</summary>
+    [GraphQLName("createUser")]
+    public async Task<UserType> CreateUserAsync(
+        CreateUserInput input,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        var user = await users.CreateAsync(
+                new CreateUserCommand
+                {
+                    Email = input.Email,
+                    Password = input.Password,
+                    FirstName = input.FirstName,
+                    LastName = input.LastName,
+                    Scopes = input.Scopes?.ToList(),
+                    RoleIds = ManagementMapping.ParseGidList(input.RoleIDs),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.ToGraphQL(user);
+    }
+
+    /// <summary>Port of mutationResolver.UpdateUser (axonhub.resolvers.go:531-533).</summary>
+    [GraphQLName("updateUser")]
+    public async Task<UserType> UpdateUserAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateUserInput input,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var user = await users.UpdateAsync(
+                new UpdateUserCommand
+                {
+                    Id = gid.Id,
+                    Email = input.Email,
+                    FirstName = input.FirstName,
+                    LastName = input.LastName,
+                    PreferLanguage = input.PreferLanguage,
+                    Avatar = input.Avatar,
+                    ClearAvatar = input.ClearAvatar ?? false,
+                    IsOwner = input.IsOwner,
+                    Password = input.Password,
+                    Scopes = input.Scopes?.ToList(),
+                    AppendScopes = input.AppendScopes?.ToList(),
+                    ClearScopes = input.ClearScopes ?? false,
+                    AddRoleIds = ManagementMapping.ParseGidList(input.AddRoleIDs),
+                    RemoveRoleIds = ManagementMapping.ParseGidList(input.RemoveRoleIDs),
+                    ClearRoles = input.ClearRoles ?? false,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.ToGraphQL(user);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateUserStatus (axonhub.resolvers.go:536-538).
+    /// </summary>
+    [GraphQLName("updateUserStatus")]
+    public async Task<UserType> UpdateUserStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UserStatusValue status,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var user = await users.UpdateStatusAsync(
+                gid.Id,
+                status == UserStatusValue.Activated ? "activated" : "deactivated",
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.ToGraphQL(user);
+    }
+
+    /// <summary>Port of mutationResolver.DeleteUser (axonhub.resolvers.go:541-547).</summary>
+    [GraphQLName("deleteUser")]
+    public async Task<bool> DeleteUserAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+        await users.DeleteAsync(gid.Id, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.CreateRole (axonhub.resolvers.go:550-552).</summary>
+    [GraphQLName("createRole")]
+    public async Task<RoleType> CreateRoleAsync(
+        CreateRoleInput input,
+        [Service] RoleManagementService roles,
+        CancellationToken cancellationToken)
+    {
+        var role = await roles.CreateAsync(
+                new CreateRoleCommand
+                {
+                    Name = input.Name,
+                    Level = input.Level is null
+                        ? null
+                        : input.Level == RoleLevelValue.System
+                            ? RoleManagementService.LevelSystem
+                            : RoleManagementService.LevelProject,
+                    Scopes = input.Scopes?.ToList(),
+                    ProjectId = input.ProjectID is null
+                        ? null
+                        : GidValue.Parse(input.ProjectID).Id,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.ToGraphQL(role);
+    }
+
+    /// <summary>Port of mutationResolver.UpdateRole (axonhub.resolvers.go:555-557).</summary>
+    [GraphQLName("updateRole")]
+    public async Task<RoleType> UpdateRoleAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateRoleInput input,
+        [Service] RoleManagementService roles,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var role = await roles.UpdateAsync(
+                new UpdateRoleCommand
+                {
+                    Id = gid.Id,
+                    Name = input.Name,
+                    Scopes = input.Scopes?.ToList(),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.ToGraphQL(role);
+    }
+
+    /// <summary>Port of mutationResolver.DeleteRole (axonhub.resolvers.go:560-567).</summary>
+    [GraphQLName("deleteRole")]
+    public async Task<bool> DeleteRoleAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] RoleManagementService roles,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+        await roles.DeleteAsync(gid.Id, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDeleteRoles (axonhub.resolvers.go:570-579).
+    /// </summary>
+    [GraphQLName("bulkDeleteRoles")]
+    public async Task<bool> BulkDeleteRolesAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] RoleManagementService roles,
+        CancellationToken cancellationToken)
+    {
+        var roleIds = ManagementMapping.ParseGidList(ids)
+            ?? throw new InvalidOperationException("ids is required");
+
+        await roles.BulkDeleteAsync(roleIds, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.CreateProject (axonhub.resolvers.go:582-584).</summary>
+    /// <remarks>
+    /// The resolver binds the whole ent.CreateProjectInput; ProjectService
+    /// reads only name and description (project.go:53-157).
+    /// </remarks>
+    [GraphQLName("createProject")]
+    public async Task<ProjectType> CreateProjectAsync(
+        CreateProjectInput input,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var project = await projects.CreateAsync(
+                new CreateProjectCommand
+                {
+                    Name = input.Name,
+                    Description = input.Description,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>Port of mutationResolver.UpdateProject (axonhub.resolvers.go:587-589).</summary>
+    /// <remarks>
+    /// The input's status field is not applied: the reference passes it in
+    /// ent.UpdateProjectInput but UpdateProject only sets name/description and
+    /// the user edges (project.go:160-188).
+    /// </remarks>
+    [GraphQLName("updateProject")]
+    public async Task<ProjectType> UpdateProjectAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateProjectInput input,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var project = await projects.UpdateAsync(
+                new UpdateProjectCommand
+                {
+                    Id = gid.Id,
+                    Name = input.Name,
+                    Description = input.Description,
+                    ClearUsers = input.ClearUsers ?? false,
+                    AddUserIds = ManagementMapping.ParseGidList(input.AddUserIDs),
+                    RemoveUserIds = ManagementMapping.ParseGidList(input.RemoveUserIDs),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateProjectStatus (axonhub.resolvers.go:592-594;
+    /// biz/project.go:300-315).
+    /// </summary>
+    [GraphQLName("updateProjectStatus")]
+    public async Task<ProjectType> UpdateProjectStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        ProjectStatusValue status,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var project = await projects.UpdateStatusAsync(
+                gid.Id,
+                ProjectMapping.ToWireStatus(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateProjectProfiles
+    /// (axonhub.resolvers.go:597-599; biz/project.go:236-256). The input binds
+    /// straight to objects.ProjectProfiles, so a nil profiles list stays nil
+    /// and an empty one serializes as [].
+    /// </summary>
+    [GraphQLName("updateProjectProfiles")]
+    public async Task<ProjectType> UpdateProjectProfilesAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateProjectProfilesInput input,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var project = await projects.UpdateProfilesAsync(
+                new UpdateProjectProfilesCommand
+                {
+                    Id = gid.Id,
+                    Profiles = new ProjectProfilesModel
+                    {
+                        ActiveProfile = input.ActiveProfile,
+                        Profiles = input.Profiles?
+                            .Select(static profile => new ProjectProfileModel
+                            {
+                                Name = profile.Name,
+                                ChannelIDs = profile.ChannelIDs,
+                                ChannelTags = profile.ChannelTags,
+                                ChannelTagsMatchMode = profile.ChannelTagsMatchMode
+                                    ?? string.Empty,
+                            })
+                            .ToList(),
+                    },
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return UserProfileMapping.ToGraphQL(project);
+    }
+
+    /// <summary>Port of mutationResolver.DeleteProject (axonhub.resolvers.go:602-608).</summary>
+    [GraphQLName("deleteProject")]
+    public async Task<bool> DeleteProjectAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+        await projects.DeleteAsync(gid.Id, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.AddUserToProject (axonhub.resolvers.go:610-614).
+    /// </summary>
+    [GraphQLName("addUserToProject")]
+    public async Task<UserProjectType> AddUserToProjectAsync(
+        AddUserToProjectInput input,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        var userProject = await users.AddUserToProjectAsync(
+                new AddProjectUserCommand
+                {
+                    UserId = GidValue.Parse(input.UserId).Id,
+                    ProjectId = GidValue.Parse(input.ProjectId).Id,
+                    IsOwner = input.IsOwner,
+                    Scopes = input.Scopes?.ToList(),
+                    // objects.IntGuids(nil) yields an empty slice in the reference.
+                    RoleIds = ManagementMapping.ParseGidList(input.RoleIDs) ?? [],
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ProjectUserMapping.ToGraphQL(userProject);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.RemoveUserFromProject
+    /// (axonhub.resolvers.go:616-624).
+    /// </summary>
+    [GraphQLName("removeUserFromProject")]
+    public async Task<bool> RemoveUserFromProjectAsync(
+        RemoveUserFromProjectInput input,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        await users.RemoveUserFromProjectAsync(
+                GidValue.Parse(input.UserId).Id,
+                GidValue.Parse(input.ProjectId).Id,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateProjectUser (axonhub.resolvers.go:626-632).
+    /// </summary>
+    [GraphQLName("updateProjectUser")]
+    public async Task<UserProjectType> UpdateProjectUserAsync(
+        UpdateProjectUserInput input,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        var userProject = await users.UpdateProjectUserAsync(
+                new UpdateProjectUserCommand
+                {
+                    UserId = GidValue.Parse(input.UserId).Id,
+                    ProjectId = GidValue.Parse(input.ProjectId).Id,
+                    IsOwner = input.IsOwner,
+                    Scopes = input.Scopes?.ToList(),
+                    // objects.IntGuids(nil) yields an empty slice in the reference.
+                    AddRoleIds = ManagementMapping.ParseGidList(input.AddRoleIDs) ?? [],
+                    RemoveRoleIds = ManagementMapping.ParseGidList(input.RemoveRoleIDs) ?? [],
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ProjectUserMapping.ToGraphQL(userProject);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateChannelStatus
+    /// (axonhub.resolvers.go:203-206; biz channel.go:1205-1220).
+    /// </summary>
+    [GraphQLName("updateChannelStatus")]
+    public async Task<ChannelType> UpdateChannelStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        ChannelStatusValue status,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(id);
+
+        var channel = await channels.UpdateStatusAsync(
+                gid.Id,
+                ChannelMapping.ToWire(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteChannel
+    /// (axonhub.resolvers.go:208-215; biz channel.go:1280-1290).
+    /// </summary>
+    [GraphQLName("deleteChannel")]
+    public async Task<bool> DeleteChannelAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(id);
+        await channels.DeleteAsync(gid.Id, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkArchiveChannels (axonhub.resolvers.go:217-226).</summary>
+    [GraphQLName("bulkArchiveChannels")]
+    public async Task<bool> BulkArchiveChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        await channels.BulkArchiveAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkDisableChannels (axonhub.resolvers.go:228-237).</summary>
+    [GraphQLName("bulkDisableChannels")]
+    public async Task<bool> BulkDisableChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        await channels.BulkDisableAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkEnableChannels (axonhub.resolvers.go:239-248).</summary>
+    [GraphQLName("bulkEnableChannels")]
+    public async Task<bool> BulkEnableChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        await channels.BulkEnableAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkRecoverChannels (axonhub.resolvers.go:250-259).</summary>
+    [GraphQLName("bulkRecoverChannels")]
+    public async Task<bool> BulkRecoverChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        await channels.BulkRecoverAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkDeleteChannels (axonhub.resolvers.go:261-270).</summary>
+    [GraphQLName("bulkDeleteChannels")]
+    public async Task<bool> BulkDeleteChannelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        await channels.BulkDeleteAsync(ParseGids(ids), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkAddChannelTags (axonhub.resolvers.go:272-281).</summary>
+    [GraphQLName("bulkAddChannelTags")]
+    public async Task<bool> BulkAddChannelTagsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> tags,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        await channels.BulkAddTagsAsync(ParseGids(ids), tags, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkRemoveChannelTags (axonhub.resolvers.go:283-292).</summary>
+    [GraphQLName("bulkRemoveChannelTags")]
+    public async Task<bool> BulkRemoveChannelTagsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> tags,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        await channels.BulkRemoveTagsAsync(ParseGids(ids), tags, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkManageChannelTags (axonhub.resolvers.go:294-303).</summary>
+    [GraphQLName("bulkManageChannelTags")]
+    public async Task<bool> BulkManageChannelTagsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> addTags,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> removeTags,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        await channels.BulkManageTagsAsync(
+                ParseGids(ids),
+                addTags,
+                removeTags,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkUpdateChannelOrdering
+    /// (axonhub.resolvers.go:390-402; biz channel_bulk.go:23-45). The resolver
+    /// adds the "failed to bulk update channel ordering" prefix.
+    /// </summary>
+    [GraphQLName("bulkUpdateChannelOrdering")]
+    public async Task<BulkUpdateChannelOrderingResult> BulkUpdateChannelOrderingAsync(
+        BulkUpdateChannelOrderingInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var items = ChannelInputMapping.ToCommand(input);
+
+        IReadOnlyList<ChannelRecord> updated;
+        try
+        {
+            updated = await channels.BulkUpdateOrderingAsync(items, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // fmt.Errorf("failed to bulk update channel ordering: %w", err)
+            throw new InvalidOperationException(
+                "failed to bulk update channel ordering: " + ex.Message,
+                ex);
+        }
+
+        return new BulkUpdateChannelOrderingResult
+        {
+            Success = true,
+            Updated = updated.Count,
+            Channels = updated.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkUpdateChannelAutoDisable
+    /// (axonhub.resolvers.go:404-415; biz channel_bulk.go:242-340). Unlike the
+    /// ordering resolver, the reference adds no error prefix here.
+    /// </summary>
+    [GraphQLName("bulkUpdateChannelAutoDisable")]
+    public async Task<BulkUpdateChannelAutoDisablePayload> BulkUpdateChannelAutoDisableAsync(
+        BulkUpdateChannelAutoDisableInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var updated = await channels.BulkUpdateAutoDisableAsync(
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new BulkUpdateChannelAutoDisablePayload
+        {
+            Success = true,
+            Updated = updated.Count,
+            Channels = updated.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.SaveChannelEndpoints
+    /// (axonhub.resolvers.go:194-197; biz channel.go:1243-1275). The reference
+    /// resolver forwards the service error unchanged.
+    /// </summary>
+    [GraphQLName("saveChannelEndpoints")]
+    public async Task<ChannelType> SaveChannelEndpointsAsync(
+        SaveChannelEndpointsInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var channel = await channels.SaveEndpointsAsync(
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.SaveChannelModelPrices
+    /// (price.resolvers.go:17-24; biz channel_price.go:374-508). The reference
+    /// resolver maps each (non-null) input and forwards the service error
+    /// unchanged; deletes are not part of the returned list.
+    /// </summary>
+    [GraphQLName("saveChannelModelPrices")]
+    public async Task<IReadOnlyList<ChannelModelPriceType>> SaveChannelModelPricesAsync(
+        [GraphQLType(typeof(NonNullType<IdType>))] string channelId,
+        IReadOnlyList<SaveChannelModelPriceInput> input,
+        [Service] ChannelModelPriceService prices,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(channelId);
+
+        var saved = await prices.SaveAsync(
+                new SaveChannelModelPricesCommand(gid.Id, PriceMapping.ToCommands(input)),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return saved.Select(PriceMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DetectChannelEndpoints
+    /// (axonhub.resolvers.go:199-201; biz channel_endpoint_detect.go:72-115).
+    /// The reference resolver forwards the service error unchanged.
+    /// </summary>
+    [GraphQLName("detectChannelEndpoints")]
+    public async Task<DetectChannelEndpointsPayload> DetectChannelEndpointsAsync(
+        DetectChannelEndpointsInput input,
+        [Service] ChannelEndpointDetectService detector,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(input.ChannelID);
+
+        var result = await detector.DetectAsync(
+                new DetectChannelEndpointsCommand(gid.Id, input.Model),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new DetectChannelEndpointsPayload
+        {
+            Endpoints = result.Endpoints
+                .Select(static endpoint => new DetectedChannelEndpointType
+                {
+                    ApiFormat = endpoint.ApiFormat,
+                    Supported = endpoint.Supported,
+                    StatusCode = endpoint.StatusCode,
+                    Reason = endpoint.Reason,
+                })
+                .ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DisableChannelAPIKey
+    /// (axonhub.resolvers.go:418-424; biz channel_apikey.go:23-144). The
+    /// resolver always reports error code 0 and the manual-disable reason.
+    /// </summary>
+    [GraphQLName("disableChannelAPIKey")]
+    public async Task<bool> DisableChannelApiKeyAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        string key,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(channelID);
+
+        try
+        {
+            await channels.DisableApiKeyAsync(
+                    gid.Id,
+                    key,
+                    0,
+                    "Manually disabled by user",
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to disable channel API key: %w", err)
+            throw new InvalidOperationException(
+                "failed to disable channel API key: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.EnableChannelAPIKey (axonhub.resolvers.go:427-433).</summary>
+    [GraphQLName("enableChannelAPIKey")]
+    public async Task<bool> EnableChannelApiKeyAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        string key,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(channelID);
+
+        try
+        {
+            await channels.EnableApiKeyAsync(
+                    gid.Id,
+                    key,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to enable channel API key: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.EnableAllChannelAPIKeys (axonhub.resolvers.go:436-442).</summary>
+    [GraphQLName("enableAllChannelAPIKeys")]
+    public async Task<bool> EnableAllChannelApiKeysAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(channelID);
+
+        try
+        {
+            await channels.EnableAllApiKeysAsync(
+                    gid.Id,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to enable all channel API keys: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.EnableSelectedChannelAPIKeys
+    /// (axonhub.resolvers.go:445-451).
+    /// </summary>
+    [GraphQLName("enableSelectedChannelAPIKeys")]
+    public async Task<bool> EnableSelectedChannelApiKeysAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> keys,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(channelID);
+
+        try
+        {
+            await channels.EnableSelectedApiKeysAsync(
+                    gid.Id,
+                    keys,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to enable selected channel API keys: " + ex.Message,
+                ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteDisabledChannelAPIKeys
+    /// (axonhub.resolvers.go:454-462; biz channel_apikey.go:288-370).
+    /// </summary>
+    [GraphQLName("deleteDisabledChannelAPIKeys")]
+    public async Task<DeleteDisabledApiKeysPayload> DeleteDisabledChannelApiKeysAsync(
+        [GraphQLType(typeof(IdType))] string channelID,
+        [GraphQLType(typeof(ListType<NonNullType<StringType>>))] IReadOnlyList<string> keys,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(channelID);
+
+        DeleteDisabledApiKeysResult result;
+        try
+        {
+            result = await channels.DeleteDisabledApiKeysAsync(
+                    gid.Id,
+                    keys,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to delete disabled channel API keys: " + ex.Message,
+                ex);
+        }
+
+        return new DeleteDisabledApiKeysPayload
+        {
+            Success = result.Success,
+            Message = result.Message,
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TestChannel (axonhub.resolvers.go:305-325). A
+    /// not-found upstream URL gets its own message; every other failure carries
+    /// the resolver's prefix.
+    /// </summary>
+    [GraphQLName("testChannel")]
+    public async Task<TestChannelPayloadType> TestChannelAsync(
+        TestChannelInput input,
+        [Service] ChannelTestService tester,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(input.ChannelID);
+
+        TestChannelResult result;
+        try
+        {
+            result = await tester
+                .TestChannelAsync(
+                    gid.Id,
+                    input.ModelID,
+                    cancellationToken,
+                    ChannelInputMapping.ToProxyConfig(input.Proxy))
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (GoErrors.As<HttpClientError>(ex) is { StatusCode: 404 })
+            {
+                throw new InvalidOperationException(
+                    "URL not found, please check if the URL is correct and try again",
+                    ex);
+            }
+
+            throw new InvalidOperationException("failed to test channel: " + ex.Message, ex);
+        }
+
+        return new TestChannelPayloadType
+        {
+            Latency = result.Latency,
+            Success = result.Success,
+            Message = result.Message,
+            Error = result.Error,
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TestChannelAPIKeys
+    /// (axonhub.resolvers.go:327-354). The resolver runs a test per configured
+    /// key and maps every result one to one, in order.
+    /// </summary>
+    [GraphQLName("testChannelAPIKeys")]
+    public async Task<TestChannelApiKeysPayloadType> TestChannelApiKeysAsync(
+        [GraphQLType(typeof(NonNullType<IdType>))] string channelID,
+        [GraphQLName("modelID")] string? modelID,
+        [Service] ChannelTestService tester,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        TestChannelApiKeysResult result;
+        try
+        {
+            result = await tester
+                .TestChannelApiKeysAsync(gid.Id, modelID, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to test channel API keys: " + ex.Message,
+                ex);
+        }
+
+        return new TestChannelApiKeysPayloadType
+        {
+            ChannelID = new GidValue("Channel", result.ChannelId).ToString(),
+            Total = result.Total,
+            SuccessCount = result.SuccessCount,
+            FailedCount = result.FailedCount,
+            Results = result.Results
+                .Select(static item => new TestApiKeyResultType
+                {
+                    KeyPrefix = item.KeyPrefix,
+                    Success = item.Success,
+                    Latency = item.Latency,
+                    Error = item.Error,
+                    Disabled = item.Disabled,
+                })
+                .ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TestChannelAPIKey
+    /// (axonhub.resolvers.go:356-372): test one key that must belong to the
+    /// channel.
+    /// </summary>
+    [GraphQLName("testChannelAPIKey")]
+    public async Task<TestApiKeyResultType> TestChannelApiKeyAsync(
+        [GraphQLType(typeof(NonNullType<IdType>))] string channelID,
+        string key,
+        [GraphQLName("modelID")] string? modelID,
+        [Service] ChannelTestService tester,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(channelID);
+
+        TestApiKeyResult result;
+        try
+        {
+            result = await tester
+                .TestSingleApiKeyAsync(gid.Id, key, modelID, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to test channel API key: " + ex.Message,
+                ex);
+        }
+
+        return new TestApiKeyResultType
+        {
+            KeyPrefix = result.KeyPrefix,
+            Success = result.Success,
+            Latency = result.Latency,
+            Error = result.Error,
+            Disabled = result.Disabled,
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CreateChannel
+    /// (axonhub.resolvers.go:193-201; biz channel.go:633-671).
+    /// </summary>
+    [GraphQLName("createChannel")]
+    public async Task<ChannelType> CreateChannelAsync(
+        CreateChannelInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var channel = await channels.CreateAsync(
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DuplicateChannel
+    /// (axonhub.resolvers.go:178-181; biz channel_duplicate.go:17-84).
+    /// </summary>
+    [GraphQLName("duplicateChannel")]
+    public async Task<ChannelType> DuplicateChannelAsync(
+        [GraphQLType(typeof(IdType))] string sourceID,
+        CreateChannelInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(sourceID);
+
+        var channel = await channels.DuplicateAsync(
+                gid.Id,
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.SyncChannelModels
+    /// (axonhub.resolvers.go:710-729; biz channel_model_sync.go:203-219). The
+    /// resolver returns biz errors unchanged; manual_models is normalized to an
+    /// empty list because the payload field is non-null.
+    /// </summary>
+    [GraphQLName("syncChannelModels")]
+    public async Task<SyncChannelModelsPayloadType> SyncChannelModelsAsync(
+        [GraphQLType(typeof(NonNullType<IdType>))] string channelID,
+        string? pattern,
+        [Service] ChannelModelSyncService modelSync,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(channelID);
+
+        ChannelModelSyncResult result;
+        try
+        {
+            result = await modelSync
+                .SyncChannelModelsAsync(gid.Id, pattern, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(ex.Message, ex);
+        }
+
+        return new SyncChannelModelsPayloadType
+        {
+            // The reference marshals back the parsed GUID, including whatever
+            // type segment the caller sent.
+            ChannelID = gid.ToString(),
+            SupportedModels = result.SupportedModels,
+            ManualModels = result.ManualModels,
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkCreateChannels
+    /// (axonhub.resolvers.go:183-186; biz channel_bulk.go:67-161).
+    /// </summary>
+    [GraphQLName("bulkCreateChannels")]
+    public async Task<IReadOnlyList<ChannelType>> BulkCreateChannelsAsync(
+        BulkCreateChannelsInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var created = await channels.BulkCreateChannelsAsync(
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return created.Select(ChannelMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkImportChannels
+    /// (axonhub.resolvers.go:374-388; biz channel_bulk.go:484-568). The biz
+    /// service never fails the whole mutation: per-row errors are data.
+    /// </summary>
+    [GraphQLName("bulkImportChannels")]
+    public async Task<BulkImportChannelsResultType> BulkImportChannelsAsync(
+        BulkImportChannelsInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var result = await channels.BulkImportChannelsAsync(
+                ChannelInputMapping.ToItems(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new BulkImportChannelsResultType
+        {
+            Success = result.Success,
+            Created = result.Created,
+            Failed = result.Failed,
+            Errors = result.Errors,
+            Channels = result.Channels.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateChannel
+    /// (axonhub.resolvers.go:188-190; biz channel.go:849-1203).
+    /// </summary>
+    [GraphQLName("updateChannel")]
+    public async Task<ChannelType> UpdateChannelAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateChannelInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(id);
+
+        var channel = await channels.UpdateAsync(
+                gid.Id,
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateChannelSettings
+    /// (axonhub.resolvers.go:222-224; biz channel_settings.go:153-195).
+    /// </summary>
+    [GraphQLName("updateChannelSettings")]
+    public async Task<ChannelType> UpdateChannelSettingsAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateChannelSettingsInput input,
+        [Service] ChannelLifecycleService channels,
+        [Service] ChannelPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        await privacy.EvaluateMutationAsync(cancellationToken).ConfigureAwait(false);
+
+        var gid = GidValue.Parse(id);
+
+        var channel = await channels.UpdateSettingsAsync(
+                gid.Id,
+                ChannelInputMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelMapping.ToGraphQL(channel);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CreateChannelOverrideTemplate
+    /// (axonhub.resolvers.go:644-652). The resolver checks for a current user
+    /// before calling the service.
+    /// </summary>
+    [GraphQLName("createChannelOverrideTemplate")]
+    public async Task<ChannelOverrideTemplateType> CreateChannelOverrideTemplateAsync(
+        CreateChannelOverrideTemplateInput input,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        var record = await templates.CreateAsync(
+                new CreateChannelOverrideTemplateCommand
+                {
+                    Name = input.Name,
+                    Description = input.Description,
+                    HeaderOverrideOperations = input.HeaderOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                    BodyOverrideOperations = input.BodyOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelOverrideTemplateMapping.ToGraphQL(record);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateChannelOverrideTemplate
+    /// (axonhub.resolvers.go:654-657).
+    /// </summary>
+    [GraphQLName("updateChannelOverrideTemplate")]
+    public async Task<ChannelOverrideTemplateType> UpdateChannelOverrideTemplateAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateChannelOverrideTemplateInput input,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        var record = await templates.UpdateAsync(
+                new UpdateChannelOverrideTemplateCommand
+                {
+                    Id = gid.Id,
+                    Name = input.Name,
+                    Description = input.Description,
+                    ClearDescription = input.ClearDescription == true,
+                    HeaderOverrideOperations = input.HeaderOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                    AppendHeaderOverrideOperations = input.AppendHeaderOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                    BodyOverrideOperations = input.BodyOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                    AppendBodyOverrideOperations = input.AppendBodyOverrideOperations?
+                        .Select(ChannelInputMapping.ToOperation)
+                        .ToList(),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelOverrideTemplateMapping.ToGraphQL(record);
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteChannelOverrideTemplate
+    /// (axonhub.resolvers.go:659-666).
+    /// </summary>
+    [GraphQLName("deleteChannelOverrideTemplate")]
+    public async Task<bool> DeleteChannelOverrideTemplateAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        await templates.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ApplyChannelOverrideTemplate
+    /// (axonhub.resolvers.go:668-692). The resolver converts the IDs and adds
+    /// the "failed to apply template: " prefix.
+    /// </summary>
+    [GraphQLName("applyChannelOverrideTemplate")]
+    public async Task<ApplyChannelOverrideTemplatePayloadType> ApplyChannelOverrideTemplateAsync(
+        ApplyChannelOverrideTemplateInput input,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        var command = new ApplyChannelOverrideTemplateCommand
+        {
+            TemplateId = GidValue.Parse(input.TemplateID).Id,
+            ChannelIds = ParseGids(input.ChannelIDs),
+            Mode = input.Mode == OverrideApplyModeValue.Replace
+                ? ChannelOverrideApplyMode.Replace
+                : ChannelOverrideApplyMode.Merge,
+        };
+
+        ChannelOverrideTemplateApplyResult result;
+        try
+        {
+            result = await templates.ApplyAsync(command, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to apply template: " + ex.Message,
+                ex);
+        }
+
+        return new ApplyChannelOverrideTemplatePayloadType
+        {
+            Success = result.Success,
+            Updated = result.Updated,
+            Channels = result.Channels.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ClearChannelOverrideTemplates
+    /// (axonhub.resolvers.go:694-708). The resolver converts the IDs and adds
+    /// the "failed to clear templates: " prefix.
+    /// </summary>
+    [GraphQLName("clearChannelOverrideTemplates")]
+    public async Task<ClearChannelOverrideTemplatesPayloadType> ClearChannelOverrideTemplatesAsync(
+        ClearChannelOverrideTemplatesInput input,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        ChannelOverrideTemplateApplyResult result;
+        try
+        {
+            result = await templates.ClearAsync(
+                    ParseGids(input.ChannelIDs),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to clear templates: " + ex.Message,
+                ex);
+        }
+
+        return new ClearChannelOverrideTemplatesPayloadType
+        {
+            Success = result.Success,
+            Updated = result.Updated,
+            Channels = result.Channels.Select(ChannelMapping.ToGraphQL).ToList(),
+        };
+    }
+
+    private static List<long> ParseGids(IReadOnlyList<string> ids)
+    {
+        var result = new List<long>(ids.Count);
+        foreach (var id in ids)
+        {
+            result.Add(GidValue.Parse(id).Id);
+        }
+
+        return result;
+    }
+
+    /// <summary>Port of mutationResolver.UpdateMe (me.resolvers.go:22-38).</summary>
+    [GraphQLName("updateMe")]
+    public async Task<UserType> UpdateMeAsync(
+        UpdateMeInput input,
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+        => ManagementMapping.ToGraphQL(
+            await profiles.UpdateMeAsync(
+                    new UpdateMeCommand
+                    {
+                        FirstName = input.FirstName,
+                        LastName = input.LastName,
+                        PreferLanguage = input.PreferLanguage,
+                        Avatar = input.Avatar,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateMyPassword (me.resolvers.go:41-66).</summary>
+    [GraphQLName("updateMyPassword")]
+    public Task<bool> UpdateMyPasswordAsync(
+        UpdateMyPasswordInput input,
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+        => profiles.UpdateMyPasswordAsync(
+            new UpdateMyPasswordCommand
+            {
+                OldPassword = input.OldPassword,
+                NewPassword = input.NewPassword,
+            },
+            cancellationToken);
+
+    /// <summary>Port of mutationResolver.UnlinkOIDCIdentity (me.resolvers.go:69-107).</summary>
+    [GraphQLName("unlinkOIDCIdentity")]
+    public Task<bool> UnlinkOidcIdentityAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+        => profiles.UnlinkOidcIdentityAsync(GidValue.Parse(id).Id, cancellationToken);
+
+    /// <summary>Port of mutationResolver.CreateAPIKey (axonhub.resolvers.go:464-467).</summary>
+    [GraphQLName("createAPIKey")]
+    public async Task<ApiKeyType> CreateApiKeyAsync(
+        CreateApiKeyInput input,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.CreateAsync(
+                    new CreateApiKeyCommand
+                    {
+                        Name = input.Name,
+                        ProjectId = GidValue.Parse(input.ProjectID).Id,
+                        Type = input.Type is null
+                            ? null
+                            : ApiKeyMapping.ToWireType(input.Type.Value),
+                        Scopes = input.Scopes,
+                        AllowedIps = input.AllowedIps,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateAPIKey (axonhub.resolvers.go:469-472).</summary>
+    [GraphQLName("updateAPIKey")]
+    public async Task<ApiKeyType> UpdateApiKeyAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateApiKeyInput input,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.UpdateAsync(
+                    new UpdateApiKeyCommand
+                    {
+                        Id = GidValue.Parse(id).Id,
+                        Name = input.Name,
+                        Scopes = input.Scopes,
+                        AppendScopes = input.AppendScopes,
+                        ClearScopes = input.ClearScopes == true,
+                        AllowedIps = input.AllowedIps,
+                        AppendAllowedIps = input.AppendAllowedIps,
+                        ClearAllowedIps = input.ClearAllowedIps == true,
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateAPIKeyStatus (axonhub.resolvers.go:474-477).</summary>
+    [GraphQLName("updateAPIKeyStatus")]
+    public async Task<ApiKeyType> UpdateApiKeyStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        ApiKeyStatusValue status,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.UpdateStatusAsync(
+                    GidValue.Parse(id).Id,
+                    ApiKeyMapping.ToWireStatus(status),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateAPIKeyProfiles (axonhub.resolvers.go:479-482).</summary>
+    [GraphQLName("updateAPIKeyProfiles")]
+    public async Task<ApiKeyType> UpdateApiKeyProfilesAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateApiKeyProfilesInput input,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.UpdateProfilesAsync(
+                    GidValue.Parse(id).Id,
+                    ApiKeyMapping.ToModel(input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.CreateAPIKeyProfileTemplate
+    /// (axonhub.resolvers.go:731-734).
+    /// </summary>
+    [GraphQLName("createApiKeyProfileTemplate")]
+    public async Task<ApiKeyProfileTemplateType> CreateApiKeyProfileTemplateAsync(
+        CreateApiKeyProfileTemplateInput input,
+        ApiKeyProfileInput profile,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+        => ApiKeyProfileTemplateMapping.ToGraphQL(
+            await templates.CreateAsync(
+                    new CreateApiKeyProfileTemplateCommand
+                    {
+                        Name = input.Name,
+                        Description = input.Description,
+                        ProjectId = GidValue.Parse(input.ProjectID).Id,
+                    },
+                    ApiKeyMapping.ToModel(profile),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateAPIKeyProfileTemplate
+    /// (axonhub.resolvers.go:736-739).
+    /// </summary>
+    [GraphQLName("updateApiKeyProfileTemplate")]
+    public async Task<ApiKeyProfileTemplateType> UpdateApiKeyProfileTemplateAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateApiKeyProfileTemplateInput input,
+        ApiKeyProfileInput? profile,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+        => ApiKeyProfileTemplateMapping.ToGraphQL(
+            await templates.UpdateAsync(
+                    GidValue.Parse(id).Id,
+                    new UpdateApiKeyProfileTemplateCommand
+                    {
+                        Name = input.Name,
+                        Description = input.Description,
+                    },
+                    profile is null ? null : ApiKeyMapping.ToModel(profile),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.DeleteAPIKeyProfileTemplate
+    /// (axonhub.resolvers.go:741-744).
+    /// </summary>
+    [GraphQLName("deleteApiKeyProfileTemplate")]
+    public async Task<ApiKeyProfileTemplateType> DeleteApiKeyProfileTemplateAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+        => ApiKeyProfileTemplateMapping.ToGraphQL(
+            await templates.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.LoadAPIKeyProfileTemplate
+    /// (axonhub.resolvers.go:746-749).
+    /// </summary>
+    [GraphQLName("loadApiKeyProfileTemplate")]
+    public async Task<ApiKeyType> LoadApiKeyProfileTemplateAsync(
+        LoadApiKeyProfileTemplateInput input,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await templates.LoadAsync(
+                    GidValue.Parse(input.TemplateID).Id,
+                    GidValue.Parse(input.ApiKeyID).Id,
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.RotateAPIKey (axonhub.resolvers.go:484-487).</summary>
+    [GraphQLName("rotateAPIKey")]
+    public async Task<ApiKeyType> RotateApiKeyAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+        => ApiKeyMapping.ToGraphQL(
+            await apiKeys.RotateAsync(GidValue.Parse(id).Id, cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.BulkDisableAPIKeys (axonhub.resolvers.go:489-499).</summary>
+    [GraphQLName("bulkDisableAPIKeys")]
+    public async Task<bool> BulkDisableApiKeysAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+    {
+        await apiKeys.BulkDisableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkEnableAPIKeys (axonhub.resolvers.go:501-511).</summary>
+    [GraphQLName("bulkEnableAPIKeys")]
+    public async Task<bool> BulkEnableApiKeysAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+    {
+        await apiKeys.BulkEnableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkArchiveAPIKeys (axonhub.resolvers.go:513-523).</summary>
+    [GraphQLName("bulkArchiveAPIKeys")]
+    public async Task<bool> BulkArchiveApiKeysAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+    {
+        await apiKeys.BulkArchiveAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.CreateModel (model.resolvers.go:27-29).</summary>
+    [GraphQLName("createModel")]
+    public async Task<ModelType> CreateModelAsync(
+        CreateModelInput input,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+        => ModelMapping.ToGraphQL(
+            await models.CreateAsync(ModelMapping.ToCommand(input), cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.BulkCreateModels (model.resolvers.go:31-33).</summary>
+    [GraphQLName("bulkCreateModels")]
+    public async Task<IReadOnlyList<ModelType>> BulkCreateModelsAsync(
+        IReadOnlyList<CreateModelInput> inputs,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        var created = await models.BulkCreateAsync(
+                [.. inputs.Select(ModelMapping.ToCommand)],
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. created.Select(ModelMapping.ToGraphQL)];
+    }
+
+    /// <summary>Port of mutationResolver.UpdateModel (model.resolvers.go:35-37).</summary>
+    [GraphQLName("updateModel")]
+    public async Task<ModelType> UpdateModelAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateModelInput input,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+        => ModelMapping.ToGraphQL(
+            await models.UpdateAsync(
+                    ModelMapping.ToCommand(id, input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.DeleteModel (model.resolvers.go:39-45).</summary>
+    [GraphQLName("deleteModel")]
+    public async Task<bool> DeleteModelAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UpdateModelStatus (model.resolvers.go:47-54).</summary>
+    [GraphQLName("updateModelStatus")]
+    public async Task<bool> UpdateModelStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        ModelStatusValue status,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.UpdateStatusAsync(
+                GidValue.Parse(id).Id,
+                ModelMapping.ToWireStatus(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkArchiveModels (model.resolvers.go:56-66).</summary>
+    [GraphQLName("bulkArchiveModels")]
+    public async Task<bool> BulkArchiveModelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.BulkArchiveAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkDisableModels (model.resolvers.go:68-78).</summary>
+    [GraphQLName("bulkDisableModels")]
+    public async Task<bool> BulkDisableModelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.BulkDisableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkEnableModels (model.resolvers.go:80-90).</summary>
+    [GraphQLName("bulkEnableModels")]
+    public async Task<bool> BulkEnableModelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.BulkEnableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.BulkDeleteModels (model.resolvers.go:92-102).</summary>
+    [GraphQLName("bulkDeleteModels")]
+    public async Task<bool> BulkDeleteModelsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        await models.BulkDeleteAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.CreatePrompt (prompt.resolvers.go:15-23).</summary>
+    [GraphQLName("createPrompt")]
+    public async Task<PromptType> CreatePromptAsync(
+        CreatePromptInput input,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+        => PromptMapping.ToGraphQL(
+            await prompts.CreateAsync(PromptMapping.ToCommand(input), cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdatePrompt (prompt.resolvers.go:25-39).</summary>
+    [GraphQLName("updatePrompt")]
+    public async Task<PromptType> UpdatePromptAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdatePromptInput input,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+        => PromptMapping.ToGraphQL(
+            await prompts.UpdateAsync(
+                    PromptMapping.ToCommand(id, input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.DeletePrompt (prompt.resolvers.go:41-50).</summary>
+    [GraphQLName("deletePrompt")]
+    public async Task<bool> DeletePromptAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdatePromptStatus (prompt.resolvers.go:52-67).
+    /// </summary>
+    [GraphQLName("updatePromptStatus")]
+    public async Task<bool> UpdatePromptStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        PromptStatusValue status,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.UpdateStatusAsync(
+                GidValue.Parse(id).Id,
+                PromptMapping.ToWireStatus(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDeletePrompts (prompt.resolvers.go:69-82).
+    /// </summary>
+    [GraphQLName("bulkDeletePrompts")]
+    public async Task<bool> BulkDeletePromptsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.BulkDeleteAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkEnablePrompts (prompt.resolvers.go:84-97).
+    /// </summary>
+    [GraphQLName("bulkEnablePrompts")]
+    public async Task<bool> BulkEnablePromptsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.BulkEnableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDisablePrompts (prompt.resolvers.go:99-112).
+    /// </summary>
+    [GraphQLName("bulkDisablePrompts")]
+    public async Task<bool> BulkDisablePromptsAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        await prompts.BulkDisableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.CreatePromptProtectionRule
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("createPromptProtectionRule")]
+    public async Task<PromptProtectionRuleType> CreatePromptProtectionRuleAsync(
+        CreatePromptProtectionRuleInput input,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+        => PromptProtectionRuleMapping.ToGraphQL(
+            await rules.CreateAsync(
+                    PromptProtectionRuleMapping.ToCommand(input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.UpdatePromptProtectionRule
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("updatePromptProtectionRule")]
+    public async Task<PromptProtectionRuleType> UpdatePromptProtectionRuleAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdatePromptProtectionRuleInput input,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+        => PromptProtectionRuleMapping.ToGraphQL(
+            await rules.UpdateAsync(
+                    PromptProtectionRuleMapping.ToCommand(id, input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of mutationResolver.DeletePromptProtectionRule
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("deletePromptProtectionRule")]
+    public async Task<bool> DeletePromptProtectionRuleAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.DeleteAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdatePromptProtectionRuleStatus
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("updatePromptProtectionRuleStatus")]
+    public async Task<bool> UpdatePromptProtectionRuleStatusAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        PromptProtectionRuleStatusValue status,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.UpdateStatusAsync(
+                GidValue.Parse(id).Id,
+                PromptProtectionRuleMapping.ToWireStatus(status),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDeletePromptProtectionRules
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("bulkDeletePromptProtectionRules")]
+    public async Task<bool> BulkDeletePromptProtectionRulesAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.BulkDeleteAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkEnablePromptProtectionRules
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("bulkEnablePromptProtectionRules")]
+    public async Task<bool> BulkEnablePromptProtectionRulesAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.BulkEnableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.BulkDisablePromptProtectionRules
+    /// (prompt_protection_rule.resolvers.go).
+    /// </summary>
+    [GraphQLName("bulkDisablePromptProtectionRules")]
+    public async Task<bool> BulkDisablePromptProtectionRulesAsync(
+        [GraphQLType(typeof(ListType<NonNullType<IdType>>))] IReadOnlyList<string> ids,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        await rules.BulkDisableAsync(ParseGids(ids), cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.PreviewPromptProtectionRule
+    /// (prompt_protection_rule.resolvers.go). The resolver always builds a
+    /// non-nil settings struct, so the preview never hits "settings are
+    /// required".
+    /// </summary>
+    [GraphQLName("previewPromptProtectionRule")]
+    public Task<PromptProtectionRulePreviewResultType> PreviewPromptProtectionRuleAsync(
+        PromptProtectionRulePreviewInput input,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        var result = PromptProtectionRuleManagementService.Preview(
+            input.Pattern,
+            input.TestText,
+            PromptProtectionRuleMapping.ToDomain(input.Settings));
+
+        return Task.FromResult(new PromptProtectionRulePreviewResultType
+        {
+            Result = result.Result,
+            HasMatch = result.HasMatch,
+        });
+    }
+
+    /// <summary>Port of mutationResolver.ArchiveTrace (axonhub.resolvers.go:1034-1037).</summary>
+    [GraphQLName("archiveTrace")]
+    public async Task<bool> ArchiveTraceAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        await traces.ArchiveAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UnarchiveTrace (axonhub.resolvers.go:1039-1042).</summary>
+    [GraphQLName("unarchiveTrace")]
+    public async Task<bool> UnarchiveTraceAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        await traces.UnarchiveAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.RetainTrace (axonhub.resolvers.go:1034-1037).</summary>
+    [GraphQLName("retainTrace")]
+    public async Task<bool> RetainTraceAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        await traces.RetainAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UnretainTrace (axonhub.resolvers.go:1039-1042).</summary>
+    [GraphQLName("unretainTrace")]
+    public async Task<bool> UnretainTraceAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        await traces.UnretainAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.ArchiveThread (axonhub.resolvers.go:999-1002).</summary>
+    [GraphQLName("archiveThread")]
+    public async Task<bool> ArchiveThreadAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        await threads.ArchiveAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UnarchiveThread (axonhub.resolvers.go:1004-1007).</summary>
+    [GraphQLName("unarchiveThread")]
+    public async Task<bool> UnarchiveThreadAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        await threads.UnarchiveAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.RetainThread (axonhub.resolvers.go:999-1002).</summary>
+    [GraphQLName("retainThread")]
+    public async Task<bool> RetainThreadAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        await threads.RetainAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.UnretainThread (axonhub.resolvers.go:1004-1007).</summary>
+    [GraphQLName("unretainThread")]
+    public async Task<bool> UnretainThreadAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        await threads.UnretainAsync(GidValue.Parse(id).Id, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Port of mutationResolver.CreateDataStorage (axonhub.resolvers.go:634-637).</summary>
+    [GraphQLName("createDataStorage")]
+    public async Task<DataStorageType> CreateDataStorageAsync(
+        CreateDataStorageInput input,
+        [Service] DataStorageManagementService storages,
+        CancellationToken cancellationToken)
+        => DataStorageMapping.ToGraphQL(
+            await storages.CreateAsync(DataStorageMapping.ToCommand(input), cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.UpdateDataStorage (axonhub.resolvers.go:639-642).</summary>
+    [GraphQLName("updateDataStorage")]
+    public async Task<DataStorageType> UpdateDataStorageAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        UpdateDataStorageInput input,
+        [Service] DataStorageManagementService storages,
+        CancellationToken cancellationToken)
+        => DataStorageMapping.ToGraphQL(
+            await storages.UpdateAsync(
+                    DataStorageMapping.ToCommand(id, input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>Port of mutationResolver.Backup (backup.resolvers.go:20-33).</summary>
+    [GraphQLName("backup")]
+    public async Task<BackupPayloadType> BackupAsync(
+        BackupOptionsInput input,
+        [Service] BackupService backupService,
+        CancellationToken cancellationToken)
+    {
+        var data = await backupService.BackupAsync(
+                BackupMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new BackupPayloadType
+        {
+            Success = true,
+            Data = data,
+            Message = "Backup completed successfully",
+        };
+    }
+
+    /// <summary>Port of mutationResolver.Restore (backup.resolvers.go:36-51).</summary>
+    [GraphQLName("restore")]
+    public async Task<RestorePayloadType> RestoreAsync(
+        IFile file,
+        RestoreOptionsInput input,
+        [Service] BackupService backupService,
+        CancellationToken cancellationToken)
+    {
+        // io.ReadAll(file.File): the upload is buffered in memory and read
+        // errors propagate unchanged.
+        await using var buffer = new MemoryStream();
+        await file.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+
+        await backupService.RestoreAsync(
+                buffer.ToArray(),
+                BackupMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return new RestorePayloadType
+        {
+            Success = true,
+            Message = "Restore completed successfully",
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.UpdateAutoBackupSettings
+    /// (backup.resolvers.go:54-117).
+    /// </summary>
+    [GraphQLName("updateAutoBackupSettings")]
+    public async Task<bool> UpdateAutoBackupSettingsAsync(
+        UpdateAutoBackupSettingsInput input,
+        [Service] IManagementIdentity identity,
+        [Service] ISystemSettingsAdminService settings,
+        [Service] BackupService backupService,
+        CancellationToken cancellationToken)
+    {
+        var user = await identity.GetCurrentUserAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null || !user.IsOwner)
+        {
+            throw new InvalidOperationException("permission denied: owner access required");
+        }
+
+        // Errors from the reference are returned without an additional prefix.
+        var current = await settings.GetAutoBackupSettingsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        await settings.SetAutoBackupSettingsAsync(
+                BackupMapping.Apply(current, input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        await backupService.RescheduleAsync(cancellationToken).ConfigureAwait(false);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.TriggerAutoBackup (backup.resolvers.go:120-141).
+    /// The reference detaches the HTTP context and runs the backup in a fresh
+    /// goroutine; the port opens a new DI scope and drops the request token so
+    /// the work survives the response.
+    /// </summary>
+    [GraphQLName("triggerAutoBackup")]
+    public async Task<TriggerBackupPayloadType> TriggerAutoBackupAsync(
+        [Service] IManagementIdentity identity,
+        [Service] IServiceScopeFactory scopeFactory,
+        CancellationToken cancellationToken)
+    {
+        var user = await identity.GetCurrentUserAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null || !user.IsOwner)
+        {
+            throw new InvalidOperationException("permission denied: owner access required");
+        }
+
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    await using var scope = scopeFactory.CreateAsyncScope();
+                    var backupService =
+                        scope.ServiceProvider.GetRequiredService<BackupService>();
+                    await backupService.RunBackupNowAsync(CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // log.Error(bgCtx, "Manual trigger autobackup failed", ...)
+                }
+            },
+            CancellationToken.None);
+
+        return new TriggerBackupPayloadType
+        {
+            Success = true,
+            Message = "Backup completed successfully",
+        };
+    }
+
+    /// <summary>
+    /// Port of mutationResolver.ClearCache (system.resolvers.go:383-408).
+    /// Owner-only; every normalized target is reloaded in order and the first
+    /// failure aborts the mutation. The reference's
+    /// <c>ChannelService.ReloadEnabledChannelsCache</c> prefixes the cache load
+    /// error, so the port reconstructs that chain around the grain refresh.
+    /// </summary>
+    [GraphQLName("clearCache")]
+    public async Task<ClearCachePayloadType> ClearCacheAsync(
+        ClearCacheInput input,
+        [Service] IManagementIdentity identity,
+        [Service] IEnabledChannelsCacheRefresher refresher,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var user = await identity.GetCurrentUserAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null || !user.IsOwner)
+        {
+            throw new InvalidOperationException("permission denied: owner access required");
+        }
+
+        var targets = DiagnosticsTargets.Normalize(input.Targets);
+
+        foreach (var target in targets)
+        {
+            switch (target)
+            {
+                case DiagnosticsTargetValue.ChannelCache:
+                    try
+                    {
+                        await refresher.ReloadAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException(
+                            "failed to clear cache for " + DiagnosticsTargets.ToWire(target)
+                            + ": failed to reload enabled channels cache: " + ex.Message,
+                            ex);
+                    }
+
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        "unsupported cache target: " + DiagnosticsTargets.ToWire(target));
+            }
+        }
+
+        return new ClearCachePayloadType
+        {
+            Success = true,
+            Message = "cache cleared successfully",
+            Targets = targets,
+        };
+    }
+}

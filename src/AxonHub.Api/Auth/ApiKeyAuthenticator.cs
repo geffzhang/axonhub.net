@@ -1,0 +1,291 @@
+using System.Text.Json;
+using AxonHub.Persistence;
+using Microsoft.AspNetCore.Http;
+
+namespace AxonHub.Api.Auth;
+
+/// <summary>Authentication rejected the caller with 401 Invalid API key.</summary>
+public sealed class InvalidApiKeyException : Exception
+{
+    public InvalidApiKeyException()
+        : base("invalid api key")
+    {
+    }
+
+    public InvalidApiKeyException(string message)
+        : base(message)
+    {
+    }
+
+    public InvalidApiKeyException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>The API key's allowed_ips list does not contain the client.</summary>
+public sealed class ClientIpForbiddenException : Exception
+{
+    public ClientIpForbiddenException()
+        : base("IP address is not allowed for this API key")
+    {
+    }
+}
+
+/// <summary>HTTP-level seam so tests can supply an authenticated caller directly.</summary>
+public interface IApiKeyAuthenticator
+{
+    Task<RequestIdentity> AuthenticateAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Strict authentication for surfaces that never fall back to no-auth
+    /// (middleware.WithGeminiKeyAuth): a supplied key is mandatory and any
+    /// lookup or validation failure rejects the request.
+    /// </summary>
+    Task<RequestIdentity> AuthenticateKeyAsync(
+        HttpRequest request,
+        string key,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// WithAdminGraphqlAuth's direct AuthService.AuthenticateAPIKey call
+    /// (auth.go:220): the strict lookup without the allowed_ips check. The
+    /// gate performs the type and IP checks itself, in the reference's order
+    /// (type first, then IPs), so it needs the raw row.
+    /// </summary>
+    Task<ApiKeyRecord> AuthenticateAdminKeyAsync(
+        string key,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Port of biz.AuthService.AuthenticateAPIKey + AuthenticateNoAuth and the
+/// surrounding middleware.WithAPIKeyConfig flow
+/// (internal/server/middleware/auth.go:27-79).
+/// </summary>
+/// <remarks>
+/// The reference caches API keys and projects; the port reads PostgreSQL on
+/// every request, which is observably identical but slower (C026). No-auth
+/// keys are created lazily exactly like APIKeyService.EnsureNoAuthAPIKey.
+/// </remarks>
+public sealed class ApiKeyAuthenticator(
+    IApiKeyStore apiKeys,
+    IProjectStore projects,
+    IUserStore users,
+    ApiKeyAuthOptions options,
+    TimeProvider timeProvider) : IApiKeyAuthenticator
+{
+    /// <summary>biz.NoAuthAPIKeyValue: never accepted as a client-supplied key.</summary>
+    public const string NoAuthApiKeyValue = "AXONHUB_API_KEY_NO_AUTH";
+
+    /// <summary>biz.NoAuthAPIKeyName.</summary>
+    public const string NoAuthApiKeyName = "No Auth System Key";
+
+    public async Task<RequestIdentity> AuthenticateAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var key = ApiKeyHeaderExtractor.Extract(request.Headers);
+
+        // DO NOT ALLOW USE NO AUTH API KEY DIRECTLY.
+        if (key == NoAuthApiKeyValue)
+        {
+            throw new InvalidApiKeyException();
+        }
+
+        (ApiKeyRecord ApiKey, ProjectRecord Project)? authenticated = null;
+        if (key is not null)
+        {
+            try
+            {
+                authenticated = await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // middleware.WithAPIKeyConfig falls back to no-auth on any error.
+                authenticated = null;
+            }
+        }
+
+        authenticated ??= await AuthenticateNoAuthAsync(cancellationToken).ConfigureAwait(false);
+
+        var apiKey = authenticated.Value.ApiKey;
+        CheckAllowedIps(request, apiKey, options.TrustedProxies);
+
+        // The reference publishes the key and its project edge on the context
+        // (contexts.WithAPIKey / WithProjectID), which ListEnabledModels reads.
+        return new RequestIdentity(apiKey.ProjectId, apiKey.Id)
+        {
+            ApiKey = apiKey,
+            Project = authenticated.Value.Project,
+        };
+    }
+
+    /// <summary>
+    /// Port of middleware.WithGeminiKeyAuth's direct AuthService.
+    /// AuthenticateAPIKey call (auth.go:262-310): no no-auth fallback, the
+    /// allowed_ips check follows a successful lookup exactly like the
+    /// reference.
+    /// </summary>
+    public async Task<RequestIdentity> AuthenticateKeyAsync(
+        HttpRequest request,
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var authenticated = await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false);
+
+        CheckAllowedIps(request, authenticated.ApiKey, options.TrustedProxies);
+
+        return new RequestIdentity(authenticated.ApiKey.ProjectId, authenticated.ApiKey.Id)
+        {
+            ApiKey = authenticated.ApiKey,
+            Project = authenticated.Project,
+        };
+    }
+
+    /// <summary>
+    /// Port of the WithAdminGraphqlAuth lookup (auth.go:220): strict
+    /// authentication, no allowed_ips check. A lookup or validation failure
+    /// is <see cref="InvalidApiKeyException"/> (the reference's ent.IsNotFound
+    /// / ErrInvalidAPIKey branch); every other failure propagates to the
+    /// caller's 500 branch.
+    /// </summary>
+    public async Task<ApiKeyRecord> AuthenticateAdminKeyAsync(
+        string key,
+        CancellationToken cancellationToken = default)
+        => (await AuthenticateApiKeyAsync(key, cancellationToken).ConfigureAwait(false)).ApiKey;
+
+    /// <summary>Port of AuthService.AuthenticateAPIKey.</summary>
+    private async Task<(ApiKeyRecord ApiKey, ProjectRecord Project)> AuthenticateApiKeyAsync(
+        string key,
+        CancellationToken cancellationToken)
+    {
+        var apiKey = await apiKeys.GetByKeyAsync(key, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidApiKeyException();
+
+        if (!string.Equals(apiKey.Status, "enabled", StringComparison.Ordinal))
+        {
+            throw new InvalidApiKeyException();
+        }
+
+        var project = await projects.GetByIdAsync(apiKey.ProjectId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidApiKeyException();
+
+        if (!string.Equals(project.Status, "active", StringComparison.Ordinal))
+        {
+            throw new InvalidApiKeyException();
+        }
+
+        if (string.Equals(apiKey.Type, "noauth", StringComparison.Ordinal))
+        {
+            throw new InvalidApiKeyException();
+        }
+
+        // AuthService.AuthenticateAPIKey resolves the project edge here; the
+        // reference then publishes it with contexts.WithProjectID.
+        return (apiKey, project);
+    }
+
+    /// <summary>Port of AuthService.AuthenticateNoAuth + EnsureNoAuthAPIKey.</summary>
+    private async Task<(ApiKeyRecord ApiKey, ProjectRecord Project)> AuthenticateNoAuthAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!options.AllowNoAuth)
+        {
+            throw new InvalidApiKeyException("API key is required");
+        }
+
+        var apiKey = await apiKeys.GetByKeyAsync(NoAuthApiKeyValue, cancellationToken).ConfigureAwait(false)
+            ?? await CreateNoAuthApiKeyAsync(cancellationToken).ConfigureAwait(false);
+
+        if (!string.Equals(apiKey.Status, "enabled", StringComparison.Ordinal))
+        {
+            throw new InvalidApiKeyException();
+        }
+
+        var project = await projects.GetByIdAsync(apiKey.ProjectId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidApiKeyException();
+
+        if (!string.Equals(project.Status, "active", StringComparison.Ordinal))
+        {
+            throw new InvalidApiKeyException();
+        }
+
+        return (apiKey, project);
+    }
+
+    /// <summary>
+    /// Port of APIKeyService.EnsureNoAuthAPIKey's create branch: the first
+    /// project (id ascending) and the owner user. A missing either one is
+    /// ent.NotFound in the reference, which the middleware maps to 401.
+    /// </summary>
+    private async Task<ApiKeyRecord> CreateNoAuthApiKeyAsync(CancellationToken cancellationToken)
+    {
+        var project = await projects.GetFirstAsync(cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidApiKeyException("failed to get default project");
+
+        var owner = await users.FindOwnerAsync(cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidApiKeyException("failed to get owner user for noauth api key");
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var apiKey = new ApiKeyRecord
+        {
+            CreatedAt = now,
+            UpdatedAt = now,
+            Key = NoAuthApiKeyValue,
+            Name = NoAuthApiKeyName,
+            Type = "noauth",
+            Status = "enabled",
+            // Ent create defaults: the field's string list, an empty profiles
+            // object and an empty IP list.
+            Scopes = """["write_requests","read_channels"]""",
+            Profiles = """{"activeProfile":"","profiles":null}""",
+            AllowedIps = "[]",
+            ProjectId = project.Id,
+            UserId = owner.Id,
+        };
+
+        await apiKeys.CreateAsync(apiKey, cancellationToken).ConfigureAwait(false);
+        return apiKey;
+    }
+
+    /// <summary>
+    /// Port of the reference's allowed_ips checks (WithAPIKeyConfig,
+    /// WithGeminiKeyAuth and WithAdminGraphqlAuth). The gate calls this itself
+    /// because the reference checks the key type before the IP list.
+    /// </summary>
+    public static void CheckAllowedIps(
+        HttpRequest request,
+        ApiKeyRecord apiKey,
+        IReadOnlyList<string> trustedProxies)
+    {
+        var allowed = ParseAllowedIps(apiKey.AllowedIps);
+        if (allowed.Length == 0)
+        {
+            return;
+        }
+
+        var clientIp = ClientAddress.Resolve(request, trustedProxies);
+        var candidates = clientIp.Length == 0 ? Array.Empty<string>() : [clientIp];
+        if (!ClientAddress.IsAnyAllowedIp(candidates, allowed))
+        {
+            throw new ClientIpForbiddenException();
+        }
+    }
+
+    private static string[] ParseAllowedIps(string? json)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return [];
+        }
+
+        return JsonSerializer.Deserialize<string[]>(json) ?? [];
+    }
+}

@@ -1,0 +1,6 @@
+{
+  "case": "invalid-content-type",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"invalid request: unsupported content type: text/plain\"\n}\n",
+  "stderr": ""
+}

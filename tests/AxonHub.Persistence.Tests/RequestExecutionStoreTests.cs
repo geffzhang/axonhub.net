@@ -1,0 +1,812 @@
+using Dapper;
+
+namespace AxonHub.Persistence.Tests;
+
+[Collection(PostgresCollection.Name)]
+public sealed class RequestExecutionStoreTests(PostgresFixture fixture)
+{
+    private static readonly DateTime CreatedAt = new(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+    private static readonly DateTime UpdatedAt = new(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+
+    [Fact]
+    public async Task CreateAndListByRequestIdRoundTripsEveryColumn()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var first = NewExecution(101);
+        first.Status = "failed";
+        var firstId = await store.CreateAsync(first);
+        first.Id = firstId;
+
+        var second = NewExecution(101);
+        second.ModelId = "gpt-4o-mini";
+        second.ChannelId = 8;
+        var secondId = await store.CreateAsync(second);
+        second.Id = secondId;
+
+        var otherRequest = NewExecution(202);
+        await store.CreateAsync(otherRequest);
+
+        var executions = await store.ListByRequestIdAsync(101);
+
+        Assert.Equal(new[] { firstId, secondId }, executions.Select(execution => execution.Id).ToArray());
+        RecordAssert.Equivalent(first, executions[0]);
+        RecordAssert.Equivalent(second, executions[1]);
+    }
+
+    [Fact]
+    public async Task ListByRequestIdReturnsEmptyForUnknownRequest()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var executions = await store.ListByRequestIdAsync(999);
+
+        Assert.Empty(executions);
+    }
+
+    [Fact]
+    public async Task ListByRequestIdDescOrdersNewestFirst()
+    {
+        // biz/video.go loadTask reads the executions newest-first to find the
+        // latest provider task association; the rows share created_at, so the
+        // surrogate id decides the order (ent Order(Desc(FieldID))).
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var firstId = await store.CreateAsync(NewExecution(101));
+        var secondId = await store.CreateAsync(NewExecution(101));
+        var thirdId = await store.CreateAsync(NewExecution(101));
+        await store.CreateAsync(NewExecution(202));
+
+        var executions = await store.ListByRequestIdDescAsync(101);
+
+        Assert.Equal(
+            new[] { thirdId, secondId, firstId },
+            executions.Select(execution => execution.Id).ToArray());
+        Assert.Empty(await store.ListByRequestIdDescAsync(999));
+    }
+
+    [Fact]
+    public async Task UpdateResultWritesOutcomeAndKeepsHeadersAndChunks()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var execution = NewExecution(303);
+        var id = await store.CreateAsync(execution);
+        var changedAt = UpdatedAt.AddMinutes(1);
+
+        var updated = await store.UpdateResultAsync(
+            id,
+            "completed",
+            externalId: "resp-2",
+            upstreamModelId: "gpt-4o-2026-02-01",
+            responseBody: null,
+            setResponseBody: true,
+            errorMessage: null,
+            latencyMs: 55,
+            firstTokenLatencyMs: 5,
+            reasoningDurationMs: 6,
+            updatedAt: changedAt);
+
+        Assert.True(updated);
+
+        var actual = (await store.ListByRequestIdAsync(303)).Single();
+        Assert.Equal("completed", actual.Status);
+        Assert.Equal("resp-2", actual.ExternalId);
+        Assert.Equal("gpt-4o-2026-02-01", actual.UpstreamModelId);
+
+        // UpdateRequestExecutionFinalized never touches response_status_code, so
+        // the value captured at creation survives.
+        Assert.Equal(200L, actual.ResponseStatusCode);
+        Assert.Null(actual.ResponseBody);
+
+        // Finalization passes an empty error message, and the store only writes
+        // non-empty values, so a previously captured message survives.
+        Assert.Equal("none", actual.ErrorMessage);
+
+        // Headers and chunks go through their own updates, so finalization
+        // cannot clear them.
+        RecordAssert.Json("""{"content-type":"application/json"}""", actual.ResponseHeaders);
+        RecordAssert.Json("""[{"delta":"hi"}]""", actual.ResponseChunks);
+        Assert.Equal(55L, actual.MetricsLatencyMs);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task GetByIdReturnsTheRowOrNull()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var execution = NewExecution(707);
+        var id = await store.CreateAsync(execution);
+        execution.Id = id;
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        RecordAssert.Equivalent(execution, actual);
+
+        Assert.Null(await store.GetByIdAsync(id + 1));
+    }
+
+    [Fact]
+    public async Task UpdateResultLeavesTheBodyUntouchedWhenNotSet()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var id = await store.CreateAsync(NewExecution(808));
+        var changedAt = UpdatedAt.AddMinutes(1);
+
+        var updated = await store.UpdateResultAsync(
+            id,
+            "failed",
+            externalId: null,
+            upstreamModelId: null,
+            responseBody: """{"new":true}""",
+            setResponseBody: false,
+            errorMessage: null,
+            latencyMs: null,
+            firstTokenLatencyMs: null,
+            reasoningDurationMs: null,
+            updatedAt: changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        Assert.Equal("failed", actual.Status);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateResponseChunksWritesOnlyChunks()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var id = await store.CreateAsync(NewExecution(909));
+        var changedAt = UpdatedAt.AddMinutes(4);
+
+        var updated = await store.UpdateResponseChunksAsync(
+            id,
+            """[{"delta":"yo"}]""",
+            changedAt);
+
+        Assert.True(updated);
+
+        var actual = await store.GetByIdAsync(id);
+        Assert.NotNull(actual);
+        RecordAssert.Json("""[{"delta":"yo"}]""", actual.ResponseChunks);
+        Assert.Equal("completed", actual.Status);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateResponseHeadersWritesOnlyHeaders()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var id = await store.CreateAsync(NewExecution(606));
+        var changedAt = UpdatedAt.AddMinutes(4);
+
+        var updated = await store.UpdateResponseHeadersAsync(
+            id,
+            """{"content-type":["text/event-stream"]}""",
+            changedAt);
+
+        Assert.True(updated);
+
+        var actual = (await store.ListByRequestIdAsync(606)).Single();
+        RecordAssert.Json("""{"content-type":["text/event-stream"]}""", actual.ResponseHeaders);
+        Assert.Equal("chatcmpl-1", actual.ExternalId);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateStatusWritesFailureDetailsAndKeepsFinalizedMetadata()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var execution = NewExecution(404);
+        var id = await store.CreateAsync(execution);
+        var changedAt = UpdatedAt.AddMinutes(2);
+
+        var updated = await store.UpdateStatusAsync(
+            id,
+            "failed",
+            responseStatusCode: 503,
+            upstreamModelId: "gpt-4o-2026-03-01",
+            errorMessage: "upstream unavailable",
+            latencyMs: 77,
+            firstTokenLatencyMs: null,
+            reasoningDurationMs: null,
+            updatedAt: changedAt);
+
+        Assert.True(updated);
+
+        var actual = (await store.ListByRequestIdAsync(404)).Single();
+        Assert.Equal("failed", actual.Status);
+        Assert.Equal(503L, actual.ResponseStatusCode);
+        Assert.Equal("gpt-4o-2026-03-01", actual.UpstreamModelId);
+        Assert.Equal("upstream unavailable", actual.ErrorMessage);
+        Assert.Equal(77L, actual.MetricsLatencyMs);
+
+        // Values not supplied by the caller are left as they were.
+        Assert.Equal(30L, actual.MetricsFirstTokenLatencyMs);
+        Assert.Equal(changedAt, actual.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task UpdateStatusCanCancelWithoutClearingResponseData()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var execution = NewExecution(505);
+        var id = await store.CreateAsync(execution);
+
+        await store.UpdateStatusAsync(
+            id,
+            "canceled",
+            responseStatusCode: null,
+            upstreamModelId: null,
+            errorMessage: null,
+            latencyMs: null,
+            firstTokenLatencyMs: null,
+            reasoningDurationMs: null,
+            updatedAt: UpdatedAt.AddMinutes(3));
+
+        var actual = (await store.ListByRequestIdAsync(505)).Single();
+        Assert.Equal("canceled", actual.Status);
+        Assert.Equal("chatcmpl-1", actual.ExternalId);
+        Assert.Equal(200L, actual.ResponseStatusCode);
+        RecordAssert.Json("""{"id":"chatcmpl-1"}""", actual.ResponseBody);
+        Assert.Equal("none", actual.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task UpdateReportsMissingRows()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        Assert.False(await store.UpdateStatusAsync(
+            12345, "failed", null, null, null, null, null, null, UpdatedAt));
+        Assert.False(await store.UpdateResultAsync(
+            12345, "failed", null, null, null, true, null, null, null, null, UpdatedAt));
+        Assert.False(await store.UpdateResponseHeadersAsync(12345, "{}", UpdatedAt));
+        Assert.False(await store.UpdateResponseChunksAsync(12345, "[]", UpdatedAt));
+        Assert.Null(await store.GetByIdAsync(12345));
+    }
+
+    [Fact]
+    public async Task ListAppliesEveryScalarPredicate()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var first = NewExecution(101);
+        first.ExternalId = "resp-alpha";
+        first.UpstreamModelId = "gpt-4o-2026-01-01";
+        first.ReasoningEffort = "high";
+        first.ErrorMessage = "none";
+        first.ResponseStatusCode = 200;
+        first.Stream = true;
+        first.MetricsLatencyMs = 100;
+        first.MetricsFirstTokenLatencyMs = 10;
+        first.MetricsReasoningDurationMs = 5;
+        first.RequestUrl = "https://alpha.example/v1/chat";
+        first.PassThroughApplied = true;
+        var firstId = await store.CreateAsync(first);
+
+        var second = NewExecution(101);
+        second.ExternalId = "resp-beta";
+        second.UpstreamModelId = null;
+        second.ReasoningEffort = null;
+        second.ErrorMessage = "boom";
+        second.Status = "failed";
+        second.ResponseStatusCode = 503;
+        second.Stream = false;
+        second.MetricsLatencyMs = null;
+        second.MetricsFirstTokenLatencyMs = null;
+        second.MetricsReasoningDurationMs = null;
+        second.RequestUrl = "https://beta.example/v1/responses";
+        second.PassThroughApplied = false;
+        second.ChannelId = null;
+        second.DataStorageId = null;
+        second.Format = "anthropic/messages";
+        var secondId = await store.CreateAsync(second);
+
+        var third = NewExecution(101);
+        third.ExternalId = null;
+        third.UpstreamModelId = "claude-4-2026";
+        third.ReasoningEffort = "low";
+        third.ErrorMessage = null;
+        third.ResponseStatusCode = 429;
+        third.Stream = true;
+        third.MetricsLatencyMs = 200;
+        third.MetricsFirstTokenLatencyMs = 20;
+        third.MetricsReasoningDurationMs = 10;
+        third.RequestUrl = null;
+        third.PassThroughApplied = true;
+        third.ModelId = "claude-4";
+        third.ChannelId = 8;
+        var thirdId = await store.CreateAsync(third);
+
+        var fourth = NewExecution(101);
+        fourth.ExternalId = null;
+        fourth.UpstreamModelId = null;
+        fourth.ReasoningEffort = null;
+        fourth.ErrorMessage = null;
+        fourth.Status = "failed";
+        fourth.ResponseStatusCode = null;
+        fourth.Stream = false;
+        fourth.MetricsLatencyMs = null;
+        fourth.MetricsFirstTokenLatencyMs = null;
+        fourth.MetricsReasoningDurationMs = null;
+        fourth.RequestUrl = null;
+        fourth.PassThroughApplied = false;
+        fourth.ProjectId = 10;
+        fourth.ChannelId = null;
+        fourth.DataStorageId = null;
+        var fourthId = await store.CreateAsync(fourth);
+
+        // The connection is always scoped to a parent request, like the
+        // Request.executions field in the reference.
+        async Task<IReadOnlyList<long>> QueryAsync(RequestExecutionListFilter where)
+            => (await store.ListAsync(
+                    new RequestExecutionListQuery { RequestScope = 101, Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal([firstId, secondId, thirdId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { RequestId = 101 }));
+        Assert.Empty(
+            await QueryAsync(new RequestExecutionListFilter { RequestIdNEQ = 101 }));
+        Assert.Empty(
+            await QueryAsync(new RequestExecutionListFilter { RequestIdIn = [202] }));
+        Assert.Empty(
+            await QueryAsync(new RequestExecutionListFilter { RequestIdNotIn = [101] }));
+        Assert.Equal([firstId, secondId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { ProjectId = 9 }));
+        Assert.Equal([firstId, secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { ModelIdContains = "gpt-4o" }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { FormatContains = "anthropic" }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { StatusIn = ["completed"] }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { StatusNEQ = "completed" }));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { ExternalId = "resp-alpha" }));
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { ExternalIdContainsFold = "ALPHA" }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { ExternalIdIn = ["resp-beta"] }));
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { ExternalIdNotIn = ["resp-beta"] }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { ExternalIdNEQ = "resp-alpha" }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { ExternalIdIsNil = true }));
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new RequestExecutionListFilter { ExternalIdNotNil = true }));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { UpstreamModelIdHasPrefix = "gpt" }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new RequestExecutionListFilter { UpstreamModelIdHasSuffix = "2026" }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new RequestExecutionListFilter { UpstreamModelIdContains = "claude" }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { UpstreamModelIdIsNil = true }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { UpstreamModelIdNotNil = true }));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { ReasoningEffort = "high" }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new RequestExecutionListFilter { ReasoningEffortIn = ["low"] }));
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { ReasoningEffortEqualFold = "HIGH" }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { ReasoningEffortIsNil = true }));
+
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { ErrorMessage = "boom" }));
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { ErrorMessageNEQ = "boom" }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { ErrorMessageContains = "oo" }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { ErrorMessageHasPrefix = "bo" }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { ErrorMessageIsNil = true }));
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new RequestExecutionListFilter { ErrorMessageNotNil = true }));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCode = 200 }));
+        Assert.Equal([secondId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeNEQ = 200 }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeIn = [503] }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeNotIn = [503] }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeGT = 500 }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeGTE = 503 }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeLT = 500 }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeLTE = 429 }));
+        Assert.Equal([fourthId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeIsNil = true }));
+        Assert.Equal([firstId, secondId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { ResponseStatusCodeNotNil = true }));
+
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { Stream = true }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { Stream = false }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { StreamNEQ = true }));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsLatencyMs = 100 }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsLatencyMsGT = 100 }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsLatencyMsIsNil = true }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsLatencyMsNotNil = true }));
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsFirstTokenLatencyMsLTE = 10 }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsFirstTokenLatencyMsGTE = 20 }));
+        Assert.Equal([thirdId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsReasoningDurationMsGT = 7 }));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsReasoningDurationMsNotNil = true }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { MetricsReasoningDurationMsIsNil = true }));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { RequestUrl = "https://alpha.example/v1/chat" }));
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { RequestUrlContainsFold = "ALPHA.EXAMPLE" }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { RequestUrlHasPrefix = "https://beta" }));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { RequestUrlHasSuffix = "/responses" }));
+        Assert.Equal([thirdId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { RequestUrlIsNil = true }));
+        Assert.Equal([firstId, secondId],
+            await QueryAsync(new RequestExecutionListFilter { RequestUrlNotNil = true }));
+
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { PassThroughApplied = true }));
+        Assert.Equal([secondId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { PassThroughApplied = false }));
+
+        Assert.Equal([firstId, secondId, thirdId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { StatusIn = [] }));
+        Assert.Equal([firstId, secondId, thirdId, fourthId],
+            await QueryAsync(new RequestExecutionListFilter { ChannelIdIn = [] }));
+    }
+
+    [Fact]
+    public async Task ListAppliesTheEdgePredicates()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        await SeedChannelRowAsync(db, 300, "Alpha");
+        // Soft-deleted targets still satisfy nested edge predicates.
+        await SeedChannelRowAsync(db, 301, "Beta", deletedAt: 99);
+        await SeedDataStorageRowAsync(db, 900, "Primary");
+        // Request 101 points at the soft-deleted channel; request 201 is not
+        // seeded, so executions scoped to it have no request row.
+        await SeedRequestRowAsync(db, 101, "completed", channelId: 301);
+
+        var first = NewExecution(101);
+        first.ChannelId = 300;
+        first.DataStorageId = 900;
+        var firstId = await store.CreateAsync(first);
+
+        var second = NewExecution(201);
+        second.Status = "failed";
+        second.ChannelId = 301;
+        second.DataStorageId = null;
+        var secondId = await store.CreateAsync(second);
+
+        var third = NewExecution(101);
+        third.ChannelId = null;
+        third.DataStorageId = null;
+        var thirdId = await store.CreateAsync(third);
+
+        // Request.executions always scopes to the parent request id.
+        async Task<IReadOnlyList<long>> QueryAsync(
+            RequestExecutionListFilter where,
+            long scope)
+            => (await store.ListAsync(
+                    new RequestExecutionListQuery { RequestScope = scope, Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { HasRequest = true }, 101));
+        Assert.Empty(
+            await QueryAsync(new RequestExecutionListFilter { HasRequest = true }, 201));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { HasRequest = false }, 201));
+        Assert.Empty(
+            await QueryAsync(new RequestExecutionListFilter { HasRequest = false }, 101));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    HasRequestWith = [new RequestListFilter { Status = "completed" }],
+                },
+                101));
+        Assert.Empty(
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    HasRequestWith = [new RequestListFilter { Status = "failed" }],
+                },
+                101));
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    HasRequestWith =
+                    [
+                        new RequestListFilter
+                        {
+                            HasChannelWith = [new ChannelListFilter { Name = "Beta" }],
+                        },
+                    ],
+                },
+                101));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { HasChannel = true }, 101));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { HasChannel = true }, 201));
+        Assert.Equal([thirdId],
+            await QueryAsync(new RequestExecutionListFilter { HasChannel = false }, 101));
+        Assert.Equal([firstId],
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    HasChannelWith = [new ChannelListFilter { Name = "Alpha" }],
+                },
+                101));
+        Assert.Equal([secondId],
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    HasChannelWith = [new ChannelListFilter { Name = "Beta" }],
+                },
+                201));
+
+        Assert.Equal([firstId],
+            await QueryAsync(new RequestExecutionListFilter { HasDataStorage = true }, 101));
+        Assert.Equal([thirdId],
+            await QueryAsync(new RequestExecutionListFilter { HasDataStorage = false }, 101));
+        Assert.Equal([firstId],
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    HasDataStorageWith = [new DataStorageListFilter { Name = "Primary" }],
+                },
+                101));
+        Assert.Equal([firstId],
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    HasDataStorageWith = [new DataStorageListFilter { Primary = false }],
+                },
+                101));
+
+        // An empty With list is ignored, exactly like entgql's empty filter list.
+        Assert.Equal([firstId, thirdId],
+            await QueryAsync(new RequestExecutionListFilter { HasChannelWith = [] }, 101));
+        Assert.Equal([secondId],
+            await QueryAsync(new RequestExecutionListFilter { HasChannelWith = [] }, 201));
+        Assert.Equal([firstId],
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    Or =
+                    [
+                        new RequestExecutionListFilter { HasDataStorage = true },
+                        new RequestExecutionListFilter
+                        {
+                            HasChannelWith = [new ChannelListFilter { Name = "Beta" }],
+                        },
+                    ],
+                },
+                101));
+        Assert.Equal([secondId],
+            await QueryAsync(
+                new RequestExecutionListFilter
+                {
+                    Or =
+                    [
+                        new RequestExecutionListFilter { HasDataStorage = true },
+                        new RequestExecutionListFilter
+                        {
+                            HasChannelWith = [new ChannelListFilter { Name = "Beta" }],
+                        },
+                    ],
+                },
+                201));
+    }
+
+    [Fact]
+    public async Task ListWithoutRequestScopeFiltersByChannelAndDataStorage()
+    {
+        // Channel.executions and DataStorage.executions resolve the reverse
+        // edge with a foreign-key predicate and no parent request, so the
+        // nullable RequestScope must render no request_id condition.
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+        await using var context = db.Factory.CreateDbContext();
+        var store = new RequestExecutionStore(context);
+
+        var onChannel = NewExecution(101);
+        onChannel.ChannelId = 7;
+        onChannel.DataStorageId = 3;
+        var onChannelId = await store.CreateAsync(onChannel);
+
+        var onChannelOtherStorage = NewExecution(202);
+        onChannelOtherStorage.ChannelId = 7;
+        onChannelOtherStorage.DataStorageId = 4;
+        var onChannelOtherStorageId = await store.CreateAsync(onChannelOtherStorage);
+
+        var onOtherChannel = NewExecution(303);
+        onOtherChannel.ChannelId = 8;
+        onOtherChannel.DataStorageId = 3;
+        var onOtherChannelId = await store.CreateAsync(onOtherChannel);
+
+        async Task<long[]> IdsAsync(RequestExecutionListFilter where)
+            => (await store.ListAsync(new RequestExecutionListQuery { Where = where }))
+                .Nodes.Select(static row => row.Id).ToArray();
+
+        Assert.Equal(
+            [onChannelId, onChannelOtherStorageId],
+            await IdsAsync(new RequestExecutionListFilter { ChannelId = 7 }));
+        Assert.Equal(
+            [onChannelId, onOtherChannelId],
+            await IdsAsync(new RequestExecutionListFilter { DataStorageId = 3 }));
+        Assert.Equal(
+            [onChannelId],
+            await IdsAsync(new RequestExecutionListFilter
+            {
+                ChannelId = 7,
+                DataStorageId = 3,
+            }));
+    }
+
+    private static RequestExecutionRecord NewExecution(long requestId) => new()
+    {
+        CreatedAt = CreatedAt,
+        UpdatedAt = UpdatedAt,
+        ProjectId = 9,
+        ChannelApiKeyIndex = 1,
+        ExternalId = "chatcmpl-1",
+        ModelId = "gpt-4o",
+        UpstreamModelId = "gpt-4o-2026-01-01",
+        Format = "openai/chat_completions",
+        ReasoningEffort = "high",
+        ChannelApiKeySuffix = "abcd",
+        RequestBody = """{"model":"gpt-4o"}""",
+        ResponseHeaders = """{"content-type":"application/json"}""",
+        ResponseBody = """{"id":"chatcmpl-1"}""",
+        ResponseChunks = """[{"delta":"hi"}]""",
+        ErrorMessage = "none",
+        ResponseStatusCode = 200,
+        Status = "completed",
+        Stream = true,
+        MetricsLatencyMs = 120,
+        MetricsFirstTokenLatencyMs = 30,
+        MetricsReasoningDurationMs = 40,
+        RequestHeaders = """{"authorization":"Bearer x"}""",
+        RequestUrl = "https://api.example.com/v1/chat/completions",
+        PassThroughApplied = true,
+        ChannelId = 3,
+        DataStorageId = 4,
+        RequestId = requestId,
+    };
+
+    private static async Task SeedRequestRowAsync(
+        TestDatabase db,
+        long id,
+        string status,
+        long? channelId = null)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "requests"
+                ("id", "created_at", "updated_at", "source", "model_id", "request_body",
+                 "status", "channel_id", "project_id")
+            VALUES (@Id, @CreatedAt, @CreatedAt, 'api', 'gpt-4o', '{}'::jsonb, @Status,
+                    @ChannelId, 1);
+            """,
+            new { Id = id, CreatedAt, Status = status, ChannelId = channelId });
+    }
+
+    private static async Task SeedChannelRowAsync(
+        TestDatabase db,
+        long id,
+        string name,
+        long deletedAt = 0)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "channels"
+                ("id", "created_at", "updated_at", "deleted_at", "type", "name", "status",
+                 "credentials", "supported_models", "default_test_model")
+            VALUES (@Id, @CreatedAt, @CreatedAt, @DeletedAt, 'openai', @Name, 'enabled',
+                    '{}'::jsonb, 'null'::jsonb, 'gpt-4o');
+            """,
+            new { Id = id, CreatedAt, Name = name, DeletedAt = deletedAt });
+    }
+
+    private static async Task SeedDataStorageRowAsync(
+        TestDatabase db,
+        long id,
+        string name,
+        bool primary = false)
+    {
+        await using var connection = await db.Factory.OpenAsync();
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO "data_storages"
+                ("id", "created_at", "updated_at", "deleted_at", "name", "description",
+                 "primary", "type", "settings", "status")
+            VALUES (@Id, @CreatedAt, @CreatedAt, 0, @Name, '', @Primary, 'database',
+                    '{}'::jsonb, 'active');
+            """,
+            new { Id = id, CreatedAt, Name = name, Primary = primary });
+    }
+}

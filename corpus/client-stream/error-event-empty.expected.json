@@ -1,0 +1,6 @@
+{
+  "case": "error-event-empty",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"error: stream error, type: stream_error\"\n}\n",
+  "stderr": ""
+}

@@ -1,0 +1,6 @@
+{
+  "case": "http-error",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"HTTP error 500\"\n}\n",
+  "stderr": ""
+}

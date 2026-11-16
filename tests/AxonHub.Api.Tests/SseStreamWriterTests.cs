@@ -1,0 +1,328 @@
+using System.Text;
+using AxonHub.Api.Http;
+using AxonHub.Llm;
+using AxonHub.Llm.Http;
+using AxonHub.Llm.Streams;
+using Microsoft.AspNetCore.Http;
+
+namespace AxonHub.Api.Tests;
+
+/// <summary>
+/// Byte-level tests for the SSE writer. The reference uses gin-contrib/sse, so
+/// the exact framing (no space after <c>data:</c>, CR escaped as <c>\r</c>,
+/// blank line between events) is part of the client contract.
+/// </summary>
+public sealed class SseStreamWriterTests
+{
+    private static (DefaultHttpContext Context, MemoryStream Body) NewContext()
+    {
+        var context = new DefaultHttpContext();
+        var body = new MemoryStream();
+        context.Response.Body = body;
+        return (context, body);
+    }
+
+    [Fact]
+    public async Task WritesHeadersAndGinCompatibleFraming()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+        [
+            TestChannels.Data("hello\nworld"),
+            TestChannels.Data("[DONE]"),
+        ]);
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.Equal("text/event-stream;charset=utf-8", context.Response.ContentType);
+        Assert.Equal("no-cache", context.Response.Headers["Cache-Control"].ToString());
+        Assert.Equal("keep-alive", context.Response.Headers["Connection"].ToString());
+        Assert.Equal(
+            "data:hello\ndata:world\n\ndata:[DONE]\n\n",
+            Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task WritesEventFieldForTypedEventsAndEscapesCarriageReturns()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+        [
+            new StreamEvent { Type = "error", Data = Encoding.UTF8.GetBytes("a\rb") },
+            TestChannels.Data("[DONE]"),
+        ]);
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.Equal(
+            "event:error\ndata:a\\rb\n\ndata:[DONE]\n\n",
+            Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task SuppressesTrailingErrorAfterDoneEvent()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+            [TestChannels.Data("[DONE]")],
+            terminalError: new IOException("connection reset"));
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.Equal("data:[DONE]\n\n", Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task SuppressesTrailingErrorAfterFinishReason()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+            [TestChannels.Data("{\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}]}")],
+            terminalError: new IOException("connection reset"));
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.DoesNotContain("event:error", Encoding.UTF8.GetString(body.ToArray()), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WritesClassifiedErrorEventWhenStreamFailsWithoutTerminal()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new IOException("connection reset"));
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        // writeSSEErrorEvent classifies first: a broken upstream connection is a
+        // 502 upstream_stream_interrupted, not a bare exception message.
+        Assert.Equal(
+            "event:error\ndata:{\"error\":{\"code\":\"upstream_stream_interrupted\","
+            + "\"message\":\"Upstream provider closed the connection before the response completed: connection reset\","
+            + "\"type\":\"upstream_error\"},\"request_id\":\"\"}\n\n",
+            Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task WritesClassifiedIncompleteStreamErrorWhenStreamEndsWithoutTerminal()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>([]);
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.Equal(
+            "event:error\ndata:{\"error\":{\"code\":\"upstream_stream_interrupted\","
+            + "\"message\":\"Upstream provider closed the connection before the response completed: "
+            + "stream ended without terminal event or completed response\","
+            + "\"type\":\"upstream_error\"},\"request_id\":\"\"}\n\n",
+            Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task SuppressesErrorEventWhenClientCancelled()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new IOException("connection reset"));
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, cancellation.Token);
+
+        Assert.Equal(string.Empty, Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task WritesDeadlineErrorWhenTheRequestDeadlineExpired()
+    {
+        var (context, body) = NewContext();
+        using var request = new CancellationTokenSource();
+        await request.CancelAsync();
+        context.Features.Set<IRequestTimeoutFeature>(new TimedOutFeature(request.Token));
+
+        // The request token is already canceled, but a deadline is not a client
+        // disconnect: the client still receives context.DeadlineExceeded.
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new OperationCanceledException(request.Token));
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, request.Token);
+
+        Assert.Equal(
+            "event:error\ndata:{\"error\":{\"code\":\"\",\"message\":\"context deadline exceeded\","
+            + "\"type\":\"server_error\"},\"request_id\":\"\"}\n\n",
+            Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [Fact]
+    public async Task KeepsRealStreamErrorsWhenTheDeadlineExpired()
+    {
+        var (context, body) = NewContext();
+        using var request = new CancellationTokenSource();
+        await request.CancelAsync();
+        context.Features.Set<IRequestTimeoutFeature>(new TimedOutFeature(request.Token));
+
+        // chat.go:482-488 only suppresses context.Canceled (or a canceled ctx
+        // without a deadline); a genuine stream error after the deadline is
+        // still reported.
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new IOException("connection reset"));
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, request.Token);
+
+        var text = Encoding.UTF8.GetString(body.ToArray());
+        Assert.Contains("upstream_stream_interrupted", text, StringComparison.Ordinal);
+        Assert.Contains("connection reset", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The synthesized incomplete-stream error never passes through the
+    /// upstream error policy in the reference: only stream.Err() does
+    /// (upstreamErrorStream.Err), and that is nil here.
+    /// </summary>
+    [Fact]
+    public async Task DoesNotTransformSynthesizedIncompleteStreamErrors()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>([]);
+        var calls = 0;
+
+        await SseStreamWriter.WriteAsync(
+            context,
+            stream,
+            expectedChoices: 1,
+            CancellationToken.None,
+            (_, _) =>
+            {
+                calls++;
+                return Task.FromResult<Exception?>(new ResponseError
+                {
+                    Detail = new ErrorDetail { Message = "safe", Type = "upstream_error" },
+                });
+            });
+
+        Assert.Equal(0, calls);
+        Assert.Contains(
+            "stream ended without terminal event",
+            Encoding.UTF8.GetString(body.ToArray()),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TransformStreamErrorRewritesTheTrailingErrorEvent()
+    {
+        var (context, body) = NewContext();
+        var stream = new ListStream<StreamEvent>(
+            [],
+            terminalError: new IOException("connection reset"));
+
+        await SseStreamWriter.WriteAsync(
+            context,
+            stream,
+            expectedChoices: 1,
+            CancellationToken.None,
+            (_, _) => Task.FromResult<Exception?>(new ResponseError
+            {
+                StatusCode = 502,
+                Detail = new ErrorDetail
+                {
+                    Message = "safe",
+                    Type = "upstream_error",
+                    Code = "upstream_stream_interrupted",
+                },
+            }));
+
+        Assert.Contains(
+            "data:{\"error\":{\"code\":\"upstream_stream_interrupted\",\"message\":\"safe\","
+            + "\"type\":\"upstream_error\"},\"request_id\":\"\"}",
+            Encoding.UTF8.GetString(body.ToArray()),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcknowledgesDeliveryOnlyAfterTheTerminalEventIsWritten()
+    {
+        var (context, _) = NewContext();
+        var stream = new CapabilityListStream(
+        [
+            TestChannels.Data("hello"),
+            TestChannels.Data("[DONE]"),
+        ]);
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.True(stream.DeliveryAcknowledged);
+    }
+
+    [Fact]
+    public async Task DoesNotAcknowledgeDeliveryWhenTheStreamNeverTerminates()
+    {
+        var (context, body) = NewContext();
+        var stream = new CapabilityListStream([TestChannels.Data("hello")]);
+
+        await SseStreamWriter.WriteAsync(context, stream, expectedChoices: 1, CancellationToken.None);
+
+        Assert.False(stream.DeliveryAcknowledged);
+        Assert.Contains("upstream_stream_interrupted", Encoding.UTF8.GetString(body.ToArray()), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A transport-shaped stream: the writer's gate must see the terminal flag
+    /// and acknowledge the request chain exactly like InboundPersistentStream's
+    /// Deliver fallback does.
+    /// </summary>
+    private sealed class CapabilityListStream(IReadOnlyList<StreamEvent> items)
+        : IStream<StreamEvent>, IDeliveryAcknowledger, IDeliveryBoundary
+    {
+        private int _index;
+
+        public StreamEvent? Current { get; private set; }
+
+        public Exception? Err => null;
+
+        public bool DeliveryAcknowledged { get; private set; }
+
+        public bool Next()
+        {
+            if (_index >= items.Count)
+            {
+                return false;
+            }
+
+            Current = items[_index];
+            _index++;
+            return true;
+        }
+
+        public void AcknowledgeDelivery() => DeliveryAcknowledged = true;
+
+        public async Task<Exception?> DeliverAsync(
+            Func<Task<DeliveryWrite>> write,
+            CancellationToken cancellationToken)
+        {
+            var result = await write();
+            if (result.Error is null && result.Terminal)
+            {
+                AcknowledgeDelivery();
+            }
+
+            return result.Error;
+        }
+
+        public void Dispose()
+        {
+            // Nothing to release.
+        }
+    }
+
+    private sealed class TimedOutFeature(CancellationToken token) : IRequestTimeoutFeature
+    {
+        public CancellationToken Token { get; } = token;
+
+        public bool IsTimedOut => true;
+    }
+}

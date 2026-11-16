@@ -1,0 +1,6 @@
+{
+  "case": "invalid-missing-model",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"invalid request: model is required\"\n}\n",
+  "stderr": ""
+}

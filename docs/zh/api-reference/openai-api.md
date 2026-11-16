@@ -1,0 +1,813 @@
+# OpenAI API 参考
+
+## 概述
+
+AxonHub 完全支持 OpenAI API 规范，允许您使用任何 OpenAI 兼容的客户端 SDK 访问多个提供商的模型。
+
+## 核心优势
+
+- **API 互操作性**：使用 OpenAI Chat Completions API 调用 Anthropic、Gemini 和其他支持的模型
+- **零代码变更**：继续使用现有的 OpenAI 客户端 SDK，无需修改
+- **自动转换**：AxonHub 在需要时自动在 API 格式之间进行转换
+- **提供商灵活性**：使用 OpenAI API 格式访问任何支持的 AI 提供商
+
+## 支持的端点
+
+### OpenAI Chat Completions API
+
+**端点：**
+- `POST /v1/chat/completions` - 文本生成
+- `GET /v1/models` - 列出可用模型
+
+**示例请求：**
+```go
+import (
+    "github.com/openai/openai-go/v3"
+    "github.com/openai/openai-go/v3/option"
+)
+
+// 使用 AxonHub 配置创建 OpenAI 客户端
+client := openai.NewClient(
+    option.WithAPIKey("your-axonhub-api-key"),
+    option.WithBaseURL("http://localhost:8090/v1"),
+    
+)
+
+// 使用 OpenAI API 格式调用 Anthropic 模型
+completion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+    Messages: []openai.ChatCompletionMessageParamUnion{
+        openai.UserMessage("Hello, Claude!"),
+    },
+    Model: openai.ChatModel("claude-3-5-sonnet"),
+},
+    option.WithHeader("AH-Trace-Id", "trace-example-123"),
+    option.WithHeader("AH-Thread-Id", "thread-example-abc"))
+if err != nil {
+    // 适当处理错误
+    panic(err)
+}
+
+// 访问响应内容
+responseText := completion.Choices[0].Message.Content
+fmt.Println(responseText)
+```
+
+### OpenAI Responses API
+
+AxonHub 支持通过 HTTP 和 WebSocket 使用 OpenAI Responses API。两种渠道端点格式分别为
+HTTP 的 `openai/responses` 和 WebSocket 的 `openai/responses-ws`。两者使用相同的
+Responses 协议，只是传输封装不同。
+
+**端点：**
+- `POST /v1/responses` - 生成响应
+- WebSocket `/v1/responses` - 通过 WebSocket 创建 Responses 流
+
+**能力：**
+- ✅ 支持基本响应生成和流式响应
+- ✅ 同一渠道内会先选择与入站传输匹配的端点格式
+- ✅ 没有匹配格式时，支持 HTTP 与 WebSocket Responses 之间的转换
+- ✅ 当来源上下文和身份可以验证时，支持通过 `previous_response_id` 继续对话
+
+### 端点选择与传输转换
+
+当一个渠道支持两种传输方式时，请将 `openai/responses` 和
+`openai/responses-ws` 配置为两个独立端点。AxonHub 会在同一渠道内优先选择与入站
+格式完全匹配的端点。如果没有允许的同格式端点，则按配置顺序选择第一个允许的端点，
+并转换 HTTP 或 WebSocket 的 Responses 封装。转换会保留 Responses item、提供商的
+response 和 item ID、工具数据、图像操作与结果，以及支持的未知字段。它不会把
+`/v1/images/generations`、`/v1/images/edits` 或 `/v1/models` 转换为 Responses 工具调用。
+
+模型协议覆盖必须引用渠道中已经存在的端点格式。例如：
+
+```json
+{
+  "model": "gpt-5",
+  "apiFormats": ["openai/responses", "openai/responses-ws"],
+  "enabled": true
+}
+```
+
+### 连续对话与恢复
+
+`previous_response_id` 不是可以跨渠道使用的全局令牌。AxonHub 会检查其渠道、端点来源、
+模型、认证身份，以及原生 WebSocket 续接所需的上游连接代次。原生 WebSocket 下一轮会在
+匹配的上游会话中发送增量内容。切换渠道或传输方式时，必须具备经过确认的完整输入历史。
+
+如果所需历史缺失、过期、超出预算或属于其他来源，AxonHub 会在发送上游请求前停止处理，
+返回 HTTP 400，或返回类似下面的 WebSocket 错误：
+
+```json
+{
+  "type": "error",
+  "status": 400,
+  "error": {
+    "type": "invalid_request_error",
+    "code": "previous_response_not_found",
+    "message": "Continuation context is unavailable; resend the full input without previous_response_id."
+  }
+}
+```
+
+此恢复错误不会进入普通渠道故障转移。恢复时，请删除 `previous_response_id` 并重新发送
+完整输入。当前有界默认值为：每条 HTTP 保留记录或流捕获 16 MiB、保留载荷总量 64 MiB、
+每个下游连接的单帧或排队帧 128 MiB。这些数值描述网关的恢复行为，不代表提供商的上下文窗口上限。
+
+原生 Images 始终使用 HTTP 边界。图像生成和编辑使用 OpenAI 兼容的
+`/v1/images/generations` 与 `/v1/images/edits`，模型发现使用 `/v1/models`；这些请求
+不会包装成 Responses `image_generation` 调用。原生 Images 的请求和响应约定请参阅
+[图像生成 API](image-generation.md)。
+
+**示例请求：**
+```go
+import (
+    "context"
+    "fmt"
+
+    "github.com/openai/openai-go/v3"
+    "github.com/openai/openai-go/v3/option"
+    "github.com/openai/openai-go/v3/responses"
+    "github.com/openai/openai-go/v3/shared"
+)
+
+// 使用 AxonHub 配置创建 OpenAI 客户端
+client := openai.NewClient(
+    option.WithAPIKey("your-axonhub-api-key"),
+    option.WithBaseURL("http://localhost:8090/v1"),
+)
+
+ctx := context.Background()
+
+// 生成响应（支持同一上游 channel 的 previous_response_id 透传）
+params := responses.ResponseNewParams{
+    Model: shared.ResponsesModel("gpt-4o"),
+    PreviousResponseID: openai.String("resp_prev_123"),
+    Input: responses.ResponseNewParamsInputUnion{
+        OfString: openai.String("你好，最近怎么样？"),
+    },
+}
+
+response, err := client.Responses.New(ctx, params,
+        option.WithHeader("AH-Trace-Id", "trace-example-123"),
+        option.WithHeader("AH-Thread-Id", "thread-example-abc"))
+if err != nil {
+    panic(err)
+}
+
+fmt.Println(response.OutputText())
+```
+
+**示例：流式响应**
+```go
+import (
+    "context"
+    "fmt"
+    "strings"
+
+    "github.com/openai/openai-go/v3"
+    "github.com/openai/openai-go/v3/option"
+    "github.com/openai/openai-go/v3/responses"
+    "github.com/openai/openai-go/v3/shared"
+)
+
+client := openai.NewClient(
+    option.WithAPIKey("your-axonhub-api-key"),
+    option.WithBaseURL("http://localhost:8090/v1"),
+)
+
+ctx := context.Background()
+
+params := responses.ResponseNewParams{
+    Model: shared.ResponsesModel("gpt-4o"),
+    Input: responses.ResponseNewParamsInputUnion{
+        OfString: openai.String("给我讲一个关于机器人的短故事。"),
+    },
+}
+
+stream := client.Responses.NewStreaming(ctx, params,
+        option.WithHeader("AH-Trace-Id", "trace-example-123"),
+        option.WithHeader("AH-Thread-Id", "thread-example-abc"))
+
+var fullContent strings.Builder
+for stream.Next() {
+    event := stream.Current()
+    if event.Type == "response.output_text.delta" && event.Delta != "" {
+        fullContent.WriteString(event.Delta)
+        fmt.Print(event.Delta) // 边传输边打印
+    }
+}
+
+if err := stream.Err(); err != nil {
+    panic(err)
+}
+
+fmt.Println("\n完整响应:", fullContent.String())
+```
+
+### OpenAI Decisions API
+
+AxonHub 以原生方式支持 OpenAI Decisions 协议，并提供独立的非流式端点。
+请求发送到 `POST /v1/decisions`，保留 Decisions JSON 结构，不会转换为 Chat
+Completions、Responses 或 SystemOne。
+
+**端点：**
+
+- `POST /v1/decisions` - 使用带类型的问题评估共享输入
+
+**渠道端点配置：**
+
+在需要接收 Decisions 请求的渠道中添加自定义端点，并设置
+`api_format: openai/decisions`。端点可以继承渠道的 `base_url`，也可以提供
+自己的 `base_url`。可选的 `path` 会替换默认路径，且必须以 `/` 开头，例如
+`/v1/decisions`。Decisions 不会回退到 Chat 端点。渠道必须配置兼容的
+`openai/decisions` 端点，才能接收此类请求。
+
+```json
+{
+  "api_format": "openai/decisions",
+  "base_url": "https://decisions.example.test/api",
+  "path": "/v1/decisions"
+}
+```
+
+**请求协议：**
+
+原生请求必须包含 `model`、`input` 和非空的 `questions` 数组。`input` 可以是
+非空字符串，也可以是受支持的消息项数组。文本部分使用 `input_text`，图片
+部分使用 `input_image`；`message` 项可以包含文本或嵌套内容部分。问题和答案
+对象保持原生 JSON 结构，包括未知字段和带类型的 choice 值。
+
+```json
+{
+  "model": "example-decisions-model",
+  "input": "一条虚构的客户报告称包裹完好送达。",
+  "questions": [
+    {
+      "type": "choice",
+      "name": "route",
+      "instructions": "选择最合适的虚构路由标签。",
+      "choices": [
+        { "value": "review", "description": "需要人工审核。" },
+        { "value": "complete", "description": "不需要后续处理。" }
+      ]
+    }
+  ]
+}
+```
+
+**响应和限制：**
+
+- 成功响应以原生 Decisions JSON 返回，并包含 `answers` 数组。答案可以是
+  `choice`、`predicate` 或 `score` 等带类型结果，也可以包含 `refusal` 答案。
+- 第一阶段的 Decisions 仅支持非流式请求。请设置 `stream` 为 `false` 或省略
+  该字段。带有 `"stream": true` 的请求会在本地被拒绝，并返回无效请求错误。
+  此端点不支持 SSE 客户端和 SDK 的流式辅助方法。
+- 如果响应包含 `usage`，只有 `usage.input_tokens` 会映射为 AxonHub 的 prompt
+  用量。output、total、cache 和 reasoning token 字段不会由此协议映射。缺少
+  `usage` 或其值为 null 时，相关用量保持缺失。
+- 提示词保护会按请求应用已配置的提示词保护规则：匹配的规则可以遮盖命中的文本，
+  也可以直接拒绝请求。遮盖分为主路径和条件性的原始回放路径：
+  - 主路径：字符串形式的 `input`，以及 `input[].content[]` 中 `type` 为
+    `input_text` 的部分的 `text`。
+  - 条件性原始回放路径：仅当请求体透传已启用且实际应用、主路径命中的遮盖规则
+    可用，并且额外字段本身也匹配这些规则及其作用域时，遮盖才会作用于独立的
+    `input[].text` 和字符串形式的 `message.content`。透传禁用时，仅遮盖主路径的
+    字符串 `input` 和嵌套 `input_text` 字段。额外形式单独出现时不会产生主路径
+    命中，因而会原样返回。
+  内联图片值和无关的上游字段会保留，但追踪数据不会暴露内联图片字节。
+- 原生 Decisions 请求和响应不会转换为 SystemOne。SystemOne 端点配置属于独立
+  的协议边界，不是 `/v1/decisions` 的回退或兼容路径。
+
+**虚构响应示例：**
+
+```json
+{
+  "model": "example-decisions-model",
+  "answers": [
+    { "type": "choice", "name": "route", "choice": "complete" },
+    { "type": "refusal", "name": "safety_check", "refusal": "not evaluated" }
+  ],
+  "usage": { "input_tokens": 12, "output_tokens": 99 }
+}
+```
+
+**虚构错误示例：**
+
+```json
+{
+  "error": {
+    "message": "decision rate limit",
+    "type": "rate_limit_error",
+    "code": "rate_limit",
+    "x_beta": null
+  }
+}
+```
+
+**虚构的条件性提示词保护示例：**
+
+遮盖 `secret-*` 的规则命中了嵌套的 `input_text` 部分，因此主路径会遮盖它。
+如果请求体透传已启用且实际应用、该命中的遮盖规则可用于原始回放，并且独立的
+`input[].text` 本身也匹配该规则及其作用域，条件性原始回放路径才会同时遮盖它：
+
+```json
+{
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "secret-nested" }]
+    },
+    { "type": "input_text", "text": "secret-standalone" }
+  ]
+}
+```
+
+满足这些条件时，两处 `secret-*` 都会被遮盖。透传禁用时，仅遮盖嵌套的
+`input_text` 字段。如果只存在独立的 `input[].text`，则没有任何主路径
+字段命中，请求会原样返回。
+
+## API 转换能力
+
+AxonHub 自动在 API 格式之间进行转换，实现以下强大场景：
+
+### 使用 OpenAI SDK 调用 Anthropic 模型
+```go
+// OpenAI SDK 调用 Anthropic 模型
+completion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+    Messages: []openai.ChatCompletionMessageParamUnion{
+        openai.UserMessage("请解释什么是机器学习"),
+    },
+    Model: openai.ChatModel("claude-3-5-sonnet"),  // Anthropic 模型
+})
+
+// 访问响应
+responseText := completion.Choices[0].Message.Content
+fmt.Println(responseText)
+// AxonHub 自动转换 OpenAI 格式 → Anthropic 格式
+```
+
+### 使用 OpenAI SDK 调用 Gemini 模型
+```go
+// OpenAI SDK 调用 Gemini 模型
+completion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+    Messages: []openai.ChatCompletionMessageParamUnion{
+        openai.UserMessage("解释神经网络"),
+    },
+    Model: openai.ChatModel("gemini-2.5"),  // Gemini 模型
+})
+
+// 访问响应
+responseText := completion.Choices[0].Message.Content
+fmt.Println(responseText)
+// AxonHub 自动转换 OpenAI 格式 → Gemini 格式
+```
+
+## Moderations API
+
+AxonHub 通过独立端点提供 OpenAI 兼容的内容审核（Moderations）能力。
+
+**端点：**
+- `POST /v1/moderations` - 对文本和/或图片输入进行分类，支持 `omni-moderation-latest` 等模型
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `input` | string \| string[] \| 多模态对象数组 | ✅ | 待分类内容。多模态项为 `{ "type": "text", "text": "..." }` 或 `{ "type": "image_url", "image_url": { "url": "..." } }`。 |
+| `model` | string | ❌ | 审核模型。省略时 AxonHub 默认使用 `omni-moderation-latest`。该模型需配置在具备 `openai/moderations` 端点的渠道上。 |
+
+**独立请求示例：**
+
+```json
+{
+  "model": "omni-moderation-latest",
+  "input": "...text to classify goes here..."
+}
+```
+
+也支持多模态输入（文本 + 图片）：
+
+```json
+{
+  "model": "omni-moderation-latest",
+  "input": [
+    { "type": "text", "text": "...text to classify goes here..." },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://example.com/image.png" }
+    }
+  ]
+}
+```
+
+**说明：**
+- Chat Completions / Responses 不建模可选的内联 `moderation` 请求字段，请改用本独立端点。
+- OpenAI 及部分 OpenAI 兼容渠道类型默认包含 `openai/moderations` 端点。若上游不支持 `/moderations`，可能返回上游错误；可按需移除或覆盖该端点。
+- 开启请求体透传且入站/出站 format 一致时，moderations 请求仍会修补顶层 `model` 字段以支持模型映射。
+
+## Codex Alpha Search API
+
+AxonHub 可透明转发 Codex/CPA 兼容的 Alpha Search 端点，不解析上游自定义的搜索请求和响应结构。
+
+**端点：**
+- `POST /v1/alpha/search`
+
+请求必须包含 `model`，以便 AxonHub 选择渠道。除模型映射会修改顶层 `model` 外，其余 JSON（包括 `commands.search_query`）原样转发；上游响应也原样返回。该端点不属于公开 OpenAI API，只应为确实实现了 `/alpha/search` 的上游（例如 CPA）配置 `openai/alpha_search` endpoint。只有内置 Codex 渠道默认包含该端点；其他渠道（包括 Fenno、OpenAI 和 OpenAI Responses）都需要显式加入。
+
+## 嵌入 API
+
+AxonHub 通过 OpenAI 兼容 API 提供全面的文本和多模态嵌入生成支持。
+
+**端点：**
+- `POST /v1/embeddings` - OpenAI 兼容嵌入 API
+
+**支持的输入类型：**
+- 单个文本字符串
+- 文本字符串数组
+- 令牌数组（整数）
+- 多个令牌数组
+
+**支持的编码格式：**
+- `float` - 默认，返回嵌入向量为浮点数组
+- `base64` - 返回嵌入为 base64 编码字符串
+
+### 请求格式
+
+```json
+{
+  "input": "要嵌入的文本",
+  "model": "text-embedding-3-small",
+  "encoding_format": "float",
+  "dimensions": 1536,
+  "user": "user-id"
+}
+```
+
+**参数：**
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `input` | string \| string[] \| number[] \| number[][] | ✅ | 要嵌入的文本。可以是单个字符串、字符串数组、令牌数组或多个令牌数组。 |
+| `model` | string | ✅ | 用于嵌入生成的模型。 |
+| `encoding_format` | string | ❌ | 返回嵌入的格式。可以是 `float` 或 `base64`。默认：`float`。 |
+| `dimensions` | integer | ❌ | 输出嵌入的维度数。 |
+| `user` | string | ❌ | 最终用户的唯一标识符。 |
+
+### 响应格式
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [0.123, 0.456, ...],
+      "index": 0
+    }
+  ],
+  "model": "text-embedding-3-small",
+  "usage": {
+    "prompt_tokens": 4,
+    "total_tokens": 4
+  }
+}
+```
+
+### 示例
+
+**OpenAI SDK (Python)：**
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="your-axonhub-api-key",
+    base_url="http://localhost:8090/v1"
+)
+
+response = client.embeddings.create(
+    input="你好，世界！",
+    model="text-embedding-3-small"
+)
+
+print(response.data[0].embedding[:5])  # 前 5 个维度
+```
+
+**OpenAI SDK (Go)：**
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/openai/openai-go"
+    "github.com/openai/openai-go/option"
+)
+
+func main() {
+    client := openai.NewClient(
+        option.WithAPIKey("your-axonhub-api-key"),
+        option.WithBaseURL("http://localhost:8090/v1"),
+    )
+
+    embedding, err := client.Embeddings.New(context.TODO(), openai.EmbeddingNewParams{
+        Input: openai.Union[string](openai.String("你好，世界！")),
+        Model: openai.String("text-embedding-3-small"),
+        option.WithHeader("AH-Trace-Id", "trace-example-123"),
+        option.WithHeader("AH-Thread-Id", "thread-example-abc"),
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Printf("嵌入维度: %d\n", len(embedding.Data[0].Embedding))
+    fmt.Printf("前 5 个值: %v\n", embedding.Data[0].Embedding[:5])
+}
+```
+
+**多个文本：**
+```python
+response = client.embeddings.create(
+    input=["你好，世界！", "你好吗？"],
+    model="text-embedding-3-small"
+)
+
+for i, data in enumerate(response.data):
+    print(f"文本 {i}: {data.embedding[:3]}...")
+```
+
+## 模型 API
+
+AxonHub 提供增强的 `/v1/models` 端点，可列出可用模型并选择性地显示扩展元数据。
+
+### 支持的端点
+
+**端点：**
+- `GET /v1/models` - 列出可用模型
+
+### 查询参数
+
+| 参数 | 类型 | 必填 | 描述 |
+|-----------|------|----------|-------------|
+| `include` | 字符串 | ❌ | 要包含的字段列表，以逗号分隔，或使用 "all" 包含所有扩展字段 |
+
+### 可用字段
+
+| 字段 | 类型 | 描述 |
+|-------|------|-------------|
+| `name` | 字符串 | 模型的显示名称 |
+| `description` | 字符串 | 模型描述 |
+| `context_length` | 整数 | 最大上下文长度（以令牌计） |
+| `max_output_tokens` | 整数 | 最大输出令牌数 |
+| `modalities` | 对象 | 模型支持的输入输出类型（input, output） |
+| `capabilities` | 对象 | 模型能力（vision, tool_call, reasoning） |
+| `pricing` | 对象 | 定价信息（input, output, cache_read, cache_write） |
+| `icon` | 字符串 | 模型图标 URL |
+| `type` | 字符串 | 模型类型（chat, embedding, image, rerank, moderation, tts, stt） |
+
+### 响应格式（基础 - 默认）
+
+调用时不带 `include` 参数，端点仅返回基础字段：
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-4",
+      "object": "model",
+      "created": 1686935002,
+      "owned_by": "openai"
+    }
+  ]
+}
+```
+
+**字段：**
+- `id` - 模型标识符
+- `object` - 始终为 "model"
+- `created` - 模型创建的 Unix 时间戳
+- `owned_by` - 拥有该模型的组织
+
+### 响应格式（扩展）
+
+使用 `?include=all` 或选择字段时，响应包含扩展元数据：
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-4",
+      "object": "model",
+      "created": 1686935002,
+      "owned_by": "openai",
+      "name": "GPT-4",
+      "description": "GPT-4 model with advanced reasoning capabilities",
+      "context_length": 8192,
+      "max_output_tokens": 4096,
+      "modalities": {
+        "input": ["text", "image"],
+        "output": ["text"]
+      },
+      "capabilities": {
+        "vision": false,
+        "tool_call": true,
+        "reasoning": true
+      },
+      "pricing": {
+        "input": 30.0,
+        "output": 60.0,
+        "cache_read": 15.0,
+        "cache_write": 30.0,
+        "unit": "per_1m_tokens",
+        "currency": "USD"
+      },
+      "icon": "https://example.com/icon.png",
+      "type": "chat"
+    }
+  ]
+}
+```
+
+**扩展字段：**
+- `name` - 人类可读的模型名称
+- `description` - 详细的模型描述
+- `context_length` - 上下文窗口的最大令牌数
+- `max_output_tokens` - 响应中的最大令牌数
+- `modalities` - 模型支持的输入输出模态类型：
+  - `input` - 支持的输入类型数组（如 `text`、`image`、`audio`、`video`、`pdf`）
+  - `output` - 支持的输出类型数组（如 `text`）
+- `capabilities` - 包含布尔标志的对象：
+  - `vision` - 支持图像输入
+  - `tool_call` - 支持函数调用
+  - `reasoning` - 支持高级推理
+- `pricing` - 包含定价详情的对象：
+  - `input` - 每 100 万令牌的输入价格
+  - `output` - 每 100 万令牌的输出价格
+  - `cache_read` - 每 100 万令牌的缓存读取价格
+  - `cache_write` - 每 100 万令牌的缓存写入价格
+  - `unit` - 始终为 "per_1m_tokens"
+  - `currency` - 始终为 "USD"
+- `icon` - 模型图标图像的 URL
+- `type` - 模型类别（chat, embedding, image, rerank, moderation, tts, stt）
+
+### 示例
+
+**基础请求（默认）：**
+```bash
+curl -s http://localhost:8090/v1/models \
+  -H "Authorization: Bearer your-api-key" | jq
+```
+
+**包含所有扩展字段：**
+```bash
+curl -s "http://localhost:8090/v1/models?include=all" \
+  -H "Authorization: Bearer your-api-key" | jq
+```
+
+**仅选择字段：**
+```bash
+curl -s "http://localhost:8090/v1/models?include=name,pricing" \
+  -H "Authorization: Bearer your-api-key" | jq
+```
+
+**OpenAI SDK（Python）：**
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="your-axonhub-api-key",
+    base_url="http://localhost:8090/v1"
+)
+
+# 获取带扩展元数据的模型
+models = client.models.list()
+for model in models.data:
+    print(f"Model: {model.id}")
+    # 如果可用，访问扩展字段
+    if hasattr(model, 'name'):
+        print(f"  Name: {model.name}")
+    if hasattr(model, 'pricing'):
+        print(f"  Input price: ${model.pricing.input}/1M tokens")
+```
+
+### 错误响应
+
+**401 未授权 - API 密钥无效：**
+```json
+{
+  "error": {
+    "message": "Invalid API key",
+    "type": "invalid_request_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+**500 内部服务器错误：**
+```json
+{
+  "error": {
+    "message": "Internal server error",
+    "type": "internal_error",
+    "code": "internal_error"
+  }
+}
+```
+
+### 字段可用性说明
+
+> **注意：** 扩展字段仅在模型配置了 ModelCard 数据时才会填充。没有 ModelCard 数据的模型将为扩展字段返回 `null`。
+
+## 认证
+
+OpenAI API 格式使用 Bearer 令牌认证：
+
+- **头部**：`Authorization: Bearer <your-api-key>`
+
+API 密钥通过 AxonHub 的 API 密钥管理系统进行管理。
+
+## 流式支持
+
+OpenAI API 格式支持流式响应：
+
+```go
+// OpenAI SDK 流式传输
+completion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+    Messages: []openai.ChatCompletionMessageParamUnion{
+        openai.UserMessage("写一篇关于人工智能的短篇故事"),
+    },
+    Model:  openai.ChatModel("claude-3-5-sonnet"),
+    Stream: openai.Bool(true),
+})
+if err != nil {
+    panic(err)
+}
+
+// 遍历流式数据块
+for completion.Next() {
+    chunk := completion.Current()
+    if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+        fmt.Print(chunk.Choices[0].Delta.Content)
+    }
+}
+
+if err := completion.Err(); err != nil {
+    panic(err)
+}
+```
+
+## 错误处理
+
+OpenAI 格式错误响应：
+
+```json
+{
+  "error": {
+    "message": "Invalid API key",
+    "type": "invalid_request_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+## 工具支持
+
+AxonHub 通过 OpenAI API 格式支持**函数工具**（自定义函数调用）。但是，**不支持**各提供商特有的工具：
+
+| 工具类型 | 支持状态 | 说明 |
+| -------- | -------- | ---- |
+| **函数工具（Function Tools）** | ✅ 支持 | 自定义函数定义可跨所有提供商使用 |
+| **网页搜索（Web Search）** | ❌ 不支持 | 提供商特有功能（OpenAI、Anthropic 等） |
+| **代码解释器（Code Interpreter）** | ❌ 不支持 | 提供商特有功能（OpenAI、Anthropic 等） |
+| **文件搜索（File Search）** | ❌ 不支持 | 提供商特有功能 |
+| **计算机使用（Computer Use）** | ❌ 不支持 | Anthropic 特有功能 |
+
+> **注意**：仅支持可跨提供商转换的通用函数工具。网页搜索、代码解释器、计算机使用等提供商特有工具需要直接访问提供商的基础设施，无法通过 AxonHub 代理。
+
+## 最佳实践
+
+1. **使用追踪头部**：包含 `AH-Trace-Id` 和 `AH-Thread-Id` 头部以获得更好的可观测性
+2. **模型选择**：在请求中明确指定目标模型
+3. **错误处理**：为 API 响应实现适当的错误处理
+4. **流式处理**：对于长响应使用流式处理以获得更好的用户体验
+5. **使用函数工具**：进行工具调用时，请使用通用函数工具而非提供商特有工具
+
+## 迁移指南
+
+### 从 OpenAI 迁移到 AxonHub
+```go
+// 之前：直接 OpenAI
+client := openai.NewClient(
+    option.WithAPIKey("openai-key"),
+)
+
+// 之后：使用 OpenAI API 的 AxonHub
+client := openai.NewClient(
+    option.WithAPIKey("axonhub-api-key"),
+    option.WithBaseURL("http://localhost:8090/v1"),
+)
+// 您的现有代码继续工作！
+```

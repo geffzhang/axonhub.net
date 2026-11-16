@@ -1,0 +1,93 @@
+# AxonHub.NET local compose stack
+#
+#   docker compose up --build
+#
+# The API image is built from this repository, including the admin frontend.
+# The stack binds to 127.0.0.1:8090 by default. Override DB_PASSWORD for
+# anything beyond a local machine; the fallback is for local development only.
+#
+# Configuration:
+#   - docker-compose.yml sets the PostgreSQL connection and Kestrel port via
+#     environment variables (highest precedence).
+#   - ./config.example.yml is mounted as /app/config.yml for the server, CORS,
+#     trace, trace headers and GC settings. Copy it to config.yml and update the
+#     volume if you want a local file separate from the example.
+#   - The .NET port reads config.yml through YamlConfigurationSource; see the
+#     comments in config.example.yml for supported reference sections.
+
+name: axonhub
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
+    environment:
+      POSTGRES_DB: axonhub
+      POSTGRES_USER: axonhub
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-axonhub-local}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - axonhub-backend
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 512m
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  axonhub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: axonhub.net:local
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=axonhub;Username=axonhub;Password=${DB_PASSWORD:-axonhub-local}"
+      ASPNETCORE_HTTP_PORTS: "8090"
+      ASPNETCORE_ENVIRONMENT: "Production"
+    ports:
+      - "${AXONHUB_BIND_ADDRESS:-127.0.0.1}:${AXONHUB_HOST_PORT:-8090}:8090"
+    volumes:
+      - ./config.example.yml:/app/config.yml:ro
+    networks:
+      - axonhub-backend
+      - axonhub-egress
+    depends_on:
+      postgres:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # The runtime image intentionally stays small (no curl/wget), so the
+    # database healthcheck gates startup and the app is checked by /health.
+
+volumes:
+  postgres_data:
+
+networks:
+  # Database traffic stays internal; the app also joins the bridge network
+  # so it can reach the configured upstream AI providers.
+  axonhub-backend:
+    internal: true
+  axonhub-egress:
+    driver: bridge

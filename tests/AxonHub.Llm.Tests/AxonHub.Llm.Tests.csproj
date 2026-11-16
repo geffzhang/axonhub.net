@@ -2,11 +2,20 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- 测试方法名刻意与参照实现（pipeline_retry_test.go / empty_response_test.go）
+         的 Go 测试名逐条对应，下划线是该映射的一部分。 -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\AxonHub.Llm\AxonHub.Llm.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="testdata/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

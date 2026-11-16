@@ -1,0 +1,6 @@
+{
+  "case": "comment-lines",
+  "exit_code": 0,
+  "stdout": "{\n  \"events\": [\n    {\n      \"type\": \"\",\n      \"data\": \"{\\\"id\\\":\\\"c6\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"delta\\\":{\\\"content\\\":\\\"a\\\"},\\\"finish_reason\\\":null,\\\"logprobs\\\":null}],\\\"object\\\":\\\"\\\",\\\"created\\\":0,\\\"model\\\":\\\"\\\",\\\"usage\\\":null}\"\n    },\n    {\n      \"type\": \"\",\n      \"data\": \"[DONE]\"\n    }\n  ]\n}\n",
+  "stderr": ""
+}

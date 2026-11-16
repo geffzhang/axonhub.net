@@ -4,8 +4,43 @@
     <AssemblyName>AxonHub.Api</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="HotChocolate.AspNetCore" />
+    <PackageReference Include="OpenTelemetry" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <ProjectReference Include="..\AxonHub.Grains\AxonHub.Grains.csproj" />
     <ProjectReference Include="..\AxonHub.Llm\AxonHub.Llm.csproj" />
+    <ProjectReference Include="..\AxonHub.Persistence\AxonHub.Persistence.csproj" />
     <PackageReference Include="Microsoft.Orleans.Server" />
+    <!-- UseInMemoryReminderService (§149): reminder storage is not part of Server. -->
+    <PackageReference Include="Microsoft.Orleans.Reminders" />
+    <!-- Opt-in multi-silo cluster: shared PostgreSQL membership + reminders. -->
+    <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AdoNet" />
+    <PackageReference Include="ZstdSharp.Port" />
+    <PackageReference Include="BCrypt.Net-Next" />
+    <PackageReference Include="AWSSDK.S3" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+    <PackageReference Include="Microsoft.ML.Tokenizers.Data.O200kBase" />
+    <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Go 的 override 测试与被测代码同包（同 package 可访问未导出标识符）；
+         GoTextTemplate / OverrideJson / ChannelOverrideApplier 保持 internal，
+         只对测试程序集开放。 -->
+    <InternalsVisibleTo Include="AxonHub.Api.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 内置目录快照与 internal/server/biz/catalogdata/ 逐字节一致（go:embed）。 -->
+    <EmbeddedResource Include="Catalog\Data\*.json" />
+    <!-- 默认 favicon 与 internal/server/assets/favicon.ico 逐字节一致（go:embed）。 -->
+    <EmbeddedResource Include="Assets\favicon.ico"
+                      LogicalName="AxonHub.Api.Assets.favicon.ico" />
+    <!-- gqlgen v0.17.86 playground/page.tmpl 对两个 endpoint 的渲染结果，
+         逐字节复刻（GraphiQL 4.1.2 / React 18.2.0）。 -->
+    <EmbeddedResource Include="Static\Playground\admin.html"
+                      LogicalName="AxonHub.Api.Static.Playground.admin.html" />
+    <EmbeddedResource Include="Static\Playground\openapi.html"
+                      LogicalName="AxonHub.Api.Static.Playground.openapi.html" />
   </ItemGroup>
 </Project>

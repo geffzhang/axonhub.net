@@ -1,0 +1,10 @@
+{
+  "status_code": 200,
+  "headers": {
+    "Content-Type": [
+      "text/event-stream"
+    ]
+  },
+  "body": "",
+  "sse": "event: error\ndata: {\"error\":{\"code\":\"1211\",\"message\":\"model not found\"},\"request_id\":\"req_1\"}\n\n"
+}

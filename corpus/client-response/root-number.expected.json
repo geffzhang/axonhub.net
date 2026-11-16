@@ -1,0 +1,6 @@
+{
+  "case": "root-number",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"failed to unmarshal chat completion response: json: cannot unmarshal number into Go value of type openai.Response\"\n}\n",
+  "stderr": ""
+}

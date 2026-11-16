@@ -1,0 +1,2007 @@
+using HotChocolate;
+using HotChocolate.Resolvers;
+using HotChocolate.Types;
+using Microsoft.Extensions.DependencyInjection;
+using AxonHub.Api.Catalog;
+using AxonHub.Api.Diagnostics;
+using AxonHub.Api.Management;
+using AxonHub.Api.Models;
+using AxonHub.Api.Orchestration;
+using AxonHub.Api.Scopes;
+using AxonHub.Api.Settings;
+using AxonHub.Persistence;
+
+namespace AxonHub.Api.GraphQL;
+
+/// <summary>
+/// The GraphQL <c>ScopeInfo</c> type (internal/server/gql/scopes.graphql:3-7).
+/// HotChocolate's default naming convention maps the properties to
+/// <c>scope</c>, <c>description</c> and <c>levels</c>.
+/// </summary>
+public sealed record ScopeInfo(
+    string Scope,
+    string Description,
+    IReadOnlyList<string> Levels);
+
+/// <summary>
+/// Port of queryResolver.AllScopes
+/// (internal/server/gql/scopes.resolvers.go:15-42).
+/// </summary>
+/// <remarks>
+/// The SDL is <c>allScopes(level: String): [ScopeInfo!]!</c>
+/// (internal/server/gql/scopes.graphql:10). The resolver passes a non-nil level
+/// through as-is (no validation), so an unknown value yields an empty list.
+/// </remarks>
+public sealed class AdminQuery
+{
+    /// <summary>Port of queryResolver.AllScopes.</summary>
+    public IReadOnlyList<ScopeInfo> AllScopes(string? level)
+        => [.. ScopeCatalog.AllScopes(level).Select(static scope => new ScopeInfo(
+            scope.Slug,
+            scope.Description,
+            scope.Levels))];
+
+    /// <summary>Port of queryResolver.SystemStatus (system.resolvers.go:479-488).</summary>
+    [GraphQLName("systemStatus")]
+    public async Task<SystemStatusType> SystemStatusAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return SystemSettingsMapping.ToGraphQL(
+                await settings.IsInitializedAsync(cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to check initialization status: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>Port of queryResolver.RetryPolicy (system.resolvers.go:519-522).</summary>
+    [GraphQLName("retryPolicy")]
+    public async Task<RetryPolicyType> RetryPolicyAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetRetryPolicyAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Port of queryResolver.SystemModelSettings (system.resolvers.go:529-537).</summary>
+    [GraphQLName("systemModelSettings")]
+    public async Task<SystemModelSettingsType> SystemModelSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return SystemSettingsMapping.ToGraphQL(
+                await settings.GetModelSettingsAsync(cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get system model settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>Port of queryResolver.SecuritySettings (system.resolvers.go:639-642).</summary>
+    [GraphQLName("securitySettings")]
+    public async Task<SecuritySettingsType> SecuritySettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetSecuritySettingsAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Port of queryResolver.StoragePolicy (system.resolvers.go:590-593).</summary>
+    [GraphQLName("storagePolicy")]
+    public async Task<StoragePolicyType> StoragePolicyAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetStoragePolicyAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.DefaultDataStorageID (system.resolvers.go:540-554):
+    /// the service error is wrapped a second time and id 0 renders as null.
+    /// </summary>
+    [GraphQLName("defaultDataStorageID")]
+    [GraphQLType(typeof(IdType))]
+    public async Task<string?> DefaultDataStorageIdAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        long id;
+        try
+        {
+            id = await settings.GetDefaultDataStorageIdAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // fmt.Errorf("failed to get default data storage ID: %w", err)
+            throw new InvalidOperationException(
+                "failed to get default data storage ID: " + ex.Message,
+                ex);
+        }
+
+        return id == 0 ? null : new GidValue("DataStorage", id).ToString();
+    }
+
+    /// <summary>
+    /// Port of queryResolver.BrandSettings (system.resolvers.go:491-512): three
+    /// sequential reads, each wrapped with its own field prefix.
+    /// </summary>
+    [GraphQLName("brandSettings")]
+    public async Task<BrandSettingsType> BrandSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        string brandName;
+        try
+        {
+            brandName = await settings.GetBrandNameAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get brand name: " + ex.Message,
+                ex);
+        }
+
+        string brandLogo;
+        try
+        {
+            brandLogo = await settings.GetBrandLogoAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get brand logo: " + ex.Message,
+                ex);
+        }
+
+        string title;
+        try
+        {
+            title = await settings.GetTitleAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("failed to get title: " + ex.Message, ex);
+        }
+
+        return SystemSettingsMapping.ToGraphQL(new BrandSettings
+        {
+            BrandName = brandName,
+            BrandLogo = brandLogo,
+            Title = title,
+        });
+    }
+
+    /// <summary>
+    /// Port of queryResolver.SystemChannelSettings (system.resolvers.go:609-617).
+    /// </summary>
+    [GraphQLName("systemChannelSettings")]
+    public async Task<SystemChannelSettingsType> SystemChannelSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return SystemSettingsMapping.ToGraphQL(
+                await settings.GetChannelSettingsAsync(cancellationToken)
+                    .ConfigureAwait(false));
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get channel setting: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.SystemGeneralSettings (system.resolvers.go:619-622):
+    /// the resolver returns the service result without another wrapper.
+    /// </summary>
+    [GraphQLName("systemGeneralSettings")]
+    public async Task<SystemGeneralSettingsType> SystemGeneralSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetGeneralSettingsAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.UserAgentPassThroughSettings
+    /// (system.resolvers.go:654-664).
+    /// </summary>
+    [GraphQLName("userAgentPassThroughSettings")]
+    public async Task<UserAgentPassThroughSettingsType> UserAgentPassThroughSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return new UserAgentPassThroughSettingsType
+            {
+                Enabled = await settings.GetUserAgentPassThroughAsync(cancellationToken)
+                    .ConfigureAwait(false),
+            };
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get user-agent pass-through settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.PassThroughSettings (system.resolvers.go:666-676).
+    /// </summary>
+    [GraphQLName("passThroughSettings")]
+    public async Task<PassThroughSettingsType> PassThroughSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return new PassThroughSettingsType
+            {
+                Enabled = await settings.GetPassThroughAsync(cancellationToken)
+                    .ConfigureAwait(false),
+            };
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get pass-through settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.UsageCostInjectionSettings
+    /// (system.resolvers.go:678-688).
+    /// </summary>
+    [GraphQLName("usageCostInjectionSettings")]
+    public async Task<UsageCostInjectionSettingsType> UsageCostInjectionSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return new UsageCostInjectionSettingsType
+            {
+                Enabled = await settings.GetInjectUsageCostEnabledAsync(cancellationToken)
+                    .ConfigureAwait(false),
+            };
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get usage cost injection settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.VideoStorageSettings (system.resolvers.go:624-627):
+    /// the resolver returns the service result without another wrapper.
+    /// </summary>
+    [GraphQLName("videoStorageSettings")]
+    public async Task<VideoStorageSettingsType> VideoStorageSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetVideoStorageSettingsAsync(cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.ProxyPresets (system.resolvers.go:644-652): the
+    /// service error is wrapped a second time.
+    /// </summary>
+    [GraphQLName("proxyPresets")]
+    public async Task<IReadOnlyList<ProxyPresetType>> ProxyPresetsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ProxyPreset> presets;
+        try
+        {
+            presets = await settings.GetProxyPresetsAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get proxy presets: " + ex.Message,
+                ex);
+        }
+
+        return presets.Select(preset => SystemSettingsMapping.ToGraphQL(preset)).ToList();
+    }
+
+    /// <summary>
+    /// Port of queryResolver.OnboardingInfo (system.resolvers.go:557-590): a
+    /// missing record renders as null and the service error is wrapped again.
+    /// </summary>
+    [GraphQLName("onboardingInfo")]
+    public async Task<OnboardingInfoType?> OnboardingInfoAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+    {
+        OnboardingRecord? info;
+        try
+        {
+            info = await settings.GetOnboardingInfoAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get onboarding info: " + ex.Message,
+                ex);
+        }
+
+        return info is null ? null : SystemSettingsMapping.ToGraphQL(info);
+    }
+
+    /// <summary>
+    /// Port of queryResolver.WebhookNotifierConfig (system.resolvers.go:524-527):
+    /// the resolver returns the service result without another wrapper.
+    /// </summary>
+    [GraphQLName("webhookNotifierConfig")]
+    public async Task<WebhookNotifierConfigType> WebhookNotifierConfigAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => WebhookNotifierMapping.ToGraphQL(
+            await settings.GetWebhookNotifierConfigAsync(cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.SystemVersion (system.resolvers.go:589-592):
+    /// build.GetBuildInfo with no wrapper.
+    /// </summary>
+    [GraphQLName("systemVersion")]
+    public SystemVersionType SystemVersion([Service] ISystemVersionService version)
+        => SystemVersionMapping.ToGraphQL(version.GetBuildInfo());
+
+    /// <summary>
+    /// Port of queryResolver.CheckForUpdate (system.resolvers.go:594-606):
+    /// includeBeta defaults to false and the service error is wrapped.
+    /// </summary>
+    [GraphQLName("checkForUpdate")]
+    public async Task<VersionCheckType> CheckForUpdateAsync(
+        [Service] ISystemVersionService version,
+        CancellationToken cancellationToken,
+        bool includeBeta = false)
+    {
+        VersionCheckResult result;
+        try
+        {
+            result = await version.CheckForUpdateAsync(includeBeta, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to check for update: " + ex.Message,
+                ex);
+        }
+
+        return SystemVersionMapping.ToGraphQL(result);
+    }
+
+    /// <summary>
+    /// Port of queryResolver.QuotaRoutingSettings (system.resolvers.go:705-708):
+    /// the strict read, so a malformed or invalid stored mode is a field error.
+    /// </summary>
+    [GraphQLName("quotaRoutingSettings")]
+    public async Task<QuotaRoutingSettingsType> QuotaRoutingSettingsAsync(
+        [Service] SystemQuotaRoutingSettingsService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.ProviderQuotaCollectionSettings
+    /// (system.resolvers.go:710-713): the strict read with its
+    /// "failed to get provider quota collection settings" wrappers.
+    /// </summary>
+    [GraphQLName("providerQuotaCollectionSettings")]
+    public async Task<ProviderQuotaCollectionSettingsType> ProviderQuotaCollectionSettingsAsync(
+        [Service] IProviderQuotaCollectionSettingsService settings,
+        CancellationToken cancellationToken)
+        => SystemSettingsMapping.ToGraphQL(
+            await settings.GetAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.ClaudeCodeSafeguardsSettings
+    /// (system.resolvers.go:804-807): the resolver delegates straight to the
+    /// service, which requires read_settings via authz.RequireScope.
+    /// </summary>
+    [GraphQLName("claudeCodeSafeguardsSettings")]
+    public async Task<ClaudeCodeSafeguardsSettingsType> ClaudeCodeSafeguardsSettingsAsync(
+        [Service] IClaudeCodeSafeguardsSettingsService settings,
+        CancellationToken cancellationToken)
+        => ClaudeCodeSafeguardsMapping.ToGraphQL(
+            await settings.GetAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.CodexCompatibilitySettings
+    /// (system.resolvers.go:470-473): the resolver delegates straight to the
+    /// service, which requires read_settings via authz.RequireScope.
+    /// </summary>
+    [GraphQLName("codexCompatibilitySettings")]
+    public async Task<CodexCompatibilitySettingsType> CodexCompatibilitySettingsAsync(
+        [Service] ICodexCompatibilitySettingsService settings,
+        CancellationToken cancellationToken)
+        => CodexCompatibilityMapping.ToGraphQL(
+            await settings.GetAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.CodexCompatibilityEnabled
+    /// (system.resolvers.go:475-478): the system-bypass read, so no principal
+    /// scope is consulted.
+    /// </summary>
+    [GraphQLName("codexCompatibilityEnabled")]
+    public Task<bool> CodexCompatibilityEnabledAsync(
+        [Service] ICodexCompatibilitySettingsService settings,
+        CancellationToken cancellationToken)
+        => settings.IsEnabledAsync(cancellationToken);
+
+    /// <summary>
+    /// Port of queryResolver.CodexCatalogChannels
+    /// (system.resolvers.go:480-497): read_settings then read_channels, then
+    /// every live channel whose type is <c>codex</c>, archived included.
+    /// </summary>
+    [GraphQLName("codexCatalogChannels")]
+    public async Task<IReadOnlyList<CodexCatalogChannelType>> CodexCatalogChannelsAsync(
+        [Service] IChannelAdminStore channels,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        await scope.RequireScopeAsync(AuthorizationScope.ReadSettings, cancellationToken)
+            .ConfigureAwait(false);
+        await scope.RequireScopeAsync(AuthorizationScope.ReadChannels, cancellationToken)
+            .ConfigureAwait(false);
+
+        var rows = await channels
+            .ListAllAsync(
+                new ChannelListQuery
+                {
+                    Where = new ChannelListFilter { Type = "codex" },
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var result = new List<CodexCatalogChannelType>(rows.Count);
+        foreach (var row in rows)
+        {
+            result.Add(CodexCompatibilityMapping.ToGraphQL(row));
+        }
+
+        return result;
+    }
+
+    /// <summary>Port of queryResolver.PreviewGcCleanup (system.resolvers.go:499-515).</summary>
+    [GraphQLName("previewGcCleanup")]
+    public async Task<IReadOnlyList<GcCleanupPreviewItemType>> PreviewGcCleanupAsync(
+        TriggerGcCleanupInput input,
+        [Service] IGcCleanupService gcCleanup,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.ReadSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires read:settings scope");
+        }
+
+        var items = await gcCleanup.PreviewCleanupAsync(
+                SystemSettingsMapping.ToDomain(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        // The reference returns the worker's error untouched.
+        return [.. items.Select(SystemSettingsMapping.ToGraphQL)];
+    }
+
+    /// <summary>
+    /// Port of queryResolver.ProvidersCatalog (system.resolvers.go:442-462).
+    /// The guard is <c>scopes.UserHasScope(read_channels)</c>; <c>filtered</c>
+    /// defaults to true and a filtered read applies the developer allow-list
+    /// plus the bundled extra models, exactly like the reference.
+    /// </summary>
+    [GraphQLName("providersCatalog")]
+    public async Task<ProvidersCatalogType> ProvidersCatalogAsync(
+        [Service] IServiceProvider services,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken,
+        bool? filtered = true)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.ReadChannels,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires read_channels scope");
+        }
+
+        var catalogService = services.GetService<ICatalogService>();
+        if (catalogService is null)
+        {
+            throw new InvalidOperationException("catalog service is not configured");
+        }
+
+        CatalogSnapshot snapshot;
+        try
+        {
+            snapshot = await catalogService
+                .SnapshotAsync(filtered ?? true, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to load providers catalog: " + ex.Message,
+                ex);
+        }
+
+        return CatalogMapping.ToGraphQL(snapshot);
+    }
+
+    /// <summary>
+    /// Port of queryResolver.CatalogSettings (system.resolvers.go:465-476):
+    /// the strict read, so an unreadable stored value surfaces as a field error
+    /// under the "failed to get catalog settings" prefix.
+    /// </summary>
+    [GraphQLName("catalogSettings")]
+    public async Task<CatalogSettingsType> CatalogSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        [Service] AuthorizationScope scope,
+        CancellationToken cancellationToken)
+    {
+        if (!await scope.HasUserScopeAsync(
+                AuthorizationScope.ReadSettings,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                "permission denied: requires read_settings scope");
+        }
+
+        try
+        {
+            return CatalogMapping.ToGraphQL(
+                await settings.GetCatalogSettingsAsync(cancellationToken)
+                    .ConfigureAwait(false));
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "failed to get catalog settings: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Port of queryResolver.GetCacheDiagnostics (system.resolvers.go:690-726).
+    /// Owner-only; the reference returns <c>ErrNotOwner</c> before touching the
+    /// input. <c>input</c> is nullable, and a missing one means the default
+    /// CHANNEL_CACHE target.
+    /// </summary>
+    [GraphQLName("getCacheDiagnostics")]
+    public async Task<GetCacheDiagnosticsPayloadType> GetCacheDiagnosticsAsync(
+        GetCacheDiagnosticsInput? input,
+        [Service] IManagementIdentity identity,
+        [Service] CacheDiagnosticsService diagnostics,
+        CancellationToken cancellationToken)
+    {
+        var user = await identity.GetCurrentUserAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null || !user.IsOwner)
+        {
+            throw new InvalidOperationException("permission denied: owner access required");
+        }
+
+        var payload = await diagnostics
+            .GetCacheDiagnosticsAsync(input?.Targets, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new GetCacheDiagnosticsPayloadType
+        {
+            FileName = payload.FileName,
+            Content = payload.Content,
+            Targets = payload.Targets,
+        };
+    }
+
+    /// <summary>Port of queryResolver.AutoBackupSettings (backup.resolvers.go:130-132).</summary>
+    [GraphQLName("autoBackupSettings")]
+    public async Task<AutoBackupSettingsType> AutoBackupSettingsAsync(
+        [Service] ISystemSettingsAdminService settings,
+        CancellationToken cancellationToken)
+        => BackupMapping.ToGraphQL(
+            await settings.GetAutoBackupSettingsAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Port of queryResolver.Users (ent.resolvers.go:579-592).</summary>
+    [GraphQLName("users")]
+    public async Task<UserConnectionType> UsersAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        UserOrder? orderBy,
+        UserWhereInput? where,
+        [Service] UserManagementService users,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ManagementMapping.ToUserSortField(orderBy);
+        var page = await users.ListAsync(
+                new UserListQuery
+                {
+                    Where = ManagementMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ManagementMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Roles (ent.resolvers.go:503-516).</summary>
+    [GraphQLName("roles")]
+    public async Task<RoleConnectionType> RolesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RoleOrder? orderBy,
+        RoleWhereInput? where,
+        [Service] RoleManagementService roles,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ManagementMapping.ToRoleSortField(orderBy);
+        var page = await roles.ListAsync(
+                new RoleListQuery
+                {
+                    Where = ManagementMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ManagementMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ManagementMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Projects (ent.resolvers.go:439-452).</summary>
+    [GraphQLName("projects")]
+    public async Task<ProjectConnectionType> ProjectsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ProjectOrder? orderBy,
+        ProjectWhereInput? where,
+        [Service] ProjectManagementService projects,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ProjectMapping.ToSortField(orderBy);
+        var page = await projects.ListAsync(
+                new ProjectListQuery
+                {
+                    Where = ProjectMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ProjectMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ProjectMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Systems (ent.resolvers.go:519-528).</summary>
+    /// <remarks>
+    /// Unlike users/roles/projects there is no CREATED_AT rewrite; a missing
+    /// orderBy is ent's default id order. The System privacy policy (owner or
+    /// read_settings) runs before the query, and a denied caller surfaces as
+    /// "permission denied" with FORBIDDEN through the error filter.
+    /// </remarks>
+    [GraphQLName("systems")]
+    public async Task<SystemConnectionType> SystemsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        SystemOrder? orderBy,
+        SystemWhereInput? where,
+        [Service] ISystemStore systems,
+        [Service] SystemPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        await privacy.EvaluateSystemQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        var sortField = SystemAdminMapping.ToSortField(orderBy);
+        var page = await systems.ListAsync(
+                new SystemListQuery
+                {
+                    Where = SystemAdminMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = SystemAdminMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return SystemAdminMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.OidcIdentities (ent.resolvers.go:427-436).</summary>
+    /// <remarks>
+    /// The OIDCIdentity policy allows owners and read_users callers to see
+    /// every row; any other user only sees their own identities through the
+    /// UserOwnedQueryRule predicate, which is ANDed with the supplied where.
+    /// </remarks>
+    [GraphQLName("oidcIdentities")]
+    public async Task<OidcIdentityConnectionType> OidcIdentitiesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        OidcIdentityOrder? orderBy,
+        OidcIdentityWhereInput? where,
+        [Service] IOidcIdentityAdminStore identities,
+        [Service] SystemPrivacy privacy,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var ownerFilter = await privacy
+            .EvaluateOidcIdentityQueryAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var filter = SystemAdminMapping.ToFilter(where);
+        if (ownerFilter is not null)
+        {
+            filter = filter is null
+                ? new OidcIdentityListFilter { UserId = ownerFilter }
+                : new OidcIdentityListFilter
+                {
+                    And =
+                    [
+                        filter,
+                        new OidcIdentityListFilter { UserId = ownerFilter },
+                    ],
+                };
+        }
+
+        var sortField = SystemAdminMapping.ToSortField(orderBy);
+        var page = await identities.ListAsync(
+                new OidcIdentityListQuery
+                {
+                    Where = filter,
+                    SortField = sortField,
+                    Direction = SystemAdminMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return SystemAdminMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.APIKeys (ent.resolvers.go:340-354).</summary>
+    [GraphQLName("apiKeys")]
+    public async Task<ApiKeyConnectionType> ApiKeysAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ApiKeyOrder? orderBy,
+        ApiKeyWhereInput? where,
+        [Service] ApiKeyManagementService apiKeys,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ApiKeyMapping.ToSortField(orderBy);
+        var page = await apiKeys.ListAsync(
+                new ApiKeyListQuery
+                {
+                    Where = ApiKeyMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ApiKeyMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ApiKeyMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>
+    /// Port of queryResolver.APIKeyProfileTemplates (ent.resolvers.go:355-368).
+    /// </summary>
+    /// <remarks>
+    /// The reference validates pagination and rewrites a CREATED_AT order to
+    /// ent.DefaultAPIKeyProfileTemplateOrder's field (id) before paginating; the
+    /// list runs through the template schema's query policy.
+    /// </remarks>
+    [GraphQLName("apiKeyProfileTemplates")]
+    public async Task<ApiKeyProfileTemplateConnectionType> ApiKeyProfileTemplatesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ApiKeyProfileTemplateOrder? orderBy,
+        ApiKeyProfileTemplateWhereInput? where,
+        [Service] ApiKeyProfileTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ApiKeyProfileTemplateMapping.ToSortField(orderBy);
+        var page = await templates.ListAsync(
+                new ApiKeyProfileTemplateListQuery
+                {
+                    Where = ApiKeyProfileTemplateMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ApiKeyProfileTemplateMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ApiKeyProfileTemplateMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.APIKeyQuotaUsages (axonhub.resolvers.go:952-981).</summary>
+    /// <remarks>
+    /// The reference loads the key through <c>client.APIKey.Get</c> (privacy
+    /// applies, a missing or filtered row is <c>ent: api_key not found</c>) and
+    /// then asks the quota service for one entry per quota-carrying profile;
+    /// both steps prefix their failures. The reference decodes the profiles
+    /// column during the ent scan; the port decodes it in the quota service, so
+    /// a corrupt column surfaces under the second prefix and with System.Text.Json
+    /// text instead of ent's scan error (C002 strategy).
+    /// </remarks>
+    [GraphQLName("apiKeyQuotaUsages")]
+    public async Task<IReadOnlyList<ApiKeyProfileQuotaUsageType>> ApiKeyQuotaUsagesAsync(
+        [GraphQLType(typeof(IdType))] string apiKeyId,
+        [Service] ApiKeyManagementService apiKeys,
+        [Service] IApiKeyProfileQuotaReader quotas,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(apiKeyId);
+
+        ApiKeyRecord apiKey;
+        try
+        {
+            apiKey = await apiKeys.GetNodeAsync(gid.Id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException("failed to get api key: " + ex.Message, ex);
+        }
+
+        IReadOnlyList<ProfileQuotaUsage> usages;
+        try
+        {
+            usages = await quotas.ProfileQuotaUsagesAsync(apiKey, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                "failed to get api key quota usage: " + ex.Message,
+                ex);
+        }
+
+        return [.. usages.Select(static usage => ApiKeyMapping.ToGraphQL(usage))];
+    }
+
+    /// <summary>
+    /// Port of queryResolver.Models (ent.resolvers.go:416-424).
+    /// </summary>
+    /// <remarks>
+    /// The reference resolver does not call validatePaginationArgs, but ent's
+    /// generated Paginate (gql_pagination.go:2817-2824) calls
+    /// validateFirstLast before paging, so the port does the latter only. A
+    /// CREATED_AT order is rewritten to the default (id) sort field.
+    /// </remarks>
+    [GraphQLName("models")]
+    public async Task<ModelConnectionType> ModelsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ModelOrder? orderBy,
+        ModelWhereInput? where,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ModelMapping.ToSortField(orderBy);
+        var page = await models.ListAsync(
+                new ModelListQuery
+                {
+                    Where = ModelMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ModelMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ModelMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Prompts (ent.resolvers.go:465-478).</summary>
+    /// <remarks>
+    /// The reference validates pagination and rewrites a CREATED_AT order to
+    /// ent.DefaultPromptOrder's field (id) before paginating; the list itself
+    /// runs through the Prompt schema's query policy (C188).
+    /// </remarks>
+    [GraphQLName("prompts")]
+    public async Task<PromptConnectionType> PromptsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        PromptOrder? orderBy,
+        PromptWhereInput? where,
+        [Service] PromptManagementService prompts,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = PromptMapping.ToSortField(orderBy);
+        var page = await prompts.ListAsync(
+                new PromptListQuery
+                {
+                    Where = PromptMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = PromptMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return PromptMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>
+    /// Port of queryResolver.PromptProtectionRules (ent.resolvers.go:471-484).
+    /// </summary>
+    /// <remarks>
+    /// The reference validates pagination and rewrites a CREATED_AT order to
+    /// ent.DefaultPromptProtectionRuleOrder's field (id) before paginating.
+    /// </remarks>
+    [GraphQLName("promptProtectionRules")]
+    public async Task<PromptProtectionRuleConnectionType> PromptProtectionRulesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        PromptProtectionRuleOrder? orderBy,
+        PromptProtectionRuleWhereInput? where,
+        [Service] PromptProtectionRuleManagementService rules,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = PromptProtectionRuleMapping.ToSortField(orderBy);
+        var page = await rules.ListAsync(
+                new PromptProtectionRuleListQuery
+                {
+                    Where = PromptProtectionRuleMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = PromptProtectionRuleMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return PromptProtectionRuleMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.DataStorages (ent.resolvers.go:400-412).</summary>
+    /// <remarks>
+    /// The reference validates pagination, then ent's generated Paginate
+    /// (gql_pagination.go:2503-2510) validates first/last exclusivity, and only
+    /// then rewrites a CREATED_AT order to ent.DefaultDataStorageOrder's field
+    /// (id) before paginating; the list runs through the DataStorage query
+    /// policy (C196).
+    /// </remarks>
+    [GraphQLName("dataStorages")]
+    public async Task<DataStorageConnectionType> DataStoragesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        DataStorageOrder? orderBy,
+        DataStorageWhereInput? where,
+        [Service] DataStorageManagementService storages,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = DataStorageMapping.ToSortField(orderBy);
+        var page = await storages.ListAsync(
+                new DataStorageListQuery
+                {
+                    Where = DataStorageMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = DataStorageMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return DataStorageMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.QueryModels (model.resolvers.go:160-227).</summary>
+    [GraphQLName("queryModels")]
+    public async Task<IReadOnlyList<ModelIdentityWithStatusType>> QueryModelsAsync(
+        QueryModelsInput input,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        var identities = await models.QueryModelsAsync(
+                ModelMapping.ToCommand(input),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. identities.Select(ModelMapping.ToGraphQL)];
+    }
+
+    /// <summary>
+    /// Port of queryResolver.QueryModelChannelConnections
+    /// (model.resolvers.go:229-231).
+    /// </summary>
+    [GraphQLName("queryModelChannelConnections")]
+    public async Task<IReadOnlyList<ModelChannelConnectionType>>
+        QueryModelChannelConnectionsAsync(
+            IReadOnlyList<ModelAssociationInput> associations,
+            [Service] ModelManagementService models,
+            CancellationToken cancellationToken)
+    {
+        var connections = await models.QueryModelChannelConnectionsAsync(
+                [.. associations.Select(static association =>
+                    (ModelAssociation?)SystemSettingsMapping.ToDomain(association))],
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. connections.Select(ModelMapping.ToGraphQL)];
+    }
+
+    /// <summary>
+    /// Port of queryResolver.QueryUnassociatedChannels
+    /// (model.resolvers.go:233-235).
+    /// </summary>
+    [GraphQLName("queryUnassociatedChannels")]
+    public async Task<IReadOnlyList<UnassociatedChannelType>> QueryUnassociatedChannelsAsync(
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+    {
+        var channels = await models.QueryUnassociatedChannelsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. channels.Select(ModelMapping.ToGraphQL)];
+    }
+
+    /// <summary>Port of queryResolver.FetchModels (model.resolvers.go:126-152).</summary>
+    [GraphQLName("fetchModels")]
+    public async Task<FetchModelsPayloadType> FetchModelsAsync(
+        FetchModelsInputType input,
+        [Service] ModelManagementService models,
+        CancellationToken cancellationToken)
+        => ModelMapping.ToGraphQL(
+            await models.FetchModelsAsync(
+                    ModelMapping.ToDomain(input),
+                    cancellationToken)
+                .ConfigureAwait(false));
+
+    /// <summary>
+    /// Port of queryResolver.ChannelOverrideTemplates (ent.resolvers.go:383-397).
+    /// </summary>
+    [GraphQLName("channelOverrideTemplates")]
+    public async Task<ChannelOverrideTemplateConnectionType> ChannelOverrideTemplatesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ChannelOverrideTemplateOrder? orderBy,
+        ChannelOverrideTemplateWhereInput? where,
+        [Service] ChannelOverrideTemplateService templates,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = ChannelOverrideTemplateMapping.ToSortField(orderBy);
+        var page = await templates.ListAsync(
+                new ChannelOverrideTemplateListQuery
+                {
+                    Where = ChannelOverrideTemplateMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = ChannelOverrideTemplateMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ChannelOverrideTemplateMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Channels (ent.resolvers.go:372-381).</summary>
+    [GraphQLName("channels")]
+    public Task<ChannelConnectionType> ChannelsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ChannelOrder? orderBy,
+        ChannelWhereInput? where,
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+    {
+        var sortField = ChannelMapping.ToSortField(orderBy);
+
+        return channels.ChannelsAsync(
+            new ChannelListQuery
+            {
+                Where = ChannelMapping.ToFilter(where),
+                SortField = sortField,
+                Direction = ChannelMapping.ToSortDirection(orderBy),
+                Ordered = orderBy is not null,
+                After = ManagementMapping.ToListCursor(after),
+                Before = ManagementMapping.ToListCursor(before),
+                First = first,
+                Last = last,
+            },
+            sortField,
+            cancellationToken);
+    }
+
+    /// <summary>Port of queryResolver.QueryChannels (axonhub.resolvers.go:977-983).</summary>
+    [GraphQLName("queryChannels")]
+    public Task<ChannelConnectionType> QueryChannelsAsync(
+        QueryChannelInput input,
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => channels.QueryChannelsAsync(input, cancellationToken);
+
+    /// <summary>
+    /// Port of queryResolver.ChannelProbeData (channel_probe.resolvers.go:23-26):
+    /// the resolver returns the service result without another wrapper, and the
+    /// input IDs go through GUID.UnmarshalGQL without a type check.
+    /// </summary>
+    [GraphQLName("channelProbeData")]
+    public async Task<IReadOnlyList<ChannelProbeDataType>> ChannelProbeDataAsync(
+        GetChannelProbeDataInput input,
+        [Service] ChannelProbeService channelProbes,
+        CancellationToken cancellationToken)
+    {
+        List<long> channelIds = new(input.ChannelIDs.Count);
+        foreach (var channelId in input.ChannelIDs)
+        {
+            channelIds.Add(GidValue.Parse(channelId).Id);
+        }
+
+        var data = await channelProbes
+            .BatchQueryChannelProbesAsync(channelIds, cancellationToken)
+            .ConfigureAwait(false);
+
+        List<ChannelProbeDataType> result = new(data.Count);
+        foreach (var item in data)
+        {
+            result.Add(ChannelProbeMapping.ToGraphQL(item));
+        }
+
+        return result;
+    }
+
+    /// <summary>Port of queryResolver.AllChannelSummarys.</summary>
+    [GraphQLName("allChannelSummarys")]
+    public Task<IReadOnlyList<ChannelType>> AllChannelSummarysAsync(
+        bool? includeArchived,
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => channels.AllChannelSummarysAsync(includeArchived == true, cancellationToken);
+
+    /// <summary>Port of queryResolver.AllChannelTags.</summary>
+    [GraphQLName("allChannelTags")]
+    public Task<IReadOnlyList<string>> AllChannelTagsAsync(
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => channels.AllChannelTagsAsync(cancellationToken);
+
+    /// <summary>Port of queryResolver.CountChannelsByType.</summary>
+    [GraphQLName("countChannelsByType")]
+    public Task<IReadOnlyList<ChannelTypeCountType>> CountChannelsByTypeAsync(
+        CountChannelsByTypeInput input,
+        [Service] ChannelQueryService channels,
+        CancellationToken cancellationToken)
+        => channels.CountChannelsByTypeAsync(input, cancellationToken);
+
+    /// <summary>Port of queryResolver.Me (me.resolvers.go:112-125).</summary>
+    [GraphQLName("me")]
+    public async Task<UserInfoType> MeAsync(
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+        => UserProfileMapping.ToGraphQL(
+            await profiles.GetMeAsync(cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Port of queryResolver.MyProjects (me.resolvers.go:127-140).</summary>
+    [GraphQLName("myProjects")]
+    public async Task<IReadOnlyList<ProjectType>> MyProjectsAsync(
+        [Service] UserProfileService profiles,
+        CancellationToken cancellationToken)
+    {
+        var projects = await profiles.GetMyProjectsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return [.. projects.Select(UserProfileMapping.ToGraphQL)];
+    }
+
+    /// <summary>Port of queryResolver.Traces (ent.resolvers.go:557-570).</summary>
+    /// <remarks>
+    /// The reference validates pagination, rewrites a CREATED_AT order to
+    /// ent.DefaultTraceOrder's field (id) and then paginates; the list runs
+    /// through the Trace schema's query policy (C189).
+    /// </remarks>
+    [GraphQLName("traces")]
+    public async Task<TraceConnectionType> TracesAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        TraceOrder? orderBy,
+        TraceWhereInput? where,
+        [Service] TraceManagementService traces,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = TraceMapping.ToRootTraceSortField(orderBy);
+        var page = await traces.ListAsync(
+                new TraceListQuery
+                {
+                    Where = TraceMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Threads (ent.resolvers.go:541-554).</summary>
+    [GraphQLName("threads")]
+    public async Task<ThreadConnectionType> ThreadsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        ThreadOrder? orderBy,
+        ThreadWhereInput? where,
+        [Service] ThreadManagementService threads,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = TraceMapping.ToRootThreadSortField(orderBy);
+        var page = await threads.ListAsync(
+                new ThreadListQuery
+                {
+                    Where = TraceMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Requests (ent.resolvers.go:496-511).</summary>
+    [GraphQLName("requests")]
+    public async Task<RequestConnectionType> RequestsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        RequestOrder? orderBy,
+        RequestWhereInput? where,
+        [Service] RequestManagementService requests,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = TraceMapping.ToRootRequestSortField(orderBy);
+        var page = await requests.ListAsync(
+                new RequestListQuery
+                {
+                    Where = TraceMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = TraceMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return TraceMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.UsageLogs (ent.resolvers.go:572-586).</summary>
+    [GraphQLName("usageLogs")]
+    public async Task<UsageLogConnectionType> UsageLogsAsync(
+        [GraphQLType(typeof(CursorType))] CursorValue? after,
+        int? first,
+        [GraphQLType(typeof(CursorType))] CursorValue? before,
+        int? last,
+        UsageLogOrder? orderBy,
+        UsageLogWhereInput? where,
+        [Service] UsageLogManagementService usageLogs,
+        CancellationToken cancellationToken)
+    {
+        ManagementValidation.ValidatePaginationArgs(first, last);
+        ManagementValidation.ValidateFirstLast(first, last);
+
+        var sortField = RequestMapping.ToRootUsageLogSortField(orderBy);
+        var page = await usageLogs.ListAsync(
+                new UsageLogListQuery
+                {
+                    Where = RequestMapping.ToFilter(where),
+                    SortField = sortField,
+                    Direction = RequestMapping.ToSortDirection(orderBy),
+                    After = ManagementMapping.ToListCursor(after),
+                    Before = ManagementMapping.ToListCursor(before),
+                    First = first,
+                    Last = last,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return RequestMapping.BuildConnection(page, sortField);
+    }
+
+    /// <summary>Port of queryResolver.Node (ent.resolvers.go:324-332).</summary>
+    /// <remarks>
+    /// The reference maps every ent type string to a Noder table lookup; the
+    /// port resolves all 19 types registered by guidTypeToNodeType
+    /// (graphql.go:206-226) and reports every other type as "unknown node
+    /// type: %s". PromptProtectionRule is absent from the reference map even
+    /// though its SDL type implements Node, and so is OIDCIdentity.
+    /// </remarks>
+    [GraphQLName("node")]
+    public async Task<INode?> NodeAsync(
+        [GraphQLType(typeof(IdType))] string id,
+        [Service] ProjectPrivacy projectPrivacy,
+        [Service] UserPrivacy userPrivacy,
+        [Service] IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        var gid = GidValue.Parse(id);
+
+        switch (gid.Type)
+        {
+            case "Project":
+                {
+                    // client.Noder dispatches to Project.Get, so the Project
+                    // query policy (WhereID(ctx)) runs.
+                    var project = await projectPrivacy
+                        .GetVisibleProjectAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return project is null
+                        ? throw new InvalidOperationException("ent: project not found")
+                        : UserProfileMapping.ToGraphQL(project);
+                }
+
+            case "User":
+                {
+                    // client.Noder dispatches to User.Get, so the User query
+                    // policy runs; a filtered-out row is ent NotFound and a
+                    // deny propagates.
+                    var user = await userPrivacy
+                        .GetVisibleUserOrThrowAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ManagementMapping.ToGraphQL(user);
+                }
+
+            case "APIKey":
+                {
+                    // Resolved lazily so node(Project|User) and unknown-type
+                    // reporting do not require the API key slice's services; the
+                    // production host always registers them.
+                    var apiKeys = services.GetRequiredService<ApiKeyManagementService>();
+                    var apiKey = await apiKeys.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ApiKeyMapping.ToGraphQL(apiKey);
+                }
+
+            case "APIKeyProfileTemplate":
+                {
+                    var templates = services.GetRequiredService<ApiKeyProfileTemplateService>();
+                    var template = await templates.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ApiKeyProfileTemplateMapping.ToGraphQL(template);
+                }
+
+            case "Model":
+                {
+                    var models = services.GetRequiredService<ModelManagementService>();
+                    var model = await models.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ModelMapping.ToGraphQL(model);
+                }
+
+            case "Prompt":
+                {
+                    var prompts = services.GetRequiredService<PromptManagementService>();
+                    var prompt = await prompts.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return PromptMapping.ToGraphQL(prompt);
+                }
+
+            // PromptProtectionRule implements Node in the SDL, but the
+            // reference's guidTypeToNodeType map (graphql.go:206-226) does not
+            // register it, so node() reports it as an unknown type.
+            case "DataStorage":
+                {
+                    var storages = services.GetRequiredService<DataStorageManagementService>();
+                    var storage = await storages.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return DataStorageMapping.ToGraphQL(storage);
+                }
+
+            case "Channel":
+                {
+                    var channels = services.GetRequiredService<ChannelQueryService>();
+                    return await channels.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+            case "ChannelProbe":
+                {
+                    // The probe schema has no mixins and no policy, so the
+                    // Noder lookup is a bare primary-key read.
+                    var probes = services.GetRequiredService<IChannelProbeStore>();
+                    var probe = await probes.GetByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return probe is null
+                        ? throw new InvalidOperationException("ent: channel_probe not found")
+                        : ChannelProbeMapping.ToGraphQL(probe);
+                }
+
+            case "ChannelOverrideTemplate":
+                {
+                    // OwnerRule → UserOwnedQueryRule inside the service.
+                    var templates = services.GetRequiredService<ChannelOverrideTemplateService>();
+                    var template = await templates.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ChannelOverrideTemplateMapping.ToGraphQL(template);
+                }
+
+            case "Trace":
+                {
+                    var traces = services.GetRequiredService<TraceManagementService>();
+                    var trace = await traces.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return TraceMapping.ToGraphQL(trace);
+                }
+
+            case "Thread":
+                {
+                    var threads = services.GetRequiredService<ThreadManagementService>();
+                    var thread = await threads.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return TraceMapping.ToGraphQL(thread);
+                }
+
+            case "Request":
+                {
+                    var requests = services.GetRequiredService<RequestQueryService>();
+                    var request = await requests.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return TraceMapping.ToGraphQL(request);
+                }
+
+            case "RequestExecution":
+                {
+                    // The execution schema declares no mixins and no policy.
+                    var executions = services.GetRequiredService<IRequestExecutionStore>();
+                    var execution = await executions.GetByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return execution is null
+                        ? throw new InvalidOperationException("ent: request_execution not found")
+                        : RequestMapping.ToGraphQL(execution);
+                }
+
+            case "Role":
+                {
+                    var rolePrivacy = services.GetRequiredService<RolePrivacy>();
+                    var role = await rolePrivacy
+                        .GetVisibleRoleOrThrowAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return ManagementMapping.ToGraphQL(role);
+                }
+
+            case "UserProject":
+                {
+                    // OwnerRule → UserProjectScopeReadRule(read_users) →
+                    // UserOwnedQueryRule; the policy's predicate is applied to
+                    // the primary-key read, so a filtered-out row is NotFound.
+                    var projects = services.GetRequiredService<IUserAdminStore>();
+                    var scope = await services.GetRequiredService<UserProjectPrivacy>()
+                        .EvaluateQueryAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    var membership = await projects
+                        .GetProjectUserByIdAsync(gid.Id, cancellationToken, scope)
+                        .ConfigureAwait(false);
+                    return membership is null
+                        ? throw new InvalidOperationException("ent: user_project not found")
+                        : ProjectUserMapping.ToGraphQL(membership);
+                }
+
+            case "UserRole":
+                {
+                    // The join table declares no mixins and no policy.
+                    var roles = services.GetRequiredService<IRoleStore>();
+                    var userRole = await roles.GetUserRoleByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return userRole is null
+                        ? throw new InvalidOperationException("ent: user_role not found")
+                        : UserRoleMapping.ToGraphQL(userRole);
+                }
+
+            case "UsageLog":
+                {
+                    var usageLogs = services.GetRequiredService<UsageLogManagementService>();
+                    var usageLog = await usageLogs.GetNodeAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return RequestMapping.ToGraphQL(usageLog);
+                }
+
+            case "System":
+                {
+                    // The reference's guidTypeToNodeType registration also runs
+                    // the System query policy through Noder.
+                    var systems = services.GetRequiredService<ISystemStore>();
+                    await services.GetRequiredService<SystemPrivacy>()
+                        .EvaluateSystemQueryAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var system = await systems.GetByIdAsync(gid.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    return system is null
+                        ? throw new InvalidOperationException("ent: system not found")
+                        : SystemAdminMapping.ToGraphQL(system);
+                }
+
+            default:
+                throw new InvalidOperationException("unknown node type: " + gid.Type);
+        }
+    }
+
+    /// <summary>Port of queryResolver.AnalyticsMetadata (analytics.resolvers.go:24-40).</summary>
+    [GraphQLName("analyticsMetadata")]
+    public async Task<AnalyticsMetadataType> AnalyticsMetadataAsync(
+        [Service] AnalyticsService analytics,
+        CancellationToken cancellationToken)
+    {
+        var earliest = await analytics.GetEarliestTimeAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return new AnalyticsMetadataType { EarliestTime = earliest };
+    }
+
+    /// <summary>Port of queryResolver.AnalyticsOverview (analytics.resolvers.go:42-88).</summary>
+    [GraphQLName("analyticsOverview")]
+    public async Task<AnalyticsOverviewType> AnalyticsOverviewAsync(
+        AnalyticsFilterInput? filter,
+        [Service] AnalyticsService analytics,
+        CancellationToken cancellationToken)
+    {
+        var overview = await analytics.GetOverviewAsync(
+                filter is null ? null : AnalyticsMapping.ToModel(filter),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return AnalyticsMapping.ToGraphQL(overview);
+    }
+
+    /// <summary>Port of queryResolver.AnalyticsDailyStats (analytics.resolvers.go:90-194).</summary>
+    [GraphQLName("analyticsDailyStats")]
+    public async Task<IReadOnlyList<AnalyticsDailyStatType>> AnalyticsDailyStatsAsync(
+        AnalyticsFilterInput? filter,
+        [Service] AnalyticsService analytics,
+        CancellationToken cancellationToken)
+    {
+        var stats = await analytics.GetDailyStatsAsync(
+                filter is null ? null : AnalyticsMapping.ToModel(filter),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(AnalyticsMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.AnalyticsDimensionStats (analytics.resolvers.go:196-242).</summary>
+    [GraphQLName("analyticsDimensionStats")]
+    public async Task<IReadOnlyList<AnalyticsDimensionStatType>> AnalyticsDimensionStatsAsync(
+        AnalyticsFilterInput? filter,
+        string dimension,
+        [Service] AnalyticsService analytics,
+        CancellationToken cancellationToken)
+    {
+        var stats = await analytics.GetDimensionStatsAsync(
+                filter is null ? null : AnalyticsMapping.ToModel(filter),
+                dimension,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(AnalyticsMapping.ToGraphQL).ToList();
+    }
+
+    // -------------------------------------------------------- dashboard (§105)
+
+    /// <summary>Port of queryResolver.DashboardOverview (dashboard.resolvers.go:42-93).</summary>
+    [GraphQLName("dashboardOverview")]
+    public async Task<DashboardOverviewType> DashboardOverviewAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var overview = await dashboard.GetDashboardOverviewAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return DashboardMapping.ToGraphQL(overview);
+    }
+
+    /// <summary>Port of queryResolver.RequestStats (dashboard.resolvers.go:99-148).</summary>
+    [GraphQLName("requestStats")]
+    public async Task<RequestStatsType> RequestStatsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetRequestStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return DashboardMapping.ToGraphQL(stats);
+    }
+
+    /// <summary>Port of queryResolver.RequestStatsByChannel (dashboard.resolvers.go:153-171).</summary>
+    [GraphQLName("requestStatsByChannel")]
+    public async Task<IReadOnlyList<RequestStatsByChannelType>> RequestStatsByChannelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetRequestStatsByChannelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.RequestStatsByModel (dashboard.resolvers.go:176-194).</summary>
+    [GraphQLName("requestStatsByModel")]
+    public async Task<IReadOnlyList<RequestStatsByModelType>> RequestStatsByModelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetRequestStatsByModelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.RequestStatsByAPIKey (dashboard.resolvers.go:199-218).</summary>
+    [GraphQLName("requestStatsByAPIKey")]
+    public async Task<IReadOnlyList<RequestStatsByApiKeyType>> RequestStatsByApiKeyAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetRequestStatsByApiKeyAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.TokenStatsByAPIKey (dashboard.resolvers.go:223-246).</summary>
+    [GraphQLName("tokenStatsByAPIKey")]
+    public async Task<IReadOnlyList<TokenStatsByApiKeyType>> TokenStatsByApiKeyAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetTokenStatsByApiKeyAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.APIKeyTokenUsageStats (dashboard.resolvers.go:250-340).</summary>
+    [GraphQLName("apiKeyTokenUsageStats")]
+    public async Task<IReadOnlyList<ApiKeyTokenUsageStatsType>> ApiKeyTokenUsageStatsAsync(
+        ApiKeyTokenUsageStatsInput? input,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        DashboardApiKeyTokenUsageInput? model = null;
+        if (input is not null)
+        {
+            model = new DashboardApiKeyTokenUsageInput(
+                input.ApiKeyIds?.Select(GidValue.Parse).ToList() ?? [],
+                input.CreatedAtGTE,
+                input.CreatedAtLTE);
+        }
+
+        var stats = await dashboard.GetApiKeyTokenUsageStatsAsync(model, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.DailyRequestStats (dashboard.resolvers.go:345-447).</summary>
+    [GraphQLName("dailyRequestStats")]
+    public async Task<IReadOnlyList<DailyRequestStatsType>> DailyRequestStatsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetDailyRequestStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.TopRequestsProjects (dashboard.resolvers.go:449-512).</summary>
+    [GraphQLName("topRequestsProjects")]
+    public async Task<IReadOnlyList<TopRequestsProjectsType>> TopRequestsProjectsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var projects = await dashboard.GetTopRequestsProjectsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return projects.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>
+    /// Port of queryResolver.TokenStats (dashboard.resolvers.go:517-718). A
+    /// failed synchronous all-time aggregation reports a non-terminating field
+    /// error and keeps the zero defaults, exactly like graphql.AddError.
+    /// </summary>
+    [GraphQLName("tokenStats")]
+    public async Task<TokenStatsType> TokenStatsAsync(
+        IResolverContext context,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetTokenStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (stats.AllTimeFailed)
+        {
+            context.ReportError(
+                ErrorBuilder.New()
+                    .SetMessage("Failed to aggregate all-time token statistics")
+                    .SetExtension("code", "TOKEN_STATS_ALL_TIME_AGG_FAILED")
+                    .Build());
+        }
+
+        return DashboardMapping.ToGraphQL(stats);
+    }
+
+    /// <summary>Port of queryResolver.ChannelSuccessRates (dashboard.resolvers.go:724-870).</summary>
+    [GraphQLName("channelSuccessRates")]
+    public async Task<IReadOnlyList<ChannelSuccessRateType>> ChannelSuccessRatesAsync(
+        string? timeWindow,
+        int? limit,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var rates = await dashboard.GetChannelSuccessRatesAsync(
+                timeWindow,
+                limit,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return rates.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.FastestChannels (dashboard.resolvers.go:875-1019).</summary>
+    [GraphQLName("fastestChannels")]
+    public async Task<IReadOnlyList<FastestChannelType>> FastestChannelsAsync(
+        FastestChannelsInput input,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var channels = await dashboard.GetFastestChannelsAsync(
+                new DashboardFastestChannelsInput(input.TimeWindow, input.Limit ?? 5),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return channels.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.FastestModels (dashboard.resolvers.go:1024-1168).</summary>
+    [GraphQLName("fastestModels")]
+    public async Task<IReadOnlyList<FastestModelType>> FastestModelsAsync(
+        FastestChannelsInput input,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var models = await dashboard.GetFastestModelsAsync(
+                new DashboardFastestChannelsInput(input.TimeWindow, input.Limit ?? 5),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return models.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.ModelPerformanceStats (dashboard.resolvers.go:1173-1325).</summary>
+    [GraphQLName("modelPerformanceStats")]
+    public async Task<IReadOnlyList<ModelPerformanceStatType>> ModelPerformanceStatsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetModelPerformanceStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.ChannelPerformanceStats (dashboard.resolvers.go:1328-1374).</summary>
+    [GraphQLName("channelPerformanceStats")]
+    public async Task<IReadOnlyList<ChannelPerformanceStatType>> ChannelPerformanceStatsAsync(
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetChannelPerformanceStatsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.TokenStatsByChannel (dashboard.resolvers.go:1377-1401).</summary>
+    [GraphQLName("tokenStatsByChannel")]
+    public async Task<IReadOnlyList<TokenStatsByChannelType>> TokenStatsByChannelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetTokenStatsByChannelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.TokenStatsByModel (dashboard.resolvers.go:1403-1426).</summary>
+    [GraphQLName("tokenStatsByModel")]
+    public async Task<IReadOnlyList<TokenStatsByModelType>> TokenStatsByModelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetTokenStatsByModelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.CostStatsByChannel (dashboard.resolvers.go:1428-1447).</summary>
+    [GraphQLName("costStatsByChannel")]
+    public async Task<IReadOnlyList<CostStatsByChannelType>> CostStatsByChannelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetCostStatsByChannelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.CostStatsByModel (dashboard.resolvers.go:1449-1468).</summary>
+    [GraphQLName("costStatsByModel")]
+    public async Task<IReadOnlyList<CostStatsByModelType>> CostStatsByModelAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetCostStatsByModelAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.CostStatsByAPIKey (dashboard.resolvers.go:1470-1490).</summary>
+    [GraphQLName("costStatsByAPIKey")]
+    public async Task<IReadOnlyList<CostStatsByApiKeyType>> CostStatsByApiKeyAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetCostStatsByApiKeyAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+
+    /// <summary>Port of queryResolver.UsageStatsByUser (dashboard.resolvers.go:1492-1620).</summary>
+    [GraphQLName("usageStatsByUser")]
+    public async Task<IReadOnlyList<UsageStatsByUserType>> UsageStatsByUserAsync(
+        string? timeWindow,
+        [Service] DashboardService dashboard,
+        CancellationToken cancellationToken)
+    {
+        var stats = await dashboard.GetUsageStatsByUserAsync(timeWindow, cancellationToken)
+            .ConfigureAwait(false);
+        return stats.Select(DashboardMapping.ToGraphQL).ToList();
+    }
+}

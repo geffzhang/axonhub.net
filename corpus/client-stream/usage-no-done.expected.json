@@ -1,0 +1,6 @@
+{
+  "case": "usage-no-done",
+  "exit_code": 0,
+  "stdout": "{\n  \"events\": [\n    {\n      \"type\": \"\",\n      \"data\": \"{\\\"id\\\":\\\"c5\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"delta\\\":{\\\"content\\\":\\\"tail\\\"},\\\"finish_reason\\\":null,\\\"logprobs\\\":null}],\\\"object\\\":\\\"chat.completion.chunk\\\",\\\"created\\\":9,\\\"model\\\":\\\"gpt-4o\\\",\\\"usage\\\":null}\"\n    },\n    {\n      \"type\": \"\",\n      \"data\": \"{\\\"id\\\":\\\"c5\\\",\\\"choices\\\":[],\\\"object\\\":\\\"chat.completion.chunk\\\",\\\"created\\\":9,\\\"model\\\":\\\"gpt-4o\\\",\\\"usage\\\":{\\\"prompt_tokens\\\":5,\\\"completion_tokens\\\":2,\\\"total_tokens\\\":7,\\\"prompt_tokens_details\\\":{\\\"audio_tokens\\\":0,\\\"cached_tokens\\\":0},\\\"completion_tokens_details\\\":{\\\"audio_tokens\\\":0,\\\"reasoning_tokens\\\":0,\\\"accepted_prediction_tokens\\\":0,\\\"rejected_prediction_tokens\\\":0}}}\"\n    },\n    {\n      \"type\": \"\",\n      \"data\": \"{\\\"id\\\":\\\"c5\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"delta\\\":{},\\\"finish_reason\\\":\\\"stop\\\",\\\"logprobs\\\":null}],\\\"object\\\":\\\"chat.completion.chunk\\\",\\\"created\\\":9,\\\"model\\\":\\\"gpt-4o\\\",\\\"usage\\\":null}\"\n    },\n    {\n      \"type\": \"\",\n      \"data\": \"[DONE]\"\n    }\n  ]\n}\n",
+  "stderr": ""
+}

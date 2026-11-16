@@ -1,0 +1,441 @@
+using System.Text.Json;
+using AxonHub.Api.Billing;
+using AxonHub.Api.Models;
+using AxonHub.Api.Orchestration;
+using AxonHub.Llm.Json;
+using AxonHub.Llm.Pipeline;
+using AxonHub.Persistence;
+using GoJson = AxonHub.Llm.Json.GoJson;
+
+namespace AxonHub.Api.Management;
+
+/// <summary>
+/// The reload hook in syncChannelModels (channel_model_sync.go:59-61,
+/// 214-216). The reference reloads its in-memory enabled-channel cache; the
+/// port signals the same cache grain.
+/// </summary>
+public interface IChannelModelSyncReloadHook
+{
+    void ReloadAfterModelSync();
+}
+
+/// <summary>
+/// Production reload hook: the model sync wrote a channel row, so the cache's
+/// <c>updated_at</c> fingerprint changed and a force refresh is requested
+/// (debounced like <c>ChannelService.asyncReloadChannels</c>).
+/// </summary>
+public sealed class GrainChannelModelSyncReloadHook(IEnabledChannelsCacheRefresher refresher)
+    : IChannelModelSyncReloadHook
+{
+    public void ReloadAfterModelSync() => refresher.RequestRefresh();
+}
+
+/// <summary>No-op reload hook for hosts that run without the channel cache.</summary>
+public sealed class NullChannelModelSyncReloadHook : IChannelModelSyncReloadHook
+{
+    public void ReloadAfterModelSync()
+    {
+    }
+}
+
+/// <summary>
+/// The reference's <c>modelSyncMu</c> + <c>lastModelSyncExecutionTime</c>
+/// (channel_internal.go:33-46). Production wires
+/// <see cref="GrainChannelModelSyncGuard"/>, which keeps the gate in the
+/// singleton <see cref="AxonHub.Grains.Abstractions.IChannelModelSyncGrain"/>;
+/// direct constructions keep the service's in-process lock.
+/// </summary>
+public interface IChannelModelSyncGuard
+{
+    /// <summary>
+    /// <c>shouldRunModelSync</c>: true exactly once per aligned auto-sync
+    /// interval window.
+    /// </summary>
+    Task<bool> TryBeginRunAsync(
+        DateTimeOffset now,
+        AutoSyncFrequency autoSyncFrequency,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Aggregate counters returned by the sync-all pass (biz logs them only).</summary>
+public sealed record ChannelModelSyncSummary(int SuccessCount, int FailureCount, int ChangedCount);
+
+/// <summary>
+/// The GraphQL payload source after one channel sync: the re-read/updated row
+/// plus its decoded model lists (the resolver reads ch.SupportedModels and
+/// normalizes a nil manual_models to an empty list).
+/// </summary>
+public sealed record ChannelModelSyncResult(
+    ChannelRecord Channel,
+    IReadOnlyList<string> SupportedModels,
+    IReadOnlyList<string> ManualModels,
+    bool Changed);
+
+/// <summary>
+/// Port of the model-sync half of ChannelService
+/// (internal/server/biz/channel_model_sync.go and channel_internal.go:23-59):
+/// per-channel fetch/merge/price-ensure plus the hourly schedule guard.
+/// </summary>
+/// <remarks>
+/// Each channel gets a fresh ModelFetcher, like the reference's
+/// NewModelFetcher call inside syncChannelModelsForChannel. Per-channel proxy
+/// settings are not ported (C158); the cron registration lives in
+/// <see cref="ChannelModelSyncScheduler"/> and the execution window in the
+/// singleton grain (§148). The single-channel load runs in the caller's
+/// context, so ent evaluates the Channel query policy there; the periodic pass
+/// runs under <c>authz.WithSystemBypass</c> (channel_internal.go:24-32) and is
+/// not gated.
+/// </remarks>
+public sealed class ChannelModelSyncService(
+    IChannelModelSyncStore store,
+    IChannelModelPriceStore prices,
+    IExecutor executor,
+    TimeProvider time,
+    IChannelAutoSyncFrequencyProvider frequency,
+    IChannelModelSyncReloadHook reloadHook,
+    IChannelModelSyncGuard? modelSyncGuard = null,
+    ChannelPrivacy? privacy = null)
+{
+    private readonly object _modelSyncGate = new();
+    private readonly IChannelModelSyncGuard? _modelSyncGuard = modelSyncGuard;
+    private DateTimeOffset? _lastModelSyncExecutionTime;
+
+    /// <summary>
+    /// Port of ChannelService.SyncChannelModels (channel_model_sync.go:203-219):
+    /// load the channel, sync it, return the updated row.
+    /// </summary>
+    public async Task<ChannelModelSyncResult> SyncChannelModelsAsync(
+        long channelId,
+        string? patternOverride,
+        CancellationToken cancellationToken = default)
+    {
+        // SyncChannelModels starts with a plain Channel.Get in the caller's
+        // context (channel_model_sync.go:203-208); ent evaluates the Channel
+        // query policy on that read.
+        if (privacy is not null)
+        {
+            await privacy.EvaluateQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        ChannelRecord? channel;
+        try
+        {
+            channel = await store.GetAsync(channelId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException("failed to get channel: " + ex.Message, ex);
+        }
+
+        if (channel is null)
+        {
+            throw new InvalidOperationException("failed to get channel: ent: channel not found");
+        }
+
+        var result = await SyncChannelModelsForChannelAsync(channel, patternOverride, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result.Changed)
+        {
+            reloadHook.ReloadAfterModelSync();
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Port of ChannelService.syncChannelModels (channel_model_sync.go:15-67):
+    /// every enabled channel with auto-sync on, one channel failure never stops
+    /// the pass.
+    /// </summary>
+    public async Task<ChannelModelSyncSummary> SyncAllAsync(
+        CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<ChannelRecord> channels;
+        try
+        {
+            channels = await store.ListAutoSyncEnabledAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The reference logs the query error and returns.
+            return new ChannelModelSyncSummary(0, 0, 0);
+        }
+
+        if (channels.Count == 0)
+        {
+            return new ChannelModelSyncSummary(0, 0, 0);
+        }
+
+        var successCount = 0;
+        var failureCount = 0;
+        var changedCount = 0;
+
+        foreach (var channel in channels)
+        {
+            try
+            {
+                var result = await SyncChannelModelsForChannelAsync(channel, null, cancellationToken)
+                    .ConfigureAwait(false);
+                successCount++;
+                if (result.Changed)
+                {
+                    changedCount++;
+                }
+            }
+            catch (Exception)
+            {
+                failureCount++;
+            }
+        }
+
+        if (changedCount > 0)
+        {
+            // asyncReloadChannels: fire-and-forget in the reference; the
+            // production hook only asks the cache grain to schedule its
+            // debounced reload and returns immediately.
+            reloadHook.ReloadAfterModelSync();
+        }
+
+        return new ChannelModelSyncSummary(successCount, failureCount, changedCount);
+    }
+
+    /// <summary>
+    /// Port of ChannelService.syncChannelModelsForChannel
+    /// (channel_model_sync.go:69-201).
+    /// </summary>
+    public async Task<ChannelModelSyncResult> SyncChannelModelsForChannelAsync(
+        ChannelRecord channel,
+        string? patternOverride,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        // The reference constructs a fresh fetcher per channel, so the provider
+        // conf cache is not shared across the pass.
+        var fetcher = new ModelFetcher(executor, store, time);
+        var fetchResult = await fetcher.FetchModelsAsync(
+                new FetchModelsInput
+                {
+                    ChannelType = channel.Type,
+                    BaseUrl = channel.BaseUrl ?? string.Empty,
+                    ChannelId = channel.Id,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (fetchResult.Error is not null)
+        {
+            throw new InvalidOperationException(
+                "model fetch returned error: " + fetchResult.Error);
+        }
+
+        if (fetchResult.Fallback)
+        {
+            throw new InvalidOperationException("model fetch returned fallback models");
+        }
+
+        var fetchedModelIds = fetchResult.Models.Select(static model => model.Id).ToList();
+
+        var pattern = channel.AutoSyncModelPattern ?? string.Empty;
+        if (patternOverride is not null)
+        {
+            pattern = patternOverride;
+        }
+
+        // An invalid pattern is logged and the filter is skipped, not fatal.
+        if (pattern.Length > 0 && XRegexp.ValidateRegex(pattern) is null)
+        {
+            fetchedModelIds = XRegexp.Filter(fetchedModelIds, pattern);
+        }
+
+        var (updated, changed) = await store.SyncAsync(
+                channel.Id,
+                current => BuildPlan(current, fetchedModelIds),
+                EnsurePricesAsync,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (updated is null)
+        {
+            throw new InvalidOperationException("failed to reload channel for model sync: ent: channel not found");
+        }
+
+        return new ChannelModelSyncResult(
+            updated,
+            ParseModelList(updated.SupportedModels),
+            ParseModelList(updated.ManualModels),
+            changed);
+    }
+
+    /// <summary>
+    /// Port of shouldRunModelSync (channel_internal.go:33-46): run at most once
+    /// per aligned interval window. Go's zero-time check maps to a null field.
+    /// This is the direct-construction fallback; production defers to
+    /// <see cref="IChannelModelSyncGuard"/> so the window is cluster-wide.
+    /// </summary>
+    public bool ShouldRunModelSync(DateTimeOffset now, AutoSyncFrequency autoSyncFrequency)
+    {
+        var interval = TimeSpan.FromMinutes(GetIntervalMinutes(autoSyncFrequency));
+        var utcTicks = now.UtcTicks;
+        var aligned = new DateTimeOffset(utcTicks - (utcTicks % interval.Ticks), TimeSpan.Zero);
+
+        lock (_modelSyncGate)
+        {
+            if (_lastModelSyncExecutionTime is { } last && last == aligned)
+            {
+                return false;
+            }
+
+            _lastModelSyncExecutionTime = aligned;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Port of ChannelService.runSyncChannelModelsPeriodically
+    /// (channel_internal.go:23-31). The reference registers it at cron
+    /// <c>11 * * * *</c> in UTC (<see cref="ChannelModelSyncScheduler"/>); the
+    /// settings read comes first, then the execution gate. Production uses the
+    /// cluster-wide grain guard; a direct construction without one keeps the
+    /// reference's in-process lock.
+    /// </summary>
+    public async Task RunSyncChannelModelsPeriodicallyAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var autoSyncFrequency = await frequency.GetAutoSyncFrequencyAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var now = time.GetUtcNow();
+
+        var shouldRun = _modelSyncGuard is null
+            ? ShouldRunModelSync(now, autoSyncFrequency)
+            : await _modelSyncGuard.TryBeginRunAsync(now, autoSyncFrequency, cancellationToken)
+                .ConfigureAwait(false);
+
+        if (!shouldRun)
+        {
+            return;
+        }
+
+        await SyncAllAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Port of getIntervalMinutesFromAutoSyncFrequency (channel_internal.go:48-59).</summary>
+    public static int GetIntervalMinutes(AutoSyncFrequency autoSyncFrequency) => autoSyncFrequency switch
+    {
+        AutoSyncFrequency.SixHours => 360,
+        AutoSyncFrequency.OneDay => 1440,
+        _ => 60,
+    };
+
+    /// <summary>
+    /// The merge decision built inside the transaction
+    /// (channel_model_sync.go:139-167).
+    /// </summary>
+    internal static ChannelModelSyncPlan? BuildPlan(
+        ChannelRecord current,
+        IReadOnlyList<string> fetchedModelIds)
+    {
+        var manualModels = ParseModelList(current.ManualModels);
+        var mergedModels = Uniq(manualModels.Concat(fetchedModelIds));
+
+        if (mergedModels.Count == 0)
+        {
+            // Both fetched and manual models are empty: nothing is written.
+            return null;
+        }
+
+        var supportedModels = ParseModelList(current.SupportedModels);
+        var supportedSet = new HashSet<string>(supportedModels, StringComparer.Ordinal);
+        var mergedSet = new HashSet<string>(mergedModels, StringComparer.Ordinal);
+        var modelsChanged = mergedModels.Any(model => !supportedSet.Contains(model))
+            || supportedModels.Any(model => !mergedSet.Contains(model));
+
+        ChannelSettingsDraft? settings;
+        try
+        {
+            settings = ChannelWriteSerialization.ParseSettings(current.Settings);
+        }
+        catch (JsonException ex)
+        {
+            // Ent would have failed the in-transaction re-read.
+            throw new StoreFailureException(
+                "failed to reload channel for model sync: " + ex.Message,
+                ex);
+        }
+
+        var modelProtocolsChanged = false;
+        string? settingsJson = null;
+        if (modelsChanged && settings is not null)
+        {
+            modelProtocolsChanged =
+                ChannelValidation.RemoveRemovedModelProtocolOverrides(settings, mergedModels);
+            if (modelProtocolsChanged)
+            {
+                settingsJson = GoJson.MarshalToString(settings);
+            }
+        }
+
+        return new ChannelModelSyncPlan(
+            mergedModels,
+            GoJson.MarshalToString(mergedModels),
+            modelsChanged,
+            modelProtocolsChanged,
+            settingsJson);
+    }
+
+    private Task<bool> EnsurePricesAsync(
+        long channelId,
+        IReadOnlyList<string> modelIds,
+        CancellationToken cancellationToken)
+        => prices.EnsureAutoPricesAsync(
+            channelId,
+            modelIds,
+            ModelCardPricing.ToPriceJson,
+            ChannelModelPriceService.GenerateReferenceId,
+            cancellationToken);
+
+    /// <summary>
+    /// Decodes the raw JSON string list columns (manual_models / supported_models).
+    /// Ent would have rejected a malformed row during the re-read; the sync
+    /// reports the same prefix instead of silently merging against an empty
+    /// list (C141 documents the lenient read used elsewhere).
+    /// </summary>
+    private static List<string> ParseModelList(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw) || string.Equals(raw, "null", StringComparison.Ordinal))
+        {
+            return [];
+        }
+
+        try
+        {
+            var values = LlmJson.Deserialize<List<string?>>(raw);
+            return values is null
+                ? []
+                : values.Select(static value => value ?? string.Empty).ToList();
+        }
+        catch (JsonException ex)
+        {
+            throw new StoreFailureException(
+                "failed to reload channel for model sync: " + ex.Message,
+                ex);
+        }
+    }
+
+    /// <summary>Port of lo.Uniq: first occurrence order.</summary>
+    private static List<string> Uniq(IEnumerable<string> values)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>();
+        foreach (var value in values)
+        {
+            if (seen.Add(value))
+            {
+                result.Add(value);
+            }
+        }
+
+        return result;
+    }
+}

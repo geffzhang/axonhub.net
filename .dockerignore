@@ -1,0 +1,16 @@
+**/bin/
+**/obj/
+frontend/node_modules/
+frontend/dist/
+config.yml
+config.yaml
+.git/
+.vs/
+.idea/
+tests/
+porting/
+corpus/
+tools/
+*.user
+Dockerfile
+.dockerignore

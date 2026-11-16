@@ -1,0 +1,6 @@
+{
+  "case": "tool-calls",
+  "exit_code": 0,
+  "stdout": "{\n  \"status_code\": 200,\n  \"headers\": {\n    \"Cache-Control\": [\n      \"no-cache\"\n    ],\n    \"Content-Type\": [\n      \"application/json\"\n    ]\n  },\n  \"body\": \"{\\\"id\\\":\\\"chatcmpl-tool1\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"message\\\":{\\\"role\\\":\\\"assistant\\\",\\\"content\\\":\\\"\\\",\\\"tool_calls\\\":[{\\\"id\\\":\\\"call_1\\\",\\\"type\\\":\\\"function\\\",\\\"function\\\":{\\\"name\\\":\\\"get_weather\\\",\\\"arguments\\\":\\\"{\\\\\\\"city\\\\\\\":\\\\\\\"Paris\\\\\\\"}\\\"},\\\"index\\\":0}]},\\\"finish_reason\\\":\\\"tool_calls\\\",\\\"logprobs\\\":null}],\\\"object\\\":\\\"chat.completion\\\",\\\"created\\\":1725000001,\\\"model\\\":\\\"gpt-4o\\\",\\\"usage\\\":null}\"\n}\n",
+  "stderr": ""
+}

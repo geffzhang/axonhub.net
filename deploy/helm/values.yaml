@@ -1,0 +1,207 @@
+# Default values for axonhub.net.
+#
+# The .NET port requires PostgreSQL. The bundled PostgreSQL StatefulSet is for
+# development and single-node clusters; use an external HA database in
+# production. When replicaCount > 1 (or autoscaling is enabled), the chart
+# automatically turns on Orleans AdoNet membership + durable reminders.
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  imagePullSecrets: []
+
+axonhub:
+  replicaCount: 1
+
+  image:
+    # Build with `docker build -t axonhub.net:latest .` and push to your registry.
+    repository: axonhub.net
+    pullPolicy: IfNotPresent
+    # Defaults to .Chart.AppVersion when empty.
+    tag: ""
+
+  environment: Production
+
+  # Extra environment variables. System variables below take precedence if a
+  # key is duplicated.
+  env: {}
+
+  database:
+    # Npgsql key-value DSN, not a postgres:// URI. Empty uses the bundled
+    # PostgreSQL service.
+    dsn: ""
+    # Prefer an existing Secret in production. The Secret must contain the
+    # ConnectionStrings__Default value under this key.
+    existingSecret: ""
+    existingSecretKey: dsn
+
+  cluster:
+    # Automatically enabled when replicaCount > 1 or autoscaling.enabled=true.
+    # Set this explicitly only if you need a single-replica multi-silo setup.
+    enabled: false
+    clusterId: axonhub
+    serviceId: axonhub
+    siloPort: 11111
+    # 0 disables the Orleans client gateway; no external Orleans client is used.
+    gatewayPort: 0
+
+  # Optional raw config.yml. It is mounted at /app/config.yml and is read by
+  # the YAML configuration provider. Environment variables still override it.
+  config:
+    content: ""
+
+  service:
+    type: ClusterIP
+    port: 8090
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+
+  startupProbe:
+    enabled: true
+    httpGet:
+      path: /health
+      port: http
+    failureThreshold: 30
+    periodSeconds: 5
+    timeoutSeconds: 3
+
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  podAnnotations: {}
+  podSecurityContext:
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  terminationGracePeriodSeconds: 60
+
+  nodeSelector: {}
+  tolerations: []
+  # Empty adds a soft host anti-affinity when cluster mode is enabled.
+  affinity: {}
+
+postgresql:
+  enabled: true
+  # The bundled StatefulSet is a single primary. Use an external database for
+  # replication/HA and set axonhub.database.existingSecret.
+  replicaCount: 1
+
+  image:
+    repository: postgres
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
+
+  auth:
+    username: axonhub
+    password: axonhub_password
+    database: axonhub
+    # Optional Secret containing the POSTGRES_PASSWORD value. When set, also
+    # set axonhub.database.existingSecret or database.dsn for the app.
+    existingSecret: ""
+    existingSecretPasswordKey: password
+
+  service:
+    type: ClusterIP
+    port: 5432
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  podSecurityContext:
+    fsGroup: 999
+
+  securityContext: {}
+
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+      storageClass: ""
+      accessModes:
+        - ReadWriteOnce
+
+  livenessProbe:
+    exec:
+      command:
+        - pg_isready
+        - -U
+        - axonhub
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+  readinessProbe:
+    exec:
+      command:
+        - pg_isready
+        - -U
+        - axonhub
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: null
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""

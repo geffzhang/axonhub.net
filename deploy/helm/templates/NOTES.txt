@@ -1,0 +1,49 @@
+Thank you for installing AxonHub.NET.
+
+1. Open the application:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ (index $host.paths 0).path }}
+{{- end }}
+{{- else if contains "NodePort" .Values.axonhub.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "axonhub.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.axonhub.service.type }}
+  kubectl get --namespace {{ .Release.Namespace }} svc {{ include "axonhub.fullname" . }} -w
+{{- else }}
+  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "axonhub.fullname" . }} 8090:{{ .Values.axonhub.service.port }}
+  # Then open http://127.0.0.1:8090/
+{{- end }}
+
+2. Check the deployment:
+   kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "axonhub.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+   kubectl logs --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "axonhub.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -c axonhub
+
+3. PostgreSQL:
+{{- if .Values.postgresql.enabled }}
+   The chart deployed a single-primary PostgreSQL at
+   {{ include "axonhub.postgresql.serviceName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.postgresql.service.port }}.
+   For production, use an external HA database and set axonhub.database.existingSecret.
+{{- else }}
+   Using the external database configured by axonhub.database.dsn or existingSecret.
+{{- end }}
+
+4. Orleans cluster mode:
+   {{- if eq (include "axonhub.clusterEnabled" . | trim) "true" }}
+   Enabled (AdoNet membership + durable reminders). All replicas share the
+   same PostgreSQL and use Pod IP:{{ .Values.axonhub.cluster.siloPort }} for silo traffic.
+   Check membership rows in orleansmembershiptable.
+   {{- else }}
+   Disabled (single silo). Do not scale this release beyond one replica
+   without enabling axonhub.cluster.enabled or autoscaling.
+   {{- end }}
+
+5. Run the chart test:
+   helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+
+{{- if and .Values.postgresql.enabled (not .Values.axonhub.database.existingSecret) (not .Values.axonhub.database.dsn) }}
+
+WARNING: The bundled PostgreSQL uses the value in postgresql.auth.password.
+Change it or use an existing Secret before exposing this release.
+{{- end }}

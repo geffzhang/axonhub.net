@@ -1,0 +1,6 @@
+{
+  "case": "error-event-zai",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"error: model not found, code: 1211, request_id: req_1\"\n}\n",
+  "stderr": ""
+}

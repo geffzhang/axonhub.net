@@ -1,0 +1,65 @@
+import { IconPlus, IconUpload, IconArrowsSort, IconSettings, IconScale, IconTemplate } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
+import { useNavigate } from '@tanstack/react-router';
+import { Button } from '@/components/ui/button';
+import { PermissionGuard } from '@/components/permission-guard';
+import { revealFocusedHorizontalButton, useHorizontalScroll } from '@/hooks/use-horizontal-scroll';
+import { useChannels } from '../context/channels-context';
+
+export function ChannelsPrimaryButtons() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { setOpen } = useChannels();
+  const scrollRef = useHorizontalScroll<HTMLDivElement>();
+
+  return (
+    <div ref={scrollRef} onFocusCapture={revealFocusedHorizontalButton} data-testid='channel-actions-scroller' className='flex min-w-0 max-w-full gap-2 overflow-x-auto p-1'>
+      <PermissionGuard requiredSystemScope='read_settings'>
+        {/* Load Balancing Strategy - navigate to system retry configuration */}
+        <Button
+          variant='outline'
+          className='shrink-0 space-x-1'
+          onClick={() => navigate({ to: '/system', search: { tab: 'retry' } })}
+        >
+          <span>{t('channels.loadBalancingStrategy')}</span> <IconScale size={18} />
+        </Button>
+      </PermissionGuard>
+
+      <PermissionGuard requiredSystemScope='read_settings'>
+        <Button variant='outline' className='shrink-0 space-x-1' onClick={() => setOpen('channelSettings')}>
+          <span>{t('channels.actions.settings')}</span> <IconSettings size={18} />
+        </Button>
+      </PermissionGuard>
+
+      {/* Templates are private to the current user, so this is not gated on
+          channel write scope — it matches the per-channel override entry. */}
+      <Button
+        variant='outline'
+        className='shrink-0 space-x-1'
+        onClick={() => setOpen('templates')}
+        data-testid='manage-templates-button'
+      >
+        <span>{t('channels.templates.manager.button')}</span> <IconTemplate size={18} />
+      </Button>
+
+      <PermissionGuard requiredScope='write_channels'>
+        <>
+          {/* Bulk Import - requires write_channels permission */}
+          <Button variant='outline' className='shrink-0 space-x-1' onClick={() => setOpen('bulkImport')}>
+            <span>{t('channels.importChannels', '批量导入')}</span> <IconUpload size={18} />
+          </Button>
+
+          {/* Bulk Ordering - requires write_channels permission */}
+          <Button variant='outline' className='shrink-0 space-x-1' onClick={() => setOpen('bulkOrdering')}>
+            <span>{t('channels.orderChannels')}</span> <IconArrowsSort size={18} />
+          </Button>
+
+          {/* Add Channel - requires write_channels permission */}
+          <Button className='shrink-0 space-x-1' onClick={() => setOpen('add')} data-testid='add-channel-button'>
+            <span>{t('channels.addChannel')}</span> <IconPlus size={18} />
+          </Button>
+        </>
+      </PermissionGuard>
+    </div>
+  );
+}

@@ -1,0 +1,6 @@
+{
+  "case": "error-payload",
+  "exit_code": 0,
+  "stdout": "{\n  \"error\": \"error: rate limited, code: 429, type: rate_limit\"\n}\n",
+  "stderr": ""
+}

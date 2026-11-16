@@ -399,3 +399,7 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Local AxonHub configuration (may contain secrets)
+config.yml
+config.yaml
