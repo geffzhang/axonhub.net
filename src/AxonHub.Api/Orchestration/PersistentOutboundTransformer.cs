@@ -815,6 +815,13 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     /// <summary>Port of HasMoreChannels: is there a candidate after the current one?</summary>
     public bool HasMoreChannels() => _candidateIndex + 1 < _candidates.Length;
 
+    /// <summary>
+    /// Terminal provider authentication, quota, and content-filter failures
+    /// must be returned to the caller rather than sent to another channel.
+    /// </summary>
+    public bool CanSwitchChannel(Exception error)
+        => !ChannelRetryPredicate.IsTerminalUpstreamError(error);
+
     /// <summary>Port of NextChannel: advance the candidate and count the retry attempt.</summary>
     public Exception? TryNextChannel(CancellationToken cancellationToken)
     {
@@ -856,6 +863,11 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
     public bool CanRetry(Exception error)
     {
         if (_candidateIndex >= _candidates.Length)
+        {
+            return false;
+        }
+
+        if (ChannelRetryPredicate.IsTerminalUpstreamError(error))
         {
             return false;
         }

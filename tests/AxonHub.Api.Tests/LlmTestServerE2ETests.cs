@@ -1,8 +1,5 @@
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using AxonHub.Abstractions;
 using AxonHub.Api.Endpoints;
 using AxonHub.Api.Orchestration;
@@ -29,7 +26,11 @@ namespace AxonHub.Api.Tests;
 /// </code>
 /// then set <c>AXONHUB_E2E_LLM_TEST_SERVER_URL=http://localhost:8080</c>
 /// (and optionally <c>AXONHUB_E2E_LLM_TEST_SERVER_KEY</c>, default
-/// <c>test-key</c>) before <c>dotnet test</c>.
+/// <c>test-key</c>, a fake credential used only by the local fixture) before
+/// running the resilience suite:
+/// <code>
+/// dotnet test tests\AxonHub.Api.Tests\AxonHub.Api.Tests.csproj --filter "FullyQualifiedName~LlmTestServerResilienceE2ETests"
+/// </code>
 /// </remarks>
 [Collection(OrleansCollection.Name)]
 public sealed class LlmTestServerE2ETests(GrainClusterFixture fixture)
@@ -46,10 +47,7 @@ public sealed class LlmTestServerE2ETests(GrainClusterFixture fixture)
         }
     }
 
-    private static readonly JsonSerializerOptions ConfigurationJson = new()
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
+    internal static LlmTestServerAdminClient AdminClient { get; } = new(ServerUrl, ApiKey);
 
     [LlmTestServerFact]
     public async Task NonStreamChatRoundTripsThroughRealHttpExecutor()
@@ -219,9 +217,6 @@ public sealed class LlmTestServerE2ETests(GrainClusterFixture fixture)
         string content,
         IReadOnlyList<string>? streamChunks)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-
         var configuration = new
         {
             requiredBearerToken = ApiKey,
@@ -237,15 +232,7 @@ public sealed class LlmTestServerE2ETests(GrainClusterFixture fixture)
             },
         };
 
-        using var response = await http.PostAsJsonAsync(
-            ServerUrl + "/admin-api/configure",
-            configuration,
-            ConfigurationJson);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.True(
-            response.IsSuccessStatusCode,
-            "LlmTestServer configure failed: " + (int)response.StatusCode + " " + body);
-        Assert.Contains("configured", body, StringComparison.Ordinal);
+        await AdminClient.ConfigureAsync(configuration);
     }
 }
 

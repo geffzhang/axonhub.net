@@ -75,6 +75,44 @@ public sealed class PersistentOutboundRetryTests
     }
 
     [Fact]
+    public void TerminalProviderErrorsNeverRetryTheSameChannel()
+    {
+        var candidate = CandidateWithModels(908, "m1", "m2");
+        candidate.RetrySettings = new ChannelRetrySettings
+        {
+            RetryableStatusCodes = [400, 401, 403, 429],
+        };
+        var harness = new Harness(candidate);
+        harness.Transformer.TransformRequest(Request("m1"));
+
+        var terminalErrors = new Exception[]
+        {
+            new ResponseError
+            {
+                StatusCode = 401,
+                Detail = new ErrorDetail { Code = "invalid_api_key" },
+            },
+            new ResponseError
+            {
+                StatusCode = 403,
+                Detail = new ErrorDetail { Code = "permission_denied" },
+            },
+            new ResponseError
+            {
+                StatusCode = 429,
+                Detail = new ErrorDetail { Code = "insufficient_quota" },
+            },
+            new ResponseError
+            {
+                StatusCode = 400,
+                Detail = new ErrorDetail { Code = "content_filter" },
+            },
+        };
+
+        Assert.All(terminalErrors, error => Assert.False(harness.Transformer.CanRetry(error)));
+    }
+
+    [Fact]
     public void CircuitBreakerSkipsNeverRetryTheSameChannel()
     {
         var harness = new Harness(CandidateWithModels(904, "m1", "m2"));

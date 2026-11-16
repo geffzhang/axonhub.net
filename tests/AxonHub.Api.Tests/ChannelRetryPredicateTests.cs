@@ -125,6 +125,38 @@ public sealed class ChannelRetryPredicateTests
         Assert.Equal(expected, ChannelRetryPredicate.IsRetryable(error, settings));
     }
 
+    [Theory]
+    [InlineData(401, "invalid_api_key", true)]
+    [InlineData(403, "permission_denied", true)]
+    [InlineData(429, "insufficient_quota", true)]
+    [InlineData(429, "insufficient_balance", true)]
+    [InlineData(400, "content_filter", true)]
+    [InlineData(429, "rate_limit_exceeded", false)]
+    [InlineData(500, "server_error", false)]
+    public void IdentifiesTerminalProviderErrors(int statusCode, string code, bool expected)
+    {
+        var error = new ResponseError
+        {
+            StatusCode = statusCode,
+            Detail = new ErrorDetail { Code = code },
+        };
+
+        Assert.Equal(expected, ChannelRetryPredicate.IsTerminalUpstreamError(error));
+    }
+
+    [Fact]
+    public void IdentifiesTerminalCodeInRawHttpClientErrorBody()
+    {
+        var error = new HttpClientError(
+            "POST",
+            "http://upstream.test",
+            429,
+            "429 Too Many Requests",
+            """{"error":{"code":"insufficient_quota"}}"""u8.ToArray());
+
+        Assert.True(ChannelRetryPredicate.IsTerminalUpstreamError(error));
+    }
+
     [Fact]
     public void ParsesRetrySettingsFromStoredJson()
     {
