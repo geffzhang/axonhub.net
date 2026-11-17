@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { graphqlRequest, GraphQLRequestError } from '@/gql/graphql';
+import { GRAPHQL_ACCEPT_HEADER, graphqlRequest, GraphQLRequestError } from '@/gql/graphql';
 import { toast } from 'sonner';
 import { getTokenFromStorage, useAuthStore } from '@/stores/authStore';
 import i18n from '@/lib/i18n';
@@ -1322,6 +1322,7 @@ export function useRestore() {
         method: 'POST',
         headers: {
           Authorization: token ? `Bearer ${token}` : '',
+          Accept: GRAPHQL_ACCEPT_HEADER,
         },
         body: formData,
       });
