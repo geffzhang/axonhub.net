@@ -16,10 +16,9 @@ namespace AxonHub.Api.Auth;
 /// GraphQL surface.
 /// </summary>
 public sealed class AdminJwtAuthMiddleware(
-    RequestDelegate next,
-    ManagementAuthService auth)
+    RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext context)
+    public async Task InvokeAsync(HttpContext context, ManagementAuthService auth)
     {
         ArgumentNullException.ThrowIfNull(context);
 

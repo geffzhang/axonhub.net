@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AxonHub.Api.Management;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Auth;
 
@@ -13,6 +14,30 @@ public static partial class ManagementAuthHandlers
 {
     private static readonly JsonSerializerOptions RequestJson =
         new(JsonSerializerDefaults.Web);
+
+    private static readonly Action<ILogger, Exception?> LogInvalidRefreshAuthorization =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(1010, "AdminAuthRefreshInvalidAuthorization"),
+            "Admin auth refresh rejected: missing or malformed Authorization header");
+
+    private static readonly Action<ILogger, Exception?> LogEmptyRefreshCredential =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(1011, "AdminAuthRefreshEmptyCredential"),
+            "Admin auth refresh rejected: empty bearer credential");
+
+    private static readonly Action<ILogger, string, Exception?> LogRefreshInvalidJwt =
+        LoggerMessage.Define<string>(
+            LogLevel.Information,
+            new EventId(1012, "AdminAuthRefreshInvalidJwt"),
+            "Admin auth refresh rejected invalid JWT (cause type: {CauseType})");
+
+    private static readonly Action<ILogger, string, string, Exception?> LogRefreshFailed =
+        LoggerMessage.Define<string, string>(
+            LogLevel.Error,
+            new EventId(1013, "AdminAuthRefreshFailed"),
+            "Admin auth refresh failed (exception type: {ExceptionType}, inner exception type: {InnerExceptionType})");
 
     /// <summary>Port of AuthHandlers.SignIn.</summary>
     public static async Task SignInAsync(
@@ -111,14 +136,17 @@ public static partial class ManagementAuthHandlers
     public static async Task RefreshAsync(
         HttpContext context,
         ManagementAuthService auth,
+        ILogger<ManagementAuthService> logger,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(auth);
+        ArgumentNullException.ThrowIfNull(logger);
 
         var authorization = context.Request.Headers.Authorization.ToString();
         if (!authorization.StartsWith("Bearer ", StringComparison.Ordinal))
         {
+            LogInvalidRefreshAuthorization(logger, null);
             await AbortResponse.WriteErrorAsync(
                     context,
                     StatusCodes.Status401Unauthorized,
@@ -131,6 +159,7 @@ public static partial class ManagementAuthHandlers
         var token = authorization["Bearer ".Length..].Trim();
         if (token.Length == 0)
         {
+            LogEmptyRefreshCredential(logger, null);
             await AbortResponse.WriteErrorAsync(
                     context,
                     StatusCodes.Status401Unauthorized,
@@ -149,8 +178,12 @@ public static partial class ManagementAuthHandlers
                     cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (InvalidJwtException)
+        catch (InvalidJwtException exception)
         {
+            LogRefreshInvalidJwt(
+                logger,
+                exception.InnerException?.GetType().Name ?? "invalid claims",
+                null);
             await AbortResponse.WriteErrorAsync(
                     context,
                     StatusCodes.Status401Unauthorized,
@@ -163,8 +196,13 @@ public static partial class ManagementAuthHandlers
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            LogRefreshFailed(
+                logger,
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none",
+                null);
             await AbortResponse.WriteErrorAsync(
                     context,
                     StatusCodes.Status500InternalServerError,

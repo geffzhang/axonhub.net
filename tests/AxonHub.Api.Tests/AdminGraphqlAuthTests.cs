@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Tests;
 
@@ -29,34 +30,37 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
     private const string Mutation = "mutation { updateRetryPolicy(input: { enabled: true }) }";
 
     private readonly AdminGraphqlGateServices _gate = new();
+    private readonly RecordingLogger<AdminGraphqlAuthMiddleware> _logger = new();
 
     private AdminGraphqlAuthMiddleware _middleware = null!;
+    private ManagementAuthService _auth = null!;
+    private IApiKeyAuthenticator _apiKeys = null!;
     private bool _nextCalled;
     private WebApplication _app = null!;
     private HttpClient _client = null!;
 
     public async Task InitializeAsync()
     {
-        var authenticator = new ApiKeyAuthenticator(
+        _apiKeys = new ApiKeyAuthenticator(
             _gate.ApiKeys,
             _gate.Projects,
             _gate.Users,
             ApiKeyAuthOptions.Default,
             TimeProvider.System);
+        _auth = new ManagementAuthService(
+            _gate.Users,
+            _gate.Systems,
+            _gate.Profiles,
+            _gate.Passwords,
+            _gate.Oidc);
         _middleware = new AdminGraphqlAuthMiddleware(
             _ =>
             {
                 _nextCalled = true;
                 return Task.CompletedTask;
             },
-            new ManagementAuthService(
-                _gate.Users,
-                _gate.Systems,
-                _gate.Profiles,
-                _gate.Passwords,
-                _gate.Oidc),
-            authenticator,
-            ApiKeyAuthOptions.Default);
+            ApiKeyAuthOptions.Default,
+            _logger);
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -65,6 +69,7 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
         builder.Services.AddScoped<ISystemSettingsAdminService>(
             _ => new SystemSettingsAdminService(_gate.Systems));
         builder.Services.AddSingleton<UserProfileService>();
+        builder.Services.AddSingleton<ILogger<AdminGraphqlAuthMiddleware>>(_logger);
 
         _app = builder.Build();
         _app.MapAdminGraphql();
@@ -226,6 +231,15 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
         Assert.Equal(
             "Failed to validate token",
             body.GetProperty("error").GetProperty("message").GetString());
+        Assert.Contains(
+            _logger.Entries,
+            entry => entry.Level == LogLevel.Error
+                && entry.Message.Contains("JWT validation failed", StringComparison.Ordinal)
+                && entry.Message.Contains(nameof(InvalidOperationException), StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            _logger.Entries,
+            entry => entry.Message.Contains("db down", StringComparison.Ordinal));
+        Assert.All(_logger.Entries, entry => Assert.Null(entry.Exception));
     }
 
     [Fact]
@@ -257,7 +271,7 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
             context.Request.Headers.Authorization = authorization;
         }
 
-        await _middleware.InvokeAsync(context);
+        await _middleware.InvokeAsync(context, _auth, _apiKeys);
 
         Assert.False(_nextCalled);
         Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
@@ -271,7 +285,7 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
         var context = NewHttpContext();
         context.Request.Headers.Authorization = "Bearer   " + _gate.Jwt + "  ";
 
-        await _middleware.InvokeAsync(context);
+        await _middleware.InvokeAsync(context, _auth, _apiKeys);
 
         Assert.True(_nextCalled);
         var identity = Assert.IsType<AdminGraphqlIdentity>(
@@ -480,5 +494,27 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
             response.StatusCode,
             document.RootElement.Clone(),
             response.Content.Headers.ContentType?.MediaType);
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull
+            => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _ = eventId;
+            Entries.Add((logLevel, formatter(state, exception), exception));
+        }
     }
 }
