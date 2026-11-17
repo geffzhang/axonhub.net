@@ -356,23 +356,60 @@ public sealed class AdminRequestContentEndpointTests : IAsyncLifetime, IDisposab
         _tempDirectory = Path.Combine(
             Path.GetTempPath(),
             "axonhub-content-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempDirectory);
+        var storageDirectory = Path.Combine(_tempDirectory, "storage");
+        Directory.CreateDirectory(storageDirectory);
+        const string outsideContent = "outside-storage-sentinel";
+        await File.WriteAllTextAsync(
+            Path.Combine(_tempDirectory, "traversal-marker.txt"), outsideContent);
 
         SeedRequest(row =>
         {
             row.ContentSaved = true;
             row.ContentStorageId = 5;
-            row.ContentStorageKey = "/1/requests/42/../../../../etc/passwd";
+            row.ContentStorageKey = "/1/requests/42/../../../../traversal-marker.txt";
+        });
+        SeedStorage("fs", new DataStorageSettings { Directory = storageDirectory });
+
+        using var response = await GetAsync("/admin/requests/42/content");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.DoesNotContain(outsideContent, body, StringComparison.Ordinal);
+        Assert.Empty(_backends.Created);
+
+        // Windows cleans a rooted path before file lookup; Unix rejects
+        // the relative traversal before reaching ServeFile.
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal("404 page not found\n", body);
+            Assert.Equal("text/plain", response.Content.Headers.ContentType!.MediaType);
+        }
+        else
+        {
+            using var error = JsonDocument.Parse(body);
+            Assert.Equal("Content not found", Message(error.RootElement));
+            Assert.Equal("application/json", response.Content.Headers.ContentType!.MediaType);
+        }
+    }
+
+    [Fact]
+    public async Task ContentFsMissingFileReturnsServeFileNotFound()
+    {
+        _tempDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "axonhub-content-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempDirectory);
+        SeedRequest(row =>
+        {
+            row.ContentSaved = true;
+            row.ContentStorageId = 5;
+            row.ContentStorageKey = ContentKey;
         });
         SeedStorage("fs", new DataStorageSettings { Directory = _tempDirectory });
 
         using var response = await GetAsync("/admin/requests/42/content");
 
-        // filepath.Clean drops the leading ".." on Windows (the path is
-        // rooted after FromSlash) and rejects it on Unix; both answer 404.
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-
-        // ServeFile's Error, not the gin JSON envelope.
         Assert.Equal("404 page not found\n", await response.Content.ReadAsStringAsync());
         Assert.Equal("text/plain", response.Content.Headers.ContentType!.MediaType);
     }

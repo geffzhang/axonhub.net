@@ -42,6 +42,11 @@ DeepSeek、OpenRouter 上游，以及非流式/流式、Embeddings、Images、�
 429 换渠道。韧性用例还验证重试预算及最后错误、认证/配额/内容过滤错误不回退、
 deadline、流中断与终止标记、熔断、自动禁用、trace 粘性选路和最终 usage 归属。
 
+`AbortConnection` 的服务端 `emittedContentFrames` 只证明帧已写出，不保证网关在
+连接重置前读到它。断流用例以网关记录的上游帧为依据：收到正文后必须保留前缀、
+报告 `upstream_stream_interrupted`，且不得回退或补成功终止标记；未收到正文时
+允许按预算回退，但不得拼接两个渠道的内容。首内容前、后两种路径另有确定性端点测试。
+
 ```bash
 docker run --rm -d --name llm-test-server \
   -p 8080:8080 \

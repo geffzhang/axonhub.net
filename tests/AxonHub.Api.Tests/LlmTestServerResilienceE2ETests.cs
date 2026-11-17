@@ -389,13 +389,14 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
     }
 
     [LlmTestServerFact]
-    public async Task AbortConnectionAfterFirstFrameClassifiesTransportFailure()
+    public async Task AbortConnectionRetriesOnlyBeforePrimaryContentIsReceived()
     {
         const string model = "resilience-abort-connection";
         const string primaryModel = "resilience-abort-connection-primary";
         const string fallbackModel = "resilience-abort-connection-fallback";
         const string prefix = "A visible prefix.";
         const string remainder = " A-only remainder.";
+        const string fallbackText = "B fallback marker.";
         await ConfigureChannelsAsync(
             model,
             primaryModel,
@@ -410,7 +411,7 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
                     afterContentFrames = 1,
                 },
             },
-            new { content = "B fallback marker." });
+            new { content = fallbackText });
 
         var primary = PrimaryChannel(model);
         var fallback = FallbackChannel(model);
@@ -424,13 +425,39 @@ public sealed class LlmTestServerResilienceE2ETests(GrainClusterFixture fixture)
 
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
         var stream = InspectOpenAiStream(ResponseBody(context));
-        Assert.Equal(prefix, stream.Text);
-        Assert.True(stream.HasErrorEvent);
-        Assert.Equal(UpstreamTransportErrors.StreamInterruptedCode, stream.ErrorCode);
-        Assert.False(stream.HasDoneMarker);
-        Assert.False(stream.HasFinishReason);
+        var primaryExecution = Assert.Single(
+            _recorder.Executions, execution => execution.ChannelId == PrimaryChannelId);
+        var receivedPrimary = InspectOpenAiStream(string.Concat(
+            _recorder.ExecutionChunkSaves
+                .Where(save => save.Id == primaryExecution.Id)
+                .SelectMany(save => save.Chunks)
+                .Select(chunk => "data: " + Encoding.UTF8.GetString(chunk.Data) + "\n\n")));
+
+        // A server-side flush does not acknowledge client receipt before a reset.
+        // Choose the expected outcome from the recorded upstream frames, not
+        // from the gateway response or the fact that the server emitted a frame.
+        if (receivedPrimary.Text.Length > 0)
+        {
+            Assert.Equal(prefix, receivedPrimary.Text);
+            Assert.Equal(prefix, stream.Text);
+            Assert.True(stream.HasErrorEvent);
+            Assert.Equal(UpstreamTransportErrors.StreamInterruptedCode, stream.ErrorCode);
+            Assert.False(stream.HasDoneMarker);
+            Assert.False(stream.HasFinishReason);
+            Assert.Equal(new[] { PrimaryChannelId }, _recorder.RequestChannels);
+            Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+        }
+        else
+        {
+            Assert.Equal(fallbackText, stream.Text);
+            Assert.False(stream.HasErrorEvent);
+            Assert.True(stream.HasDoneMarker);
+            Assert.True(stream.HasFinishReason);
+            Assert.Equal(new[] { PrimaryChannelId, FallbackChannelId }, _recorder.RequestChannels);
+            Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
+        }
+
         Assert.Equal(1, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("openai"));
-        Assert.Equal(0, await LlmTestServerE2ETests.AdminClient.CountRequestsAsync("groq"));
 
         using var requests = await LlmTestServerE2ETests.AdminClient.GetRequestsAsync("provider=openai");
         var request = Assert.Single(requests.RootElement.EnumerateArray());

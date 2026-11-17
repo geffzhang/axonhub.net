@@ -255,6 +255,68 @@ public sealed class ChatCompletionEndpointTests(GrainClusterFixture fixture)
         Assert.Equal("completed", requestResult.Status);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StreamTransportFailureRetriesOnlyBeforeContentIsReceived(bool receivePrimaryContent)
+    {
+        const string model = "stream-abort-boundary";
+        const string prefix = "A visible prefix.";
+        const string fallbackText = "B fallback marker.";
+        fixture.Channels.Set(
+            TestChannels.OpenAi(4814, model),
+            TestChannels.OpenAi(4815, model));
+        var primaryChunk = TestChannels.Data(
+            """{"id":"chatcmpl-a","object":"chat.completion.chunk","created":1,"model":"stream-abort-boundary","choices":[{"index":0,"delta":{"content":"A visible prefix."},"finish_reason":null}]}""");
+        var executor = new ScriptedExecutor
+        {
+            OnStream = (call, _, _) => call == 0
+                ? new ListStream<StreamEvent>(
+                    receivePrimaryContent ? [primaryChunk] : [],
+                    new IOException("connection reset"))
+                : new ListStream<StreamEvent>(
+                    [
+                        TestChannels.Data(
+                            """{"id":"chatcmpl-b","object":"chat.completion.chunk","created":1,"model":"stream-abort-boundary","choices":[{"index":0,"delta":{"content":"B fallback marker."},"finish_reason":null}]}"""),
+                        TestChannels.Data(
+                            """{"id":"chatcmpl-b","object":"chat.completion.chunk","created":1,"model":"stream-abort-boundary","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"""),
+                        TestChannels.Data("[DONE]"),
+                    ]),
+        };
+        var recorder = new RecordingRequestChainRecorder();
+        var context = NewContext(RequestBody(model, stream: true));
+        var orchestrator = NewOrchestrator(executor, new RecordingMetricsRecorder(), recorder);
+
+        await ChatCompletionEndpoint.HandleAsync(context, orchestrator);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        var body = ResponseBody(context);
+        var primaryChunks = Assert.Single(
+            recorder.ExecutionChunkSaves,
+            save => save.Id == recorder.Executions[0].Id).Chunks;
+        if (receivePrimaryContent)
+        {
+            Assert.Equal(1, executor.Calls);
+            Assert.Equal(primaryChunk.Data, Assert.Single(primaryChunks).Data);
+            Assert.Contains(prefix, body, StringComparison.Ordinal);
+            Assert.DoesNotContain(fallbackText, body, StringComparison.Ordinal);
+            Assert.Contains("event:error", body, StringComparison.Ordinal);
+            Assert.Contains(UpstreamTransportErrors.StreamInterruptedCode, body, StringComparison.Ordinal);
+            Assert.DoesNotContain("[DONE]", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"finish_reason\":\"stop\"", body, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(2, executor.Calls);
+            Assert.Empty(primaryChunks);
+            Assert.DoesNotContain(prefix, body, StringComparison.Ordinal);
+            Assert.Contains(fallbackText, body, StringComparison.Ordinal);
+            Assert.DoesNotContain("event:error", body, StringComparison.Ordinal);
+            Assert.Contains("\"finish_reason\":\"stop\"", body, StringComparison.Ordinal);
+            Assert.EndsWith("data:[DONE]\n\n", body, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public async Task CustomUpstreamErrorPolicyRewritesProviderErrors()
     {

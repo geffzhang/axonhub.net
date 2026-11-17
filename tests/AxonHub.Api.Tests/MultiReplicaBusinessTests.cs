@@ -6,6 +6,7 @@ using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading.Channels;
+using AxonHub.Api.Management;
 using Dapper;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -238,6 +239,29 @@ public sealed class MultiReplicaBusinessTests(ITestOutputHelper output)
     }
 }
 
+public sealed class MultiReplicaProcessTests
+{
+    [Fact]
+    public async Task UnstartedProcessCanBeDisposed()
+    {
+        var process = new MultiReplicaProcess(
+            "unstarted", "cleanup", "Host=127.0.0.1", "http://127.0.0.1");
+
+        await process.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task FailedStartCanBeDisposedWithoutMaskingTheStartupError()
+    {
+        await using var process = new MultiReplicaProcess(
+            "failed-start", "cleanup", "Host=127.0.0.1", "http://127.0.0.1");
+        process.Process.StartInfo.WorkingDirectory = Path.Combine(
+            Path.GetTempPath(), "axonhub-missing-" + Guid.NewGuid().ToString("N"));
+
+        await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(process.StartAsync);
+    }
+}
+
 internal sealed class MultiReplicaEnvironment : IAsyncDisposable
 {
     public PostgreSqlContainer Database { get; } = new PostgreSqlBuilder("postgres:17-alpine")
@@ -355,19 +379,14 @@ internal sealed class MultiReplicaEnvironment : IAsyncDisposable
 internal sealed class MultiReplicaProcess : IAsyncDisposable
 {
     private readonly ConcurrentQueue<string> _lines = new();
+    private bool _started;
     public Process Process { get; }
     public HttpClient Client { get; }
     public string Diagnostics => string.Join("\n", _lines);
 
     public MultiReplicaProcess(string name, string cluster, string connectionString, string upstream)
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Directory.Build.props")))
-        {
-            root = root.Parent;
-        }
-
-        var dll = Path.Combine(root!.FullName, "src", "AxonHub.Api", "bin", "Debug", "net10.0", "AxonHub.Api.dll");
+        var dll = typeof(RequestContentHandlers).Assembly.Location;
         var url = "http://127.0.0.1:" + MultiReplicaEnvironment.FreePort();
         var start = new ProcessStartInfo("dotnet")
         {
@@ -430,7 +449,8 @@ internal sealed class MultiReplicaProcess : IAsyncDisposable
 
     public async Task StartAsync()
     {
-        Assert.True(Process.Start());
+        _started = Process.Start();
+        Assert.True(_started);
         Process.BeginOutputReadLine();
         Process.BeginErrorReadLine();
         await MultiReplicaEnvironment.EventuallyAsync(async () =>
@@ -447,7 +467,7 @@ internal sealed class MultiReplicaProcess : IAsyncDisposable
 
     public async Task KillAsync()
     {
-        if (!Process.HasExited)
+        if (_started && !Process.HasExited)
         {
             Process.Kill(entireProcessTree: true);
             await Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));

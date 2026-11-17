@@ -2392,6 +2392,10 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §278（2026-11-17）切换 GraphQL over HTTP September 2026 Edition，闭合 C165/C284 的排序请求错误状态码差异。按用户批准的完整切换，移除 `specifiedBy` 错误的旧 400 覆盖，改用 Hot Chocolate `HttpResponseFormatterOptions.HttpTransportVersion.September2026`；包含 `data`（含 null）的执行错误返回 294，无 `data` 的请求错误按响应媒体类型返回 422（`application/graphql-response+json`）或 400（`application/json`），成功响应按 `Accept` 协商媒体类型。绕过 formatter 的 service-account 只读拒绝同步返回 422 和 `application/graphql-response+json`。管理面 GraphQL 测试 helper 统一按响应形状断言状态码；legacy frontend 媒体类型用例显式发送 `Accept: application/json`。定向测试分别通过 102/102、28/28。完整 Release API 全量复跑进行中，最终计数待补；C165/C284 已转 resolved，差异账为 338 条（192 accepted / 146 resolved / 0 gap），lint 已通过。
 
+§279（2026-11-18）修复 Linux nightly 的两项 API 测试失败。目录越界用例新增存储目录外的哨兵文件，验证 404、不返回哨兵内容且不调用存储 backend；保留参照的平台差异：Unix 在相对路径校验阶段返回 JSON `Content not found`，Windows 清理根路径后由文件查找返回纯文本 404。新增普通缺失文件用例，独立锁定 ServeFile 的纯文本响应。多实例测试改为启动当前测试引用的 API 程序集，不再硬编码 `bin/Debug`；仅在启动成功后检查 `HasExited`，防止清理异常掩盖原始启动错误。新增未启动及启动失败的清理回归，用例在修复前均复现 `No process is associated with this object`。Windows Release 定向 `AdminRequestContentEndpointTests` / `MultiReplicaProcessTests` / `MultiReplicaBusinessTests` **46/46 通过**，包含真实双 API 进程的共享业务与故障恢复；同一 Release 测试产物在 Linux SDK 容器运行内容端点和进程清理用例 **45/45 通过**。本次未重跑完整 API 套件或 LlmTestServer E2E，不代表整条 CI 已全绿。
+
+§280（2026-11-18）修正 `AbortConnection` 真实 E2E 对首帧交付的竞态假设。原用例在 Linux SDK 容器复现：LlmTestServer 已记录一帧写出并立即中止连接，但网关尚未读到正文，按预算回退到 B，断言却无条件要求 A 的前缀。用例改名为 `AbortConnectionRetriesOnlyBeforePrimaryContentIsReceived`，用网关持久化 seam 记录的 A 上游帧（而非网关最终响应或服务端 emitted 计数）决定断言路径：收到正文则必须保留 A 前缀、返回 `upstream_stream_interrupted`、不回退且无成功终止标记；未收到正文则必须仅返回 B 的完整结果，且两渠道各尝试一次。原服务端故障模式、应用状态、帧计数、无 terminal 的证据断言保留。新增确定性端点 theory 分别锁定首内容前重试和首内容后不重试，并验证原始帧记录。未修改生产重试逻辑。Windows Release 与 Linux SDK 容器的完整 LlmTestServer 矩阵加端点测试分别 **57/57 通过**；Linux 真实 abort 用例额外连续 **10/10 通过**；LLM pipeline 的 precommit retry / after-content no-retry 契约 **2/2 通过**。本次未重跑完整 API 套件或远端 CI。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
