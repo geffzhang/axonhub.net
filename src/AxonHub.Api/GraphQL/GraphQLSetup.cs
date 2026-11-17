@@ -1,4 +1,3 @@
-using System.Net;
 using AxonHub.Api.Management;
 using HotChocolate.AspNetCore;
 using HotChocolate.AspNetCore.Formatters;
@@ -67,31 +66,11 @@ public static class GraphQLSetup
             .AddTypeExtension<ChannelModelPriceVersionTypeExtensions>()
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
             .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>()
-            .AddHttpResponseFormatter<GoCompatibleHttpResponseFormatter>();
-    }
-}
-
-internal sealed class GoCompatibleHttpResponseFormatter : DefaultHttpResponseFormatter
-{
-    public GoCompatibleHttpResponseFormatter()
-        : base(
+            .AddHttpResponseFormatter(
             new HttpResponseFormatterOptions
             {
-                HttpTransportVersion = HttpTransportVersion.Legacy,
-            },
-            new DefaultTimeProvider(),
-            IncrementalDeliveryFormat.Version_0_2)
-    {
-    }
-
-    protected override HttpStatusCode OnDetermineStatusCode(
-        OperationResult result,
-        DefaultHttpResponseFormatter.FormatInfo format,
-        HttpStatusCode? proposedStatusCode)
-    {
-        return result.Errors.Any(static error => error.Extensions?.ContainsKey("specifiedBy") == true)
-            ? HttpStatusCode.BadRequest
-            : base.OnDetermineStatusCode(result, format, proposedStatusCode);
+                HttpTransportVersion = HttpTransportVersion.September2026,
+            });
     }
 }
 

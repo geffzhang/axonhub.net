@@ -2390,6 +2390,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §277（2026-11-17）修复 API 全量回归的四项失败。C338 转 resolved：`CanRetry` 让配置的 `retryableErrorPatterns` 命中时可对终态 401/403 做显式同通道重试，同时保留终态错误不跨渠道切换及仅配置状态码不足以重试的行为。GraphQL 排序输入字段改为必填且无 schema 默认值；HTTP formatter 保持 Legacy JSON 与 resolver-error 200，只将带 GraphQL `specifiedBy` 验证标记的请求错误映射为 HTTP 400。Safeguards 单渠道 reviewer 用例额外连续复验 20 次通过。修复后 Release API 全量 **7259 项（7216 通过、0 失败、43 跳过）**，耗时 53m50s；43 项为未配置 `AXONHUB_E2E_LLM_TEST_SERVER_URL` 时跳过的 LlmTestServer E2E。定向重试 / GraphQL 回归 26/26。台账 338 条（192 accepted / 144 resolved / 2 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§278（2026-11-17）切换 GraphQL over HTTP September 2026 Edition，闭合 C165/C284 的排序请求错误状态码差异。按用户批准的完整切换，移除 `specifiedBy` 错误的旧 400 覆盖，改用 Hot Chocolate `HttpResponseFormatterOptions.HttpTransportVersion.September2026`；包含 `data`（含 null）的执行错误返回 294，无 `data` 的请求错误按响应媒体类型返回 422（`application/graphql-response+json`）或 400（`application/json`），成功响应按 `Accept` 协商媒体类型。绕过 formatter 的 service-account 只读拒绝同步返回 422 和 `application/graphql-response+json`。管理面 GraphQL 测试 helper 统一按响应形状断言状态码；legacy frontend 媒体类型用例显式发送 `Accept: application/json`。定向测试分别通过 102/102、28/28。完整 Release API 全量复跑进行中，最终计数待补；C165/C284 已转 resolved，差异账为 338 条（192 accepted / 146 resolved / 0 gap），lint 已通过。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

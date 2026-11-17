@@ -301,7 +301,7 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
 
         var (status, body, _) = await PostAsync("Bearer sk-service-account", "{ me { id } }");
 
-        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(294, (int)status);
         var error = Assert.Single(body.GetProperty("errors").EnumerateArray());
         Assert.Equal("user not found in context", error.GetProperty("message").GetString());
     }
@@ -311,12 +311,16 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
     {
         _gate.AddServiceAccountKey();
 
-        var (status, body, contentType) = await PostAsync("Bearer sk-service-account", Mutation);
+        var (status, body, contentType) = await PostAsync(
+            "Bearer sk-service-account",
+            Mutation,
+            accept: "application/json");
 
-        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, status);
 
-        // gqlgen's one-shot ErrorResponse: application/json, message only.
-        Assert.Equal("application/json", contentType);
+        // A request error uses the GraphQL response media type even for a
+        // legacy client that only accepts application/json.
+        Assert.Equal("application/graphql-response+json", contentType);
         var error = Assert.Single(body.GetProperty("errors").EnumerateArray());
         Assert.Equal(
             "service account API keys are read-only",
@@ -354,7 +358,9 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
             document,
             operationName: operationName);
 
-        Assert.True(status == HttpStatusCode.OK, body.ToString());
+        Assert.Equal(
+            allowed ? HttpStatusCode.OK : HttpStatusCode.UnprocessableEntity,
+            status);
         if (allowed)
         {
             Assert.True(body.TryGetProperty("data", out _), body.ToString());
@@ -471,7 +477,8 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
         string? authorization,
         string query,
         string? projectId = null,
-        string? operationName = null)
+        string? operationName = null,
+        string? accept = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql");
         if (authorization is not null)
@@ -482,6 +489,11 @@ public sealed class AdminGraphqlAuthTests : IAsyncLifetime
         if (projectId is not null)
         {
             request.Headers.TryAddWithoutValidation("X-Project-ID", projectId);
+        }
+
+        if (accept is not null)
+        {
+            request.Headers.TryAddWithoutValidation("Accept", accept);
         }
 
         var payload = JsonSerializer.Serialize(new { query, operationName });

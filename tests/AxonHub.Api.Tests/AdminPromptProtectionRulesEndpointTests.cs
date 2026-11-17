@@ -1308,7 +1308,7 @@ public sealed class AdminPromptProtectionRulesEndpointTests : IAsyncLifetime
 
         using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, body);
+        AdminGraphqlHttpResponseAssertions.AssertStatus(response, body);
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();

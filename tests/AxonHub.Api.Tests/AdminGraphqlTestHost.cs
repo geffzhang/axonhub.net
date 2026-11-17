@@ -1,4 +1,6 @@
+using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
 using AxonHub.Api.Auth;
 using AxonHub.Api.Management;
 using AxonHub.Api.Static;
@@ -240,5 +242,34 @@ internal static class AdminGraphqlHostBuilder
                 branch.UseMiddleware<ApiKeyReadOnlyMiddleware>();
             });
         return app;
+    }
+}
+
+internal static class AdminGraphqlHttpResponseAssertions
+{
+    public static void AssertStatus(HttpResponseMessage response, string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        AssertStatus(
+            response.StatusCode,
+            document.RootElement,
+            response.Content.Headers.ContentType?.MediaType);
+    }
+
+    public static void AssertStatus(
+        HttpStatusCode status,
+        JsonElement root,
+        string? mediaType)
+    {
+        var hasErrors = root.TryGetProperty("errors", out _);
+        var expectedStatus = !hasErrors
+            ? HttpStatusCode.OK
+            : root.TryGetProperty("data", out _)
+                ? (HttpStatusCode)294
+                : mediaType == "application/graphql-response+json"
+                    ? (HttpStatusCode)422
+                    : HttpStatusCode.BadRequest;
+
+        Assert.Equal(expectedStatus, status);
     }
 }

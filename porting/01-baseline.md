@@ -9561,6 +9561,27 @@ fixed / round_robin_success 的 cursor 规则）、`internal/server/biz/channel_
 不同，结果不可观察；发布点也因此从参照的「缓存 reload 时发布」变为「每次启用列表读取时发布」，
 内容幂等且与游标更新共用同一把锁。
 
+## 165. GraphQL over HTTP September 2026 Edition（2026-11-17）
+
+`/admin/graphql` 由 HotChocolate 16.8.0-p.15 的内置
+`HttpResponseFormatterOptions.HttpTransportVersion.September2026` 处理，不再使用
+Legacy transport 与 `specifiedBy` 特例状态码覆盖。对应正式规范：
+<https://http-spec.graphql.org/September2026/>。
+
+- GraphQL 请求校验失败（如连接排序输入缺少必填 `orderBy.field`）返回 HTTP 422。
+- 部分执行结果按 HotChocolate 的 September 2026 transport 状态规则返回；当前 resolver
+  错误回归为 HTTP 294。
+- `Accept: application/json` 的成功响应协商为 `application/json`；GraphQL 请求错误响应使用
+  `application/graphql-response+json`。
+- API key 只读中间件在 MapGraphQL 前拒绝 mutation / subscription，现也返回 HTTP 422 与
+  `application/graphql-response+json`，不再绕过 transport 契约返回 200。
+
+回归由 `AdminProjectUserEdgesEndpointTests.OrderWithoutFieldIsRejectedLikeTheReferenceSchema`、
+`AdminResidualEdgesEndpointTests.OrderWithoutFieldIsRejectedOnTheNewEdgesLikeTheReferenceSchema`、
+`AdminResidualEdgesEndpointTests.ResponseMediaTypeFollowsTheAcceptHeader` 与
+`AdminGraphqlAuthTests` 中的 resolver-error / read-only 用例锁定。C165 与 C284 的两个排序
+输入状态码 gap 已关闭；formatter 与 middleware 定向回归 7/7，相关 GraphQL 测试类 38/38。
+
 
 | 未覆盖部分 | 原因 | 风险 | 计划 |
 |---|---|---|---|

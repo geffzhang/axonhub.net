@@ -532,7 +532,7 @@ public sealed class AdminResidualEdgesEndpointTests : IAsyncLifetime
     {
         SeedApiKeySurface();
 
-        var (status, root) = await PostAsync(
+        var (status, root, contentType) = await PostAsync(
             """
             query OrderWithoutField($id: ID!) {
               node(id: $id) {
@@ -545,19 +545,45 @@ public sealed class AdminResidualEdgesEndpointTests : IAsyncLifetime
             }
             """,
             new { id = new GidValue("APIKey", 1).ToString() },
-            null);
+            null,
+            "application/graphql-response+json");
 
-        // Same engine-level contract as §209: ent.graphql declares
+        // Same request-validation contract as §209: ent.graphql declares
         // `field: XOrderField!` with no default.
-        Assert.True(status == HttpStatusCode.BadRequest, root.ToString());
+        Assert.True(status == HttpStatusCode.UnprocessableEntity, root.ToString());
+        Assert.Equal("application/graphql-response+json", contentType);
         var error = Assert.Single(root.GetProperty("errors").EnumerateArray());
         Assert.Equal("field", error.GetProperty("extensions").GetProperty("field").GetString());
     }
 
     [Fact]
+    public async Task ResponseMediaTypeFollowsTheAcceptHeader()
+    {
+        var (successStatus, success, successContentType) = await PostAsync(
+            "query { __typename }",
+            null,
+            null,
+            "application/json");
+
+        Assert.Equal(HttpStatusCode.OK, successStatus);
+        Assert.Equal("application/json", successContentType);
+        Assert.False(success.TryGetProperty("errors", out _), success.ToString());
+
+        var (errorStatus, error, errorContentType) = await PostAsync(
+            "query { unknownField }",
+            null,
+            null,
+            "application/graphql-response+json");
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, errorStatus);
+        Assert.Equal("application/graphql-response+json", errorContentType);
+        Assert.True(error.TryGetProperty("errors", out _), error.ToString());
+    }
+
+    [Fact]
     public async Task OrderingFieldsAreRequiredWithoutSchemaDefaults()
     {
-        var (status, root) = await PostAsync(
+        var (status, root, _) = await PostAsync(
             """
             query {
               request: __type(name: "RequestOrder") {
@@ -683,24 +709,35 @@ public sealed class AdminResidualEdgesEndpointTests : IAsyncLifetime
         object? variables = null,
         string? operationName = null)
     {
-        var (status, root) = await PostAsync(query, variables, operationName);
-        Assert.True(status == HttpStatusCode.OK, root.ToString());
+        var (status, root, contentType) = await PostAsync(query, variables, operationName);
+        AdminGraphqlHttpResponseAssertions.AssertStatus(status, root, contentType);
         Assert.False(root.TryGetProperty("errors", out _), root.ToString());
         return root.GetProperty("data");
     }
 
-    private async Task<(HttpStatusCode Status, JsonElement Root)> PostAsync(
+    private async Task<(HttpStatusCode Status, JsonElement Root, string? ContentType)> PostAsync(
         string query,
         object? variables,
-        string? operationName)
+        string? operationName,
+        string? accept = null)
     {
         var payload = JsonSerializer.Serialize(new { query, variables, operationName });
-        using var response = await _client.PostAsync(
-            "/admin/graphql",
-            new StringContent(payload, Encoding.UTF8, "application/json"));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+        };
+        if (accept is not null)
+        {
+            request.Headers.TryAddWithoutValidation("Accept", accept);
+        }
+
+        using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
         using var document = JsonDocument.Parse(body);
-        return (response.StatusCode, document.RootElement.Clone());
+        return (
+            response.StatusCode,
+            document.RootElement.Clone(),
+            response.Content.Headers.ContentType?.MediaType);
     }
 }
 

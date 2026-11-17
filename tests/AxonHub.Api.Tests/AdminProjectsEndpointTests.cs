@@ -832,7 +832,7 @@ public sealed class AdminProjectsEndpointTests : IAsyncLifetime
             "/admin/graphql",
             new StringContent(payload, Encoding.UTF8, "application/json"));
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, body);
+        AdminGraphqlHttpResponseAssertions.AssertStatus(response, body);
 
         using var document = JsonDocument.Parse(body);
         var error = document.RootElement.GetProperty("errors").EnumerateArray().First();
@@ -937,7 +937,7 @@ public sealed class AdminProjectsEndpointTests : IAsyncLifetime
             new StringContent(payload, Encoding.UTF8, "application/json"));
 
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, body);
+        AdminGraphqlHttpResponseAssertions.AssertStatus(response, body);
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();

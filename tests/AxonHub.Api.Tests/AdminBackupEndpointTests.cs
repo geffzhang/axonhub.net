@@ -541,9 +541,7 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
         object? variables = null,
         string? token = null)
     {
-        // HotChocolate rejects schema-invalid enum variables as request errors
-        // (HTTP 400), where gqlgen answers 200 with an errors envelope (C198).
-        var root = await ExecuteAsync(query, variables, token, allowRequestError: true);
+        var root = await ExecuteAsync(query, variables, token);
         Assert.True(root.TryGetProperty("errors", out var errors), root.ToString());
         return errors.EnumerateArray().Select(static error => error.Clone()).ToArray();
     }
@@ -551,8 +549,7 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
     private async Task<JsonElement> ExecuteAsync(
         string query,
         object? variables,
-        string? token,
-        bool allowRequestError = false)
+        string? token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql")
         {
@@ -567,10 +564,7 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
 
         using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(
-            response.StatusCode == HttpStatusCode.OK
-            || (allowRequestError && (int)response.StatusCode is >= 400 and < 500),
-            body);
+        AdminGraphqlHttpResponseAssertions.AssertStatus(response, body);
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();
@@ -615,7 +609,7 @@ public sealed class AdminBackupEndpointTests : IAsyncLifetime
 
         using var response = await _client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, body);
+        AdminGraphqlHttpResponseAssertions.AssertStatus(response, body);
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();

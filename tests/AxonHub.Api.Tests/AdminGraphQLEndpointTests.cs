@@ -88,9 +88,12 @@ public sealed class AdminGraphQLEndpointTests : IAsyncLifetime
     public async Task ResponseUsesJsonMediaTypeForLegacyFrontend()
     {
         var payload = JsonSerializer.Serialize(new { query = "{ allScopes { scope } }" });
-        using var response = await _client.PostAsync(
-            "/admin/graphql",
-            new StringContent(payload, Encoding.UTF8, "application/json"));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/graphql")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        using var response = await _client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
@@ -176,7 +179,7 @@ public sealed class AdminGraphQLEndpointTests : IAsyncLifetime
             new StringContent(payload, Encoding.UTF8, "application/json"));
 
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, body);
+        AdminGraphqlHttpResponseAssertions.AssertStatus(response, body);
 
         using var document = JsonDocument.Parse(body);
         var root = document.RootElement.Clone();

@@ -25,7 +25,7 @@ AxonHub.NET 的验收标准是**可观察行为等价**，不是逐行翻译，�
 | 差异台账 | [`porting/differences.jsonl`](../../../porting/differences.jsonl) / [`02-differences.md`](../../../porting/02-differences.md) | `C###` 编号的现象、原因、决策、测试 |
 | 验收账 | [`porting/03-acceptance.md`](../../../porting/03-acceptance.md) | 测试数字、公开 API、E2E、容器与风险 |
 
-当前台账：**338 条（192 accepted / 144 resolved / 2 gap）**。`accepted`
+当前台账：**338 条（192 accepted / 146 resolved / 0 gap）**。`accepted`
 表示已解释并接受的语言/平台差异，不是未发现的问题。
 
 ## 差异类别
@@ -60,6 +60,7 @@ python -I porting/scripts/reference_lock.py check \
 | 边界 | 说明 |
 | --- | --- |
 | 数据库 | 仅 PostgreSQL；SQLite/MySQL/读副本未移植（C011） |
+| GraphQL HTTP | `/admin/graphql` 使用 GraphQL over HTTP September 2026 Edition；请求错误为 422、带 `data` 的执行错误为 294；媒体类型遵循规范协商（C109） |
 | GCP OAuth | 交互式 web/installed OAuth 不支持（C128） |
 | WebSocket | 端口自写 TLS/SSE 不声明 ALPN，WebSocket 使用 HTTP/1.1 |
 | 日志 | 使用 ASP.NET Core 日志；参照文件轮转日志未逐项移植 |

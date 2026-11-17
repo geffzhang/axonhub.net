@@ -15,7 +15,7 @@ namespace AxonHub.Api.Auth;
 /// </summary>
 public sealed class ApiKeyReadOnlyMiddleware(RequestDelegate next)
 {
-    /// <summary>graphql.ErrorResponse(ctx, ...) body: message only, no data.</summary>
+    /// <summary>GraphQL request-error body: message only, no data.</summary>
     public const string ReadOnlyError = "service account API keys are read-only";
 
     public async Task InvokeAsync(HttpContext context)
@@ -139,11 +139,11 @@ public sealed class ApiKeyReadOnlyMiddleware(RequestDelegate next)
 
     private static async Task WriteReadOnlyAsync(HttpContext context)
     {
-        // gqlgen's ErrorResponse one-shot: 200, JSON errors array, no data.
-        context.Response.StatusCode = StatusCodes.Status200OK;
-        context.Response.ContentType = "application/json";
-        await context.Response.WriteAsJsonAsync(
+        context.Response.StatusCode = StatusCodes.Status422UnprocessableEntity;
+        context.Response.ContentType = "application/graphql-response+json";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body,
             new { errors = new[] { new { message = ReadOnlyError } } },
-            context.RequestAborted).ConfigureAwait(false);
+            cancellationToken: context.RequestAborted).ConfigureAwait(false);
     }
 }

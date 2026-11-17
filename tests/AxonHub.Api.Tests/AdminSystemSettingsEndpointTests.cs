@@ -799,8 +799,7 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
                 probe: { enabled: true, frequency: NOPE }
               })
             }
-            """,
-            allowRequestError: true);
+            """);
 
         Assert.True(response.TryGetProperty("errors", out var errors));
         Assert.NotEmpty(errors.EnumerateArray());
@@ -1970,7 +1969,7 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         return response.GetProperty("data");
     }
 
-    private async Task<JsonElement> PostAsync(string query, bool allowRequestError = false)
+    private async Task<JsonElement> PostAsync(string query)
     {
         var payload = JsonSerializer.Serialize(new { query });
         using var response = await _client.PostAsync(
@@ -1978,12 +1977,7 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
             new StringContent(payload, Encoding.UTF8, "application/json"));
 
         var body = await response.Content.ReadAsStringAsync();
-        // HotChocolate validates variable/enum literals before the resolver and
-        // answers 400; gqlgen returns 200 with an errors envelope (C198/C232).
-        Assert.True(
-            response.StatusCode == HttpStatusCode.OK
-                || (allowRequestError && (int)response.StatusCode is >= 400 and < 500),
-            $"Unexpected HTTP status {(int)response.StatusCode} ({response.StatusCode}): {body}");
+        AdminGraphqlHttpResponseAssertions.AssertStatus(response, body);
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();

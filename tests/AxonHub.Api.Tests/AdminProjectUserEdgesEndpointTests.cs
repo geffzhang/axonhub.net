@@ -328,7 +328,7 @@ public sealed class AdminProjectUserEdgesEndpointTests : IAsyncLifetime
     {
         SeedProjectsAndYourMembers();
 
-        var (status, root) = await PostAsync(
+        var (status, root, contentType) = await PostAsync(
             """
             query OrderWithoutField($id: ID!) {
               node(id: $id) {
@@ -344,11 +344,10 @@ public sealed class AdminProjectUserEdgesEndpointTests : IAsyncLifetime
             null);
 
         // ent.graphql declares `field: XOrderField!` with no default
-        // (ent.graphql:7319-7326), so gqlgen rejects an orderBy that only sets
-        // the direction. The port's CLR initializer must not leak into the SDL
-        // as a default value. The 400 status is HotChocolate's envelope
-        // (C109's accepted engine substitution), not a semantic difference.
-        Assert.Equal(HttpStatusCode.BadRequest, status);
+        // (ent.graphql:7319-7326). The missing field is a GraphQL request
+        // validation error, which the September 2026 HTTP edition maps to 422.
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, status);
+        Assert.Equal("application/graphql-response+json", contentType);
         var error = Assert.Single(root.GetProperty("errors").EnumerateArray());
         Assert.Equal("field", error.GetProperty("extensions").GetProperty("field").GetString());
         Assert.Equal(
@@ -630,13 +629,13 @@ public sealed class AdminProjectUserEdgesEndpointTests : IAsyncLifetime
         object? variables = null,
         string? operationName = null)
     {
-        var (status, root) = await PostAsync(query, variables, operationName);
-        Assert.True(status == HttpStatusCode.OK, root.ToString());
+        var (status, root, contentType) = await PostAsync(query, variables, operationName);
+        AdminGraphqlHttpResponseAssertions.AssertStatus(status, root, contentType);
         Assert.False(root.TryGetProperty("errors", out _), root.ToString());
         return root.GetProperty("data");
     }
 
-    private async Task<(HttpStatusCode Status, JsonElement Root)> PostAsync(
+    private async Task<(HttpStatusCode Status, JsonElement Root, string? ContentType)> PostAsync(
         string query,
         object? variables,
         string? operationName)
@@ -647,6 +646,9 @@ public sealed class AdminProjectUserEdgesEndpointTests : IAsyncLifetime
             new StringContent(payload, Encoding.UTF8, "application/json"));
         var body = await response.Content.ReadAsStringAsync();
         using var document = JsonDocument.Parse(body);
-        return (response.StatusCode, document.RootElement.Clone());
+        return (
+            response.StatusCode,
+            document.RootElement.Clone(),
+            response.Content.Headers.ContentType?.MediaType);
     }
 }
