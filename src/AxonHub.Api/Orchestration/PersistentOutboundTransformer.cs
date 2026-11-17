@@ -867,11 +867,6 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             return false;
         }
 
-        if (ChannelRetryPredicate.IsTerminalUpstreamError(error))
-        {
-            return false;
-        }
-
         // Local circuit-breaker bounce: never retry the same channel
         // (outbound.go:1040-1042).
         if (error is ModelCircuitBreakerSkipException)
@@ -910,6 +905,11 @@ public sealed class PersistentOutboundTransformer : IOutboundTransformer, IRetry
             && !ChannelRetriesOn429(candidate))
         {
             return false;
+        }
+
+        if (ChannelRetryPredicate.IsTerminalUpstreamError(error))
+        {
+            return ChannelRetryPredicate.IsRetryableByErrorText(error, candidate.RetrySettings);
         }
 
         // outbound.go:807-812 — a candidate with another model left is always

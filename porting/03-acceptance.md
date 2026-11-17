@@ -2388,6 +2388,8 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §276（2026-11-15）非流式已分类传输错误不再被上游错误策略重写（C031 收口）。C332 登记并转 resolved：Api 全量发现 `HiddenPolicyDoesNotRewriteClassifiedTransportErrors` 失败；端口先分类 IOException reset 为 502 `upstream_error` / `upstream_stream_interrupted`，但 `ApplyAsync` 仍沿 Cause 链看到 pipeline 的 upstream marker，把分类结果重写成默认文案。修复为：`ApplyAsync` 对已分类的 `upstream_stream_interrupted` ResponseError 短路返回；流式路径保持既有分类 + policy 语义。定向 `HiddenPolicy*` / `CustomUpstreamErrorPolicy*` / `UpstreamTransportError*` 45/45。Api 全量本轮实测 **7137（7133 通过 + 1 该失败 + 3 跳过）**，修复后未再跑全量；Llm 全量 3437/3437，Persistence 276、Grains 95 维持最近记录；合计 10945。台账 332 条（190 accepted / 142 resolved / 0 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
 
+§277（2026-11-17）修复 API 全量回归的四项失败。C338 转 resolved：`CanRetry` 让配置的 `retryableErrorPatterns` 命中时可对终态 401/403 做显式同通道重试，同时保留终态错误不跨渠道切换及仅配置状态码不足以重试的行为。GraphQL 排序输入字段改为必填且无 schema 默认值；HTTP formatter 保持 Legacy JSON 与 resolver-error 200，只将带 GraphQL `specifiedBy` 验证标记的请求错误映射为 HTTP 400。Safeguards 单渠道 reviewer 用例额外连续复验 20 次通过。修复后 Release API 全量 **7259 项（7216 通过、0 失败、43 跳过）**，耗时 53m50s；43 项为未配置 `AXONHUB_E2E_LLM_TEST_SERVER_URL` 时跳过的 LlmTestServer E2E。定向重试 / GraphQL 回归 26/26。台账 338 条（192 accepted / 144 resolved / 2 gap），`diff_register.py lint` 通过，`02-differences.md` 已重新生成。
+
 ## 公开 API 审计
 
 - 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

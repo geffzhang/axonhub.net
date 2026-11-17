@@ -1983,7 +1983,7 @@ public sealed class AdminSystemSettingsEndpointTests : IAsyncLifetime
         Assert.True(
             response.StatusCode == HttpStatusCode.OK
                 || (allowRequestError && (int)response.StatusCode is >= 400 and < 500),
-            body);
+            $"Unexpected HTTP status {(int)response.StatusCode} ({response.StatusCode}): {body}");
 
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();

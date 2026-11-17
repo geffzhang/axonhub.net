@@ -46,6 +46,11 @@ public static class ChannelRetryPredicate
         return settings is not null && settings.Matches(statusCode, ErrorText(error));
     }
 
+    public static bool IsRetryableByErrorText(Exception? error, ChannelRetrySettings? settings)
+        => error is not null
+            && settings is not null
+            && settings.MatchesErrorText(ErrorText(error));
+
     /// <summary>
     /// Provider errors that cannot be repaired by switching to another
     /// channel: authentication/permission statuses, permanent quota codes,

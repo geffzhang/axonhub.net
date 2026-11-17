@@ -25,7 +25,7 @@ AxonHub.NET 的验收标准是**可观察行为等价**，不是逐行翻译，�
 | 差异台账 | [`porting/differences.jsonl`](../../../porting/differences.jsonl) / [`02-differences.md`](../../../porting/02-differences.md) | `C###` 编号的现象、原因、决策、测试 |
 | 验收账 | [`porting/03-acceptance.md`](../../../porting/03-acceptance.md) | 测试数字、公开 API、E2E、容器与风险 |
 
-当前台账：**335 条（190 accepted / 145 resolved / 0 gap）**。`accepted`
+当前台账：**338 条（192 accepted / 144 resolved / 2 gap）**。`accepted`
 表示已解释并接受的语言/平台差异，不是未发现的问题。
 
 ## 差异类别

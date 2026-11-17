@@ -549,9 +549,42 @@ public sealed class AdminResidualEdgesEndpointTests : IAsyncLifetime
 
         // Same engine-level contract as §209: ent.graphql declares
         // `field: XOrderField!` with no default.
-        Assert.Equal(HttpStatusCode.BadRequest, status);
+        Assert.True(status == HttpStatusCode.BadRequest, root.ToString());
         var error = Assert.Single(root.GetProperty("errors").EnumerateArray());
         Assert.Equal("field", error.GetProperty("extensions").GetProperty("field").GetString());
+    }
+
+    [Fact]
+    public async Task OrderingFieldsAreRequiredWithoutSchemaDefaults()
+    {
+        var (status, root) = await PostAsync(
+            """
+            query {
+              request: __type(name: "RequestOrder") {
+                inputFields { name defaultValue type { kind name ofType { kind name } } }
+              }
+              role: __type(name: "RoleOrder") {
+                inputFields { name defaultValue type { kind name ofType { kind name } } }
+              }
+            }
+            """,
+            null,
+            null);
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.False(root.TryGetProperty("errors", out _), root.ToString());
+        AssertRequiredOrderField(root.GetProperty("data").GetProperty("request"));
+        AssertRequiredOrderField(root.GetProperty("data").GetProperty("role"));
+
+        static void AssertRequiredOrderField(JsonElement inputType)
+        {
+            var field = inputType.GetProperty("inputFields")
+                .EnumerateArray()
+                .Single(static field => field.GetProperty("name").GetString() == "field");
+
+            Assert.Equal(JsonValueKind.Null, field.GetProperty("defaultValue").ValueKind);
+            Assert.Equal("NON_NULL", field.GetProperty("type").GetProperty("kind").GetString());
+        }
     }
 
     private void SeedApiKeySurface()

@@ -62,6 +62,11 @@ public sealed class ChannelRetrySettings
             return true;
         }
 
+        return MatchesErrorText(message);
+    }
+
+    public bool MatchesErrorText(string message)
+    {
         if (string.IsNullOrEmpty(message))
         {
             return false;

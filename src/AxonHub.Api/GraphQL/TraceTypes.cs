@@ -132,6 +132,7 @@ public sealed class RequestOrder
     [DefaultValue(OrderDirectionValue.Asc)]
     public OrderDirectionValue Direction { get; set; } = OrderDirectionValue.Asc;
 
+    [GraphQLNonNullType]
     public RequestOrderFieldValue Field { get; set; }
 }
 

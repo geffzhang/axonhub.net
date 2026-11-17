@@ -80,7 +80,8 @@ public sealed class RoleOrder
     [DefaultValue(OrderDirectionValue.Asc)]
     public OrderDirectionValue Direction { get; set; } = OrderDirectionValue.Asc;
 
-    public RoleOrderFieldValue Field { get; set; } = RoleOrderFieldValue.CreatedAt;
+    [GraphQLNonNullType]
+    public RoleOrderFieldValue Field { get; set; }
 }
 
 /// <summary>

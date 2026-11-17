@@ -489,7 +489,10 @@ public sealed class SafeguardsEndpointTests(GrainClusterFixture fixture)
 
         var response = ResponseBody(context);
         Assert.Equal(200, context.Response.StatusCode);
-        Assert.Equal(1, Volatile.Read(ref reviewCalls[0]));
+        var observedReviewCalls = Volatile.Read(ref reviewCalls[0]);
+        Assert.True(
+            observedReviewCalls == 1,
+            $"Expected one reviewer call, observed {observedReviewCalls}; response: {response}");
         Assert.Contains("\"outcome\":\"not_flagged\"", response, StringComparison.Ordinal);
         Assert.Contains("event:message_stop", response, StringComparison.Ordinal);
         Assert.DoesNotContain("event:error", response, StringComparison.Ordinal);
