@@ -69,6 +69,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
     private readonly ModelAssociationCache? _associationCache;
     private readonly TimeProvider _timeProvider;
     private readonly bool _bypassModelPrivacy;
+    private readonly IUserAdminStore? _users;
 
     public ModelCandidateSelector(
         IModelStore models,
@@ -78,7 +79,8 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         TimeProvider timeProvider,
         bool bypassModelPrivacy = false,
         IEnabledChannelCacheSnapshotProvider? enabledChannelSnapshots = null,
-        ModelAssociationCache? associationCache = null)
+        ModelAssociationCache? associationCache = null,
+        IUserAdminStore? users = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(settings);
@@ -94,6 +96,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         _associationCache = associationCache;
         _timeProvider = timeProvider;
         _bypassModelPrivacy = bypassModelPrivacy;
+        _users = users;
     }
 
     /// <summary>
@@ -152,7 +155,7 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
         {
             if (!_bypassModelPrivacy)
             {
-                EvaluateQueryPrivacy(identity);
+                await EvaluateQueryPrivacyAsync(identity, cancellationToken).ConfigureAwait(false);
             }
 
             record = await _models
@@ -784,11 +787,14 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
     /// <summary>
     /// Port of the Model schema Query policy (internal/ent/schema/model.go:79-90)
     /// for the chat context: an API-key principal passes with
-    /// <c>read_channels</c>; without a key the user rule denies because there is
-    /// no user. Deny texts carry the ent sentinel suffix
-    /// (<c>privacy.Denyf</c> → <c>fmt.Errorf("%s: %w", msg, Deny)</c>).
+    /// <c>read_channels</c>; a playground user is checked against the same
+    /// owner/system-scope rules as the management Model query. Deny texts carry
+    /// the ent sentinel suffix (<c>privacy.Denyf</c> →
+    /// <c>fmt.Errorf("%s: %w", msg, Deny)</c>).
     /// </summary>
-    private static void EvaluateQueryPrivacy(RequestIdentity identity)
+    private async Task EvaluateQueryPrivacyAsync(
+        RequestIdentity identity,
+        CancellationToken cancellationToken)
     {
         if (identity.ApiKey is { } apiKey)
         {
@@ -805,8 +811,27 @@ public sealed class ModelCandidateSelector : IModelCandidateSelector
                 + PrivacyDenyException.DenyMessage);
         }
 
+        if (identity.UserId is not { } userId)
+        {
+            throw new PrivacyDenyException(
+                "no user in context: " + PrivacyDenyException.DenyMessage);
+        }
+
+        if (_users is null)
+        {
+            throw new InvalidOperationException(
+                "user store is required to evaluate model query privacy");
+        }
+
+        var user = await _users.GetPermissionUserAsync(userId, cancellationToken)
+            .ConfigureAwait(false);
+        if (PermissionValidator.HasSystemScope(user, ModelPrivacy.ReadChannels))
+        {
+            return;
+        }
+
         throw new PrivacyDenyException(
-            "no user in context: " + PrivacyDenyException.DenyMessage);
+            "default deny: " + PrivacyDenyException.DenyMessage);
     }
 
     /// <summary>ent model.StatusEnabled.</summary>

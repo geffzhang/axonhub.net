@@ -294,6 +294,62 @@ public sealed class ModelCandidateSelectorTests
         Assert.Single(selection.Candidates);
     }
 
+    [Fact]
+    public async Task PlaygroundUserWithReadChannelsMayQueryTheModel()
+    {
+        var models = new FakeModelStore();
+        SeedModel(models, settings: EntitySettings(ChannelModelAssoc(21, "m")));
+
+        var channels = new FakeChannelStore();
+        SeedChannel(channels, 21);
+
+        var users = new FakeUserAdminStore();
+        await users.CreateAsync(
+            new UserRecord
+            {
+                Id = 42,
+                Scopes = """["read_channels"]""",
+            },
+            roleIds: null);
+        var identity = new RequestIdentity(1, ApiKeyId: null) { UserId = 42 };
+
+        var selection = await CreateSelector(
+                models,
+                FallbackEnabled,
+                channels,
+                bypassPrivacy: false,
+                users: users)
+            .SelectAsync(Request("m"), identity);
+
+        Assert.Single(selection.Candidates);
+    }
+
+    [Fact]
+    public async Task PlaygroundUserWithoutReadChannelsIsDeniedModelQuery()
+    {
+        var users = new FakeUserAdminStore();
+        await users.CreateAsync(
+            new UserRecord
+            {
+                Id = 42,
+                Scopes = """["write_requests"]""",
+            },
+            roleIds: null);
+        var identity = new RequestIdentity(1, ApiKeyId: null) { UserId = 42 };
+
+        var ex = await Assert.ThrowsAsync<PrivacyDenyException>(
+            () => CreateSelector(
+                    new FakeModelStore(),
+                    FallbackEnabled,
+                    bypassPrivacy: false,
+                    users: users)
+                .SelectAsync(Request("m"), identity));
+
+        Assert.Equal(
+            "failed to query AxonHub Model: default deny: ent/privacy: deny rule: \"m\"",
+            ex.Message);
+    }
+
     // -- Association kinds ---------------------------------------------------
 
     [Fact]
@@ -998,14 +1054,16 @@ public sealed class ModelCandidateSelectorTests
         ModelSettings settings,
         FakeChannelStore? channels = null,
         FakeEnabledChannelProvider? enabled = null,
-        bool bypassPrivacy = true)
+        bool bypassPrivacy = true,
+        IUserAdminStore? users = null)
         => new(
             models,
             new StaticModelSettingsProvider(settings),
             channels ?? new FakeChannelStore(),
             enabled ?? new FakeEnabledChannelProvider(),
             new TestTimeProvider(Now),
-            bypassPrivacy);
+            bypassPrivacy,
+            users: users);
 
     private static LlmRequest Request(
         string model,
