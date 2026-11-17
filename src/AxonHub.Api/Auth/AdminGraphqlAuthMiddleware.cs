@@ -2,6 +2,7 @@ using AxonHub.Api.Management;
 using AxonHub.Llm.Transformer.Shared;
 using AxonHub.Persistence;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Auth;
 
@@ -21,10 +22,45 @@ namespace AxonHub.Api.Auth;
 /// </remarks>
 public sealed class AdminGraphqlAuthMiddleware(
     RequestDelegate next,
-    ManagementAuthService auth,
-    IApiKeyAuthenticator apiKeys,
-    ApiKeyAuthOptions options)
+    ApiKeyAuthOptions options,
+    ILogger<AdminGraphqlAuthMiddleware> logger)
 {
+    private static readonly Action<ILogger, Exception?> LogMissingAuthorization =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(1001, "AdminGraphqlMissingAuthorization"),
+            "Admin GraphQL authentication rejected: missing Authorization header");
+
+    private static readonly Action<ILogger, Exception?> LogInvalidAuthorizationScheme =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(1002, "AdminGraphqlInvalidAuthorizationScheme"),
+            "Admin GraphQL authentication rejected: invalid Authorization scheme");
+
+    private static readonly Action<ILogger, Exception?> LogEmptyBearerCredential =
+        LoggerMessage.Define(
+            LogLevel.Debug,
+            new EventId(1003, "AdminGraphqlEmptyBearerCredential"),
+            "Admin GraphQL authentication rejected: empty bearer credential");
+
+    private static readonly Action<ILogger, string, Exception?> LogInvalidBearerCredential =
+        LoggerMessage.Define<string>(
+            LogLevel.Information,
+            new EventId(1004, "AdminGraphqlInvalidBearerCredential"),
+            "Admin GraphQL authentication rejected the bearer credential (JWT cause type: {JwtCauseType})");
+
+    private static readonly Action<ILogger, string, string, Exception?> LogJwtValidationFailed =
+        LoggerMessage.Define<string, string>(
+            LogLevel.Error,
+            new EventId(1005, "AdminGraphqlJwtValidationFailed"),
+            "Admin GraphQL JWT validation failed (exception type: {ExceptionType}, inner exception type: {InnerExceptionType})");
+
+    private static readonly Action<ILogger, string, string, Exception?> LogApiKeyValidationFailed =
+        LoggerMessage.Define<string, string>(
+            LogLevel.Error,
+            new EventId(1006, "AdminGraphqlApiKeyValidationFailed"),
+            "Admin GraphQL API-key validation failed (exception type: {ExceptionType}, inner exception type: {InnerExceptionType})");
+
     /// <summary>middleware.ErrAPIKeyRequired.</summary>
     public const string ApiKeyRequired = "API key is required";
 
@@ -45,7 +81,10 @@ public sealed class AdminGraphqlAuthMiddleware(
     /// <summary>apikey.TypeServiceAccount.</summary>
     public const string ServiceAccountType = "service_account";
 
-    public async Task InvokeAsync(HttpContext context)
+    public async Task InvokeAsync(
+        HttpContext context,
+        ManagementAuthService auth,
+        IApiKeyAuthenticator apiKeys)
     {
         // ExtractAPIKeyFromRequest with Headers: ["Authorization"],
         // RequireBearer: true (middleware/header.go:57-122). Header.Get in Go
@@ -54,6 +93,7 @@ public sealed class AdminGraphqlAuthMiddleware(
         var headerValue = authorization.Count == 0 ? string.Empty : authorization[0] ?? string.Empty;
         if (headerValue.Length == 0)
         {
+            LogMissingAuthorization(logger, null);
             await AbortAsync(context, StatusCodes.Status401Unauthorized, ApiKeyRequired)
                 .ConfigureAwait(false);
             return;
@@ -61,6 +101,7 @@ public sealed class AdminGraphqlAuthMiddleware(
 
         if (!headerValue.StartsWith("Bearer ", StringComparison.Ordinal))
         {
+            LogInvalidAuthorizationScheme(logger, null);
             await AbortAsync(context, StatusCodes.Status401Unauthorized, MustStartWithBearer)
                 .ConfigureAwait(false);
             return;
@@ -69,6 +110,7 @@ public sealed class AdminGraphqlAuthMiddleware(
         var token = headerValue["Bearer ".Length..];
         if (GoStrings.TrimSpace(token).Length == 0)
         {
+            LogEmptyBearerCredential(logger, null);
             await AbortAsync(context, StatusCodes.Status401Unauthorized, BearerKeyRequired)
                 .ConfigureAwait(false);
             return;
@@ -80,6 +122,7 @@ public sealed class AdminGraphqlAuthMiddleware(
         // key auth. A server-side JWT failure (for example an unreadable
         // secret key) is not an API key concern, so report it as such instead
         // of a bogus 401 (auth.go:212-218).
+        InvalidJwtException? jwtFailure = null;
         try
         {
             var user = await auth
@@ -94,16 +137,22 @@ public sealed class AdminGraphqlAuthMiddleware(
             await next(context).ConfigureAwait(false);
             return;
         }
-        catch (InvalidJwtException)
+        catch (InvalidJwtException exception)
         {
             // Fall through to API-key authentication.
+            jwtFailure = exception;
         }
         catch (OperationCanceledException)
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            LogJwtValidationFailed(
+                logger,
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none",
+                null);
             await AbortAsync(
                     context,
                     StatusCodes.Status500InternalServerError,
@@ -123,6 +172,10 @@ public sealed class AdminGraphqlAuthMiddleware(
         }
         catch (InvalidApiKeyException)
         {
+            LogInvalidBearerCredential(
+                logger,
+                jwtFailure?.InnerException?.GetType().Name ?? "none",
+                null);
             await AbortAsync(context, StatusCodes.Status401Unauthorized, InvalidToken)
                 .ConfigureAwait(false);
             return;
@@ -131,8 +184,13 @@ public sealed class AdminGraphqlAuthMiddleware(
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            LogApiKeyValidationFailed(
+                logger,
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none",
+                null);
             await AbortAsync(
                     context,
                     StatusCodes.Status500InternalServerError,

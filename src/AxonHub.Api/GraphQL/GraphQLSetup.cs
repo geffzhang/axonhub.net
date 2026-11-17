@@ -1,5 +1,6 @@
 using AxonHub.Api.Management;
 using HotChocolate.AspNetCore;
+using HotChocolate.AspNetCore.Formatters;
 using HotChocolate.Execution;
 using HotChocolate.Execution.Configuration;
 using HotChocolate.Types;
@@ -64,7 +65,11 @@ public static class GraphQLSetup
             .AddTypeExtension<ChannelModelPriceTypeExtensions>()
             .AddTypeExtension<ChannelModelPriceVersionTypeExtensions>()
             .AddErrorFilter<AxonHubGraphQLErrorFilter>()
-            .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>();
+            .AddHttpRequestInterceptor<IntrospectionRequestInterceptor>()
+            .AddHttpResponseFormatter(new HttpResponseFormatterOptions
+            {
+                HttpTransportVersion = HttpTransportVersion.Legacy,
+            });
     }
 }
 

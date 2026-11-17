@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace AxonHub.Api.Tests;
 
@@ -26,6 +27,7 @@ public sealed class AdminAuthEndpointTests : IAsyncLifetime
     private readonly FakeUserProfileStore _profiles = new();
     private readonly FakePasswordHasher _passwords = new();
     private readonly FakeOidcLoginOnlyProviders _oidc = new();
+    private readonly RecordingLogger<ManagementAuthService> _logger = new();
 
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -39,6 +41,7 @@ public sealed class AdminAuthEndpointTests : IAsyncLifetime
         builder.Services.AddSingleton<IUserProfileStore>(_profiles);
         builder.Services.AddSingleton<IPasswordHasher>(_passwords);
         builder.Services.AddSingleton<IOidcLoginOnlyProviders>(_oidc);
+        builder.Services.AddSingleton<ILogger<ManagementAuthService>>(_logger);
         builder.Services.AddScoped<ManagementAuthService>();
 
         _app = builder.Build();
@@ -55,6 +58,7 @@ public sealed class AdminAuthEndpointTests : IAsyncLifetime
         RequestDelegate refresh = context => ManagementAuthHandlers.RefreshAsync(
             context,
             context.RequestServices.GetRequiredService<ManagementAuthService>(),
+            context.RequestServices.GetRequiredService<ILogger<ManagementAuthService>>(),
             context.RequestAborted);
         _app.MapPost("/admin/auth/signin", signIn);
         _app.MapPost("/admin/auth/refresh", refresh);
@@ -262,6 +266,14 @@ public sealed class AdminAuthEndpointTests : IAsyncLifetime
         Assert.Equal(
             "Invalid authorization token",
             body.GetProperty("error").GetProperty("message").GetString());
+        Assert.Contains(
+            _logger.Entries,
+            entry => entry.Level == LogLevel.Information
+                && entry.Message.Contains("refresh rejected invalid JWT", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            _logger.Entries,
+            entry => entry.Message.Contains("not-a-jwt", StringComparison.Ordinal));
+        Assert.All(_logger.Entries, entry => Assert.Null(entry.Exception));
     }
 
     [Fact]
@@ -390,5 +402,27 @@ public sealed class AdminAuthEndpointTests : IAsyncLifetime
 
         using var document = JsonDocument.Parse(raw);
         return (response.StatusCode, document.RootElement.Clone());
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull
+            => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _ = eventId;
+            Entries.Add((logLevel, formatter(state, exception), exception));
+        }
     }
 }

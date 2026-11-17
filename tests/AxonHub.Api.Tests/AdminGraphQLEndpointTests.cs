@@ -85,6 +85,18 @@ public sealed class AdminGraphQLEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ResponseUsesJsonMediaTypeForLegacyFrontend()
+    {
+        var payload = JsonSerializer.Serialize(new { query = "{ allScopes { scope } }" });
+        using var response = await _client.PostAsync(
+            "/admin/graphql",
+            new StringContent(payload, Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
     public async Task EveryScopeAppliesAtTheSystemLevel()
     {
         var data = await QueryAsync("{ allScopes(level: \"system\") { scope } }");
