@@ -4,7 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- 管理面 GraphQL：HotChocolate 16（前端固定 POST /admin/graphql） -->
-    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.8.0-p.9" />
+    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.8.0-p.15" />
     <!-- 指标：参照 internal/metrics 的 OTel SDK（stdout / OTLP gRPC / OTLP HTTP，5 秒周期） -->
     <PackageVersion Include="OpenTelemetry" Version="1.20.1" />
     <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.20.1" />
