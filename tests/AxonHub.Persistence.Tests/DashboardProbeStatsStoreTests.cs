@@ -79,6 +79,35 @@ public sealed class DashboardProbeStatsStoreTests(PostgresFixture fixture)
         Assert.Empty(rows);
     }
 
+    [Fact]
+    public async Task GetsChannelDetailsByIdsIncludingDeletedChannels()
+    {
+        await using var db = new TestDatabase(fixture);
+        await db.MigrateAsync();
+
+        await using var context = db.Factory.CreateDbContext();
+        var channel = new ChannelRecord
+        {
+            Name = "dashboard-channel",
+            Type = "openai",
+            Status = "enabled",
+            Credentials = "{}",
+            SupportedModels = "[]",
+            DefaultTestModel = "",
+        };
+        context.Channels.Add(channel);
+        await context.SaveChangesAsync();
+
+        var rows = await new DashboardStore(context)
+            .GetChannelsByIdsAsync([channel.Id], includeDeleted: true);
+
+        var result = Assert.Single(rows);
+        Assert.Equal(channel.Id, result.Id);
+        Assert.Equal("dashboard-channel", result.Name);
+        Assert.Equal("openai", result.Type);
+        Assert.Equal("enabled", result.Status);
+    }
+
     private static ChannelProbeRecord Row(
         long channelId,
         long timestamp,

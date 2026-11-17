@@ -699,7 +699,7 @@ public sealed class DashboardStore(AxonHubDbContext db) : IDashboardStore
             FROM "channels" c
             WHERE
             """
-            + ConnectionSql.Combine(predicates) + ";";
+            + " " + ConnectionSql.Combine(predicates) + ";";
 
         var connection = await db.OpenDapperConnectionAsync(cancellationToken).ConfigureAwait(false);
         return (await connection.QueryAsync<DashboardChannelRow>(
