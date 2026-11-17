@@ -34,6 +34,9 @@ export function extractOperationName(query: string): string | undefined {
 }
 
 export const GRAPHQL_ENDPOINT = '/admin/graphql';
+export const GRAPHQL_ACCEPT_HEADER = 'application/graphql-response+json, application/json;q=0.9';
+
+const GRAPHQL_RESPONSE_MEDIA_TYPES = new Set(['application/graphql-response+json', 'application/json']);
 
 function isForbiddenGraphQLError(error: any): boolean {
   return error?.extensions?.code === 'FORBIDDEN' || error?.message?.toLowerCase().includes('permission denied');
@@ -64,6 +67,7 @@ export async function graphqlRequest<T>(
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    Accept: GRAPHQL_ACCEPT_HEADER,
   };
 
   // Add Authorization header if token exists
@@ -117,7 +121,8 @@ export async function graphqlRequest<T>(
 
   // Check content type before parsing JSON
   const contentType = response.headers.get('content-type');
-  if (!contentType || !contentType.includes('application/json')) {
+  const mediaType = contentType?.split(';', 1)[0].trim().toLowerCase();
+  if (!mediaType || !GRAPHQL_RESPONSE_MEDIA_TYPES.has(mediaType)) {
     throw new GraphQLRequestError('Server returned non-JSON response. Please check the API endpoint.', {
       status: response.status,
     });
