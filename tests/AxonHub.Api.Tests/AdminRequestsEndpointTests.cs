@@ -213,6 +213,7 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
                     contentStorageKey
                     contentSavedAt
                     apiKey { id name }
+                    channel { id name }
                     project { id name }
                     trace { id traceID }
                     executions(first: 10, orderBy: {
@@ -274,6 +275,7 @@ public sealed class AdminRequestsEndpointTests : IAsyncLifetime
         Assert.Equal("gid://axonhub/Trace/7", node.GetProperty("traceID").GetString());
         Assert.Equal(JsonValueKind.Null, node.GetProperty("dataStorageID").ValueKind);
         Assert.Equal("gid://axonhub/Channel/4", node.GetProperty("channelID").GetString());
+        Assert.Equal("channel-4", node.GetProperty("channel").GetProperty("name").GetString());
         Assert.Equal("req-ext", node.GetProperty("externalID").GetString());
         Assert.Equal("api", node.GetProperty("source").GetString());
         Assert.Equal("gpt-4o", node.GetProperty("modelID").GetString());

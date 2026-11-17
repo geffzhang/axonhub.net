@@ -2424,6 +2424,19 @@ public sealed partial class RequestType
         ? new GidValue("Channel", channelId).ToString()
         : null;
 
+    /// <summary>Port of getNilableChannel (ent.resolvers.go:692-701).</summary>
+    [GraphQLName("channel")]
+    public async Task<ChannelType?> GetChannelAsync(
+        [Service] RequestQueryService requests,
+        CancellationToken cancellationToken)
+    {
+        var channel = await requests.GetVisibleChannelOrNullAsync(
+                Record.ChannelId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return channel is null ? null : ChannelMapping.ToGraphQL(channel);
+    }
+
     [GraphQLName("externalID")]
     public string? ExternalID => Record.ExternalId;
 
