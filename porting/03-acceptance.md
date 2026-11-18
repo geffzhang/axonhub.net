@@ -2432,6 +2432,8 @@ Playground transport 不再读取不存在的 Go 仓库路径，改用 `tests/Ax
 
 本条关闭该用例的本地修复与定向回归子项，**不关闭 CLOSE-02 的远端完整验收门禁**：尚未提交/推送，也未用修复后的代码重跑远端全量 CI。旧运行 44201894365 的失败结果保持原样，不能用定向通过覆盖。
 
+§284（2026-11-18）完成 §283 修复后的远端验收。提交 `8bcc8e8cfd4577d77b5ab1a37fc35a734bc82974` 已推送至 `chore/porting-closeout`。GitHub Actions [tests run 44210353098](https://github.com/geffzhang/axonhub.net/actions/runs/44210353098) 的 `headSha` 与该提交一致，最终 conclusion 为 success；五个 job 均实际执行并通过：Llm **3438/3438**、Grains **191/191**、Persistence **447/447**、API 全量 **7267 项（7224 通过、0 失败、43 跳过）**、独立 LlmTestServer E2E **44/44**。API 的 43 项为 opt-in 外部服务测试未配置 URL 时的条件跳过；独立 E2E job 已配置服务且 0 跳过。API 总项数较先前 run 44201894365 的报告不同，按本次 runner 日志记录，不推断其变化原因。同期 [porting-guard run 44210357805](https://github.com/geffzhang/axonhub.net/actions/runs/44210357805) 对同一 SHA 的四个 job 全部成功。CLOSE-02 与 CLOSE-03 的远端工作流门禁现已通过；这不代表尚未完成的前端 lint、真实浏览器业务验收、部署/多实例发布验收或最终 CLOSE-07 已完成。
+
 ## 公开 API 审计
 
 - 模块导出数已由 §275 完成统计（并非跨语言逐项一一映射）；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`

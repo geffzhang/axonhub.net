@@ -36,7 +36,8 @@
 - E2E 普通/headed 入口各发现 114 项、21 文件，setup 为 1 项，UI/debug CLI 正常；尚未宣称真实浏览器业务通过。限定修复证据见验收账 §282，当前改动仍未推送。
 - 补充设置 `TZ=America/New_York` 执行 date-range 测试 9/9 通过、0 跳过，覆盖默认环境下跳过的 DST 回拨用例；不重复加总。最终 Release 解决方案构建再次为 0 警告、0 错误。
 - 后端预算用例已完成本地修复（验收账 §283）：Go 参照检查 deadline 相等，端口原墙钟断言无法区分逻辑预算与调度延迟。改用可控时钟严格验证 39ms/40ms 边界及主模型已耗时 20ms 后的剩余预算，不放宽阈值；生产默认系统计时、父子取消和超时归因不变。
-- 最终 Safeguards 在 Windows/Linux 单 CPU 各 102/102 通过；三个确定性预算用例额外重复 10 轮、每轮 3/3。断开回退父预算的突变使两个边界用例都失败，已恢复并复验。Release 构建 0 警告、0 错误。修复尚未推送，CLOSE-02 的远端完整 CI 门禁仍未关闭。
+- 最终 Safeguards 在 Windows/Linux 单 CPU 各 102/102 通过；三个确定性预算用例额外重复 10 轮、每轮 3/3。断开回退父预算的突变使两个边界用例都失败，已恢复并复验。Release 构建 0 警告、0 错误。
+- 用户随后授权提交、推送并执行完整 CI。提交 `8bcc8e8cfd4577d77b5ab1a37fc35a734bc82974` 已推送到 `chore/porting-closeout`；远端 tests [44210353098](https://github.com/geffzhang/axonhub.net/actions/runs/44210353098) 与 porting-guard [44210357805](https://github.com/geffzhang/axonhub.net/actions/runs/44210357805) 均针对该 SHA 成功。后端五个 job 全通过；API 7267 项（7224 通过、0 失败、43 个 opt-in 跳过），独立 E2E 44/44、0 跳过。CLOSE-02、CLOSE-03 的远端门禁完成。
 
 ---
 
@@ -105,7 +106,7 @@ PORT-03 Cron 特殊语法、PORT-04 评审 operation name 可独立推进
 - [x] 记录最新目标 SHA，确认待运行代码包含目录越界、进程清理和 abort 测试修复。
 - [x] 手动触发 `tests.yml`。当前 `main` 普通 push 不会自动触发该工作流，不能只等待镜像发布。
 - [x] 核实运行的 `headSha`，记录 run ID 和结果；若执行期间分支前进，不把旧提交结果归给新提交。
-- [ ] 核实 Llm、Grains、Persistence、API 全量 nightly job、LlmTestServer E2E 五个 job 都实际执行且通过。
+- [x] 核实 Llm、Grains、Persistence、API 全量 nightly job、LlmTestServer E2E 五个 job 都实际执行且通过。
 - [x] 确认 E2E job 的外部服务环境变量已设置，真实用例没有因 opt-in 条件被跳过。
 - [x] API 全量中的 opt-in 跳过与独立 E2E job 的执行结果分别记录；其余跳过逐项说明。
 - [x] 核实同一代码版本的 Release 解决方案构建为 0 警告、0 错误；失败时保留日志并修根因。
@@ -119,6 +120,8 @@ dotnet build AxonHub.slnx -c Release
 从列表定位本次 dispatch，再通过对应运行页面核对各 job，不使用历史成功运行替代。
 
 **验收：** 最新验收基点对应的五个测试 job 全通过，执行数量非零，跳过有解释，构建没有警告或错误。
+
+**完成证据（2026-11-18）：** 提交 `8bcc8e8cfd4577d77b5ab1a37fc35a734bc82974` 已推送到 `chore/porting-closeout`。同 SHA 的 [tests run 44210353098](https://github.com/geffzhang/axonhub.net/actions/runs/44210353098) 五个 job 全成功：Llm 3438/3438、Grains 191/191、Persistence 447/447、API 7267 项（7224 通过、0 失败、43 个 opt-in 跳过）、独立 LlmTestServer E2E 44/44。43 个 API 跳过是未配置外部服务 URL 的条件测试；独立 E2E job 已配置服务并实际执行，0 跳过。同 SHA 的 [porting-guard run 44210357805](https://github.com/geffzhang/axonhub.net/actions/runs/44210357805) 四个 job 全成功。API 总项数与先前运行不同，照录本次 runner 输出，不推断额外原因。
 
 ### CLOSE-03：完成行为等价守护验收
 
