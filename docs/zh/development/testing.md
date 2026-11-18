@@ -35,6 +35,22 @@ dotnet test tests/AxonHub.Api.Tests/AxonHub.Api.Tests.csproj \
 
 持久化测试每个测试使用独立 schema，容器镜像为 `postgres:17-alpine`。
 
+## Safeguards 预算回归
+
+`SafeguardsFallbackTests.FallbackSharesTheOverallBudget` 使用可控 `TimeProvider`，
+验证总预算 40ms：在 39ms 时回退 token 仍有效，在 40ms 时必须取消；主模型分别
+消耗 0ms 和 20ms，以确认切换模型不重新开始总预算。另一个用例验证 10ms 单次
+超时不会取消仍有 100ms 总预算的后续模型。
+
+这些用例不把线程调度、JIT 或异步 continuation 的墙钟耗时当作 deadline。
+`SafeguardsEvaluator.Create` 未传入时钟时仍使用 `TimeProvider.System`，保留
+现有系统 timer、父子取消、纳秒换算与 timeout/error 归因；C267 的计时精度差异
+仍然有效，不代表承诺响应延迟严格小于配置的毫秒数。
+
+```powershell
+dotnet test tests\AxonHub.Api.Tests\AxonHub.Api.Tests.csproj -c Release --filter FullyQualifiedName~Safeguards
+```
+
 ## 真实 provider E2E
 
 矩阵覆盖 OpenAI Chat/Responses、Anthropic Messages、Gemini、Groq、Ollama、
@@ -61,6 +77,58 @@ AXONHUB_E2E_LLM_TEST_SERVER_KEY=test-key \
 
 未设置 URL 时真实 provider E2E 自动跳过，常规 CI 不依赖外部进程。CI 的 `e2e-llm`
 job 使用固定 digest 的同一镜像运行它们。
+
+## 前端单测与浏览器 E2E
+
+在 [`frontend`](../../../frontend) 目录运行：
+
+```powershell
+pnpm test:unit
+pnpm build
+pnpm lint
+pnpm test:e2e --list --reporter=list
+```
+
+单测不需要启动 API；其中 playground transport 与 .NET 的
+`AiSdkDataStreamTransformerTests.TransformStreamEmitsTextProtocolSequence` 共用
+[`text.stream.jsonl`](../../../tests/AxonHub.Llm.Tests/testdata/aisdk/text.stream.jsonl)，
+由后端测试校验真实 transformer 输出（仅归一化随机 text ID），不依赖上游 Go
+仓库目录。渠道源码解析测试归一化 CRLF/LF，不改变模型列表或配额断言。
+
+浏览器测试前，先启动使用**独立测试数据库**的 .NET API；测试入口不会自动创建
+数据库或启动后端，也不再依赖不存在的 shell wrapper。在另一个终端启动 API，
+并在运行 Playwright 的终端设置 `AXONHUB_API_URL`。默认 API 地址为
+`http://localhost:8099`，Vite 页面为 `http://localhost:9527`；可用
+`ASPNETCORE_URLS` 设置 API 监听地址。
+
+```powershell
+# 在 frontend 目录；API 必须已经启动并连接隔离测试数据库。
+$env:AXONHUB_API_URL = 'http://localhost:8099'
+pnpm test:e2e:setup
+pnpm test:e2e
+```
+
+Linux/macOS 使用 `AXONHUB_API_URL=http://localhost:8099 pnpm test:e2e` 设置变量。
+Playwright 自动启动并管理 Vite；本地允许复用已有的 9527 服务，执行前必须确认
+该服务连接的是本轮测试 API，而非共享环境。
+
+| 入口 | 作用 |
+| --- | --- |
+| `pnpm test:e2e` | 运行 setup，再运行依赖它的 Chromium 业务测试 |
+| `pnpm test:e2e:setup` | 只运行系统初始化/管理员登录 |
+| `pnpm test:e2e:headed` | 显示浏览器运行测试 |
+| `pnpm test:e2e:ui` | 打开 Playwright UI |
+| `pnpm test:e2e:debug` | 使用 Playwright Inspector 调试 |
+| `pnpm test:e2e:report` | 查看已有 HTML 报告 |
+
+测试凭据通过 `AXONHUB_ADMIN_EMAIL` / `AXONHUB_ADMIN_PASSWORD` 传入；未设置时
+配置中的固定示例值仅供隔离本地测试。setup 会初始化未初始化的系统，并使用这些
+凭据登录已初始化系统；业务测试会创建和修改数据，不得指向生产或共享数据库。
+报告、截图、trace 和视频也应按测试数据处理，不提交真实令牌或敏感附件。测试后
+仅停止本轮创建的后端进程，并按该隔离环境的生命周期清理数据。
+
+发现测试不等于业务通过；`--list` 不启动浏览器或后端。若构建、单测或 lint
+存在存量失败，应分别记录，不通过跳过测试或关闭规则消除。
 
 ## 差分语料
 

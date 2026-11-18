@@ -1,0 +1,8 @@
+{"Data":"{\"type\":\"start\",\"messageId\":\"msg_1\"}"}
+{"Data":"{\"type\":\"start-step\"}"}
+{"Data":"{\"type\":\"text-start\",\"id\":\"text_fixture\"}"}
+{"Data":"{\"type\":\"text-delta\",\"id\":\"text_fixture\",\"delta\":\"Hel\"}"}
+{"Data":"{\"type\":\"text-delta\",\"id\":\"text_fixture\",\"delta\":\"lo\"}"}
+{"Data":"{\"type\":\"text-end\",\"id\":\"text_fixture\"}"}
+{"Data":"{\"type\":\"finish-step\"}"}
+{"Data":"{\"type\":\"finish\"}"}

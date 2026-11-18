@@ -2,7 +2,7 @@
 
 AxonHub 的 .NET 10 + Orleans 行为等价移植。
 
-[![tests](https://github.com/geffzhang/axonhub.net/actions/workflows/tests.yml/badge.svg?branch=feat/dotnet-port-chat-slice)](https://github.com/geffzhang/axonhub.net/actions/workflows/tests.yml)
+[![tests](https://github.com/geffzhang/axonhub.net/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/geffzhang/axonhub.net/actions/workflows/tests.yml?query=branch%3Amain)
 ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)
 ![Orleans](https://img.shields.io/badge/Orleans-10.4-512BD4)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1)
@@ -42,9 +42,9 @@ AxonHub 的对外 API、管理面 GraphQL、渠道/模型/追踪/计费等行为
 | 管理面 REST + GraphQL + 前端资源 | ✅ 已移植 |
 | 多 silo 集群（AdoNet membership + durable reminder） | ✅ opt-in，默认单 silo |
 | 部署资产（本地脚本、systemd、Nginx、Helm） | ✅ 见 [`deploy/`](deploy/) |
-| Go 参照行为对照与差异台账 | ✅ 337 条，0 个未解释缺口 |
+| Go 参照行为对照与差异台账 | ✅ 338 条（192 accepted / 146 resolved / 0 gap），不代表与上游所有功能完全相同 |
 | 测试 | Llm / Grains / Persistence / Api 与 opt-in 真实 provider E2E（见[测试](#测试)） |
-| 远端 CI | Llm / Grains / Persistence / 真实 provider E2E 全绿；Api 全量 nightly |
+| 远端 CI | 以目标提交的 [tests 运行](https://github.com/geffzhang/axonhub.net/actions/workflows/tests.yml)为准；Api 全量仅 nightly/manual，镜像发布成功不代表测试通过 |
 
 ### 支持的渠道
 
