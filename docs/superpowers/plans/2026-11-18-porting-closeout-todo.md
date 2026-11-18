@@ -199,17 +199,22 @@ gh workflow run porting-guard.yml --ref main
 
 **涉及：** [Compose](../../../docker-compose.yml)、[部署说明](../../../deploy/README.md)、[Nginx 配置](../../../deploy/nginx.conf)、[Helm](../../../deploy/helm)、[多实例测试](../../../tests/AxonHub.Api.Tests/MultiReplicaBusinessTests.cs)。
 
-- [ ] 使用独立 Compose project 和数据卷，从空数据库启动与最新验收 SHA 对应的镜像。
-- [ ] 验证健康检查、首页、初始化、登录、非流式请求、SSE 请求、重启后数据保留。
+- [x] 使用独立 Compose project 和数据卷，从空数据库启动当前验收 checkout `a86de18` 对应的镜像。
+- [x] 验证健康检查、首页、初始化、管理员登录，以及 PostgreSQL 和 API 容器重启后的初始化状态持久性。
+- [ ] 验证非流式请求和 SSE 端到端行为。流式请求经代理到达 API，但因未配置 provider/API key 返回 HTTP 401；此项不能据此判定通过。
 - [ ] 在独立测试部署验证升级与回滚流程，确认配置文件和业务数据不被安装/升级脚本覆盖。
+- [x] 验证 Nginx 配置语法、HTTP 到 HTTPS 重定向、HTTP/HTTPS 健康检查、SPA 首页以及 HSTS/X-Frame-Options 响应头。
 - [ ] 通过 Nginx 验证 SSE 实时到达、不被响应缓冲；验证 Responses WebSocket 握手、消息和关闭。
 - [ ] 在 Linux 上验证双 API 进程的共享数据库、API key 撤销/轮换、OIDC 单次消费、全局并发/FIFO 与故障恢复。
 - [ ] 将测试进程启动失败的原始诊断保留下来；清理未启动/已退出进程不得再次抛异常掩盖根因。
-- [ ] 对 Helm 执行 lint/template 检查，并在独立 namespace 验证 membership、durable reminder 和跨副本访问。
+- [x] 对 Helm 执行 lint/template 检查，默认值和双副本模板渲染通过。
+- [ ] 在独立 namespace 验证 membership、durable reminder 和跨副本访问。当前 kubectl 没有选中的 context；已有 kind 容器未触碰。
 - [ ] 保留已登记的故障许可占位行为；不要为让测试通过而擅自释放可能仍被旧请求占用的许可。
-- [ ] 仅清理本轮创建的容器、进程和 namespace；不删除共享数据卷，不修改宿主现有系统服务。
+- [x] 仅清理本轮创建的容器、网络、数据卷和临时文件；不删除共享数据卷，不修改宿主现有系统服务。
 
-**验收：** 单实例和多实例业务路径均可运行，重启/升级/反向代理验证通过，清理范围和回滚步骤可审计。
+**本轮证据：** 隔离 Compose project `axonhub-closeout-a86de18` 使用镜像 `axonhub.net:closeout-a86de18`、本地端口 `18090` 和独立 PostgreSQL volume。Nginx 使用隔离本地端口 `18080/18443`；HTTP/HTTPS `/health` 均返回 200，HTTP 首页返回 301，HTTPS 首页返回 200，签入路由的无效 JSON 返回 400。PostgreSQL 与 API 容器重启后 `/admin/system/status` 仍报告已初始化。Helm 真实部署、多副本、升级/回滚和 provider-backed SSE/WebSocket 未验收。
+
+**阻塞与结论：** 本机没有当前 Kubernetes context（`kubectl` 默认访问 `localhost:8080` 失败）；未使用身份不明的现有 kind 容器。provider/API key 未配置，因此没有将 401 的流式请求记为 SSE 通过。CLOSE-06 尚未完成，不能据本轮单实例与代理检查宣称部署/多实例验收通过。
 
 ### CLOSE-07：统一验收账并给出发布结论
 
