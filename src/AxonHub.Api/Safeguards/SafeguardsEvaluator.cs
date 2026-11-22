@@ -51,6 +51,7 @@ public sealed class SafeguardsEvaluator
     private readonly string _transcript;
     private readonly bool _contextTooLong;
     private readonly ILogger<SafeguardsEvaluator>? _logger;
+    private readonly TimeProvider _timeProvider;
 
     private SafeguardsEvaluator(
         string system,
@@ -63,7 +64,8 @@ public sealed class SafeguardsEvaluator
         string context,
         string transcript,
         bool contextTooLong,
-        ILogger<SafeguardsEvaluator>? logger)
+        ILogger<SafeguardsEvaluator>? logger,
+        TimeProvider timeProvider)
     {
         _system = system;
         _escalateOnDenial = escalateOnDenial;
@@ -76,6 +78,7 @@ public sealed class SafeguardsEvaluator
         _transcript = transcript;
         _contextTooLong = contextTooLong;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     /// <summary>The reviewer prompt actually used (for diagnostics/tests).</summary>
@@ -97,7 +100,8 @@ public sealed class SafeguardsEvaluator
         byte[]? body,
         SafeguardsConfig config,
         SafeguardsClassifierFunc? call,
-        ILogger<SafeguardsEvaluator>? logger = null)
+        ILogger<SafeguardsEvaluator>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -187,7 +191,8 @@ public sealed class SafeguardsEvaluator
                 Encoding.UTF8.GetString(env),
                 RenderTranscript(messages ?? [], transcriptBudget),
                 env.Length > MaxContextBytes,
-                logger);
+                logger,
+                timeProvider ?? TimeProvider.System);
         }
 
         return null;
@@ -269,7 +274,7 @@ public sealed class SafeguardsEvaluator
             return [result];
         }
 
-        using var deadline = new SafeguardsDeadline(cancellationToken, _timeoutNanoseconds, outer: null);
+        using var deadline = new SafeguardsDeadline(cancellationToken, _timeoutNanoseconds, outer: null, _timeProvider);
 
         for (var index = 0; index < _models.Count; index++)
         {
@@ -300,7 +305,7 @@ public sealed class SafeguardsEvaluator
             bool attemptExpired;
             bool attemptTimedOut;
 
-            using (var attempt = new SafeguardsDeadline(deadline.Token, attemptTimeout, deadline))
+            using (var attempt = new SafeguardsDeadline(deadline.Token, attemptTimeout, deadline, _timeProvider))
             {
                 encoded = MarshalClassifierTools(pending);
                 var request = new SafeguardsClassifierRequest
@@ -1121,14 +1126,15 @@ internal sealed class SafeguardsDeadline : IDisposable
 {
     private readonly CancellationTokenSource _source;
     private readonly SafeguardsDeadline? _outer;
-    private readonly Timer? _timer;
+    private readonly ITimer? _timer;
     private int _timedOut;
     private int _disposed;
 
     public SafeguardsDeadline(
         CancellationToken parent,
         long timeoutNanoseconds,
-        SafeguardsDeadline? outer)
+        SafeguardsDeadline? outer,
+        TimeProvider timeProvider)
     {
         _outer = outer;
         var effectiveParent = outer?.Token ?? parent;
@@ -1136,7 +1142,7 @@ internal sealed class SafeguardsDeadline : IDisposable
 
         if (timeoutNanoseconds > 0)
         {
-            _timer = new Timer(
+            _timer = timeProvider.CreateTimer(
                 static state => ((SafeguardsDeadline)state!).OnTimeout(),
                 this,
                 ToDelay(timeoutNanoseconds),

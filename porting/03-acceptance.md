@@ -2396,9 +2396,47 @@ request chunks 不含 marker 且以 [DONE] 结尾）。定向运行：PassThroug
 
 §280（2026-11-18）修正 `AbortConnection` 真实 E2E 对首帧交付的竞态假设。原用例在 Linux SDK 容器复现：LlmTestServer 已记录一帧写出并立即中止连接，但网关尚未读到正文，按预算回退到 B，断言却无条件要求 A 的前缀。用例改名为 `AbortConnectionRetriesOnlyBeforePrimaryContentIsReceived`，用网关持久化 seam 记录的 A 上游帧（而非网关最终响应或服务端 emitted 计数）决定断言路径：收到正文则必须保留 A 前缀、返回 `upstream_stream_interrupted`、不回退且无成功终止标记；未收到正文则必须仅返回 B 的完整结果，且两渠道各尝试一次。原服务端故障模式、应用状态、帧计数、无 terminal 的证据断言保留。新增确定性端点 theory 分别锁定首内容前重试和首内容后不重试，并验证原始帧记录。未修改生产重试逻辑。Windows Release 与 Linux SDK 容器的完整 LlmTestServer 矩阵加端点测试分别 **57/57 通过**；Linux 真实 abort 用例额外连续 **10/10 通过**；LLM pipeline 的 precommit retry / after-content no-retry 契约 **2/2 通过**。本次未重跑完整 API 套件或远端 CI。
 
+§281（2026-11-18）启动移植收尾验收。当前分支 `chore/porting-closeout` 从代码基点 `3d4fbc11c9f7576de96aff115079e400bdf91901` 创建；本轮仅修改说明与清单，尚未提交或推送。参照锁检查通过，冻结提交仍为 `b8bb3421e1fe946cfc4f0d86e8412098738f2793`，局部跟进范围沿用 `00-reference.md`，未重新锁定基线。差异源账重新统计为 **338 条（192 accepted / 146 resolved / 0 gap）**。核实 C029 系统设置缓存、C182 全部 19 个配额 checker、C243 Safeguards reviewer 运行时已实现；配置示例仍保留 `server.safeguards` YAML 默认值未绑定的真实限制。修正 README 的旧条目数、历史分支 badge 和无对应运行的“CI 全绿”声明。
+
+本地 Windows 验收：`dotnet build AxonHub.slnx -c Release` **0 警告、0 错误**；差异账 lint、render 一致性、参照锁均通过；HTTP 路由 **76/76**；四类差分语料分别为 upstream-request **7/7**、unified-request **7/7**、client-response **9/9**、client-stream **12/12**。远端 [porting-guard 44201899794](https://github.com/geffzhang/axonhub.net/actions/runs/44201899794) 在同一代码基点的 ledger/routes/corpus/reference 四个 job 全部通过。
+
+远端 [tests 44201894365](https://github.com/geffzhang/axonhub.net/actions/runs/44201894365) 已手动触发，确认 `headSha` 为上述代码基点。最终工作流失败，日志数字如下；**本条不宣称整条测试工作流通过**：
+
+| 项目 | 通过 | 失败 | 跳过 | 总数 |
+| --- | ---: | ---: | ---: | ---: |
+| AxonHub.Llm.Tests | 3438 | 0 | 0 | 3438 |
+| AxonHub.Grains.Tests | 191 | 0 | 0 | 191 |
+| AxonHub.Persistence.Tests | 447 | 0 | 0 | 447 |
+| 独立 LlmTestServer E2E | 44 | 0 | 0 | 44 |
+| AxonHub.Api.Tests 全量 | 7221 | 1 | 43 | 7265 |
+
+API 唯一失败为 `SafeguardsFallbackTests.FallbackSharesTheOverallBudget`：第 309 行的墙钟耗时断言要求小于 800ms，实际报告 1000ms；原日志没有证明一定是测试调度抖动，也没有证明业务预算真的延长，需单独定位。43 项跳过为未设置外部服务 URL 的 opt-in 用例，独立 E2E job 已执行 44/44、0 跳过。CLOSE-02 保持阻塞，不通过增加阈值或自动重跑宣告解决。
+
+前端基线发现阻塞：未修改前端前，`pnpm test:unit` 为 **376 项（372 通过、3 失败、1 跳过）**；失败涉及 Bailian 模型列表断言、quota 测试加载时重复声明 `z`、AI SDK transport fixture 仍指向不存在的 Go 目录。`pnpm lint` 报 **159 errors / 93 warnings**，不能视为通过。`pnpm test:e2e --list` 因脚本指向不存在的 `scripts/e2e/e2e-test.sh` 失败。以上均未通过跳过测试或关闭规则处理；前端修复范围需先确认，CLOSE-04/05 和最终发布验收未完成。
+
+§282（2026-11-18）按用户批准的限定范围修复前端 E2E 入口与三项单测失败，lint 存量问题单独列项，不批量修改业务代码或关闭规则。`test:e2e` 及 setup/headed/UI/debug 五个入口直接调用已有 Playwright CLI，移除对不存在 shell wrapper 的依赖；后端由使用者连接隔离测试数据库并独立启动，Playwright 继续管理 Vite。Bailian 模型与 quota 两个测试的源码读取统一归一化 CRLF/LF，保留原模型列表、schema 和配额断言；实测原模型块正则在 CRLF 下无法匹配，原 quota import 剥离匹配数为 0，归一化后为 12。
+
+Playground transport 不再读取不存在的 Go 仓库路径，改用 `tests/AxonHub.Llm.Tests/testdata/aisdk/text.stream.jsonl`。现有 `TransformStreamEmitsTextProtocolSequence` 测试增加对该共享语料的校验，比较实际 .NET transformer 事件，仅归一化随机 text ID。添加语料前，前后端测试分别因缺少同一文件失败；补齐后，Release `AiSdkDataStreamTransformerTests` **21/21** 通过。
+
+前端全量单测 **394 项（393 通过、0 失败、1 跳过）**；相比基线增加的执行项来自 quota 测试模块恢复加载，不是新增 18 项功能。唯一跳过为要求 `TZ=America/New_York` 的 DST 用例。`pnpm build` 成功，保留现有大 chunk 提示；三个修改过的前端测试文件通过定向 ESLint。普通/headed 入口各发现 **114 项、21 个文件**，setup 发现 **1 项、1 个文件**；UI/debug 的 CLI 帮助入口正常。上述 discovery 不代表浏览器业务已执行。本轮未安装新依赖，未提交或推送；远端 tests 运行仍针对 §281 的已推送 SHA，不包含本轮测试语料变更。
+
+补充验证：设置 `TZ=America/New_York` 后单独执行 date-range 测试 **9/9 通过、0 跳过**，包含上述 DST 用例；该结果不与全量单测重复加总。最终本地 Release 解决方案增量构建再次确认 **0 警告、0 错误**。
+
+发布剩余门禁：全量前端 lint 基线 **159 errors / 93 warnings** 已独立保留为 LINT-01；CLOSE-04 整体验收不能据此标记通过，CLOSE-05/06/07 尚未完成。
+
+§283（2026-11-18）修复 §281 唯一失败用例的非确定性验收口径。独立 Windows 原用例与单 CPU Linux 的原 Safeguards 100 项测试均通过，未稳定复现 CI 的 1000ms 延迟；不据此声称已定位到具体线程池/JIT 事件。源码对照确认 Go 参照 `fallback_test.go:157-179` 检查 `context.Deadline()` 相等，端口却替换成总墙钟耗时小于 800ms，该断言不能区分逻辑预算延长与调度/continuation 延迟。
+
+`SafeguardsEvaluator.Create` 新增可选 `TimeProvider`，总预算与单次尝试 timer 使用同一时钟，默认仍为 `TimeProvider.System`；父子 token 接线、配置预算、duration 换算和 timeout/error 归因不变，C267 已接受的系统计时精度差异保持不变。将原用例改成两种主模型耗时（0ms、20ms）的确定性检查：总时间 39ms 尚未取消，40ms 必须取消，不能调用第三个模型，两个工具均归因为 timeout。另加 10ms 单次超时、100ms 总预算下回退仍可成功的测试。
+
+验证过程：时钟尚未接入 timer 时新增总预算用例 **2/2 失败**；临时将回退断开父预算、改为独享 1s 的突变同样 **2/2 失败**（40ms 时 token 未取消），随后已恢复正确接线。最终 Windows Release Safeguards 定向 **102/102 通过、0 跳过**；同一最终产物在单 CPU Linux 容器 **102/102 通过、0 跳过**，三个确定性预算用例额外连续 **10 轮、每轮 3/3 通过**。这些集合有重叠，不相加。最终 Release 解决方案构建 **0 警告、0 错误**。
+
+本条关闭该用例的本地修复与定向回归子项，**不关闭 CLOSE-02 的远端完整验收门禁**：尚未提交/推送，也未用修复后的代码重跑远端全量 CI。旧运行 44201894365 的失败结果保持原样，不能用定向通过覆盖。
+
+§284（2026-11-18）完成 §283 修复后的远端验收。提交 `8bcc8e8cfd4577d77b5ab1a37fc35a734bc82974` 已推送至 `chore/porting-closeout`。GitHub Actions [tests run 44210353098](https://github.com/geffzhang/axonhub.net/actions/runs/44210353098) 的 `headSha` 与该提交一致，最终 conclusion 为 success；五个 job 均实际执行并通过：Llm **3438/3438**、Grains **191/191**、Persistence **447/447**、API 全量 **7267 项（7224 通过、0 失败、43 跳过）**、独立 LlmTestServer E2E **44/44**。API 的 43 项为 opt-in 外部服务测试未配置 URL 时的条件跳过；独立 E2E job 已配置服务且 0 跳过。API 总项数较先前 run 44201894365 的报告不同，按本次 runner 日志记录，不推断其变化原因。同期 [porting-guard run 44210357805](https://github.com/geffzhang/axonhub.net/actions/runs/44210357805) 对同一 SHA 的四个 job 全部成功。CLOSE-02 与 CLOSE-03 的远端工作流门禁现已通过；这不代表尚未完成的前端 lint、真实浏览器业务验收、部署/多实例发布验收或最终 CLOSE-07 已完成。
+
 ## 公开 API 审计
 
-- 模块导出数的全量统计仍待 M5 收口；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
+- 模块导出数已由 §275 完成统计（并非跨语言逐项一一映射）；管理面 GraphQL 根字段已审计：参照 `internal/server/gql/*.graphql`
   解析出 Query 87 条、Mutation 134 条，其中 `hasTag` 是输入类型字段误计，实际 Query 为 86 条；
   端口 `/admin/graphql` 内省为 Query 85 条、Mutation 134 条。Query 唯一缺少的是 `nodes`——参照的
   resolver 恒 panic 且前端不调用，按 C269 有意不暴露；`allScopes` 由 `AdminQuery.AllScopes` 的方法名

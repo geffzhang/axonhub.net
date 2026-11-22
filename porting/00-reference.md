@@ -55,6 +55,10 @@ python -I porting\scripts\reference_lock.py check `
 
 ## 漂移记录
 
+以下记录保留各切片实施时的范围和缺口，不代表当前完成状态；当前状态以
+[`differences.jsonl`](differences.jsonl) 中对应编号的最新决策为准。例如 C243
+登记时尚未移植 reviewer，后续已补齐运行时并转为 `resolved`。
+
 | 日期 | 从 | 到 | 影响范围 | 处置 |
 |---|---|---|---|---|
 | 2026-10-30 | — | `b8bb3421`（v1.0.0-beta11） | 初始基线 | 锁定 |

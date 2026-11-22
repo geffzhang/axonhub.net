@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using AxonHub.Api.Safeguards;
@@ -19,13 +18,15 @@ public sealed class SafeguardsFallbackTests
     private static SafeguardsEvaluator FallbackEvaluator(
         SafeguardsConfig config,
         SafeguardsClassifierFunc call,
-        ILogger<SafeguardsEvaluator>? logger = null)
+        ILogger<SafeguardsEvaluator>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         var evaluator = SafeguardsEvaluator.Create(
             Encoding.UTF8.GetBytes(RequestBody),
             config,
             call,
-            logger);
+            logger,
+            timeProvider);
         Assert.NotNull(evaluator);
         return evaluator!;
     }
@@ -259,34 +260,31 @@ public sealed class SafeguardsFallbackTests
         Assert.Equal("error", result["safe"].Reason);
     }
 
-    [Fact]
-    public void FallbackSharesTheOverallBudget()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(20)]
+    public void FallbackSharesTheOverallBudget(int primaryMilliseconds)
     {
-        var calls = 0;
-        var attemptsPrimaryDeadline = false;
+        var clock = new DeadlineTimeProvider();
+        var calls = new List<string>();
+        var expiredBeforeDeadline = true;
+        var expiredAtDeadline = false;
 
-        async Task<string> Call(CancellationToken cancellationToken, SafeguardsClassifierRequest request)
+        Task<string> Call(CancellationToken cancellationToken, SafeguardsClassifierRequest request)
         {
-            calls++;
+            calls.Add(request.Model);
             Assert.True(cancellationToken.CanBeCanceled, "no deadline");
             if (request.Model == "primary")
             {
-                attemptsPrimaryDeadline = true;
+                clock.Advance(TimeSpan.FromMilliseconds(primaryMilliseconds));
                 throw new InvalidOperationException("upstream failed");
             }
 
-            // The fallback inherits the overall deadline; if it started a new
-            // one it would wait for the one-second attempt timeout instead.
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                // The shared deadline fired.
-            }
-
-            return string.Empty;
+            clock.Advance(TimeSpan.FromMilliseconds(39 - primaryMilliseconds));
+            expiredBeforeDeadline = cancellationToken.IsCancellationRequested;
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+            expiredAtDeadline = cancellationToken.IsCancellationRequested;
+            return Task.FromResult(string.Empty);
         }
 
         var evaluator = FallbackEvaluator(
@@ -297,18 +295,56 @@ public sealed class SafeguardsFallbackTests
                 TimeoutNanoseconds = 40_000_000,
                 AttemptTimeoutNanoseconds = 1_000_000_000,
             },
-            Call);
+            Call,
+            timeProvider: clock);
 
-        var stopwatch = Stopwatch.StartNew();
         var result = Verdicts(evaluator);
-        stopwatch.Stop();
 
-        Assert.True(attemptsPrimaryDeadline);
-        Assert.Equal(2, calls);
+        Assert.Equal(new[] { "primary", "backup" }, calls);
+        Assert.False(expiredBeforeDeadline);
+        Assert.True(expiredAtDeadline);
+        Assert.Equal(TimeSpan.FromMilliseconds(40), clock.Elapsed);
         Assert.Equal("timeout", result["safe"].Reason);
-        Assert.True(
-            stopwatch.ElapsedMilliseconds < 800,
-            $"fallback extended the overall deadline ({stopwatch.ElapsedMilliseconds}ms)");
+        Assert.Equal("timeout", result["danger"].Reason);
+    }
+
+    [Fact]
+    public void AttemptDeadlineDoesNotCancelTheFallback()
+    {
+        var clock = new DeadlineTimeProvider();
+        var calls = new List<string>();
+        var primaryExpired = false;
+        var fallbackExpired = true;
+        var evaluator = FallbackEvaluator(
+            new SafeguardsConfig
+            {
+                ClassifierModel = "primary",
+                FallbackModels = ["backup"],
+                TimeoutNanoseconds = 100_000_000,
+                AttemptTimeoutNanoseconds = 10_000_000,
+            },
+            (token, request) =>
+            {
+                calls.Add(request.Model);
+                if (request.Model == "primary")
+                {
+                    clock.Advance(TimeSpan.FromMilliseconds(10));
+                    primaryExpired = token.IsCancellationRequested;
+                    return Task.FromException<string>(new OperationCanceledException(token));
+                }
+
+                fallbackExpired = token.IsCancellationRequested;
+                return Task.FromResult("""{"verdicts":{"safe":{"flagged":false},"danger":{"flagged":true}}}""");
+            },
+            timeProvider: clock);
+
+        var result = Verdicts(evaluator);
+
+        Assert.Equal(new[] { "primary", "backup" }, calls);
+        Assert.True(primaryExpired);
+        Assert.False(fallbackExpired);
+        Assert.Equal("not_flagged", result["safe"].Outcome);
+        Assert.Equal("flagged", result["danger"].Outcome);
     }
 
     [Fact]
@@ -513,6 +549,62 @@ public sealed class SafeguardsFallbackTests
         Assert.All(
             logger.Entries,
             static entry => Assert.Equal(LogLevel.Warning, entry.Level));
+    }
+
+    private sealed class DeadlineTimeProvider : TimeProvider
+    {
+        private readonly List<DeadlineTimer> _timers = [];
+
+        public TimeSpan Elapsed { get; private set; }
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            Assert.Equal(Timeout.InfiniteTimeSpan, period);
+            var timer = new DeadlineTimer(callback, state, Elapsed + dueTime);
+            _timers.Add(timer);
+            return timer;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            Elapsed += elapsed;
+            foreach (var timer in _timers.ToArray())
+            {
+                timer.FireIfDue(Elapsed);
+            }
+        }
+
+        private sealed class DeadlineTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueAt) : ITimer
+        {
+            private bool _disposed;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+                => throw new NotSupportedException("The deadline test clock only supports one-shot timers.");
+
+            public void FireIfDue(TimeSpan elapsed)
+            {
+                if (!_disposed && elapsed >= dueAt)
+                {
+                    _disposed = true;
+                    callback(state);
+                }
+            }
+
+            public void Dispose() => _disposed = true;
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     private sealed class RecordingLogger : ILogger<SafeguardsEvaluator>

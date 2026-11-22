@@ -5,7 +5,7 @@ import { DefaultChatTransport, readUIMessageStream } from 'ai';
 
 test('chat transport consumes the backend AI SDK stream fixture', async () => {
   const fixture = await readFile(
-    new URL('../../../../llm/transformer/aisdk/testdata/aisdk-strop.stream.jsonl', import.meta.url),
+    new URL('../../../../tests/AxonHub.Llm.Tests/testdata/aisdk/text.stream.jsonl', import.meta.url),
     'utf8'
   );
   const events = fixture.trim().split('\n').map((line) => JSON.parse(line).Data);

@@ -263,6 +263,18 @@ public sealed class AiSdkDataStreamTransformerTests
         Assert.Equal(textStart.Id, events[4].Id);
         Assert.Equal("lo", events[4].Delta);
         Assert.Equal(textStart.Id, events[5].Id);
+
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "testdata", "aisdk", "text.stream.jsonl");
+        var expected = File.ReadLines(fixturePath).Select(line =>
+        {
+            using var document = JsonDocument.Parse(line);
+            return document.RootElement.GetProperty("Data").GetString();
+        });
+        var textId = Assert.IsType<string>(textStart.Id);
+        Assert.Equal(
+            expected,
+            events.Select(streamEvent => Encoding.UTF8.GetString(GoJson.Marshal(streamEvent))
+                .Replace(textId, "text_fixture", StringComparison.Ordinal)));
     }
 
     [Fact]

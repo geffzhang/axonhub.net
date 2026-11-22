@@ -7,7 +7,7 @@ const dataDir = import.meta.dirname;
 const srcRoot = join(dataDir, '..', '..', '..');
 
 function read(relativePath) {
-  return readFileSync(join(srcRoot, relativePath), 'utf8');
+  return readFileSync(join(srcRoot, relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function parseLocale(locale) {

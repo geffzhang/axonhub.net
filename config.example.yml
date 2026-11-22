@@ -15,7 +15,8 @@
 #   cache.*            in-process cache only; Redis is not used
 #   log.*              ASP.NET Core logging; configure Logging:* instead
 #   provider_quota.*   fixed five-minute scheduler
-#   server.safeguards  runtime reviewer not ported (see C243)
+#   server.safeguards  YAML defaults not bound; the implemented reviewer uses
+#                      built-in defaults and persisted system settings (C243)
 #
 # All keys accept their reference AXONHUB_* environment spellings as well.
 
