@@ -502,10 +502,10 @@ public sealed class UsageStatsByUserType
     public string UserName { get; init; } = string.Empty;
 
     [GraphQLName("requestCount")]
-    public int RequestCount { get; init; }
+    public long RequestCount { get; init; }
 
     [GraphQLName("totalTokens")]
-    public int TotalTokens { get; init; }
+    public long TotalTokens { get; init; }
 
     [GraphQLName("totalCost")]
     public double TotalCost { get; init; }

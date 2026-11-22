@@ -173,8 +173,8 @@ public sealed record CostStatsByApiKeyModel(string ApiKeyId, string ApiKeyName, 
 public sealed record UsageStatsByUserModel(
     string UserId,
     string UserName,
-    int RequestCount,
-    int TotalTokens,
+    long RequestCount,
+    long TotalTokens,
     double TotalCost);
 
 /// <summary>FastestChannelsInput after the resolver's normalization.</summary>
@@ -1840,8 +1840,8 @@ public sealed class DashboardService(
                 return new UsageStatsByUserModel(
                     new GidValue("User", row.UserId).ToString(),
                     userName,
-                    checked((int)row.RequestCount),
-                    checked((int)row.TotalTokens),
+                    row.RequestCount,
+                    row.TotalTokens,
                     row.TotalCost);
             })
             .ToList();

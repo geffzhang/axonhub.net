@@ -809,6 +809,34 @@ public sealed class AdminDashboardEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UsageStatsByUserSupportsCountsAboveGraphqlIntRange()
+    {
+        _identity.ProjectId = 42;
+        const long requestCount = (long)int.MaxValue + 1;
+        const long totalTokens = (long)int.MaxValue + 2;
+        _dashboard.UserUsageRows.Add(new DashboardUserUsageRow
+        {
+            UserId = 5,
+            RequestCount = requestCount,
+            TotalTokens = totalTokens,
+        });
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              usageStatsByUser {
+                requestCount
+                totalTokens
+              }
+            }
+            """);
+
+        var stats = Assert.Single(data.GetProperty("usageStatsByUser").EnumerateArray());
+        Assert.Equal(requestCount, stats.GetProperty("requestCount").GetInt64());
+        Assert.Equal(totalTokens, stats.GetProperty("totalTokens").GetInt64());
+    }
+
+    [Fact]
     public async Task UsageStatsByUserRequiresProjectOwnerAndParsesTheWindow()
     {
         _identity.ProjectId = 42;
