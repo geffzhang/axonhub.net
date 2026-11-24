@@ -272,6 +272,72 @@ public sealed class AdminDashboardEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TokenStatsSupports64BitCountsAcrossWindowsAndCache()
+    {
+        const long inputTokens = (long)int.MaxValue + 1;
+        const long outputTokens = (long)int.MaxValue + 2;
+        const long cachedTokens = (long)int.MaxValue + 3;
+        _dashboard.WindowTokenSums = new DashboardTokenSumRow
+        {
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            CachedTokens = cachedTokens,
+            RowCount = 1,
+        };
+        _dashboard.AllTimeTokenSums = new DashboardTokenSumRow
+        {
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            CachedTokens = cachedTokens,
+            RowCount = 1,
+        };
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              tokenStats {
+                totalInputTokensToday
+                totalOutputTokensToday
+                totalCachedTokensToday
+                totalInputTokensThisWeek
+                totalOutputTokensThisWeek
+                totalCachedTokensThisWeek
+                totalInputTokensThisMonth
+                totalOutputTokensThisMonth
+                totalCachedTokensThisMonth
+                totalInputTokensAllTime
+                totalOutputTokensAllTime
+                totalCachedTokensAllTime
+              }
+            }
+            """);
+
+        var stats = data.GetProperty("tokenStats");
+        Assert.Equal(inputTokens, stats.GetProperty("totalInputTokensToday").GetInt64());
+        Assert.Equal(outputTokens, stats.GetProperty("totalOutputTokensToday").GetInt64());
+        Assert.Equal(cachedTokens, stats.GetProperty("totalCachedTokensToday").GetInt64());
+        Assert.Equal(inputTokens, stats.GetProperty("totalInputTokensThisWeek").GetInt64());
+        Assert.Equal(outputTokens, stats.GetProperty("totalOutputTokensThisWeek").GetInt64());
+        Assert.Equal(cachedTokens, stats.GetProperty("totalCachedTokensThisWeek").GetInt64());
+        Assert.Equal(inputTokens, stats.GetProperty("totalInputTokensThisMonth").GetInt64());
+        Assert.Equal(outputTokens, stats.GetProperty("totalOutputTokensThisMonth").GetInt64());
+        Assert.Equal(cachedTokens, stats.GetProperty("totalCachedTokensThisMonth").GetInt64());
+        Assert.Equal(inputTokens, stats.GetProperty("totalInputTokensAllTime").GetInt64());
+        Assert.Equal(outputTokens, stats.GetProperty("totalOutputTokensAllTime").GetInt64());
+        Assert.Equal(cachedTokens, stats.GetProperty("totalCachedTokensAllTime").GetInt64());
+
+        var cached = await QueryDataAsync(
+            """
+            query { tokenStats { totalInputTokensAllTime totalOutputTokensAllTime totalCachedTokensAllTime } }
+            """);
+        var cachedStats = cached.GetProperty("tokenStats");
+        Assert.Equal(inputTokens, cachedStats.GetProperty("totalInputTokensAllTime").GetInt64());
+        Assert.Equal(outputTokens, cachedStats.GetProperty("totalOutputTokensAllTime").GetInt64());
+        Assert.Equal(cachedTokens, cachedStats.GetProperty("totalCachedTokensAllTime").GetInt64());
+        Assert.Equal(1, _dashboard.AllTimeTokenSumQueries);
+    }
+
+    [Fact]
     public async Task ChannelSuccessRatesNormalizeTheWindowLimitAndDetails()
     {
         _dashboard.ChannelExecutions.AddRange(
@@ -540,6 +606,44 @@ public sealed class AdminDashboardEndpointTests : IAsyncLifetime
         Assert.Equal("key-7", byCost.GetProperty("apiKeyName").GetString());
         Assert.Equal(0.4, byCost.GetProperty("cost").GetDouble());
         Assert.Null(_dashboard.UsageAggregateQueries[^1].Since);
+    }
+
+    [Fact]
+    public async Task TokenStatsByChannelAndModelSupports64BitCounts()
+    {
+        const long largeInput = (long)int.MaxValue + 1;
+        _dashboard.Aggregates[DashboardUsageDimension.Channel] =
+        [
+            new DashboardUsageAggregateRow
+            {
+                Id = 1,
+                Name = "channel",
+                InputTokens = largeInput,
+            },
+        ];
+        _dashboard.Aggregates[DashboardUsageDimension.Model] =
+        [
+            new DashboardUsageAggregateRow
+            {
+                Name = "model",
+                InputTokens = largeInput,
+            },
+        ];
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              tokenStatsByChannel { inputTokens totalTokens }
+              tokenStatsByModel { inputTokens totalTokens }
+            }
+            """);
+
+        var channel = Assert.Single(data.GetProperty("tokenStatsByChannel").EnumerateArray());
+        var model = Assert.Single(data.GetProperty("tokenStatsByModel").EnumerateArray());
+        Assert.Equal(largeInput, channel.GetProperty("inputTokens").GetInt64());
+        Assert.Equal(largeInput, channel.GetProperty("totalTokens").GetInt64());
+        Assert.Equal(largeInput, model.GetProperty("inputTokens").GetInt64());
+        Assert.Equal(largeInput, model.GetProperty("totalTokens").GetInt64());
     }
 
     [Fact]
@@ -1129,6 +1233,73 @@ public sealed class AdminDashboardEndpointTests : IAsyncLifetime
             scoped.GetProperty("apiKeyTokenUsageStats").EnumerateArray());
         Assert.Equal("gid://axonhub/APIKey/100", scopedStats.GetProperty("apiKeyId").GetString());
         Assert.Equal(new long[] { 100 }, _dashboard.ApiKeyUsageQueries[^1].Ids);
+    }
+
+    [Fact]
+    public async Task TokenStatsByApiKeySupports64BitCounts()
+    {
+        const long largeInput = (long)int.MaxValue + 1;
+        _dashboard.Aggregates[DashboardUsageDimension.ApiKey] =
+        [
+            new DashboardUsageAggregateRow
+            {
+                Id = 7,
+                Name = "key-7",
+                InputTokens = largeInput,
+            },
+        ];
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              tokenStatsByAPIKey { inputTokens totalTokens }
+            }
+            """);
+
+        var stats = Assert.Single(data.GetProperty("tokenStatsByAPIKey").EnumerateArray());
+        Assert.Equal(largeInput, stats.GetProperty("inputTokens").GetInt64());
+        Assert.Equal(largeInput, stats.GetProperty("totalTokens").GetInt64());
+    }
+
+    [Fact]
+    public async Task ApiKeyTokenUsageStatsSupports64BitCounts()
+    {
+        const long largeInput = (long)int.MaxValue + 1;
+        _gate.ApiKeys.Add(key =>
+        {
+            key.Id = 1;
+            key.Name = "key-1";
+            key.ProjectId = 1;
+        });
+        _dashboard.ApiKeyUsage.Add(new DashboardApiKeyUsageRow
+        {
+            ApiKeyId = 1,
+            InputTokens = largeInput,
+        });
+        _dashboard.ApiKeyModelUsage.Add(new DashboardApiKeyModelUsageRow
+        {
+            ApiKeyId = 1,
+            ModelId = "model-1",
+            InputTokens = largeInput,
+            TotalTokens = largeInput,
+        });
+
+        var data = await QueryDataAsync(
+            """
+            query Usage($input: APIKeyTokenUsageStatsInput) {
+              apiKeyTokenUsageStats(input: $input) {
+                inputTokens
+                topModels { modelId inputTokens }
+              }
+            }
+            """,
+            new { input = new { apiKeyIds = new[] { "gid://axonhub/APIKey/1" } } });
+
+        var stats = Assert.Single(data.GetProperty("apiKeyTokenUsageStats").EnumerateArray());
+        Assert.Equal(largeInput, stats.GetProperty("inputTokens").GetInt64());
+        var model = Assert.Single(stats.GetProperty("topModels").EnumerateArray());
+        Assert.Equal("model-1", model.GetProperty("modelId").GetString());
+        Assert.Equal(largeInput, model.GetProperty("inputTokens").GetInt64());
     }
 
     [Fact]

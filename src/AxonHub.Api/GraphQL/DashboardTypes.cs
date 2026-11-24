@@ -87,19 +87,19 @@ public sealed class TokenStatsByApiKeyType
     public string ApiKeyName { get; init; } = string.Empty;
 
     [GraphQLName("inputTokens")]
-    public int InputTokens { get; init; }
+    public long InputTokens { get; init; }
 
     [GraphQLName("outputTokens")]
-    public int OutputTokens { get; init; }
+    public long OutputTokens { get; init; }
 
     [GraphQLName("cachedTokens")]
-    public int CachedTokens { get; init; }
+    public long CachedTokens { get; init; }
 
     [GraphQLName("reasoningTokens")]
-    public int ReasoningTokens { get; init; }
+    public long ReasoningTokens { get; init; }
 
     [GraphQLName("totalTokens")]
-    public int TotalTokens { get; init; }
+    public long TotalTokens { get; init; }
 }
 
 /// <summary>Port of APIKeyTokenUsageStatsInput (dashboard.graphql).</summary>
@@ -132,16 +132,16 @@ public sealed class ApiKeyTokenUsageStatsType
     public string ApiKeyId { get; init; } = string.Empty;
 
     [GraphQLName("inputTokens")]
-    public int InputTokens { get; init; }
+    public long InputTokens { get; init; }
 
     [GraphQLName("outputTokens")]
-    public int OutputTokens { get; init; }
+    public long OutputTokens { get; init; }
 
     [GraphQLName("cachedTokens")]
-    public int CachedTokens { get; init; }
+    public long CachedTokens { get; init; }
 
     [GraphQLName("reasoningTokens")]
-    public int ReasoningTokens { get; init; }
+    public long ReasoningTokens { get; init; }
 
     [GraphQLName("topModels")]
     public IReadOnlyList<ModelTokenUsageStatsType> TopModels { get; init; } = [];
@@ -155,16 +155,16 @@ public sealed class ModelTokenUsageStatsType
     public string ModelId { get; init; } = string.Empty;
 
     [GraphQLName("inputTokens")]
-    public int InputTokens { get; init; }
+    public long InputTokens { get; init; }
 
     [GraphQLName("outputTokens")]
-    public int OutputTokens { get; init; }
+    public long OutputTokens { get; init; }
 
     [GraphQLName("cachedTokens")]
-    public int CachedTokens { get; init; }
+    public long CachedTokens { get; init; }
 
     [GraphQLName("reasoningTokens")]
-    public int ReasoningTokens { get; init; }
+    public long ReasoningTokens { get; init; }
 }
 
 /// <summary>Port of DailyRequestStats (dashboard.graphql).</summary>
@@ -204,40 +204,40 @@ public sealed class HourlyRequestStatsType
 public sealed class TokenStatsType
 {
     [GraphQLName("totalInputTokensToday")]
-    public int TotalInputTokensToday { get; init; }
+    public long TotalInputTokensToday { get; init; }
 
     [GraphQLName("totalOutputTokensToday")]
-    public int TotalOutputTokensToday { get; init; }
+    public long TotalOutputTokensToday { get; init; }
 
     [GraphQLName("totalCachedTokensToday")]
-    public int TotalCachedTokensToday { get; init; }
+    public long TotalCachedTokensToday { get; init; }
 
     [GraphQLName("totalInputTokensThisWeek")]
-    public int TotalInputTokensThisWeek { get; init; }
+    public long TotalInputTokensThisWeek { get; init; }
 
     [GraphQLName("totalOutputTokensThisWeek")]
-    public int TotalOutputTokensThisWeek { get; init; }
+    public long TotalOutputTokensThisWeek { get; init; }
 
     [GraphQLName("totalCachedTokensThisWeek")]
-    public int TotalCachedTokensThisWeek { get; init; }
+    public long TotalCachedTokensThisWeek { get; init; }
 
     [GraphQLName("totalInputTokensThisMonth")]
-    public int TotalInputTokensThisMonth { get; init; }
+    public long TotalInputTokensThisMonth { get; init; }
 
     [GraphQLName("totalOutputTokensThisMonth")]
-    public int TotalOutputTokensThisMonth { get; init; }
+    public long TotalOutputTokensThisMonth { get; init; }
 
     [GraphQLName("totalCachedTokensThisMonth")]
-    public int TotalCachedTokensThisMonth { get; init; }
+    public long TotalCachedTokensThisMonth { get; init; }
 
     [GraphQLName("totalInputTokensAllTime")]
-    public int TotalInputTokensAllTime { get; init; }
+    public long TotalInputTokensAllTime { get; init; }
 
     [GraphQLName("totalOutputTokensAllTime")]
-    public int TotalOutputTokensAllTime { get; init; }
+    public long TotalOutputTokensAllTime { get; init; }
 
     [GraphQLName("totalCachedTokensAllTime")]
-    public int TotalCachedTokensAllTime { get; init; }
+    public long TotalCachedTokensAllTime { get; init; }
 
     [GraphQLName("lastUpdated")]
     [GraphQLType(typeof(GoTimeType))]
@@ -415,19 +415,19 @@ public sealed class TokenStatsByChannelType
     public string ChannelName { get; init; } = string.Empty;
 
     [GraphQLName("inputTokens")]
-    public int InputTokens { get; init; }
+    public long InputTokens { get; init; }
 
     [GraphQLName("outputTokens")]
-    public int OutputTokens { get; init; }
+    public long OutputTokens { get; init; }
 
     [GraphQLName("cachedTokens")]
-    public int CachedTokens { get; init; }
+    public long CachedTokens { get; init; }
 
     [GraphQLName("reasoningTokens")]
-    public int ReasoningTokens { get; init; }
+    public long ReasoningTokens { get; init; }
 
     [GraphQLName("totalTokens")]
-    public int TotalTokens { get; init; }
+    public long TotalTokens { get; init; }
 }
 
 /// <summary>Port of TokenStatsByModel (dashboard.graphql).</summary>
@@ -438,19 +438,19 @@ public sealed class TokenStatsByModelType
     public string ModelId { get; init; } = string.Empty;
 
     [GraphQLName("inputTokens")]
-    public int InputTokens { get; init; }
+    public long InputTokens { get; init; }
 
     [GraphQLName("outputTokens")]
-    public int OutputTokens { get; init; }
+    public long OutputTokens { get; init; }
 
     [GraphQLName("cachedTokens")]
-    public int CachedTokens { get; init; }
+    public long CachedTokens { get; init; }
 
     [GraphQLName("reasoningTokens")]
-    public int ReasoningTokens { get; init; }
+    public long ReasoningTokens { get; init; }
 
     [GraphQLName("totalTokens")]
-    public int TotalTokens { get; init; }
+    public long TotalTokens { get; init; }
 }
 
 /// <summary>Port of CostStatsByChannel (dashboard.graphql).</summary>
