@@ -77,18 +77,18 @@ public sealed record TopRequestsProjectsModel(
 /// TOKEN_STATS_ALL_TIME_AGG_FAILED error.
 /// </summary>
 public sealed record TokenStatsModel(
-    int TotalInputTokensToday,
-    int TotalOutputTokensToday,
-    int TotalCachedTokensToday,
-    int TotalInputTokensThisWeek,
-    int TotalOutputTokensThisWeek,
-    int TotalCachedTokensThisWeek,
-    int TotalInputTokensThisMonth,
-    int TotalOutputTokensThisMonth,
-    int TotalCachedTokensThisMonth,
-    int TotalInputTokensAllTime,
-    int TotalOutputTokensAllTime,
-    int TotalCachedTokensAllTime,
+    long TotalInputTokensToday,
+    long TotalOutputTokensToday,
+    long TotalCachedTokensToday,
+    long TotalInputTokensThisWeek,
+    long TotalOutputTokensThisWeek,
+    long TotalCachedTokensThisWeek,
+    long TotalInputTokensThisMonth,
+    long TotalOutputTokensThisMonth,
+    long TotalCachedTokensThisMonth,
+    long TotalInputTokensAllTime,
+    long TotalOutputTokensAllTime,
+    long TotalCachedTokensAllTime,
     DateTime? LastUpdated,
     bool AllTimeFailed);
 
@@ -869,9 +869,9 @@ public sealed class DashboardService(
         var thisMonth = await GetTokenSumsAsync(periods.ThisMonth.Start, allowed, cancellationToken)
             .ConfigureAwait(false);
 
-        var allTimeInput = 0;
-        var allTimeOutput = 0;
-        var allTimeCached = 0;
+        long allTimeInput = 0;
+        long allTimeOutput = 0;
+        long allTimeCached = 0;
         DateTime? lastUpdated = null;
         var allTimeFailed = false;
 
@@ -884,9 +884,9 @@ public sealed class DashboardService(
             // async refresh when past the soft TTL, but that context carries no
             // user, so the refresh always fails and the cached values remain
             // (C195); the port simply keeps the snapshot.
-            allTimeInput = checked((int)snapshot.Stats.InputTokens);
-            allTimeOutput = checked((int)snapshot.Stats.OutputTokens);
-            allTimeCached = checked((int)snapshot.Stats.CachedTokens);
+            allTimeInput = snapshot.Stats.InputTokens;
+            allTimeOutput = snapshot.Stats.OutputTokens;
+            allTimeCached = snapshot.Stats.CachedTokens;
             lastUpdated = snapshot.CacheTime;
         }
         else
@@ -903,8 +903,8 @@ public sealed class DashboardService(
                         var row = await store.GetTokenSumsAsync(null, token)
                             .ConfigureAwait(false);
 
-                        // The reference scans SUM() into int; an empty table
-                        // yields SQL NULL and fails the scan.
+                        // An empty table yields SQL NULL; preserve the
+                        // reference's all-time aggregation error.
                         if (row.RowCount == 0)
                         {
                             throw new InvalidOperationException(
@@ -925,9 +925,9 @@ public sealed class DashboardService(
             }
             else
             {
-                allTimeInput = checked((int)refreshed.Stats.InputTokens);
-                allTimeOutput = checked((int)refreshed.Stats.OutputTokens);
-                allTimeCached = checked((int)refreshed.Stats.CachedTokens);
+                allTimeInput = refreshed.Stats.InputTokens;
+                allTimeOutput = refreshed.Stats.OutputTokens;
+                allTimeCached = refreshed.Stats.CachedTokens;
                 lastUpdated = refreshed.CacheTime;
             }
         }
@@ -949,7 +949,7 @@ public sealed class DashboardService(
             allTimeFailed);
     }
 
-    private async Task<(int Input, int Output, int Cached)> GetTokenSumsAsync(
+    private async Task<(long Input, long Output, long Cached)> GetTokenSumsAsync(
         DateTime since,
         bool allowed,
         CancellationToken cancellationToken)
@@ -963,10 +963,7 @@ public sealed class DashboardService(
         {
             var row = await dashboard.GetTokenSumsAsync(since, cancellationToken)
                 .ConfigureAwait(false);
-            return (
-                checked((int)row.InputTokens),
-                checked((int)row.OutputTokens),
-                checked((int)row.CachedTokens));
+            return (row.InputTokens, row.OutputTokens, row.CachedTokens);
         }
         catch (Exception)
         {

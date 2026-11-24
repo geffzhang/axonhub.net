@@ -272,6 +272,72 @@ public sealed class AdminDashboardEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TokenStatsSupports64BitCountsAcrossWindowsAndCache()
+    {
+        const long inputTokens = (long)int.MaxValue + 1;
+        const long outputTokens = (long)int.MaxValue + 2;
+        const long cachedTokens = (long)int.MaxValue + 3;
+        _dashboard.WindowTokenSums = new DashboardTokenSumRow
+        {
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            CachedTokens = cachedTokens,
+            RowCount = 1,
+        };
+        _dashboard.AllTimeTokenSums = new DashboardTokenSumRow
+        {
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            CachedTokens = cachedTokens,
+            RowCount = 1,
+        };
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              tokenStats {
+                totalInputTokensToday
+                totalOutputTokensToday
+                totalCachedTokensToday
+                totalInputTokensThisWeek
+                totalOutputTokensThisWeek
+                totalCachedTokensThisWeek
+                totalInputTokensThisMonth
+                totalOutputTokensThisMonth
+                totalCachedTokensThisMonth
+                totalInputTokensAllTime
+                totalOutputTokensAllTime
+                totalCachedTokensAllTime
+              }
+            }
+            """);
+
+        var stats = data.GetProperty("tokenStats");
+        Assert.Equal(inputTokens, stats.GetProperty("totalInputTokensToday").GetInt64());
+        Assert.Equal(outputTokens, stats.GetProperty("totalOutputTokensToday").GetInt64());
+        Assert.Equal(cachedTokens, stats.GetProperty("totalCachedTokensToday").GetInt64());
+        Assert.Equal(inputTokens, stats.GetProperty("totalInputTokensThisWeek").GetInt64());
+        Assert.Equal(outputTokens, stats.GetProperty("totalOutputTokensThisWeek").GetInt64());
+        Assert.Equal(cachedTokens, stats.GetProperty("totalCachedTokensThisWeek").GetInt64());
+        Assert.Equal(inputTokens, stats.GetProperty("totalInputTokensThisMonth").GetInt64());
+        Assert.Equal(outputTokens, stats.GetProperty("totalOutputTokensThisMonth").GetInt64());
+        Assert.Equal(cachedTokens, stats.GetProperty("totalCachedTokensThisMonth").GetInt64());
+        Assert.Equal(inputTokens, stats.GetProperty("totalInputTokensAllTime").GetInt64());
+        Assert.Equal(outputTokens, stats.GetProperty("totalOutputTokensAllTime").GetInt64());
+        Assert.Equal(cachedTokens, stats.GetProperty("totalCachedTokensAllTime").GetInt64());
+
+        var cached = await QueryDataAsync(
+            """
+            query { tokenStats { totalInputTokensAllTime totalOutputTokensAllTime totalCachedTokensAllTime } }
+            """);
+        var cachedStats = cached.GetProperty("tokenStats");
+        Assert.Equal(inputTokens, cachedStats.GetProperty("totalInputTokensAllTime").GetInt64());
+        Assert.Equal(outputTokens, cachedStats.GetProperty("totalOutputTokensAllTime").GetInt64());
+        Assert.Equal(cachedTokens, cachedStats.GetProperty("totalCachedTokensAllTime").GetInt64());
+        Assert.Equal(1, _dashboard.AllTimeTokenSumQueries);
+    }
+
+    [Fact]
     public async Task ChannelSuccessRatesNormalizeTheWindowLimitAndDetails()
     {
         _dashboard.ChannelExecutions.AddRange(
