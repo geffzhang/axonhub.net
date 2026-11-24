@@ -33,11 +33,11 @@ public sealed record RequestStatsByApiKeyModel(string ApiKeyId, string ApiKeyNam
 public sealed record TokenStatsByApiKeyModel(
     string ApiKeyId,
     string ApiKeyName,
-    int InputTokens,
-    int OutputTokens,
-    int CachedTokens,
-    int ReasoningTokens,
-    int TotalTokens);
+    long InputTokens,
+    long OutputTokens,
+    long CachedTokens,
+    long ReasoningTokens,
+    long TotalTokens);
 
 /// <summary>Input of apiKeyTokenUsageStats after GID parsing.</summary>
 public sealed record DashboardApiKeyTokenUsageInput(
@@ -48,19 +48,19 @@ public sealed record DashboardApiKeyTokenUsageInput(
 /// <summary>APIKeyTokenUsageStats.</summary>
 public sealed record ApiKeyTokenUsageStatsModel(
     string ApiKeyId,
-    int InputTokens,
-    int OutputTokens,
-    int CachedTokens,
-    int ReasoningTokens,
+    long InputTokens,
+    long OutputTokens,
+    long CachedTokens,
+    long ReasoningTokens,
     IReadOnlyList<ModelTokenUsageStatsModel> TopModels);
 
 /// <summary>ModelTokenUsageStats.</summary>
 public sealed record ModelTokenUsageStatsModel(
     string ModelId,
-    int InputTokens,
-    int OutputTokens,
-    int CachedTokens,
-    int ReasoningTokens);
+    long InputTokens,
+    long OutputTokens,
+    long CachedTokens,
+    long ReasoningTokens);
 
 /// <summary>DailyRequestStats.</summary>
 public sealed record DailyRequestStatsModel(string Date, int Count, int Tokens, double Cost);
@@ -145,20 +145,20 @@ public sealed record ChannelPerformanceStatModel(
 public sealed record TokenStatsByChannelModel(
     string ChannelId,
     string ChannelName,
-    int InputTokens,
-    int OutputTokens,
-    int CachedTokens,
-    int ReasoningTokens,
-    int TotalTokens);
+    long InputTokens,
+    long OutputTokens,
+    long CachedTokens,
+    long ReasoningTokens,
+    long TotalTokens);
 
 /// <summary>TokenStatsByModel.</summary>
 public sealed record TokenStatsByModelModel(
     string ModelId,
-    int InputTokens,
-    int OutputTokens,
-    int CachedTokens,
-    int ReasoningTokens,
-    int TotalTokens);
+    long InputTokens,
+    long OutputTokens,
+    long CachedTokens,
+    long ReasoningTokens,
+    long TotalTokens);
 
 /// <summary>CostStatsByChannel.</summary>
 public sealed record CostStatsByChannelModel(string ChannelName, double Cost);
@@ -550,11 +550,11 @@ public sealed class DashboardService(
             .Select(static row => new TokenStatsByApiKeyModel(
                 ApiKeyGid(row.Id),
                 row.Name,
-                checked((int)row.InputTokens),
-                checked((int)row.OutputTokens),
-                checked((int)row.CachedTokens),
-                checked((int)row.ReasoningTokens),
-                checked((int)TotalTokens(row))))
+                row.InputTokens,
+                row.OutputTokens,
+                row.CachedTokens,
+                row.ReasoningTokens,
+                TotalTokens(row)))
             .ToList();
     }
 
@@ -642,10 +642,10 @@ public sealed class DashboardService(
         return rows
             .Select(row => new ApiKeyTokenUsageStatsModel(
                 ApiKeyGid(row.ApiKeyId),
-                checked((int)row.InputTokens),
-                checked((int)row.OutputTokens),
-                checked((int)row.CachedTokens),
-                checked((int)row.ReasoningTokens),
+                row.InputTokens,
+                row.OutputTokens,
+                row.CachedTokens,
+                row.ReasoningTokens,
                 topModels.TryGetValue(row.ApiKeyId, out var models)
                     ? models
                     : []))
@@ -698,10 +698,10 @@ public sealed class DashboardService(
             {
                 list.Add(new ModelTokenUsageStatsModel(
                     row.ModelId,
-                    checked((int)row.InputTokens),
-                    checked((int)row.OutputTokens),
-                    checked((int)row.CachedTokens),
-                    checked((int)row.ReasoningTokens)));
+                    row.InputTokens,
+                    row.OutputTokens,
+                    row.CachedTokens,
+                    row.ReasoningTokens));
             }
         }
 
@@ -1600,11 +1600,11 @@ public sealed class DashboardService(
             .Select(static row => new TokenStatsByChannelModel(
                 new GidValue("Channel", row.Id).ToString(),
                 row.Name,
-                checked((int)row.InputTokens),
-                checked((int)row.OutputTokens),
-                checked((int)row.CachedTokens),
-                checked((int)row.ReasoningTokens),
-                checked((int)TotalTokens(row))))
+                row.InputTokens,
+                row.OutputTokens,
+                row.CachedTokens,
+                row.ReasoningTokens,
+                TotalTokens(row)))
             .ToList();
     }
 
@@ -1634,11 +1634,11 @@ public sealed class DashboardService(
         return top
             .Select(static row => new TokenStatsByModelModel(
                 row.Name,
-                checked((int)row.InputTokens),
-                checked((int)row.OutputTokens),
-                checked((int)row.CachedTokens),
-                checked((int)row.ReasoningTokens),
-                checked((int)TotalTokens(row))))
+                row.InputTokens,
+                row.OutputTokens,
+                row.CachedTokens,
+                row.ReasoningTokens,
+                TotalTokens(row)))
             .ToList();
     }
 

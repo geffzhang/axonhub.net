@@ -543,6 +543,44 @@ public sealed class AdminDashboardEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TokenStatsByChannelAndModelSupports64BitCounts()
+    {
+        const long largeInput = (long)int.MaxValue + 1;
+        _dashboard.Aggregates[DashboardUsageDimension.Channel] =
+        [
+            new DashboardUsageAggregateRow
+            {
+                Id = 1,
+                Name = "channel",
+                InputTokens = largeInput,
+            },
+        ];
+        _dashboard.Aggregates[DashboardUsageDimension.Model] =
+        [
+            new DashboardUsageAggregateRow
+            {
+                Name = "model",
+                InputTokens = largeInput,
+            },
+        ];
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              tokenStatsByChannel { inputTokens totalTokens }
+              tokenStatsByModel { inputTokens totalTokens }
+            }
+            """);
+
+        var channel = Assert.Single(data.GetProperty("tokenStatsByChannel").EnumerateArray());
+        var model = Assert.Single(data.GetProperty("tokenStatsByModel").EnumerateArray());
+        Assert.Equal(largeInput, channel.GetProperty("inputTokens").GetInt64());
+        Assert.Equal(largeInput, channel.GetProperty("totalTokens").GetInt64());
+        Assert.Equal(largeInput, model.GetProperty("inputTokens").GetInt64());
+        Assert.Equal(largeInput, model.GetProperty("totalTokens").GetInt64());
+    }
+
+    [Fact]
     public async Task DailyRequestStatsFillTheLastThirtyLocalDays()
     {
         _gate.Systems.Add(
@@ -1129,6 +1167,73 @@ public sealed class AdminDashboardEndpointTests : IAsyncLifetime
             scoped.GetProperty("apiKeyTokenUsageStats").EnumerateArray());
         Assert.Equal("gid://axonhub/APIKey/100", scopedStats.GetProperty("apiKeyId").GetString());
         Assert.Equal(new long[] { 100 }, _dashboard.ApiKeyUsageQueries[^1].Ids);
+    }
+
+    [Fact]
+    public async Task TokenStatsByApiKeySupports64BitCounts()
+    {
+        const long largeInput = (long)int.MaxValue + 1;
+        _dashboard.Aggregates[DashboardUsageDimension.ApiKey] =
+        [
+            new DashboardUsageAggregateRow
+            {
+                Id = 7,
+                Name = "key-7",
+                InputTokens = largeInput,
+            },
+        ];
+
+        var data = await QueryDataAsync(
+            """
+            query {
+              tokenStatsByAPIKey { inputTokens totalTokens }
+            }
+            """);
+
+        var stats = Assert.Single(data.GetProperty("tokenStatsByAPIKey").EnumerateArray());
+        Assert.Equal(largeInput, stats.GetProperty("inputTokens").GetInt64());
+        Assert.Equal(largeInput, stats.GetProperty("totalTokens").GetInt64());
+    }
+
+    [Fact]
+    public async Task ApiKeyTokenUsageStatsSupports64BitCounts()
+    {
+        const long largeInput = (long)int.MaxValue + 1;
+        _gate.ApiKeys.Add(key =>
+        {
+            key.Id = 1;
+            key.Name = "key-1";
+            key.ProjectId = 1;
+        });
+        _dashboard.ApiKeyUsage.Add(new DashboardApiKeyUsageRow
+        {
+            ApiKeyId = 1,
+            InputTokens = largeInput,
+        });
+        _dashboard.ApiKeyModelUsage.Add(new DashboardApiKeyModelUsageRow
+        {
+            ApiKeyId = 1,
+            ModelId = "model-1",
+            InputTokens = largeInput,
+            TotalTokens = largeInput,
+        });
+
+        var data = await QueryDataAsync(
+            """
+            query Usage($input: APIKeyTokenUsageStatsInput) {
+              apiKeyTokenUsageStats(input: $input) {
+                inputTokens
+                topModels { modelId inputTokens }
+              }
+            }
+            """,
+            new { input = new { apiKeyIds = new[] { "gid://axonhub/APIKey/1" } } });
+
+        var stats = Assert.Single(data.GetProperty("apiKeyTokenUsageStats").EnumerateArray());
+        Assert.Equal(largeInput, stats.GetProperty("inputTokens").GetInt64());
+        var model = Assert.Single(stats.GetProperty("topModels").EnumerateArray());
+        Assert.Equal("model-1", model.GetProperty("modelId").GetString());
+        Assert.Equal(largeInput, model.GetProperty("inputTokens").GetInt64());
     }
 
     [Fact]
